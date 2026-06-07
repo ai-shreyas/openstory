@@ -3,7 +3,7 @@
  * Reusable middleware for authentication, team access, and resource validation
  */
 
-import { scheduleFlushTracing } from '#flush-scheduler';
+import { scheduleFlushAnalytics } from '#flush-scheduler';
 import {
   requireTeamAdminAccess,
   requireTeamMemberAccess,
@@ -25,7 +25,6 @@ import {
 } from '@/lib/db/scoped';
 import { NotFoundError } from '@/lib/errors';
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
-import { withTraceContextAsync } from '@/lib/observability/tracer';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import type { Shot, Sequence } from '@/types/database';
 import { createMiddleware } from '@tanstack/react-start';
@@ -396,30 +395,21 @@ export const authMiddleware = createMiddleware({ type: 'function' }).server(
 );
 
 /**
- * Tracing middleware — wraps the request in an OTel trace-context with the
- * authenticated user's id and flushes tracing after the handler returns so
- * spans ship before serverless isolates suspend.
+ * Analytics flush middleware — schedules a PostHog flush after the handler
+ * returns so buffered events ship before serverless isolates suspend.
  */
-export const tracingMiddleware = createMiddleware({ type: 'function' })
+const analyticsFlushMiddleware = createMiddleware({ type: 'function' })
   .middleware([authMiddleware])
-  .server(async ({ next, context, serverFnMeta }) => {
-    return withTraceContextAsync(
-      {
-        userId: context.user.id,
-        tags: [`fn:${serverFnMeta.name}`],
-      },
-      async () => {
-        try {
-          return await next();
-        } finally {
-          // Schedule (don't await) so the Langfuse OTLP POST doesn't add
-          // its 100-500ms to the user-visible request duration. On
-          // Workers this uses `waitUntil` to keep the isolate alive; in
-          // dev/test it falls back to awaiting. See issue #770.
-          await scheduleFlushTracing();
-        }
-      }
-    );
+  .server(async ({ next }) => {
+    try {
+      return await next();
+    } finally {
+      // Schedule (don't await) so the PostHog flush doesn't add to the
+      // user-visible request duration. On Workers this uses `waitUntil` to
+      // keep the isolate alive; in dev/test it falls back to awaiting.
+      // See issue #770.
+      await scheduleFlushAnalytics();
+    }
   });
 
 /**
@@ -427,7 +417,7 @@ export const tracingMiddleware = createMiddleware({ type: 'function' })
  * Automatically resolves user's default team
  */
 export const authWithTeamMiddleware = createMiddleware({ type: 'function' })
-  .middleware([tracingMiddleware])
+  .middleware([analyticsFlushMiddleware])
   .server(async ({ next, context }) => {
     const team = await resolveUserTeam(context.user.id);
 

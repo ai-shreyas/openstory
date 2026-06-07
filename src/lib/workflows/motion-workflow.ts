@@ -25,7 +25,7 @@ import { computeMotionPromptInputHash } from '@/lib/ai/input-hash';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
 import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
-import { microsToUsd, type Microdollars } from '@/lib/billing/money';
+import { microsToUsd } from '@/lib/billing/money';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
@@ -35,7 +35,6 @@ import {
   submitMotionJob,
 } from '@/lib/motion/motion-generation';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
-import { endSpanSuccess, startGenAISpan } from '@/lib/observability/tracer';
 import { getGenerationChannel } from '@/lib/realtime';
 import { simpleHash } from '@/lib/utils/hash';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -95,29 +94,6 @@ function classifyMotionFailure(message: string): MotionPollOutcome {
   return isContentRejectionError(message)
     ? { kind: 'rejected', rejection: message }
     : { kind: 'failed', error: `Motion generation failed: ${message}` };
-}
-
-function recordMotionObservation(params: {
-  model: string;
-  prompt: string;
-  imageUrl: string;
-  videoUrl: string;
-  cost: Microdollars;
-  videoDuration: number;
-  generationTimeMs: number;
-}) {
-  const span = startGenAISpan('fal-motion', {
-    model: params.model,
-    provider: 'fal',
-    operation: 'generate_content',
-    input: { prompt: params.prompt, imageUrl: params.imageUrl },
-    metadata: {
-      videoDuration: params.videoDuration,
-      generationTimeMs: params.generationTimeMs,
-    },
-  });
-  span.setAttribute('gen_ai.usage.cost', microsToUsd(params.cost));
-  endSpanSuccess(span, { videoUrl: params.videoUrl });
 }
 
 export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowInput> {
@@ -571,18 +547,6 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       IMAGE_TO_VIDEO_MODELS[model].id,
       billedUnits
     );
-
-    await step.do('record-motion-observation', async () => {
-      recordMotionObservation({
-        model,
-        prompt: input.prompt,
-        imageUrl: input.imageUrl,
-        videoUrl,
-        cost: actualCost,
-        videoDuration: duration,
-        generationTimeMs: Date.now() - job.submittedAt,
-      });
-    });
 
     // Deduct credits (skip if team used own fal key). Routed through
     // deductWorkflowCredits so insufficient balances warn-and-skip (with an

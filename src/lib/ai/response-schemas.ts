@@ -6,21 +6,15 @@
  */
 
 import { z } from 'zod';
-import { getLogger } from '@/lib/observability/logger';
-
-const logger = getLogger(['openstory', 'ai', 'response-schemas']);
 
 import {
   characterBibleEntrySchema,
   continuitySchema,
   elementBibleEntrySchema,
   locationBibleEntrySchema,
-  motionPromptSchema,
   musicDesignSchema,
   projectMetadataSchema,
-  sceneAnalysisSchema,
   sceneSchema,
-  visualPromptSchema,
 } from './scene-analysis.schema';
 
 /**
@@ -95,86 +89,15 @@ export const sceneSplittingResultSchema = z.object({
 export type SceneSplittingResult = z.infer<typeof sceneSplittingResultSchema>;
 
 /**
- * Phase 2: Character Extraction
+ * Music Prompt Generation Response
  */
-export const characterExtractionResultSchema = sceneAnalysisSchema
-  .pick({
-    status: true,
-    characterBible: true,
-  })
-  .required();
-
-/**
- * Phase 2b: Location Extraction
- */
-export const locationExtractionResultSchema = z.object({
-  status: z.enum(['success', 'error', 'rejected']),
-  locationBible: z.array(locationBibleEntrySchema),
-});
-
-/**
- * Phase 3: Visual Prompt Generation
- */
-export const visualPromptGenerationResultSchema = z.object({
-  status: z
-    .enum(['success', 'error', 'rejected'])
-    .meta({ description: 'Processing status: success, error, or rejected' }),
-  scenes: z
-    .array(
-      sceneSchema
-        .pick({
-          sceneId: true,
-        })
-        .required()
-        .extend({
-          visual: visualPromptSchema.meta({
-            description: 'Image generation prompt data',
-          }),
-          continuity: continuitySchema.meta({
-            description: 'Continuity tracking for scene consistency',
-          }),
-        })
-    )
-    .meta({ description: 'Array of scenes with visual prompts' }),
-});
-
-/**
- * Phase 4: Motion Prompt Generation
- *
- * Note: The motion field uses a preprocess to handle AI model variations.
- * Some models return motion as an array instead of an object - we take the first element.
- */
-export const motionPromptGenerationResultSchema = z.object({
-  status: z
-    .enum(['success', 'error', 'rejected'])
-    .meta({ description: 'Processing status: success, error, or rejected' }),
-  scenes: z
-    .array(
-      sceneSchema
-        .pick({
-          sceneId: true,
-        })
-        .required()
-        .extend({
-          prompts: z
-            .object({
-              // Handle AI returning motion as array (take first element) or object
-              motion: z
-                .preprocess((val) => {
-                  if (Array.isArray(val) && val.length > 0) {
-                    logger.warn(
-                      'AI returned motion as array, using first element'
-                    );
-                    return val[0];
-                  }
-                  return val;
-                }, motionPromptSchema)
-                .meta({ description: 'Motion/video generation prompt data' }),
-            })
-            .meta({ description: 'Motion generation prompts for this scene' }),
-        })
-    )
-    .meta({ description: 'Array of scenes with motion prompts' }),
+export const musicPromptSchema = z.object({
+  tags: z
+    .string()
+    .describe('Comma-separated genre/style tags for ACE-Step (20-50 words)'),
+  prompt: z
+    .string()
+    .describe('Descriptive music prompt as fallback for non-tag models'),
 });
 
 /**

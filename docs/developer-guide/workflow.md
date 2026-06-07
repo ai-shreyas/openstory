@@ -74,12 +74,12 @@ flowchart TD
     MotionMusicPrompts -->|"motionPrompts + musicPrompt"| MotionBatch
     MotionMusicPrompts -->|"musicPrompt + tags"| MusicGen
 
-    MergeAudioVideo --> Trace
-    MotionMusicPrompts -->|"if no motion/music"| Trace
-    Trace["<b>Record Trace</b> · <1s<br/>IN: script, styleConfig, completeScenes[]<br/>OUT: Langfuse trace + generation.complete"]
+    MergeAudioVideo --> Done
+    MotionMusicPrompts -->|"if no motion/music"| Done
+    Done["<b>Complete</b> · <1s<br/>OUT: generation.complete + completeScenes[]"]
 
     style Verify fill:#2d2d44,color:#fff
-    style Trace fill:#1a472a,color:#fff
+    style Done fill:#1a472a,color:#fff
 ```
 
 > **Timing source:** Measured from local Cloudflare Workflows runs (Workerd via Miniflare) for a 9-scene run. As of #929, Phase 4 runs **sequentially** — frame images render first, then motion/music prompts — because the motion-prompt pass is conditioned on the actual rendered starting frame (passed to the LLM as a vision input). This trades the prior image∥prompt parallelism for image-grounded motion.
@@ -161,7 +161,7 @@ Uses streaming LLM output to create frames progressively as scenes arrive, plus 
 
 **Steps:**
 
-1. **`prepare-scene-splitting`** — Fetches the prompt template from Langfuse
+1. **`prepare-scene-splitting`** — Resolves the prompt template from the local prompt registry
 2. **`scene-splitting-stream`** — Streams the LLM response through `createStreamingSceneParser()`:
    - Parses incremental JSON chunks via `partial-json`
    - On each complete scene: calls `upsertFrame()` to create/update the frame in DB, emits `generation.scene:new` and `generation.frame:created`
@@ -298,11 +298,7 @@ flowchart TD
     Music --> MergeAV
 ```
 
-### Final: Record Trace + Return
-
-**Step:** `record-workflow-trace`
-
-- Records a trace to Langfuse for observability (input script, style config, aspect ratio, complete scenes, timing)
+### Final: Return
 
 Returns the `completeScenes` array.
 

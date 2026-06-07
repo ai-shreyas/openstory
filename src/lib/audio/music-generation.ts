@@ -7,13 +7,8 @@ import {
   type AudioModel,
   type AudioModelConfig,
 } from '@/lib/ai/models';
-import { microsToUsd, type Microdollars } from '@/lib/billing/money';
+import { type Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
-import {
-  endSpanError,
-  endSpanSuccess,
-  startGenAISpan,
-} from '@/lib/observability/tracer';
 import { generateAudio } from '@tanstack/ai';
 import { falAudio } from '@tanstack/ai-fal';
 
@@ -36,7 +31,6 @@ export type GenerateMusicOptions = {
   model?: AudioModel;
   /** Number of diffusion steps (default: 27) */
   steps?: number;
-  traceName?: string;
 };
 
 export type MusicResult = {
@@ -135,31 +129,7 @@ export async function generateMusic(
   const modelKey = options.model || DEFAULT_MUSIC_MODEL;
   const modelConfig = AUDIO_MODELS[modelKey];
 
-  const span = startGenAISpan(options.traceName ?? 'fal-music', {
-    model: modelKey,
-    provider: 'fal',
-    operation: 'generate_content',
-    input: {
-      prompt: options.prompt,
-      tags: options.tags,
-      duration: options.duration,
-      instrumental: options.instrumental,
-    },
-  });
-
-  try {
-    const result = await callFalAudio(options, modelConfig);
-
-    if (result.metadata.cost) {
-      span.setAttribute('gen_ai.usage.cost', microsToUsd(result.metadata.cost));
-    }
-    endSpanSuccess(span, { audioUrl: result.audioUrl });
-
-    return result;
-  } catch (error) {
-    endSpanError(span, extractFalErrorMessage(error));
-    throw error;
-  }
+  return callFalAudio(options, modelConfig);
 }
 
 async function callFalAudio(

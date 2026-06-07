@@ -194,7 +194,7 @@ const visualPromptComponentsSchema = z.object({
     .meta({ description: 'Mood, emotion, and ambient feeling' }),
 });
 
-export const visualPromptSchema = z.object({
+const visualPromptSchema = z.object({
   fullPrompt: z.string().meta({
     description: 'Complete image generation prompt with all visual details',
   }),
@@ -408,7 +408,7 @@ const audioDesignSchema = z.object({
 // Continuity Schema
 // ============================================================================
 
-export const continuitySchema = z.object({
+const continuitySchema = z.object({
   characterTags: z.array(z.string()).meta({
     description:
       "Snake_case slug of each character's name as written in the script (e.g., 'GIRL ONE' → 'girl_one'). Optional descriptive context may be appended after the name slug (e.g., 'girl_one_bathroom_morning'). One entry per character appearing in the scene.",

@@ -78,7 +78,6 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
         duration,
         instrumental: true,
         model,
-        traceName: 'sequence-music',
         scopedDb,
       });
 

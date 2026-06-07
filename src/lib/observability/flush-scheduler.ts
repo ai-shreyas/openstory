@@ -4,8 +4,9 @@
  * the work to.
  */
 
-import { flushTracing } from './langfuse';
+import { getPostHogClient } from '@/lib/posthog-server';
+import { flushAIObservability } from './ai-otel';
 
-export async function scheduleFlushTracing(): Promise<void> {
-  await flushTracing();
+export async function scheduleFlushAnalytics(): Promise<void> {
+  await Promise.all([getPostHogClient()?.flush(), flushAIObservability()]);
 }

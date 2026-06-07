@@ -9,6 +9,7 @@ import {
   ZERO_MICROS,
   type Microdollars,
 } from '@/lib/billing/money';
+import { aiObservabilityMiddleware } from '@/lib/observability/ai-otel';
 import type { ChatMessage } from '@/lib/prompts';
 import { chat, type DebugOption, type TokenUsage } from '@tanstack/ai';
 import type { ProviderPreferences } from '@tanstack/ai-openrouter';
@@ -75,17 +76,15 @@ export type LLMRequestParams<T = unknown> = {
   presence_penalty?: number;
   stream?: boolean;
   provider?: ProviderPreferences;
-  /** Observation name for Langfuse (forwarded via AI event bridge) */
+  /** Observation name for PostHog LLM analytics (forwarded via AI event bridge) */
   observationName?: string;
-  /** Prompt reference for Langfuse trace linking */
-  prompt?: { name: string; version: number; isFallback: boolean };
-  /** Tags for Langfuse filtering */
+  /** Tags for PostHog filtering */
   tags?: string[];
-  /** Additional metadata for Langfuse */
+  /** Additional observability metadata */
   metadata?: Record<string, unknown>;
-  /** User id for Langfuse/PostHog user attribution */
+  /** User id for PostHog user attribution */
   userId?: string;
-  /** Session id for Langfuse trace grouping (typically sequenceId) */
+  /** Session id for PostHog grouping (typically sequenceId) */
   sessionId?: string;
   responseSchema?: z.ZodType<T>;
   /** Resolved LLM key info — `via` decides endpoint routing + auth scheme. */
@@ -247,17 +246,6 @@ function validateStructuredOutputSupport(model: string): void {
         `Supported models: ${[...STRUCTURED_OUTPUT_MODELS].join(', ')}`
     );
   }
-}
-
-function buildChatMetadata(params: LLMRequestParams) {
-  return {
-    observationName: params.observationName,
-    prompt: params.prompt,
-    tags: params.tags,
-    metadata: params.metadata,
-    userId: params.userId,
-    sessionId: params.sessionId,
-  };
 }
 
 function baseChatOptions(params: LLMRequestParams) {
@@ -521,14 +509,20 @@ export async function* callLLMStream<T>(
 
   const baseOptions = {
     ...baseChatOptions(params),
-    metadata: buildChatMetadata(params),
     modelOptions: {
       ...buildModelOptions(params),
       streamOptions: { includeUsage: true },
     },
-    // Capture the terminal usage (carries OpenRouter's `cost`) so callers can
-    // bill the call via `llmCostFromUsage`.
     middleware: [
+      ...aiObservabilityMiddleware({
+        observationName: params.observationName,
+        tags: params.tags,
+        metadata: params.metadata,
+        userId: params.userId,
+        sessionId: params.sessionId,
+      }),
+      // Capture the terminal usage (carries OpenRouter's `cost`) so callers can
+      // bill the call via `llmCostFromUsage`.
       {
         onFinish: (_ctx: unknown, info: { usage?: TokenUsage }) => {
           usage = info.usage;

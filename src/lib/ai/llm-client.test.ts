@@ -29,6 +29,13 @@ vi.doMock('./create-adapter', () => ({
   createAdapter: () => ({ kind: 'text', name: 'mock' }),
 }));
 
+// Mock the PostHog OTel middleware factory — observability hints are
+// forwarded to it rather than to chat() metadata.
+const mockAIObservabilityMiddleware = vi.fn(() => []);
+vi.doMock('@/lib/observability/ai-otel', () => ({
+  aiObservabilityMiddleware: mockAIObservabilityMiddleware,
+}));
+
 // Dynamic import so vi.doMock above is in effect when llm-client (and its
 // `./create-adapter` import) resolves. Static imports are hoisted above
 // vi.doMock and would bypass the mocks.
@@ -45,6 +52,7 @@ const usage = (cost?: number): TokenUsage => ({
 describe('llm-client', () => {
   beforeEach(() => {
     mockChat.mockClear();
+    mockAIObservabilityMiddleware.mockClear();
   });
 
   describe('callLLMStream', () => {
@@ -103,7 +111,7 @@ describe('llm-client', () => {
       expect(chunks).toEqual(['A', 'B']);
     });
 
-    it('forwards userId and sessionId to chat metadata', async () => {
+    it('forwards userId and sessionId to the observability middleware', async () => {
       mockChat.mockReturnValue(
         (async function* () {
           yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'ok' };
@@ -123,14 +131,17 @@ describe('llm-client', () => {
       }
 
       expect(mockChat).toHaveBeenCalledTimes(1);
+      expect(mockAIObservabilityMiddleware).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-123',
+          sessionId: 'seq-456',
+          observationName: 'unit-test',
+        })
+      );
       const firstCall = mockChat.mock.calls[0];
       if (!firstCall) throw new Error('expected mockChat to have been called');
-      const callArgs = firstCall[0];
-      expect(callArgs.metadata).toMatchObject({
-        userId: 'user-123',
-        sessionId: 'seq-456',
-        observationName: 'unit-test',
-      });
+      // The factory's middleware array is passed through to chat().
+      expect(firstCall[0].middleware).toEqual([]);
     });
 
     const drain = async (gen: AsyncIterable<unknown>) => {

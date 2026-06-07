@@ -6,16 +6,11 @@ import {
   IMAGE_MODELS,
   type TextToImageModel,
 } from '@/lib/ai/models';
-import { type Microdollars, microsToUsd } from '@/lib/billing/money';
+import { type Microdollars } from '@/lib/billing/money';
 import {
   DEFAULT_IMAGE_SIZE,
   type ImageSize,
 } from '@/lib/constants/aspect-ratios';
-import {
-  endSpanError,
-  endSpanSuccess,
-  startGenAISpan,
-} from '@/lib/observability/tracer';
 
 import { getEnv } from '#env';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -49,7 +44,6 @@ export type ImageGenerationParams = {
   acceleration?: 'none' | 'regular' | 'high';
   enablePromptExpansion?: boolean;
   referenceImageUrls?: string[];
-  traceName?: string;
 };
 
 /** Non-serializable options passed separately from ImageGenerationParams */
@@ -60,10 +54,6 @@ export type ImageGenerationOptions = {
     logs?: string[];
     progress?: number;
   }) => void;
-  /** User id for span attribution (Langfuse user.id, PostHog distinct_id) */
-  userId?: string;
-  /** Session id for Langfuse trace grouping (typically sequenceId) */
-  sessionId?: string;
 };
 
 export type ImageGenerationResult = {
@@ -119,32 +109,10 @@ export async function generateImageWithProvider(
 ): Promise<ImageGenerationResult> {
   const modelId = getTextToImageModelId(params.model);
 
-  const span = startGenAISpan(params.traceName ?? 'fal-image', {
-    model: params.model,
-    provider: 'fal',
-    operation: 'generate_content',
-    userId: options?.userId,
-    sessionId: options?.sessionId,
-    input: {
-      prompt: params.prompt,
-      imageSize: params.imageSize,
-      ...(params.referenceImageUrls?.length && {
-        referenceImageUrls: params.referenceImageUrls,
-      }),
-    },
-  });
-
   try {
-    const result = await generateImageInternal(params, modelId, options);
-
-    if (result.metadata.cost) {
-      span.setAttribute('gen_ai.usage.cost', microsToUsd(result.metadata.cost));
-    }
-    endSpanSuccess(span, { imageUrls: result.imageUrls });
-    return result;
+    return await generateImageInternal(params, modelId, options);
   } catch (error) {
     const errorMessage = extractFalErrorMessage(error);
-    endSpanError(span, errorMessage);
 
     // Re-throw with the full detail so workflow failure handlers get the real message
     if (errorMessage !== (error instanceof Error ? error.message : '')) {

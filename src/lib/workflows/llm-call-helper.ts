@@ -25,6 +25,7 @@ import { extractStreamingStringField } from '@/lib/ai/stream-extract';
 import type { Microdollars } from '@/lib/billing/money';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { aiObservabilityMiddleware } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import {
   getChatPrompt,
@@ -77,7 +78,7 @@ async function resolveVisionImageSources(
 }
 
 /**
- * Flatten Langfuse/local chat messages into `chat()`-ready form: system turns
+ * Flatten chat messages into `chat()`-ready form: system turns
  * become `systemPrompts`, the rest become `{ role, content }`. When vision
  * sources are supplied they are appended to the LAST user turn as image
  * content parts (its text is preserved), so a vision-capable model sees the
@@ -197,7 +198,7 @@ async function resolveCallKey(callContext: DurableLLMCallContext) {
  * Execute a durable LLM call. Returns the validated parsed object.
  *
  * Step layout (deterministic names):
- *   1. `prepare-${name}` — fetch prompt from Langfuse
+ *   1. `prepare-${name}` — resolve the chat prompt
  *   2. `${name}` — LLM call (JSON-stringified result for step boundary)
  *   3. `deduct-llm-credits-${name}` — credit deduction (only if scopedDb passed)
  */
@@ -221,9 +222,7 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
     ...config.additionalMetadata,
   };
 
-  // Step 1: Prepare — fetch the chat prompt. promptReference (Langfuse
-  // ChatPromptClient) isn't Rpc.Serializable so we refetch inside the LLM
-  // step rather than passing it through the boundary.
+  // Step 1: Prepare — resolve the chat prompt.
   const { messages } = await step.do(`prepare-${name}`, async () => {
     const { messages } = await getChatPrompt(
       config.promptName,
@@ -241,13 +240,6 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
     name,
     async (): Promise<{ jsonText: string; costMicros: Microdollars }> => {
       const adapter = createAdapter(modelId, llmKeyInfo);
-
-      // Refetch prompt inside the LLM step — promptReference can't cross the
-      // step boundary (not Rpc.Serializable).
-      const { prompt: promptReference } = await getChatPrompt(
-        config.promptName,
-        config.promptVariables
-      );
 
       logger.info(`[LLM:${logName}:cf] Starting call`, {
         model: modelId,
@@ -291,16 +283,15 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
             ...reasoningModelOptions(config.reasoning),
             maxCompletionTokens: Math.floor(getContextWindow(modelId) * 0.5),
           },
-          metadata: {
-            observationName: logName,
-            prompt: promptReference,
-            tags: logTags,
-            metadata: logMetadata,
-            sessionId: callContext.sequenceId,
-            userId: callContext.userId,
-          },
           outputSchema: config.responseSchema,
           middleware: [
+            ...aiObservabilityMiddleware({
+              observationName: logName,
+              tags: logTags,
+              metadata: logMetadata,
+              sessionId: callContext.sequenceId,
+              userId: callContext.userId,
+            }),
             {
               onFinish: (_ctx, info) => {
                 capturedUsage = info.usage;
@@ -393,10 +384,6 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
     `${name}-stream`,
     async (): Promise<{ jsonText: string; costMicros: Microdollars }> => {
       const adapter = createAdapter(modelId, llmKeyInfo);
-      const { prompt: promptReference } = await getChatPrompt(
-        config.promptName,
-        config.promptVariables
-      );
 
       logger.info(`[LLM:${logName}:cf] Starting streaming call`, {
         model: modelId,
@@ -453,16 +440,15 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
             ...reasoningModelOptions(config.reasoning),
             maxCompletionTokens: Math.floor(getContextWindow(modelId) * 0.5),
           },
-          metadata: {
-            observationName: logName,
-            prompt: promptReference,
-            tags: logTags,
-            metadata: logMetadata,
-            sessionId: callContext.sequenceId,
-            userId: callContext.userId,
-          },
           outputSchema: config.responseSchema,
           middleware: [
+            ...aiObservabilityMiddleware({
+              observationName: logName,
+              tags: logTags,
+              metadata: logMetadata,
+              sessionId: callContext.sequenceId,
+              userId: callContext.userId,
+            }),
             {
               onFinish: (_ctx, info) => {
                 capturedUsage = info.usage;

@@ -123,7 +123,6 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
           // Use library reference image(s) for visual consistency
           referenceImageUrls:
             referenceUrls.length > 0 ? referenceUrls : undefined,
-          traceName: 'location-sheet-image',
         } satisfies ImageGenerationParams;
       }
     );

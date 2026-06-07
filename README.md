@@ -35,7 +35,7 @@ OpenStory takes a script and produces a sequence of AI-generated frames — imag
 | **Runtime**    | [Bun](https://bun.com)                                                                                                                                                                        |
 | **Framework**  | [TanStack Start](https://tanstack.com/start) + [TanStack Router](https://tanstack.com/router) + [Vite](https://vite.dev)                                                                      |
 | **Database**   | [Drizzle ORM](https://orm.drizzle.team) + [Cloudflare D1](https://developers.cloudflare.com/d1) (SQLite)                                                                                      |
-| **AI**         | [TanStack AI](https://tanstack.com/ai) + [Fal.ai](https://fal.ai) + [OpenRouter](https://openrouter.ai) + [Langfuse](https://langfuse.com) (observability)                                    |
+| **AI**         | [TanStack AI](https://tanstack.com/ai) + [Fal.ai](https://fal.ai) + [OpenRouter](https://openrouter.ai) + [PostHog](https://posthog.com) (LLM observability)                                  |
 | **Workflows**  | [Cloudflare Workflows](https://developers.cloudflare.com/workflows) (durable execution)                                                                                                       |
 | **Realtime**   | [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects) (SSE progress updates)                                                                                        |
 | **Storage**    | [Cloudflare R2](https://developers.cloudflare.com/r2) (S3-compatible)                                                                                                                         |
@@ -71,7 +71,7 @@ To use AI generation features you need two API keys — run `bun setup` to add t
 - `FAL_KEY` — [fal.ai](https://fal.ai/dashboard/keys) for image, video & audio generation
 - `OPENROUTER_KEY` — [OpenRouter](https://openrouter.ai/settings/keys) for LLM script analysis
 
-See [`.env.example`](.env.example) for all optional configuration (Google OAuth, Stripe, Langfuse, PostHog, remote R2).
+See [`.env.example`](.env.example) for all optional configuration (Google OAuth, Stripe, PostHog, remote R2).
 
 ## Scripts
 

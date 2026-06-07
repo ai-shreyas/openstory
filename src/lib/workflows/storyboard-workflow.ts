@@ -141,7 +141,6 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
           model: PREVIEW_IMAGE_MODEL,
           prompt,
           imageSize: aspectRatioToImageSize(aspectRatio),
-          traceName: 'poster-image',
         });
 
         const posterUrl = result.imageUrls[0];

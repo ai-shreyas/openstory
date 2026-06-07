@@ -31,7 +31,6 @@ import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { assembleMotionPrompt } from '@/lib/motion/assemble-motion-prompt';
-import { recordWorkflowTrace } from '@/lib/observability/langfuse';
 import { buildCastCharacterBible } from '@/lib/prompts/character-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
@@ -688,20 +687,6 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
         // 45 minutes per motion/music grandchild (in parallel) plus queue
         // backlog under a many-sequence burst.
         timeout: '90 minutes',
-      });
-    }
-
-    if (sequenceId) {
-      await step.do('record-workflow-trace', async () => {
-        await recordWorkflowTrace(
-          'analyzeScriptWorkflow',
-          { script, styleConfig, aspectRatio },
-          completeScenes,
-          sequenceId,
-          input.userId,
-          analysisModelId,
-          new Date(startTime)
-        );
       });
     }
 

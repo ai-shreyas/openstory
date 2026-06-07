@@ -319,7 +319,7 @@ export async function* streamScriptEnhancement(
   }
 
   const sanitized = sanitizeScriptContent(data.script);
-  const { prompt, compiled } = await getPrompt('script/enhance');
+  const { compiled } = await getPrompt('script/enhance');
   const elements = data.elements ?? [];
   const userPrompt = createUserPrompt(sanitized, {
     style: data.style,
@@ -375,14 +375,6 @@ export async function* streamScriptEnhancement(
     { role: 'user', content: userContent },
   ];
 
-  const promptRef = prompt
-    ? {
-        name: prompt.name,
-        version: prompt.version,
-        isFallback: false,
-      }
-    : undefined;
-
   // Web search runs as OpenRouter's server tool — the model decides when to
   // search and OpenRouter executes it server-side within the agent loop.
   // Gate it out of E2E entirely (record + replay): live search results would
@@ -403,7 +395,6 @@ export async function* streamScriptEnhancement(
     ...(useWebSearch && { webSearch: true }),
     reasoning: PROMPT_REASONING,
     observationName: 'script-enhance',
-    prompt: promptRef,
     tags: ['script-enhance', model],
     userId: ctx.userId,
     apiKey: llmKey,
