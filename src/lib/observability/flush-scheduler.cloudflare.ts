@@ -9,21 +9,12 @@
  */
 
 import { waitUntil } from 'cloudflare:workers';
-import { getPostHogClient } from '@/lib/posthog-server';
-import { flushAIObservability } from './ai-otel';
-import { getLogger } from './logger';
-
-const logger = getLogger(['openstory', 'observability', 'flush-scheduler']);
+import { flushAnalytics } from './flush-analytics';
 
 export async function scheduleFlushAnalytics(): Promise<void> {
   // `waitUntil` keeps the isolate alive until the promise resolves but does
-  // not block the response. If the flush throws, swallow + log so we don't
-  // surface analytics failures to the user.
-  waitUntil(
-    Promise.all([getPostHogClient()?.flush(), flushAIObservability()]).catch(
-      (err: unknown) => {
-        logger.error('background analytics flush failed', { err });
-      }
-    )
-  );
+  // not block the response. `flushAnalytics` never rejects (allSettled +
+  // log), so a failed flush can't surface to the user — and can't settle
+  // this promise while the other flush is still in flight.
+  waitUntil(flushAnalytics());
 }

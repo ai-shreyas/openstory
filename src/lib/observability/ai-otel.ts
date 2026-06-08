@@ -29,6 +29,9 @@ import {
 import type { ChatMiddleware } from '@tanstack/ai';
 import { otelMiddleware } from '@tanstack/ai/middlewares/otel';
 import { createServerOnlyFn } from '@tanstack/react-start';
+import { getLogger, toErrorPayload } from './logger';
+
+const logger = getLogger(['openstory', 'observability', 'ai-otel']);
 
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 
@@ -46,19 +49,32 @@ const getAITracer = createServerOnlyFn((): Tracer | null => {
       import.meta.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN;
 
     if (projectToken) {
-      const host =
-        process.env.VITE_PUBLIC_POSTHOG_HOST ||
-        import.meta.env.VITE_PUBLIC_POSTHOG_HOST ||
-        DEFAULT_POSTHOG_HOST;
-      const exporter = new OTLPTraceExporter({
-        url: `${new URL(host).origin}/i/v0/ai/otel`,
-        headers: { Authorization: `Bearer ${projectToken}` },
-      });
-      provider = new BasicTracerProvider({
-        spanProcessors: [new BatchSpanProcessor(exporter)],
-      });
+      try {
+        const host =
+          process.env.VITE_PUBLIC_POSTHOG_HOST ||
+          import.meta.env.VITE_PUBLIC_POSTHOG_HOST ||
+          DEFAULT_POSTHOG_HOST;
+        const exporter = new OTLPTraceExporter({
+          url: `${new URL(host).origin}/i/v0/ai/otel`,
+          headers: { Authorization: `Bearer ${projectToken}` },
+        });
+        provider = new BasicTracerProvider({
+          spanProcessors: [new BatchSpanProcessor(exporter)],
+        });
+      } catch (error) {
+        // Bad config (e.g. a malformed VITE_PUBLIC_POSTHOG_HOST) must
+        // disable analytics, not fail the chat() call this factory runs in.
+        // Cache the failure so it isn't re-thrown on every call.
+        provider = null;
+        logger.error('PostHog LLM analytics disabled: invalid config', {
+          err: toErrorPayload(error),
+        });
+      }
     } else {
       provider = null;
+      logger.warn(
+        'PostHog LLM analytics disabled — VITE_PUBLIC_POSTHOG_PROJECT_TOKEN unset'
+      );
     }
   }
   return provider ? provider.getTracer('openstory') : null;
