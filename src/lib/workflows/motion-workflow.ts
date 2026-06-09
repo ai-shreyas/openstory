@@ -441,6 +441,8 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             motionBucket: input.motionBucket,
             aspectRatio: input.aspectRatio,
             generateAudio: input.generateAudio,
+            // Cast/element reference images (#873) — only Kling v3 Pro emits them.
+            referenceImages: input.referenceImages,
             scopedDb,
           });
           return { ok: true as const, job };

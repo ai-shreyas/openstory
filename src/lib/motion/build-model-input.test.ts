@@ -185,6 +185,53 @@ describe('buildModelInput', () => {
     }
   });
 
+  describe('reference images (#873)', () => {
+    const referenceImages = [
+      {
+        referenceImageUrl: 'https://example.com/jack-sheet.png',
+        description: 'Jack - tall man with a scar',
+        role: 'character' as const,
+      },
+      {
+        referenceImageUrl: 'https://example.com/logo.png',
+        description: 'ACME_LOGO - red circular badge',
+        role: 'element' as const,
+      },
+    ];
+
+    it('Kling emits an elements array keyed on frontal_image_url', () => {
+      const result = build('kling_v3_pro', { referenceImages });
+      expect(result.elements).toEqual([
+        { frontal_image_url: 'https://example.com/jack-sheet.png' },
+        { frontal_image_url: 'https://example.com/logo.png' },
+      ]);
+    });
+
+    it('Kling appends an @ElementN legend matching the elements order', () => {
+      const result = build('kling_v3_pro', { referenceImages });
+      expect(result.prompt).toContain(baseOptions.prompt);
+      expect(result.prompt).toContain('@Element1: Jack - tall man with a scar');
+      expect(result.prompt).toContain(
+        '@Element2: ACME_LOGO - red circular badge'
+      );
+    });
+
+    it('Kling without references is unchanged (no elements key)', () => {
+      const result = build('kling_v3_pro');
+      expect(result).not.toHaveProperty('elements');
+      expect(result.prompt).toBe(baseOptions.prompt);
+    });
+
+    it('non-Kling models ignore references entirely', () => {
+      for (const key of Object.keys(IMAGE_TO_VIDEO_MODELS)) {
+        if (key === 'kling_v3_pro') continue;
+        const result = build(safeImageToVideoModel(key), { referenceImages });
+        expect(result).not.toHaveProperty('elements');
+        expect(result.prompt).toBe(baseOptions.prompt);
+      }
+    });
+  });
+
   describe('common behavior', () => {
     it('always includes prompt', () => {
       for (const key of Object.keys(IMAGE_TO_VIDEO_MODELS)) {

@@ -1,0 +1,92 @@
+import { describe, expect, it } from 'vitest';
+import type { CharacterMinimal, SequenceElementMinimal } from '@/lib/db/schema';
+import { buildMotionReferenceImages } from './build-motion-references';
+
+const character = (
+  name: string,
+  sheetImageUrl: string | null
+): CharacterMinimal => ({
+  id: `char-${name}`,
+  characterId: name.toLowerCase(),
+  name,
+  sheetImageUrl,
+  sheetStatus: 'completed',
+  sheetInputHash: 'hash',
+  physicalDescription: `${name} is tall`,
+  consistencyTag: name.toLowerCase(),
+});
+
+const element = (token: string, imageUrl: string): SequenceElementMinimal => ({
+  id: `el-${token}`,
+  token,
+  description: `${token} description`,
+  imageUrl,
+  consistencyTag: token.toLowerCase(),
+});
+
+describe('buildMotionReferenceImages', () => {
+  it('returns refs only for characters/elements the scene references', () => {
+    const refs = buildMotionReferenceImages({
+      scene: {
+        continuity: { characterTags: ['Alice'], elementTags: ['LOGO'] },
+        originalScript: { extract: '' },
+      },
+      characters: [
+        character('Alice', 'https://example.com/alice.png'),
+        character('Bob', 'https://example.com/bob.png'),
+      ],
+      elements: [
+        element('LOGO', 'https://example.com/logo.png'),
+        element('PHONE', 'https://example.com/phone.png'),
+      ],
+    });
+
+    expect(refs).toEqual([
+      {
+        referenceImageUrl: 'https://example.com/alice.png',
+        description: 'Alice - Alice is tall',
+        role: 'character',
+      },
+      {
+        referenceImageUrl: 'https://example.com/logo.png',
+        description: 'LOGO - LOGO description',
+        role: 'element',
+      },
+    ]);
+  });
+
+  it('matches elements named in the script even without an explicit tag', () => {
+    const refs = buildMotionReferenceImages({
+      scene: {
+        continuity: { characterTags: [], elementTags: [] },
+        originalScript: { extract: 'She holds the PHONE up high.' },
+      },
+      characters: [],
+      elements: [element('PHONE', 'https://example.com/phone.png')],
+    });
+    expect(refs.map((r) => r.referenceImageUrl)).toEqual([
+      'https://example.com/phone.png',
+    ]);
+  });
+
+  it('skips characters/elements with no reference image', () => {
+    const refs = buildMotionReferenceImages({
+      scene: {
+        continuity: { characterTags: ['Alice'], elementTags: ['LOGO'] },
+        originalScript: { extract: '' },
+      },
+      characters: [character('Alice', null)],
+      elements: [element('LOGO', '')],
+    });
+    expect(refs).toEqual([]);
+  });
+
+  it('returns nothing for a scene with no continuity', () => {
+    const refs = buildMotionReferenceImages({
+      scene: null,
+      characters: [character('Alice', 'https://example.com/alice.png')],
+      elements: [element('LOGO', 'https://example.com/logo.png')],
+    });
+    expect(refs).toEqual([]);
+  });
+});

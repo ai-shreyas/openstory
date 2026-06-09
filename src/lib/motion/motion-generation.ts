@@ -30,9 +30,16 @@ export type GenerateMotionOptions = {
    *  the model's native audio output (sfx/ambient/lip-sync). Omitting the
    *  flag lets the API schema default apply (true for audio-capable models). */
   generateAudio?: boolean;
+  /**
+   * Character + element reference images for identity consistency across the
+   * clip (#873). Only emitted for models that accept reference images (Kling
+   * v3 Pro, via its `elements` field); ignored by every other model.
+   */
+  referenceImages?: ReferenceImageDescription[];
 };
 
 import { ensureExternallyFetchableUrl } from '@/lib/storage/external-url';
+import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import { buildModelInput } from './build-model-input';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -89,9 +96,24 @@ export async function submitMotionJob(
     falApiKeyInfo.key
   );
 
+  // Reference images (#873): only Kling v3 Pro consumes them, so only it pays
+  // the ensure-fetchable upload cost. The same locally-served /r2/ URLs that
+  // imageUrl needs swapped also apply to character sheets / element images.
+  const referenceImages =
+    modelKey === 'kling_v3_pro' && options.referenceImages?.length
+      ? await Promise.all(
+          options.referenceImages.map(async (ref) => ({
+            ...ref,
+            referenceImageUrl: await ensureExternallyFetchableUrl(
+              ref.referenceImageUrl
+            ),
+          }))
+        )
+      : undefined;
+
   // Prepare the model input
   const modelInput = buildModelInput(
-    { ...options, imageUrl },
+    { ...options, imageUrl, referenceImages },
     modelConfig,
     modelKey
   );

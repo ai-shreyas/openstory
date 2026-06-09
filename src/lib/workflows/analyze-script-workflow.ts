@@ -31,6 +31,7 @@ import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { assembleMotionPrompt } from '@/lib/motion/assemble-motion-prompt';
+import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { recordWorkflowTrace } from '@/lib/observability/langfuse';
 import { buildCastCharacterBible } from '@/lib/prompts/character-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -665,6 +666,14 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           characterTags,
           duration: scene.metadata?.durationSeconds || 3,
           aspectRatio,
+          // Cast/element refs so motion preserves identity across the clip
+          // (#873) — only Kling v3 Pro emits them. Same library + matcher the
+          // image step uses, so motion attaches the same references.
+          referenceImages: buildMotionReferenceImages({
+            scene,
+            characters: charactersWithSheets,
+            elements: allElements,
+          }),
         };
       });
 
