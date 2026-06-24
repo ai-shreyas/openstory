@@ -89,18 +89,6 @@ export const sceneSplittingResultSchema = z.object({
 export type SceneSplittingResult = z.infer<typeof sceneSplittingResultSchema>;
 
 /**
- * Music Prompt Generation Response
- */
-export const musicPromptSchema = z.object({
-  tags: z
-    .string()
-    .describe('Comma-separated genre/style tags for ACE-Step (20-50 words)'),
-  prompt: z
-    .string()
-    .describe('Descriptive music prompt as fallback for non-tag models'),
-});
-
-/**
  * Music Design + Prompt Generation (combined Phase 7)
  * Classifies each scene's music attributes and synthesizes unified tags + prompt.
  */

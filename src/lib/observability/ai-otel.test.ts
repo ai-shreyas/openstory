@@ -26,8 +26,12 @@ vi.doMock('@tanstack/react-start', () => ({
   createServerOnlyFn: <T>(fn: T) => fn,
 }));
 
-// The enricher/formatter ignore ctx, so an inert stub is sufficient.
-const middlewareCtx: ChatMiddlewareContext = {
+// The enricher/formatter ignore ctx, so an inert stub is sufficient. The
+// capability-DI members (`capabilities`/`get`/`getOptional`/`provide`) are
+// unused here and back a class with private state that no literal can satisfy,
+// so we assert the documented fields to the context type.
+// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- inert test stub; capability-DI members are unused and unconstructable from a literal
+const middlewareCtx = {
   requestId: 'req-1',
   streamId: 'stream-1',
   runId: 'run-1',
@@ -48,8 +52,8 @@ const middlewareCtx: ChatMiddlewareContext = {
   currentMessageId: null,
   accumulatedContent: '',
   messages: [],
-  createId: (prefix) => `${prefix}-1`,
-};
+  createId: (prefix: string) => `${prefix}-1`,
+} as unknown as ChatMiddlewareContext;
 const chatSpanInfo = (): OtelSpanInfo => ({ kind: 'chat', ctx: middlewareCtx });
 const iterationSpanInfo = (iteration: number): OtelSpanInfo => ({
   kind: 'iteration',

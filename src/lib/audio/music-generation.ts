@@ -1,6 +1,5 @@
 import { getEnv } from '#env';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
-import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
   AUDIO_MODELS,
   DEFAULT_MUSIC_MODEL,

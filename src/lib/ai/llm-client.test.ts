@@ -140,8 +140,11 @@ describe('llm-client', () => {
       );
       const firstCall = mockChat.mock.calls[0];
       if (!firstCall) throw new Error('expected mockChat to have been called');
-      // The factory's middleware array is passed through to chat().
-      expect(firstCall[0].middleware).toEqual([]);
+      // The observability middleware (mocked to []) is spread into chat()'s
+      // middleware array alongside the usage-capturing onFinish middleware.
+      expect(firstCall[0].middleware).toEqual([
+        { onFinish: expect.any(Function) },
+      ]);
     });
 
     const drain = async (gen: AsyncIterable<unknown>) => {
