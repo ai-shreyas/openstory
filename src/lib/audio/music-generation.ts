@@ -8,6 +8,10 @@ import {
 } from '@/lib/ai/models';
 import { type Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
+import {
+  aiObservabilityMiddleware,
+  type AIObservabilityMeta,
+} from '@/lib/observability/ai-otel';
 import { generateAudio } from '@tanstack/ai';
 import { falAudio } from '@tanstack/ai-fal';
 
@@ -17,6 +21,8 @@ const logger = getLogger(['openstory', 'audio', 'music-generation']);
 
 export type GenerateMusicOptions = {
   scopedDb?: ScopedDb;
+  /** PostHog LLM-analytics metadata for the generation span. */
+  observability?: AIObservabilityMeta;
   /** Style/mood prompt for the music (e.g., "tense orchestral, dark atmosphere") */
   prompt: string;
   /** Comma-separated genre tags (e.g., "orchestral, ambient, cinematic") */
@@ -163,6 +169,7 @@ async function callFalAudio(
     prompt: shape.prompt,
     duration: shape.duration,
     modelOptions: shape.modelOptions,
+    middleware: aiObservabilityMiddleware(options.observability),
     debug: false,
   });
 

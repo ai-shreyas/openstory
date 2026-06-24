@@ -10,6 +10,10 @@ import { type AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { MOTION_JSON_SCHEMAS } from '@/lib/motion/endpoint-map';
 import {
+  aiObservabilityMiddleware,
+  type AIObservabilityMeta,
+} from '@/lib/observability/ai-otel';
+import {
   getDurationValues,
   numericOf,
   snapTo,
@@ -19,6 +23,8 @@ import { falVideo } from '@tanstack/ai-fal';
 
 export type GenerateMotionOptions = {
   scopedDb?: ScopedDb; // scopedDb is used to resolve the API key for the motion generation with BYOK
+  /** PostHog LLM-analytics metadata for the generation span. */
+  observability?: AIObservabilityMeta;
   imageUrl: string;
   prompt: string;
   model?: ImageToVideoModel;
@@ -117,6 +123,7 @@ export async function submitMotionJob(
     }),
     prompt: optimisedPrompt,
     modelOptions,
+    middleware: aiObservabilityMiddleware(options.observability),
     debug: false,
   });
 

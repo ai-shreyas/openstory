@@ -79,6 +79,13 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
         instrumental: true,
         model,
         scopedDb,
+        observability: {
+          observationName: 'music',
+          tags: ['music'],
+          userId: input.userId,
+          sessionId: sequenceId,
+          metadata: { model },
+        },
       });
 
       if (!result.success || !result.audioUrl) {

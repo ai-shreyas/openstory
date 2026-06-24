@@ -355,6 +355,13 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             aspectRatio: input.aspectRatio,
             generateAudio: input.generateAudio,
             scopedDb,
+            observability: {
+              observationName: 'motion',
+              tags: ['motion'],
+              userId: input.userId,
+              sessionId: input.sequenceId,
+              metadata: { model, shotId: input.shotId },
+            },
           });
           return { ok: true as const, job };
         } catch (error) {

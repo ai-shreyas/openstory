@@ -26,7 +26,7 @@ import {
   BasicTracerProvider,
   BatchSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import type { ChatMiddleware } from '@tanstack/ai';
+import type { ChatMiddleware, GenerationMiddleware } from '@tanstack/ai';
 import { otelMiddleware } from '@tanstack/ai/middlewares/otel';
 import { createServerOnlyFn } from '@tanstack/react-start';
 import { getLogger, toErrorPayload } from './logger';
@@ -117,12 +117,15 @@ function buildAttributes(
 }
 
 /**
- * Build the middleware array for a `chat()` call. Returns `[]` when PostHog
- * is not configured so call sites can spread it unconditionally.
+ * Build the middleware array for a `chat()` or media (`generateImage` /
+ * `generateAudio` / `generateVideo`) call. `otelMiddleware` returns a value
+ * satisfying both `ChatMiddleware` and `GenerationMiddleware`, so the same
+ * array can be spread into either activity. Returns `[]` when PostHog is not
+ * configured so call sites can spread it unconditionally.
  */
 export function aiObservabilityMiddleware(
   meta: AIObservabilityMeta = {}
-): Array<ChatMiddleware> {
+): Array<ChatMiddleware & GenerationMiddleware> {
   const tracer = getAITracer();
   if (!tracer) return [];
   const { observationName } = meta;

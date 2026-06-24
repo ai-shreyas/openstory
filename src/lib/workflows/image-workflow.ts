@@ -259,7 +259,16 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           }
         );
       }
-      return generateImageWithProvider(generationParams, { scopedDb });
+      return generateImageWithProvider(generationParams, {
+        scopedDb,
+        observability: {
+          observationName: 'shot-image',
+          tags: ['image'],
+          userId: input.userId,
+          sessionId: input.sequenceId,
+          metadata: { shotId: input.shotId, model: generationParams.model },
+        },
+      });
     });
 
     const imageCostMicros = imageResult.metadata.cost ?? ZERO_MICROS;

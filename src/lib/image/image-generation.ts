@@ -14,6 +14,10 @@ import {
 
 import { getEnv } from '#env';
 import type { ScopedDb } from '@/lib/db/scoped';
+import {
+  aiObservabilityMiddleware,
+  type AIObservabilityMeta,
+} from '@/lib/observability/ai-otel';
 import { ensureExternallyFetchableUrls } from '@/lib/storage/external-url';
 import { generateImage } from '@tanstack/ai';
 import { falImage } from '@tanstack/ai-fal';
@@ -49,6 +53,8 @@ export type ImageGenerationParams = {
 /** Non-serializable options passed separately from ImageGenerationParams */
 export type ImageGenerationOptions = {
   scopedDb?: ScopedDb;
+  /** PostHog LLM-analytics metadata for the generation span. */
+  observability?: AIObservabilityMeta;
   onQueueUpdate?: (update: {
     status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
     logs?: string[];
@@ -180,6 +186,7 @@ async function generateImageInternal(
     adapter,
     prompt,
     modelOptions,
+    middleware: aiObservabilityMiddleware(options?.observability),
     debug: false,
   });
 
