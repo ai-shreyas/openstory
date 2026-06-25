@@ -5,8 +5,11 @@ import {
   type ImageToVideoModel,
 } from '../ai/models';
 import { typedEntries } from '../utils/typed-object';
-import { buildModelInput } from './build-model-input';
+import { buildModelInput, buildReferenceVideoInput } from './build-model-input';
 import type { GenerateMotionOptions } from './motion-generation';
+
+const SEEDANCE_REF_ENDPOINT =
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video' as const;
 
 const baseOptions: GenerateMotionOptions = {
   prompt: 'Camera dolly forward slowly',
@@ -229,6 +232,57 @@ describe('buildModelInput', () => {
         expect(result).not.toHaveProperty('elements');
         expect(result.prompt).toBe(baseOptions.prompt);
       }
+    });
+  });
+
+  describe('buildReferenceVideoInput (#873 Seedance reference-to-video)', () => {
+    const referenceImages = [
+      {
+        referenceImageUrl: 'https://example.com/jack-sheet.png',
+        description: 'Jack - tall man with a scar',
+        role: 'character' as const,
+      },
+      {
+        referenceImageUrl: 'https://example.com/logo.png',
+        description: 'ACME_LOGO - red circular badge',
+        role: 'element' as const,
+      },
+    ];
+
+    const buildRef = (overrides: Partial<GenerateMotionOptions> = {}) =>
+      buildReferenceVideoInput(
+        { ...baseOptions, referenceImages, ...overrides },
+        IMAGE_TO_VIDEO_MODELS.seedance_v2,
+        'seedance_v2',
+        SEEDANCE_REF_ENDPOINT
+      );
+
+    it('puts the still as @Image1 in image_urls and omits image_url', () => {
+      const result = buildRef();
+      expect(result).not.toHaveProperty('image_url');
+      expect(result.image_urls).toEqual([
+        baseOptions.imageUrl,
+        'https://example.com/jack-sheet.png',
+        'https://example.com/logo.png',
+      ]);
+    });
+
+    it('appends the @ImageN legend (still first, refs after)', () => {
+      const result = buildRef();
+      expect(result.prompt).toContain(baseOptions.prompt);
+      expect(result.prompt).toContain('@Image1: the established shot');
+      expect(result.prompt).toContain('@Image2: Jack - tall man with a scar');
+      expect(result.prompt).toContain(
+        '@Image3: ACME_LOGO - red circular badge'
+      );
+    });
+
+    it('applies the seedance resolution quality override', () => {
+      expect(buildRef().resolution).toBe('720p');
+    });
+
+    it('forwards generate_audio=false when caller suppresses audio', () => {
+      expect(buildRef({ generateAudio: false }).generate_audio).toBe(false);
     });
   });
 

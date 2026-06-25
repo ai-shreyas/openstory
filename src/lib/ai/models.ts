@@ -502,6 +502,34 @@ export function getEditEndpoint(model: TextToImageModel): string | null {
 }
 
 /**
+ * Map image-to-video models to a SEPARATE reference-to-video endpoint (#873).
+ *
+ * Some motion models accept cast/element reference images only on a dedicated
+ * endpoint that takes `image_urls[]` (tagged `@Image1…@ImageN` in the prompt)
+ * and has NO single start-frame `image_url`. This is the motion analogue of
+ * `EDIT_ENDPOINTS` on the image side: when a scene has references AND the model
+ * is listed here, motion routes to this endpoint and passes the rendered still
+ * as `@Image1` plus cast/element refs as `@Image2…N` (see
+ * `resolveMotionEndpoint`). Models that emit references inline on their normal
+ * endpoint (e.g. Kling v3 Pro's `elements` field) are NOT listed here.
+ */
+export const MOTION_REFERENCE_ENDPOINTS: Partial<
+  Record<ImageToVideoModel, string>
+> = {
+  seedance_v2: 'bytedance/seedance-2.0/enterprise/v2/reference-to-video',
+};
+
+/**
+ * Get the reference-to-video endpoint for a motion model, if it has one.
+ * @returns The Fal.ai reference-to-video endpoint ID, or null if not supported
+ */
+export function getMotionReferenceEndpoint(
+  model: ImageToVideoModel
+): string | null {
+  return MOTION_REFERENCE_ENDPOINTS[model] ?? null;
+}
+
+/**
  * Check if a model supports reference images via an edit endpoint
  * @param model - The text-to-image model key
  * @returns true if the model has an edit endpoint for reference images

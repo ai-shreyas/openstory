@@ -40,7 +40,9 @@ export type GenerateMotionOptions = {
 
 import { ensureExternallyFetchableUrl } from '@/lib/storage/external-url';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
-import { buildModelInput } from './build-model-input';
+import { buildModelInput, buildReferenceVideoInput } from './build-model-input';
+import type { MotionEndpointId } from './endpoint-map';
+import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -96,11 +98,21 @@ export async function submitMotionJob(
     falApiKeyInfo.key
   );
 
-  // Reference images (#873): only Kling v3 Pro consumes them, so only it pays
-  // the ensure-fetchable upload cost. The same locally-served /r2/ URLs that
-  // imageUrl needs swapped also apply to character sheets / element images.
+  // Decide which endpoint this run submits to (#873). With cast/element refs,
+  // models that have a dedicated reference-to-video endpoint (Seedance) route
+  // there; everything else (incl. Kling, which carries refs inline as
+  // `elements`) stays on its image-to-video endpoint.
+  const hasReferenceImages = (options.referenceImages?.length ?? 0) > 0;
+  const endpoint = resolveMotionEndpoint(modelKey, hasReferenceImages);
+
+  // Reference images are emitted either inline (Kling's `elements`) or via the
+  // reference-to-video endpoint (Seedance). Both paths need externally-fetchable
+  // URLs — the same locally-served /r2/ swap imageUrl needs applies to the
+  // character sheets / element images. Models that don't emit refs skip the cost.
+  const emitsReferences =
+    endpoint.usesReferenceEndpoint || modelKey === 'kling_v3_pro';
   const referenceImages =
-    modelKey === 'kling_v3_pro' && options.referenceImages?.length
+    emitsReferences && options.referenceImages?.length
       ? await Promise.all(
           options.referenceImages.map(async (ref) => ({
             ...ref,
@@ -111,12 +123,18 @@ export async function submitMotionJob(
         )
       : undefined;
 
-  // Prepare the model input
-  const modelInput = buildModelInput(
-    { ...options, imageUrl, referenceImages },
-    modelConfig,
-    modelKey
-  );
+  // Prepare the model input — the reference-to-video endpoint has a different
+  // input shape (image_urls[] + @ImageN, no start-frame image_url).
+  const optionsWithFetchableUrls = { ...options, imageUrl, referenceImages };
+  const modelInput = endpoint.usesReferenceEndpoint
+    ? buildReferenceVideoInput(
+        optionsWithFetchableUrls,
+        modelConfig,
+        modelKey,
+        // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- resolved id is a registered MotionEndpointId (guarded in buildReferenceVideoInput)
+        endpoint.endpointId as MotionEndpointId
+      )
+    : buildModelInput(optionsWithFetchableUrls, modelConfig, modelKey);
 
   // Separate the prompt from the model options
   const { prompt: optimisedPrompt, ...modelOptions } = modelInput;
@@ -126,6 +144,7 @@ export async function submitMotionJob(
   // Log the submission details
   logger.info(`Submitting job with model: ${modelConfig.id}`, {
     provider: modelConfig.provider,
+    endpoint: endpoint.endpointId,
     promptLength: optimisedPrompt.length,
     modelOptions,
   });
@@ -134,7 +153,7 @@ export async function submitMotionJob(
   // Note this is typesafe - only options compatible with modelConfig.id are allowed
   // Important: fal.ai supports string for model ids that the client doesn't know about - so most new models _aren't_ typesafe
   const job = await generateVideo({
-    adapter: falVideo(modelConfig.id, {
+    adapter: falVideo(endpoint.endpointId, {
       apiKey: falApiKeyInfo.key,
     }),
     prompt: optimisedPrompt,

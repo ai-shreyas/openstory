@@ -16,6 +16,7 @@
  */
 
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
+import { appendLegendWithinLimit } from './reference-legend';
 
 /** A single Kling v3 combo element built from one reference image. */
 export type KlingComboElement = {
@@ -52,29 +53,4 @@ export function buildKlingElementsInput(
     prompt: appendLegendWithinLimit(basePrompt, legend, maxPromptLength),
     elements,
   };
-}
-
-/**
- * Append the `@ElementN` legend, truncating the base prompt (never the legend)
- * to stay within `maxPromptLength`. Mirrors `truncateBasePrompt` in
- * reference-image-prompt.ts: the legend is load-bearing (it binds the element
- * images to their prompt tokens) so it must survive even when the base prompt
- * does not fully fit.
- */
-function appendLegendWithinLimit(
-  basePrompt: string,
-  legend: string,
-  maxLength?: number
-): string {
-  const joiner = '\n\n';
-  const combined = `${basePrompt}${joiner}${legend}`;
-  if (!maxLength || combined.length <= maxLength) return combined;
-
-  const available = maxLength - legend.length - joiner.length - 3; // 3 for '...'
-  if (available <= 0) {
-    // Legend alone exceeds the limit (only with absurdly long descriptions) —
-    // hand it back whole and let the downstream transform clamp it.
-    return legend;
-  }
-  return `${basePrompt.slice(0, available)}...${joiner}${legend}`;
 }

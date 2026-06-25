@@ -10,7 +10,8 @@
 import type { IMAGE_TO_VIDEO_MODELS, ImageToVideoModel } from '@/lib/ai/models';
 import type { z } from 'zod';
 import { buildKlingElementsInput } from './build-kling-elements';
-import { MOTION_TRANSFORMS } from './endpoint-map';
+import { buildSeedanceReferenceInput } from './build-seedance-references';
+import { MOTION_TRANSFORMS, type MotionEndpointId } from './endpoint-map';
 import type { GenerateMotionOptions } from './motion-generation';
 import { getLogger } from '@/lib/observability/logger';
 
@@ -91,6 +92,61 @@ ${prompt}`);
     logger.info(`OUTPUT prompt:
 ${outputPrompt}`);
   }
+
+  return result;
+}
+
+/** Output of a reference-to-video transform (the endpoints in
+ *  `MOTION_REFERENCE_ENDPOINTS`). */
+type ReferenceVideoOutput = z.output<
+  (typeof MOTION_TRANSFORMS)['bytedance/seedance-2.0/enterprise/v2/reference-to-video']
+>;
+
+/**
+ * Build the request body for a reference-to-video endpoint (#873).
+ *
+ * Used when `resolveMotionEndpoint` routes a model with cast/element refs to
+ * its dedicated reference endpoint (currently Seedance 2.0). The rendered still
+ * becomes `@Image1` and the cast/element sheets `@Image2…N` in `image_urls[]` —
+ * there is no separate start-frame `image_url` on this endpoint (the transform
+ * drops `imageUrl` since the schema has no image-url field).
+ */
+export function buildReferenceVideoInput<T extends ImageToVideoModel>(
+  options: GenerateMotionOptions,
+  modelConfig: (typeof IMAGE_TO_VIDEO_MODELS)[T],
+  modelKey: T,
+  endpointId: MotionEndpointId
+): ReferenceVideoOutput {
+  const transform = MOTION_TRANSFORMS[endpointId];
+  // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- defensive guard for exhaustiveness
+  if (!transform) {
+    throw new Error(
+      `No motion transform registered for reference endpoint: ${endpointId}`
+    );
+  }
+
+  const { prompt, imageUrls } = buildSeedanceReferenceInput(
+    options.prompt,
+    options.imageUrl,
+    options.referenceImages ?? [],
+    modelConfig.maxPromptLength
+  );
+
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion safe to cast here because we know the transform is valid
+  const result = transform.parse({
+    prompt,
+    duration: options.duration,
+    aspectRatio: options.aspectRatio,
+    image_urls: imageUrls,
+    ...QUALITY_OVERRIDES[modelKey],
+    ...(options.generateAudio !== undefined && {
+      generate_audio: options.generateAudio,
+    }),
+  }) as ReferenceVideoOutput;
+
+  logger.info(
+    `model=${modelKey} endpoint=${endpointId} refImages=${imageUrls.length} promptLen=${prompt.length}`
+  );
 
   return result;
 }
