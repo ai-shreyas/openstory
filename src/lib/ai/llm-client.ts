@@ -136,7 +136,7 @@ export type LLMRequestParams<T = unknown> = {
  * https://openrouter.ai/docs/guides/features/structured-outputs
  */
 const STRUCTURED_OUTPUT_MODELS = new Set([
-  'x-ai/grok-4.3',
+  'x-ai/grok-4.5',
   'anthropic/claude-fable-5',
   'anthropic/claude-sonnet-5',
   'x-ai/grok-4.20',
