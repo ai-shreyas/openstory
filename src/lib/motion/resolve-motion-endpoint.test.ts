@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
+import {
+  IMAGE_TO_VIDEO_MODELS,
+  MOTION_REFERENCE_ENDPOINTS,
+} from '@/lib/ai/models';
 import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
 describe('resolveMotionEndpoint', () => {
@@ -7,6 +10,7 @@ describe('resolveMotionEndpoint', () => {
     expect(resolveMotionEndpoint('seedance_v2', true)).toEqual({
       endpointId: 'bytedance/seedance-2.0/enterprise/v2/reference-to-video',
       usesReferenceEndpoint: true,
+      referenceConfig: MOTION_REFERENCE_ENDPOINTS.seedance_v2,
     });
   });
 

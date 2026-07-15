@@ -502,30 +502,53 @@ export function getEditEndpoint(model: TextToImageModel): string | null {
 }
 
 /**
- * Map image-to-video models to a SEPARATE reference-to-video endpoint (#873).
- *
- * Some motion models accept cast/element reference images only on a dedicated
- * endpoint that takes `image_urls[]` (tagged `@Image1…@ImageN` in the prompt)
- * and has NO single start-frame `image_url`. This is the motion analogue of
- * `EDIT_ENDPOINTS` on the image side: when a scene has references AND the model
- * is listed here, motion routes to this endpoint and passes the rendered still
- * as `@Image1` plus cast/element refs as `@Image2…N` (see
- * `resolveMotionEndpoint`). Models that emit references inline on their normal
- * endpoint (e.g. Kling v3 Pro's `elements` field) are NOT listed here.
+ * How a model's dedicated reference-to-video endpoint binds reference images
+ * to the prompt (#873). The tag syntax is per-model prompt convention, not
+ * API surface — fal never validates it, the model just reads the tokens.
  */
-export const MOTION_REFERENCE_ENDPOINTS: Partial<
-  Record<ImageToVideoModel, string>
-> = {
-  seedance_v2: 'bytedance/seedance-2.0/enterprise/v2/reference-to-video',
+export type MotionReferenceEndpointConfig = {
+  /** The fal reference-to-video endpoint id to submit to. */
+  endpointId: string;
+  /**
+   * Renders the prompt token bound to `image_urls[position - 1]` (position is
+   * 1-based) — e.g. `@Image1` for Seedance, `<IMAGE_REF_0>` for Gemini Omni
+   * Flash.
+   */
+  tag: (position: number) => string;
+  /** Total images the endpoint accepts, including the rendered still. */
+  maxImages: number;
 };
 
 /**
- * Get the reference-to-video endpoint for a motion model, if it has one.
- * @returns The Fal.ai reference-to-video endpoint ID, or null if not supported
+ * Map image-to-video models to a SEPARATE reference-to-video endpoint (#873).
+ *
+ * Some motion models accept cast/element reference images only on a dedicated
+ * endpoint that takes `image_urls[]` (bound to prompt tokens — see
+ * `MotionReferenceEndpointConfig.tag`) and has NO single start-frame
+ * `image_url`. This is the motion analogue of `EDIT_ENDPOINTS` on the image
+ * side: when a scene has references AND the model is listed here, motion
+ * routes to this endpoint and passes the rendered still as the first image
+ * plus cast/element refs after it (see `resolveMotionEndpoint`). Models that
+ * emit references inline on their normal endpoint (e.g. Kling v3 Pro's
+ * `elements` field) are NOT listed here.
+ */
+export const MOTION_REFERENCE_ENDPOINTS: Partial<
+  Record<ImageToVideoModel, MotionReferenceEndpointConfig>
+> = {
+  seedance_v2: {
+    endpointId: 'bytedance/seedance-2.0/enterprise/v2/reference-to-video',
+    tag: (position) => `@Image${position}`,
+    maxImages: 9,
+  },
+};
+
+/**
+ * Get the reference-to-video endpoint config for a motion model, if it has one.
+ * @returns The endpoint config, or null if the model has no reference endpoint
  */
 export function getMotionReferenceEndpoint(
   model: ImageToVideoModel
-): string | null {
+): MotionReferenceEndpointConfig | null {
   return MOTION_REFERENCE_ENDPOINTS[model] ?? null;
 }
 

@@ -7,10 +7,14 @@
  * with correctly-typed duration values.
  */
 
-import type { IMAGE_TO_VIDEO_MODELS, ImageToVideoModel } from '@/lib/ai/models';
+import type {
+  IMAGE_TO_VIDEO_MODELS,
+  ImageToVideoModel,
+  MotionReferenceEndpointConfig,
+} from '@/lib/ai/models';
 import type { z } from 'zod';
 import { buildKlingElementsInput } from './build-kling-elements';
-import { buildSeedanceReferenceInput } from './build-seedance-references';
+import { buildReferenceVideoPrompt } from './build-reference-video-prompt';
 import { MOTION_TRANSFORMS, type MotionEndpointId } from './endpoint-map';
 import type { GenerateMotionOptions } from './motion-generation';
 import { getLogger } from '@/lib/observability/logger';
@@ -106,17 +110,20 @@ type ReferenceVideoOutput = z.output<
  * Build the request body for a reference-to-video endpoint (#873).
  *
  * Used when `resolveMotionEndpoint` routes a model with cast/element refs to
- * its dedicated reference endpoint (currently Seedance 2.0). The rendered still
- * becomes `@Image1` and the cast/element sheets `@Image2…N` in `image_urls[]` —
- * there is no separate start-frame `image_url` on this endpoint (the transform
- * drops `imageUrl` since the schema has no image-url field).
+ * its dedicated reference endpoint (currently Seedance 2.0). The rendered
+ * still goes first in `image_urls[]` with the cast/element sheets after it,
+ * bound to prompt tokens via the endpoint's `tag` config — there is no
+ * separate start-frame `image_url` on this endpoint (the transform drops
+ * `imageUrl` since the schema has no image-url field).
  */
 export function buildReferenceVideoInput<T extends ImageToVideoModel>(
   options: GenerateMotionOptions,
   modelConfig: (typeof IMAGE_TO_VIDEO_MODELS)[T],
   modelKey: T,
-  endpointId: MotionEndpointId
+  referenceConfig: MotionReferenceEndpointConfig
 ): ReferenceVideoOutput {
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- guarded below: unregistered endpoints throw
+  const endpointId = referenceConfig.endpointId as MotionEndpointId;
   const transform = MOTION_TRANSFORMS[endpointId];
   // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- defensive guard for exhaustiveness
   if (!transform) {
@@ -125,7 +132,8 @@ export function buildReferenceVideoInput<T extends ImageToVideoModel>(
     );
   }
 
-  const { prompt, imageUrls } = buildSeedanceReferenceInput(
+  const { prompt, imageUrls } = buildReferenceVideoPrompt(
+    referenceConfig,
     options.prompt,
     options.imageUrl,
     options.referenceImages ?? [],

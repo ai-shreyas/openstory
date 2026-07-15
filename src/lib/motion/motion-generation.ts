@@ -41,7 +41,6 @@ export type GenerateMotionOptions = {
 import { ensureExternallyFetchableUrl } from '@/lib/storage/external-url';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import { buildModelInput, buildReferenceVideoInput } from './build-model-input';
-import type { MotionEndpointId } from './endpoint-map';
 import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -124,15 +123,14 @@ export async function submitMotionJob(
       : undefined;
 
   // Prepare the model input — the reference-to-video endpoint has a different
-  // input shape (image_urls[] + @ImageN, no start-frame image_url).
+  // input shape (tagged image_urls[], no start-frame image_url).
   const optionsWithFetchableUrls = { ...options, imageUrl, referenceImages };
   const modelInput = endpoint.usesReferenceEndpoint
     ? buildReferenceVideoInput(
         optionsWithFetchableUrls,
         modelConfig,
         modelKey,
-        // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- resolved id is a registered MotionEndpointId (guarded in buildReferenceVideoInput)
-        endpoint.endpointId as MotionEndpointId
+        endpoint.referenceConfig
       )
     : buildModelInput(optionsWithFetchableUrls, modelConfig, modelKey);
 

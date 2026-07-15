@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   IMAGE_TO_VIDEO_MODELS,
+  getMotionReferenceEndpoint,
   safeImageToVideoModel,
   type ImageToVideoModel,
 } from '../ai/models';
@@ -8,8 +9,10 @@ import { typedEntries } from '../utils/typed-object';
 import { buildModelInput, buildReferenceVideoInput } from './build-model-input';
 import type { GenerateMotionOptions } from './motion-generation';
 
-const SEEDANCE_REF_ENDPOINT =
-  'bytedance/seedance-2.0/enterprise/v2/reference-to-video' as const;
+const seedanceRefConfig = getMotionReferenceEndpoint('seedance_v2');
+if (!seedanceRefConfig) {
+  throw new Error('seedance_v2 must have a reference endpoint config');
+}
 
 const baseOptions: GenerateMotionOptions = {
   prompt: 'Camera dolly forward slowly',
@@ -254,7 +257,7 @@ describe('buildModelInput', () => {
         { ...baseOptions, referenceImages, ...overrides },
         IMAGE_TO_VIDEO_MODELS.seedance_v2,
         'seedance_v2',
-        SEEDANCE_REF_ENDPOINT
+        seedanceRefConfig
       );
 
     it('puts the still as @Image1 in image_urls and omits image_url', () => {
