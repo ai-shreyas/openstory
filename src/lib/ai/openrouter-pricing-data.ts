@@ -11,16 +11,22 @@ export type OpenRouterPricing = {
 };
 
 export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
-  'x-ai/grok-4.3': {
-    name: 'xAI: Grok 4.3',
-    promptPerMillionTokens: 1.25,
-    completionPerMillionTokens: 2.5,
+  'x-ai/grok-4.5': {
+    name: 'xAI: Grok 4.5',
+    promptPerMillionTokens: 2,
+    completionPerMillionTokens: 6,
     webSearchPerQuery: 0.005,
   },
-  'anthropic/claude-sonnet-4.6': {
-    name: 'Anthropic: Claude Sonnet 4.6',
-    promptPerMillionTokens: 3,
-    completionPerMillionTokens: 15,
+  'anthropic/claude-fable-5': {
+    name: 'Anthropic: Claude Fable 5',
+    promptPerMillionTokens: 10,
+    completionPerMillionTokens: 50,
+    webSearchPerQuery: 0.01,
+  },
+  'anthropic/claude-sonnet-5': {
+    name: 'Anthropic: Claude Sonnet 5',
+    promptPerMillionTokens: 2,
+    completionPerMillionTokens: 10,
     webSearchPerQuery: 0.01,
   },
   'x-ai/grok-4.20': {
@@ -42,13 +48,13 @@ export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
   },
   'deepseek/deepseek-v3.2': {
     name: 'DeepSeek: DeepSeek V3.2',
-    promptPerMillionTokens: 0.2145,
-    completionPerMillionTokens: 0.32175,
+    promptPerMillionTokens: 0.26899999999999996,
+    completionPerMillionTokens: 0.39999999999999997,
   },
   'z-ai/glm-5.2': {
     name: 'Z.ai: GLM 5.2',
-    promptPerMillionTokens: 0.42,
-    completionPerMillionTokens: 1.32,
+    promptPerMillionTokens: 0.9057999999999999,
+    completionPerMillionTokens: 2.8468,
   },
   'google/gemini-3.1-pro-preview': {
     name: 'Google: Gemini 3.1 Pro Preview',
@@ -87,4 +93,4 @@ export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
   },
 };
 
-export const OPENROUTER_PRICING_LAST_UPDATED = '2026-07-13T02:18:19.339Z';
+export const OPENROUTER_PRICING_LAST_UPDATED = '2026-07-16T22:53:10.447Z';

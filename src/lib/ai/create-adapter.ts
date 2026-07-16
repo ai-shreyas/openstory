@@ -8,7 +8,7 @@
 import { getEnv } from '#env';
 import type { TextModel } from '@/lib/ai/models';
 import { HTTPClient } from '@openrouter/sdk/lib/http';
-import { extendAdapter } from '@tanstack/ai';
+import { createModel, extendAdapter } from '@tanstack/ai';
 import { createOpenRouterText, openRouterText } from '@tanstack/ai-openrouter';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -73,7 +73,12 @@ let loggedRetryMode = false;
  * prune it here. Add entries with `createModel` from '@tanstack/ai':
  * `createModel('vendor/model-id', { input: [...], features: [...] })`.
  */
-export const CATALOG_LAG_MODELS = [] as const;
+export const CATALOG_LAG_MODELS = [
+  createModel('x-ai/grok-4.5', {
+    input: ['text', 'image'],
+    features: ['reasoning', 'structured_outputs'],
+  }),
+] as const;
 
 const openRouterTextExtended = extendAdapter(
   openRouterText,
