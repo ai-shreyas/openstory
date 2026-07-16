@@ -205,11 +205,17 @@ describe('buildModelInput', () => {
       },
     ];
 
-    it('Kling emits an elements array keyed on frontal_image_url', () => {
+    it('Kling emits an elements array with frontal + reference images', () => {
       const result = build('kling_v3_pro', { referenceImages });
       expect(result.elements).toEqual([
-        { frontal_image_url: 'https://example.com/jack-sheet.png' },
-        { frontal_image_url: 'https://example.com/logo.png' },
+        {
+          frontal_image_url: 'https://example.com/jack-sheet.png',
+          reference_image_urls: ['https://example.com/jack-sheet.png'],
+        },
+        {
+          frontal_image_url: 'https://example.com/logo.png',
+          reference_image_urls: ['https://example.com/logo.png'],
+        },
       ]);
     });
 

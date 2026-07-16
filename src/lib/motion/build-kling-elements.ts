@@ -4,9 +4,10 @@
  * Kling v3 Pro accepts reference images inline on its image-to-video endpoint:
  * it takes an `elements` array of `{ frontal_image_url, reference_image_urls }`
  * and binds each one to the `@Element1`, `@Element2`, … tokens it finds in the
- * prompt (https://fal.ai/models/fal-ai/kling-video/v3/pro/image-to-video). We
- * have a single sheet/product image per character/element, so each becomes one
- * element keyed on `frontal_image_url`.
+ * prompt (https://fal.ai/models/fal-ai/kling-video/v3/pro/image-to-video). An
+ * image-set element requires BOTH `frontal_image_url` and at least one entry
+ * in `reference_image_urls` (fal rejects frontal-only elements); we have a
+ * single sheet/product image per character/element, so it fills both fields.
  *
  * Binding is INLINE where possible: each reference's canonical token
  * ("SCARLETT", "CORAL_LIPSTICK") is substituted with its `@ElementN` tag at
@@ -32,7 +33,7 @@ import {
 /** A single Kling v3 combo element built from one reference image. */
 export type KlingComboElement = {
   frontal_image_url: string;
-  reference_image_urls?: string[];
+  reference_image_urls: string[];
 };
 
 /** fal caps Kling v3 at 4 reference images total (elements + reference images). */
@@ -53,6 +54,7 @@ export function buildKlingElementsInput(
 
   const elements: KlingComboElement[] = usable.map((ref) => ({
     frontal_image_url: ref.referenceImageUrl,
+    reference_image_urls: [ref.referenceImageUrl],
   }));
 
   const { prompt: substituted, mentioned } = substituteReferenceTags(

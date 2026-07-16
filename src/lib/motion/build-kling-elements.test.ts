@@ -14,14 +14,22 @@ describe('buildKlingElementsInput', () => {
     expect(result).toEqual({ prompt: 'A slow dolly in', elements: [] });
   });
 
-  it('maps each reference to a frontal_image_url element in order', () => {
+  it('maps each reference to a frontal + reference image element in order', () => {
     const result = buildKlingElementsInput('A slow dolly in', [
       ref('https://example.com/a.png', 'Alice'),
       ref('https://example.com/b.png', 'Bob'),
     ]);
+    // fal requires both fields on an image-set element; we only have one
+    // image per reference, so it fills both.
     expect(result.elements).toEqual([
-      { frontal_image_url: 'https://example.com/a.png' },
-      { frontal_image_url: 'https://example.com/b.png' },
+      {
+        frontal_image_url: 'https://example.com/a.png',
+        reference_image_urls: ['https://example.com/a.png'],
+      },
+      {
+        frontal_image_url: 'https://example.com/b.png',
+        reference_image_urls: ['https://example.com/b.png'],
+      },
     ]);
   });
 
@@ -41,7 +49,10 @@ describe('buildKlingElementsInput', () => {
       ref('https://example.com/b.png', 'Bob'),
     ]);
     expect(result.elements).toEqual([
-      { frontal_image_url: 'https://example.com/b.png' },
+      {
+        frontal_image_url: 'https://example.com/b.png',
+        reference_image_urls: ['https://example.com/b.png'],
+      },
     ]);
     expect(result.prompt).toContain('@Element1: Bob');
     expect(result.prompt).not.toContain('No image');
