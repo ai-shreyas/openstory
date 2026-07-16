@@ -7,10 +7,10 @@
  * with correctly-typed duration values.
  */
 
-import type {
+import {
   IMAGE_TO_VIDEO_MODELS,
-  ImageToVideoModel,
-  MotionReferenceEndpointConfig,
+  type ImageToVideoModel,
+  type MotionReferenceEndpointConfig,
 } from '@/lib/ai/models';
 import type { z } from 'zod';
 import { buildKlingElementsInput } from './build-kling-elements';
@@ -20,6 +20,7 @@ import {
   substituteReferenceTags,
 } from './reference-legend';
 import { MOTION_TRANSFORMS, type MotionEndpointId } from './endpoint-map';
+import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 import type { GenerateMotionOptions } from './motion-generation';
 import { getLogger } from '@/lib/observability/logger';
 
@@ -173,4 +174,34 @@ export function buildReferenceVideoInput<T extends ImageToVideoModel>(
   );
 
   return result;
+}
+
+/**
+ * Resolve the endpoint and build the exact fal request body for a motion run
+ * (#873). Shared by `submitMotionJob` and the scene editor's optimised-prompt
+ * preview, so what the user sees is what fal receives — the only difference at
+ * submit time is that locally-served `/r2/` URLs are swapped for externally
+ * fetchable ones first.
+ */
+export function buildMotionRequest<T extends ImageToVideoModel>(
+  options: GenerateMotionOptions,
+  modelKey: T
+): {
+  endpointId: string;
+  input: ModelOutputMap[T] | ReferenceVideoOutput;
+} {
+  const modelConfig = IMAGE_TO_VIDEO_MODELS[modelKey];
+  const endpoint = resolveMotionEndpoint(
+    modelKey,
+    (options.referenceImages?.length ?? 0) > 0
+  );
+  const input = endpoint.usesReferenceEndpoint
+    ? buildReferenceVideoInput(
+        options,
+        modelConfig,
+        modelKey,
+        endpoint.referenceConfig
+      )
+    : buildModelInput(options, modelConfig, modelKey);
+  return { endpointId: endpoint.endpointId, input };
 }

@@ -57,11 +57,15 @@ import {
   type TextToImageModel,
 } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import { getStorageDomainFn } from '@/functions/storage-config';
+import { buildMotionRequest } from '@/lib/motion/build-model-input';
+import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveMotionPrompt } from '@/lib/motion/resolve-motion-prompt';
+import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
 import { useShotPromptStream } from '@/lib/realtime/use-shot-prompt-stream';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CopyIcon, History, Loader2, Minimize2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -106,6 +110,33 @@ function isValidTabValue(value: string): value is TabValue {
     value === 'elements'
   );
 }
+
+/** Compact copy-to-clipboard icon for prompt headers. */
+const PromptCopyButton: React.FC<{
+  text: string | undefined;
+  copyKey: string;
+  copiedTab: string | null;
+  onCopy: (text: string | undefined, key: string) => void;
+  label: string;
+}> = ({ text, copyKey, copiedTab, onCopy, label }) => (
+  <Button
+    type="button"
+    variant="ghost"
+    size="icon"
+    className="h-6 w-6"
+    onClick={() => onCopy(text, copyKey)}
+    disabled={!text}
+    aria-label={label}
+  >
+    {copiedTab === copyKey ? (
+      <span aria-hidden className="text-xs">
+        ✓
+      </span>
+    ) : (
+      <CopyIcon className="h-3.5 w-3.5" />
+    )}
+  </Button>
+);
 
 type SceneScriptPromptsProps = {
   shot?: ShotWithImage | undefined;
@@ -887,6 +918,74 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   const motionModel = effectiveMotionModel;
 
+  // CDN-backed deployments absolutize stored /r2/ URLs at submit (toCdnUrl) —
+  // fetch the server-only domain once so the preview shows the same final
+  // URLs. Locally it's null and the preview keeps the stored relative URLs
+  // (at submit those become fal-storage uploads we can't predict).
+  const { data: storageConfig } = useQuery({
+    queryKey: ['storage-domain'],
+    queryFn: () => getStorageDomainFn(),
+    staleTime: Infinity,
+  });
+  const storageDomain = storageConfig?.storageDomain ?? null;
+
+  // The exact fal request for the selected model — same builder submitMotionJob
+  // uses, so the preview shows the real endpoint payload including reference
+  // bindings (@ImageN/@ElementN substitution, image_urls/elements arrays).
+  // Null when the transform rejects the draft input (e.g. no rendered still
+  // yet) — the plain-text assembled prompt renders as the fallback.
+  const finalMotionRequest = useMemo(() => {
+    if (!assembledPrompt || !shot) return null;
+    // Mirror of toCdnUrl for the client: absolutize only when the CDN domain
+    // is configured, so prod previews show exactly what fal receives.
+    const absolutize = (url: string) =>
+      storageDomain && url.startsWith('/r2/')
+        ? `https://${storageDomain}/${url.slice('/r2/'.length)}`
+        : url;
+    try {
+      const referenceImages = buildMotionReferenceImages({
+        scene: shot.metadata ?? null,
+        characters: mentionCharacters ?? [],
+        elements: mentionElements ?? [],
+      }).map((ref) => ({
+        ...ref,
+        referenceImageUrl: absolutize(ref.referenceImageUrl),
+      }));
+      return buildMotionRequest(
+        {
+          prompt: assembledPrompt,
+          imageUrl: absolutize(shot.thumbnailUrl ?? ''),
+          duration: resolveShotDuration({
+            explicit: undefined,
+            durationMs: shot.durationMs,
+            metadataSeconds: shot.metadata?.metadata?.durationSeconds,
+            model: motionModel,
+          }),
+          aspectRatio,
+          generateAudio: videoModelSupportsAudio(motionModel)
+            ? generateAudio
+            : undefined,
+          referenceImages,
+        },
+        motionModel
+      );
+    } catch {
+      return null;
+    }
+  }, [
+    assembledPrompt,
+    shot,
+    mentionCharacters,
+    mentionElements,
+    motionModel,
+    aspectRatio,
+    generateAudio,
+    storageDomain,
+  ]);
+  const finalMotionRequestJson = finalMotionRequest
+    ? JSON.stringify(finalMotionRequest.input, null, 2)
+    : null;
+
   // Has the *currently-selected* video model produced a video for this scene —
   // drives Generate vs Regenerate (NOT whether the shot has any video, which
   // could be from a different model). A variant row (any status) means it was
@@ -1084,9 +1183,18 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               >
                 Prompt
               </label>
-              <span className="text-xs text-muted-foreground">
-                {(editedImagePrompt || imagePrompt || '').length} characters
-              </span>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">
+                  {(editedImagePrompt || imagePrompt || '').length} characters
+                </span>
+                <PromptCopyButton
+                  text={editedImagePrompt || imagePrompt || ''}
+                  copyKey="image-prompt-field"
+                  copiedTab={copiedTab}
+                  onCopy={(text, key) => void handleCopy(text, key)}
+                  label="Copy image prompt"
+                />
+              </div>
             </div>
             <MarkdownEditor
               id="image-prompt-input"
@@ -1274,26 +1382,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                   : 'Generate Image'}
             </Button>
           )}
-
-          {/* Copy button for current prompt */}
-          <Button
-            variant="outline"
-            onClick={() =>
-              void handleCopy(editedImagePrompt || imagePrompt, 'image-prompt')
-            }
-            disabled={!imagePrompt}
-            className="w-full"
-          >
-            {copiedTab === 'image-prompt' ? (
-              <span className="flex items-center gap-2">
-                <span className="text-xs">✓</span> Copied
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <CopyIcon className="h-4 w-4" /> Copy Prompt
-              </span>
-            )}
-          </Button>
         </div>
       </TabsContent>
 
@@ -1312,9 +1400,18 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               >
                 Prompt
               </label>
-              <span className="text-xs text-muted-foreground">
-                {(editedMotionPrompt || rawMotionPrompt).length} characters
-              </span>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">
+                  {(editedMotionPrompt || rawMotionPrompt).length} characters
+                </span>
+                <PromptCopyButton
+                  text={editedMotionPrompt || rawMotionPrompt}
+                  copyKey="motion-prompt-field"
+                  copiedTab={copiedTab}
+                  onCopy={(text, key) => void handleCopy(text, key)}
+                  label="Copy motion prompt"
+                />
+              </div>
             </div>
             <MarkdownEditor
               id="motion-prompt-input"
@@ -1389,31 +1486,61 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             </p>
           </div>
 
-          {/* Assembled prompt preview */}
-          {assembledPrompt && assembledPrompt !== editedMotionPrompt && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span
-                  id="motion-assembled-prompt-heading"
-                  className="text-sm font-medium"
-                >
-                  Optimised prompt
-                </span>
-                <span
-                  className={`text-xs ${isOverLimit ? 'text-destructive font-medium' : 'text-muted-foreground'}`}
-                >
-                  {assembledPrompt.length}&nbsp;/&nbsp;{maxPromptLength}
-                </span>
+          {/* Optimised prompt preview — the exact fal request body for the
+              selected model (incl. reference bindings) when it can be built,
+              else the assembled prompt text. */}
+          {assembledPrompt &&
+            (finalMotionRequestJson ||
+              assembledPrompt !== editedMotionPrompt) && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span
+                    id="motion-assembled-prompt-heading"
+                    className="text-sm font-medium"
+                  >
+                    Optimised prompt
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <span
+                      className={`text-xs ${isOverLimit ? 'text-destructive font-medium' : 'text-muted-foreground'}`}
+                    >
+                      {assembledPrompt.length}&nbsp;/&nbsp;{maxPromptLength}
+                    </span>
+                    <PromptCopyButton
+                      text={finalMotionRequestJson ?? assembledPrompt}
+                      copyKey="motion-request-json"
+                      copiedTab={copiedTab}
+                      onCopy={(text, key) => void handleCopy(text, key)}
+                      label="Copy optimised prompt JSON"
+                    />
+                  </div>
+                </div>
+                {finalMotionRequest && finalMotionRequestJson ? (
+                  <div className="space-y-1">
+                    <pre
+                      id="motion-assembled-prompt-preview"
+                      aria-labelledby="motion-assembled-prompt-heading"
+                      className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-3 font-mono text-xs leading-relaxed text-foreground"
+                    >
+                      {finalMotionRequestJson}
+                    </pre>
+                    <p className="text-xs text-muted-foreground">
+                      {finalMotionRequest.endpointId}
+                      {!storageDomain &&
+                        ' · relative /r2/ image URLs are made publicly fetchable at submit'}
+                    </p>
+                  </div>
+                ) : (
+                  <p
+                    id="motion-assembled-prompt-preview"
+                    aria-labelledby="motion-assembled-prompt-heading"
+                    className="whitespace-pre-wrap rounded-md border bg-muted/50 p-3 text-sm leading-relaxed text-foreground"
+                  >
+                    {assembledPrompt}
+                  </p>
+                )}
               </div>
-              <p
-                id="motion-assembled-prompt-preview"
-                aria-labelledby="motion-assembled-prompt-heading"
-                className="whitespace-pre-wrap rounded-md border bg-muted/50 p-3 text-sm leading-relaxed text-foreground"
-              >
-                {assembledPrompt}
-              </p>
-            </div>
-          )}
+            )}
 
           {/* History button */}
           <Button
@@ -1533,24 +1660,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                   : 'Generate Motion'}
             </Button>
           )}
-
-          {/* Copy button for assembled prompt */}
-          <Button
-            variant="outline"
-            onClick={() => void handleCopy(assembledPrompt, 'motion-prompt')}
-            disabled={!assembledPrompt}
-            className="w-full"
-          >
-            {copiedTab === 'motion-prompt' ? (
-              <span className="flex items-center gap-2">
-                <span className="text-xs">✓</span> Copied
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <CopyIcon className="h-4 w-4" /> Copy Prompt
-              </span>
-            )}
-          </Button>
         </div>
       </TabsContent>
 

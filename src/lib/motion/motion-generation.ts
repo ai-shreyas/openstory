@@ -40,7 +40,7 @@ export type GenerateMotionOptions = {
 
 import { ensureExternallyFetchableUrl } from '@/lib/storage/external-url';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
-import { buildModelInput, buildReferenceVideoInput } from './build-model-input';
+import { buildModelInput, buildMotionRequest } from './build-model-input';
 import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -107,7 +107,9 @@ export async function submitMotionJob(
   // Reference images are emitted either inline (Kling's `elements`) or via the
   // reference-to-video endpoint (Seedance). Both paths need externally-fetchable
   // URLs — the same locally-served /r2/ swap imageUrl needs applies to the
-  // character sheets / element images. Models that don't emit refs skip the cost.
+  // character sheets / element images. Models that don't emit refs keep the raw
+  // references: their URLs are never sent, but the builder still needs the
+  // tokens + descriptions to substitute entity tokens in the prompt.
   const emitsReferences =
     endpoint.usesReferenceEndpoint || modelKey === 'kling_v3_pro';
   const referenceImages =
@@ -120,19 +122,16 @@ export async function submitMotionJob(
             ),
           }))
         )
-      : undefined;
+      : options.referenceImages;
 
   // Prepare the model input — the reference-to-video endpoint has a different
-  // input shape (tagged image_urls[], no start-frame image_url).
+  // input shape (tagged image_urls[], no start-frame image_url). Shared with
+  // the scene editor's optimised-prompt preview via buildMotionRequest.
   const optionsWithFetchableUrls = { ...options, imageUrl, referenceImages };
-  const modelInput = endpoint.usesReferenceEndpoint
-    ? buildReferenceVideoInput(
-        optionsWithFetchableUrls,
-        modelConfig,
-        modelKey,
-        endpoint.referenceConfig
-      )
-    : buildModelInput(optionsWithFetchableUrls, modelConfig, modelKey);
+  const modelInput = buildMotionRequest(
+    optionsWithFetchableUrls,
+    modelKey
+  ).input;
 
   // Separate the prompt from the model options
   const { prompt: optimisedPrompt, ...modelOptions } = modelInput;
