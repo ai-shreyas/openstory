@@ -37,7 +37,7 @@ export function getVariantImagePrompt(
 
 Layout: ${layout}
 ${sceneContext}
-Match Image 1 exactly: same character(s) (face, hair, skin, clothing), lighting, color grade, and texture. If character reference sheets are provided, use them for likeness — do not render them as separate panels.
+Match Image 1 exactly: same character(s) (face, hair, skin, clothing), lighting, color grade, and texture.
 
 No text, dialogue bubbles, scene numbers, or watermarks.
 `;

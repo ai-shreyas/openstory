@@ -28,7 +28,7 @@ import {
   appendLegendWithinLimit,
   inlineReferenceDescription,
   substituteReferenceTags,
-} from './reference-legend';
+} from '@/lib/prompts/reference-legend';
 
 /** A single Kling v3 combo element built from one reference image. */
 export type KlingComboElement = {

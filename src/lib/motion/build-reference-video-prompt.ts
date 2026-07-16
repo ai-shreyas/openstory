@@ -29,7 +29,7 @@ import {
   appendLegendWithinLimit,
   inlineReferenceDescription,
   substituteReferenceTags,
-} from './reference-legend';
+} from '@/lib/prompts/reference-legend';
 
 export function buildReferenceVideoPrompt(
   config: MotionReferenceEndpointConfig,

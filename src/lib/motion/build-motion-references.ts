@@ -15,21 +15,29 @@
  * trigger sites can all call it without converting.
  */
 
-import type { CharacterMinimal, SequenceElementMinimal } from '@/lib/db/schema';
+import type {
+  CharacterMinimal,
+  SequenceElementMinimal,
+  SequenceLocationMinimal,
+} from '@/lib/db/schema';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { buildElementReferenceImages } from '@/lib/prompts/element-prompt';
+import { buildLocationReferenceImages } from '@/lib/prompts/location-prompt';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import {
   matchCharactersToScene,
   matchElementsToScene,
+  matchLocationsToScene,
 } from '@/lib/workflows/scene-matching';
 
 type SceneReferenceInput = {
   continuity?: {
     characterTags?: string[];
     elementTags?: string[] | null;
+    environmentTag?: string | null;
   } | null;
   originalScript?: { extract?: string } | null;
+  metadata?: { location?: string } | null;
 } | null;
 
 export function buildMotionReferenceImages(params: {
@@ -51,6 +59,42 @@ export function buildMotionReferenceImages(params: {
 
   return [
     ...buildCharacterReferenceImages(matchedCharacters),
+    ...buildElementReferenceImages(matchedElements),
+  ];
+}
+
+/**
+ * Resolve the character + location + element reference images for a shot's
+ * IMAGE generation — the client-safe mirror of the matching inside
+ * `buildShotImageWorkflowInput`, used by the scene editor's optimised-prompt
+ * preview so it attaches the same refs the `/image` workflow will.
+ */
+export function buildShotImageReferenceImages(params: {
+  scene: SceneReferenceInput;
+  characters: CharacterMinimal[];
+  locations: SequenceLocationMinimal[];
+  elements: SequenceElementMinimal[];
+}): ReferenceImageDescription[] {
+  const { scene, characters, locations, elements } = params;
+
+  const matchedCharacters = matchCharactersToScene(
+    characters,
+    scene?.continuity?.characterTags ?? []
+  );
+  const matchedLocations = matchLocationsToScene(
+    locations,
+    scene?.continuity?.environmentTag ?? '',
+    scene?.metadata?.location ?? ''
+  );
+  const matchedElements = matchElementsToScene(
+    elements,
+    scene?.continuity?.elementTags ?? [],
+    scene?.originalScript?.extract ?? ''
+  );
+
+  return [
+    ...buildCharacterReferenceImages(matchedCharacters),
+    ...buildLocationReferenceImages(matchedLocations),
     ...buildElementReferenceImages(matchedElements),
   ];
 }

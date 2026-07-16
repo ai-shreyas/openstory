@@ -48,6 +48,7 @@ import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_VIDEO_MODEL,
+  IMAGE_MODELS,
   IMAGE_TO_VIDEO_MODELS,
   getCompatibleModel,
   safeImageToVideoModel,
@@ -56,12 +57,27 @@ import {
   type ImageToVideoModel,
   type TextToImageModel,
 } from '@/lib/ai/models';
-import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import {
+  aspectRatioToImageSize,
+  type AspectRatio,
+} from '@/lib/constants/aspect-ratios';
 import { getStorageDomainFn } from '@/functions/storage-config';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
+import { buildImageRequest } from '@/lib/image/build-image-request';
 import { buildMotionRequest } from '@/lib/motion/build-model-input';
-import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
+import {
+  buildMotionReferenceImages,
+  buildShotImageReferenceImages,
+} from '@/lib/motion/build-motion-references';
+import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { resolveMotionPrompt } from '@/lib/motion/resolve-motion-prompt';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
+import { typedEntries } from '@/lib/utils/typed-object';
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
 import { useShotPromptStream } from '@/lib/realtime/use-shot-prompt-stream';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
@@ -137,6 +153,92 @@ const PromptCopyButton: React.FC<{
     )}
   </Button>
 );
+
+/** One model's exact fal request, ready for display. */
+type ModelRequestPreview = {
+  modelKey: string;
+  modelName: string;
+  endpointId: string;
+  json: string;
+  promptLength: number;
+  maxPromptLength: number;
+};
+
+/**
+ * Per-model accordion of the exact fal request bodies — the selected model's
+ * item is open by default; every entry is copyable. Shared by the image and
+ * motion tabs.
+ */
+const ModelRequestPreviews: React.FC<{
+  idPrefix: string;
+  requests: ModelRequestPreview[];
+  selectedModel: string;
+  copiedTab: string | null;
+  onCopy: (text: string | undefined, key: string) => void;
+  footnote?: string | null;
+}> = ({ idPrefix, requests, selectedModel, copiedTab, onCopy, footnote }) => {
+  // Selected model first so its open item sits at the top of the list.
+  const ordered = [...requests].sort(
+    (a, b) =>
+      Number(b.modelKey === selectedModel) -
+      Number(a.modelKey === selectedModel)
+  );
+  return (
+    <div className="space-y-1">
+      <Accordion
+        type="multiple"
+        defaultValue={[`${idPrefix}-${selectedModel}`]}
+        className="rounded-md border"
+      >
+        {ordered.map((req) => (
+          <AccordionItem
+            key={req.modelKey}
+            value={`${idPrefix}-${req.modelKey}`}
+            className="px-3"
+          >
+            <AccordionTrigger className="py-2 text-sm">
+              <span className="flex flex-1 items-center justify-between gap-2 pr-2">
+                <span>
+                  {req.modelName}
+                  {req.modelKey === selectedModel && (
+                    <span className="text-muted-foreground"> · selected</span>
+                  )}
+                </span>
+                <span
+                  className={`text-xs font-normal tabular-nums ${
+                    req.promptLength > req.maxPromptLength
+                      ? 'text-destructive font-medium'
+                      : 'text-muted-foreground'
+                  }`}
+                >
+                  {req.promptLength}&nbsp;/&nbsp;{req.maxPromptLength}
+                </span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-1 pb-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-xs text-muted-foreground">
+                  {req.endpointId}
+                </span>
+                <PromptCopyButton
+                  text={req.json}
+                  copyKey={`${idPrefix}-${req.modelKey}`}
+                  copiedTab={copiedTab}
+                  onCopy={onCopy}
+                  label={`Copy ${req.modelName} request JSON`}
+                />
+              </div>
+              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed text-foreground">
+                {req.json}
+              </pre>
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+      {footnote && <p className="text-xs text-muted-foreground">{footnote}</p>}
+    </div>
+  );
+};
 
 type SceneScriptPromptsProps = {
   shot?: ShotWithImage | undefined;
@@ -929,62 +1031,157 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   });
   const storageDomain = storageConfig?.storageDomain ?? null;
 
-  // The exact fal request for the selected model — same builder submitMotionJob
-  // uses, so the preview shows the real endpoint payload including reference
-  // bindings (@ImageN/@ElementN substitution, image_urls/elements arrays).
-  // Null when the transform rejects the draft input (e.g. no rendered still
-  // yet) — the plain-text assembled prompt renders as the fallback.
-  const finalMotionRequest = useMemo(() => {
-    if (!assembledPrompt || !shot) return null;
-    // Mirror of toCdnUrl for the client: absolutize only when the CDN domain
-    // is configured, so prod previews show exactly what fal receives.
-    const absolutize = (url: string) =>
+  // Mirror of toCdnUrl for the client: absolutize only when the CDN domain
+  // is configured, so prod previews show exactly what fal receives.
+  const absolutizeUrl = useCallback(
+    (url: string) =>
       storageDomain && url.startsWith('/r2/')
         ? `https://${storageDomain}/${url.slice('/r2/'.length)}`
-        : url;
-    try {
-      const referenceImages = buildMotionReferenceImages({
-        scene: shot.metadata ?? null,
-        characters: mentionCharacters ?? [],
-        elements: mentionElements ?? [],
-      }).map((ref) => ({
-        ...ref,
-        referenceImageUrl: absolutize(ref.referenceImageUrl),
-      }));
-      return buildMotionRequest(
-        {
-          prompt: assembledPrompt,
-          imageUrl: absolutize(shot.thumbnailUrl ?? ''),
-          duration: resolveShotDuration({
-            explicit: undefined,
-            durationMs: shot.durationMs,
-            metadataSeconds: shot.metadata?.metadata?.durationSeconds,
-            model: motionModel,
-          }),
-          aspectRatio,
-          generateAudio: videoModelSupportsAudio(motionModel)
-            ? generateAudio
-            : undefined,
-          referenceImages,
-        },
-        motionModel
-      );
-    } catch {
-      return null;
-    }
+        : url,
+    [storageDomain]
+  );
+
+  // The exact fal request per video model — same builder submitMotionJob
+  // uses, so the preview shows the real endpoint payload including reference
+  // bindings (@ImageN/@ElementN substitution, image_urls/elements arrays).
+  // The prompt is re-assembled per model (audio-capable models get
+  // dialogue/audio sections). A model whose transform rejects the draft input
+  // (e.g. no rendered still yet) is skipped — an empty list falls back to the
+  // plain-text assembled prompt.
+  const motionRequestPreviews = useMemo((): ModelRequestPreview[] => {
+    if (!shot) return [];
+    const referenceImages = buildMotionReferenceImages({
+      scene: shot.metadata ?? null,
+      characters: mentionCharacters ?? [],
+      elements: mentionElements ?? [],
+    }).map((ref) => ({
+      ...ref,
+      referenceImageUrl: absolutizeUrl(ref.referenceImageUrl),
+    }));
+    const overrideText = editedMotionPrompt || rawMotionPrompt;
+    const mp: AssemblableMotionPrompt | null = motionPromptData
+      ? {
+          ...motionPromptData,
+          fullPrompt: overrideText || motionPromptData.fullPrompt,
+        }
+      : overrideText
+        ? { fullPrompt: overrideText, dialogue: null, audio: null }
+        : null;
+    return typedEntries(IMAGE_TO_VIDEO_MODELS).flatMap(([modelKey, config]) => {
+      try {
+        const modelPrompt = resolveMotionPrompt(
+          {
+            motionPrompt: mp,
+            characterTags,
+            description: shot.description ?? null,
+          },
+          modelKey
+        );
+        if (!modelPrompt) return [];
+        const request = buildMotionRequest(
+          {
+            prompt: modelPrompt,
+            imageUrl: absolutizeUrl(shot.thumbnailUrl ?? ''),
+            duration: resolveShotDuration({
+              explicit: undefined,
+              durationMs: shot.durationMs,
+              metadataSeconds: shot.metadata?.metadata?.durationSeconds,
+              model: modelKey,
+            }),
+            aspectRatio,
+            generateAudio: videoModelSupportsAudio(modelKey)
+              ? generateAudio
+              : undefined,
+            referenceImages,
+          },
+          modelKey
+        );
+        return [
+          {
+            modelKey,
+            modelName: config.name,
+            endpointId: request.endpointId,
+            json: JSON.stringify(request.input, null, 2),
+            promptLength: modelPrompt.length,
+            maxPromptLength: config.maxPromptLength,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
   }, [
-    assembledPrompt,
     shot,
     mentionCharacters,
     mentionElements,
-    motionModel,
+    editedMotionPrompt,
+    rawMotionPrompt,
+    motionPromptData,
+    characterTags,
     aspectRatio,
     generateAudio,
-    storageDomain,
+    absolutizeUrl,
   ]);
-  const finalMotionRequestJson = finalMotionRequest
-    ? JSON.stringify(finalMotionRequest.input, null, 2)
-    : null;
+
+  // The exact fal request per image model — same reference resolution the
+  // `/image` trigger uses (buildShotImageReferenceImages) and the same
+  // request assembly the workflow uses (buildReferenceImagePrompt +
+  // buildImageRequest), so the preview shows the real endpoint payload
+  // including inline (Image N) bindings and the ordered image_urls array.
+  const imageRequestPreviews = useMemo((): ModelRequestPreview[] => {
+    const basePrompt = (editedImagePrompt || imagePrompt || '').trim();
+    if (!basePrompt || !shot) return [];
+    const referenceImages = buildShotImageReferenceImages({
+      scene: shot.metadata ?? null,
+      characters: mentionCharacters ?? [],
+      locations: mentionLocations ?? [],
+      elements: mentionElements ?? [],
+    }).map((ref) => ({
+      ...ref,
+      referenceImageUrl: absolutizeUrl(ref.referenceImageUrl),
+    }));
+    return typedEntries(IMAGE_MODELS).flatMap(([modelKey, config]) => {
+      if ('hidden' in config) return [];
+      try {
+        const { prompt: enhancedPrompt, referenceUrls } =
+          buildReferenceImagePrompt(
+            basePrompt,
+            referenceImages,
+            config.maxPromptLength
+          );
+        const request = buildImageRequest({
+          model: modelKey,
+          prompt: enhancedPrompt,
+          imageSize: aspectRatio
+            ? aspectRatioToImageSize(aspectRatio)
+            : undefined,
+          numImages: 1,
+          referenceImageUrls: referenceUrls,
+        });
+        return [
+          {
+            modelKey,
+            modelName: config.name,
+            endpointId: request.endpointId,
+            json: JSON.stringify(request.input, null, 2),
+            promptLength: enhancedPrompt.length,
+            maxPromptLength: config.maxPromptLength,
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+  }, [
+    editedImagePrompt,
+    imagePrompt,
+    shot,
+    mentionCharacters,
+    mentionLocations,
+    mentionElements,
+    aspectRatio,
+    absolutizeUrl,
+  ]);
 
   // Has the *currently-selected* video model produced a video for this scene —
   // drives Generate vs Regenerate (NOT whether the shot has any video, which
@@ -996,8 +1193,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     (!!shot?.videoUrl &&
       effectiveMotionModel ===
         safeImageToVideoModel(shot.motionModel, DEFAULT_VIDEO_MODEL));
-  const maxPromptLength = IMAGE_TO_VIDEO_MODELS[motionModel].maxPromptLength;
-  const isOverLimit = assembledPrompt.length > maxPromptLength;
 
   // Sync local state when props change (prev-value refs avoid extra re-renders)
   if (shot?.id !== prevScriptShotIdRef.current) {
@@ -1268,6 +1463,27 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             </p>
           </div>
 
+          {/* Optimised prompt previews — the exact fal request body per image
+              model, mirroring the /image workflow's reference resolution and
+              request assembly. */}
+          {imageRequestPreviews.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-sm font-medium">Optimised prompts</span>
+              <ModelRequestPreviews
+                idPrefix="image-request"
+                requests={imageRequestPreviews}
+                selectedModel={effectiveImageModel}
+                copiedTab={copiedTab}
+                onCopy={(text, key) => void handleCopy(text, key)}
+                footnote={
+                  !storageDomain
+                    ? 'Relative /r2/ image URLs are made publicly fetchable at submit'
+                    : null
+                }
+              />
+            </div>
+          )}
+
           {/* Shorten + History buttons */}
           <div className="flex gap-2">
             <Button
@@ -1486,50 +1702,32 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             </p>
           </div>
 
-          {/* Optimised prompt preview — the exact fal request body for the
-              selected model (incl. reference bindings) when it can be built,
-              else the assembled prompt text. */}
+          {/* Optimised prompt previews — the exact fal request body per video
+              model (incl. reference bindings) when they can be built, else
+              the assembled prompt text as the fallback. */}
           {assembledPrompt &&
-            (finalMotionRequestJson ||
+            (motionRequestPreviews.length > 0 ||
               assembledPrompt !== editedMotionPrompt) && (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span
-                    id="motion-assembled-prompt-heading"
-                    className="text-sm font-medium"
-                  >
-                    Optimised prompt
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <span
-                      className={`text-xs ${isOverLimit ? 'text-destructive font-medium' : 'text-muted-foreground'}`}
-                    >
-                      {assembledPrompt.length}&nbsp;/&nbsp;{maxPromptLength}
-                    </span>
-                    <PromptCopyButton
-                      text={finalMotionRequestJson ?? assembledPrompt}
-                      copyKey="motion-request-json"
-                      copiedTab={copiedTab}
-                      onCopy={(text, key) => void handleCopy(text, key)}
-                      label="Copy optimised prompt JSON"
-                    />
-                  </div>
-                </div>
-                {finalMotionRequest && finalMotionRequestJson ? (
-                  <div className="space-y-1">
-                    <pre
-                      id="motion-assembled-prompt-preview"
-                      aria-labelledby="motion-assembled-prompt-heading"
-                      className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-3 font-mono text-xs leading-relaxed text-foreground"
-                    >
-                      {finalMotionRequestJson}
-                    </pre>
-                    <p className="text-xs text-muted-foreground">
-                      {finalMotionRequest.endpointId}
-                      {!storageDomain &&
-                        ' · relative /r2/ image URLs are made publicly fetchable at submit'}
-                    </p>
-                  </div>
+                <span
+                  id="motion-assembled-prompt-heading"
+                  className="text-sm font-medium"
+                >
+                  Optimised prompts
+                </span>
+                {motionRequestPreviews.length > 0 ? (
+                  <ModelRequestPreviews
+                    idPrefix="motion-request"
+                    requests={motionRequestPreviews}
+                    selectedModel={motionModel}
+                    copiedTab={copiedTab}
+                    onCopy={(text, key) => void handleCopy(text, key)}
+                    footnote={
+                      !storageDomain
+                        ? 'Relative /r2/ image URLs are made publicly fetchable at submit'
+                        : null
+                    }
+                  />
                 ) : (
                   <p
                     id="motion-assembled-prompt-preview"

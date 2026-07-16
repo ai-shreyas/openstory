@@ -1,16 +1,16 @@
 /**
- * Shared helpers for binding reference images into a motion prompt (#873).
+ * Shared helpers for binding reference images into a generation prompt (#873).
  *
  * The preferred binding is INLINE: prompts name entities by canonical token
  * (a character's bible name, an element's UPPERCASE token), and
- * `substituteReferenceTags` rewrites those occurrences into the video model's
- * tag syntax (`@Image2`, `@Element1`) — matching how vendor examples weave
- * tags into the narrative ("the fruit tea from @Image2"). A trailing legend
- * line is the fallback for references never mentioned in the prompt; the
- * legend is load-bearing — dropping it orphans the reference images — so when
- * the combined text exceeds the model's prompt limit we truncate the BASE
- * prompt and always keep the legend intact. Mirrors `truncateBasePrompt` in
- * reference-image-prompt.ts.
+ * `substituteReferenceTags` rewrites those occurrences into the target
+ * model's reference syntax — a video model's tag (`@Image2`, `@Element1`) or
+ * an image model's positional binding (`SCARLETT (Image 2)`) — matching how
+ * vendor examples weave tags into the narrative ("the fruit tea from
+ * @Image2"). A trailing legend line is the fallback for references never
+ * mentioned in the prompt; the legend is load-bearing — dropping it orphans
+ * the reference images — so when the combined text exceeds the model's prompt
+ * limit we truncate the BASE prompt and always keep the legend intact.
  */
 
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';

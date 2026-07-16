@@ -18,7 +18,7 @@ import { buildReferenceVideoPrompt } from './build-reference-video-prompt';
 import {
   inlineReferenceDescription,
   substituteReferenceTags,
-} from './reference-legend';
+} from '@/lib/prompts/reference-legend';
 import { MOTION_TRANSFORMS, type MotionEndpointId } from './endpoint-map';
 import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 import type { GenerateMotionOptions } from './motion-generation';
