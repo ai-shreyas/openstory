@@ -49,6 +49,7 @@ export const buildCharacterReferenceImages = (
       referenceImageUrl: c.sheetImageUrl ?? '',
       description: buildCharacterDescription(c),
       role: 'character' as const,
+      token: c.name,
     }));
 };
 

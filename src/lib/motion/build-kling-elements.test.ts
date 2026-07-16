@@ -66,4 +66,53 @@ describe('buildKlingElementsInput', () => {
     expect(result.prompt).toContain('@Element1: Alice');
     expect(result.prompt).toContain('...');
   });
+
+  it('binds mentioned tokens inline as @ElementN with no legend', () => {
+    const result = buildKlingElementsInput(
+      'ALICE lifts the CORAL_LIPSTICK toward the light',
+      [
+        {
+          ...ref('https://example.com/a.png', 'Alice - tall woman'),
+          token: 'Alice',
+        },
+        {
+          ...ref('https://example.com/b.png', 'CORAL_LIPSTICK - a coral tube'),
+          token: 'CORAL_LIPSTICK',
+        },
+      ]
+    );
+    expect(result.prompt).toBe(
+      '@Element1 lifts the @Element2 toward the light'
+    );
+  });
+
+  it('legends only the unmentioned refs when others bind inline', () => {
+    const result = buildKlingElementsInput('ALICE walks out of frame', [
+      {
+        ...ref('https://example.com/a.png', 'Alice - tall woman'),
+        token: 'Alice',
+      },
+      {
+        ...ref('https://example.com/b.png', 'Bob - short man'),
+        token: 'Bob',
+      },
+    ]);
+    expect(result.prompt).toContain('@Element1 walks out of frame');
+    expect(result.prompt).not.toContain('@Element1: Alice');
+    expect(result.prompt).toContain('@Element2: Bob - short man');
+  });
+
+  it('substitutes overflow (5th+) ref tokens with descriptions', () => {
+    const refs = Array.from({ length: 5 }, (_, i) => ({
+      ...ref(`https://example.com/${i}.png`, `Ref ${i} - person ${i}`),
+      token: `REF_${i}`,
+    }));
+    const result = buildKlingElementsInput(
+      'REF_0 nods while REF_4 exits',
+      refs
+    );
+    expect(result.elements).toHaveLength(4);
+    expect(result.prompt).toContain('@Element1 nods');
+    expect(result.prompt).toContain('Ref 4 (person 4) exits');
+  });
 });

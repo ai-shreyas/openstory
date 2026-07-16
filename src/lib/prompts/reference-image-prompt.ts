@@ -16,6 +16,14 @@ export type ReferenceImageDescription = {
   description: string;
   /** Role distinguishes the primary scene from supporting reference images */
   role?: 'primary' | 'character' | 'location' | 'element';
+  /**
+   * The canonical token this entity is named by in prompts — a character's
+   * bible name (e.g. "Scarlett") or an element's UPPERCASE token (e.g.
+   * "CORAL_LIPSTICK"). Motion builders substitute occurrences with the video
+   * model's reference tag (`@Image2`, `@Element1`) or, for models without
+   * reference support, the description (#873).
+   */
+  token?: string;
 };
 
 /**

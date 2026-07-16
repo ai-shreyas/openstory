@@ -1,22 +1,33 @@
 /**
  * Convert resolved reference images into Kling v3 Pro `elements` input (#873).
  *
- * Kling v3 Pro is the only image-to-video model that accepts reference images:
+ * Kling v3 Pro accepts reference images inline on its image-to-video endpoint:
  * it takes an `elements` array of `{ frontal_image_url, reference_image_urls }`
  * and binds each one to the `@Element1`, `@Element2`, … tokens it finds in the
  * prompt (https://fal.ai/models/fal-ai/kling-video/v3/pro/image-to-video). We
  * have a single sheet/product image per character/element, so each becomes one
- * element keyed on `frontal_image_url`, and we append an `@ElementN` legend to
- * the prompt so the model knows which reference is which.
+ * element keyed on `frontal_image_url`.
+ *
+ * Binding is INLINE where possible: each reference's canonical token
+ * ("SCARLETT", "CORAL_LIPSTICK") is substituted with its `@ElementN` tag at
+ * the narrative moment it appears. References never mentioned in the prompt
+ * fall back to a trailing legend line (appended within the model's prompt
+ * limit — the base prompt is truncated rather than the legend, so the
+ * `@ElementN` bindings always survive; a dropped legend would orphan the
+ * element images). No start-frame line is needed here: unlike the
+ * reference-to-video endpoints, Kling's normal endpoint has a real start-frame
+ * `image_url`.
  *
  * The fal docs cap the combo at 4 reference images total, so we take the first
- * four. The legend is appended within the model's prompt limit (the base prompt
- * is truncated rather than the legend, so the `@ElementN` bindings always
- * survive — a dropped legend would orphan the element images).
+ * four; overflow references have their tokens replaced with plain descriptions.
  */
 
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
-import { appendLegendWithinLimit } from './reference-legend';
+import {
+  appendLegendWithinLimit,
+  inlineReferenceDescription,
+  substituteReferenceTags,
+} from './reference-legend';
 
 /** A single Kling v3 combo element built from one reference image. */
 export type KlingComboElement = {
@@ -32,9 +43,9 @@ export function buildKlingElementsInput(
   references: ReferenceImageDescription[],
   maxPromptLength?: number
 ): { prompt: string; elements: KlingComboElement[] } {
-  const usable = references
-    .filter((ref) => ref.referenceImageUrl)
-    .slice(0, MAX_KLING_ELEMENTS);
+  const withUrls = references.filter((ref) => ref.referenceImageUrl);
+  const usable = withUrls.slice(0, MAX_KLING_ELEMENTS);
+  const overflow = withUrls.slice(MAX_KLING_ELEMENTS);
 
   if (usable.length === 0) {
     return { prompt: basePrompt, elements: [] };
@@ -44,13 +55,32 @@ export function buildKlingElementsInput(
     frontal_image_url: ref.referenceImageUrl,
   }));
 
-  const legendLines = usable.map(
-    (ref, index) => `@Element${index + 1}: ${ref.description}`
+  const { prompt: substituted, mentioned } = substituteReferenceTags(
+    basePrompt,
+    [
+      ...usable.map((ref, index) => ({
+        token: ref.token,
+        render: `@Element${index + 1}`,
+      })),
+      ...overflow.map((ref) => ({
+        token: ref.token,
+        render: inlineReferenceDescription(ref),
+      })),
+    ]
   );
-  const legend = `Reference elements — keep each visually consistent with its reference image throughout the shot:\n${legendLines.join('\n')}`;
 
+  const legendLines = usable
+    .map((ref, index) =>
+      mentioned[index] ? null : `@Element${index + 1}: ${ref.description}`
+    )
+    .filter((line) => line !== null);
+
+  if (legendLines.length === 0) {
+    return { prompt: substituted, elements };
+  }
+  const legend = `Reference elements — keep each visually consistent with its reference image throughout the shot:\n${legendLines.join('\n')}`;
   return {
-    prompt: appendLegendWithinLimit(basePrompt, legend, maxPromptLength),
+    prompt: appendLegendWithinLimit(substituted, legend, maxPromptLength),
     elements,
   };
 }

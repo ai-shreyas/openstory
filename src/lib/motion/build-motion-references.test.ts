@@ -46,11 +46,13 @@ describe('buildMotionReferenceImages', () => {
         referenceImageUrl: 'https://example.com/alice.png',
         description: 'Alice - Alice is tall',
         role: 'character',
+        token: 'Alice',
       },
       {
         referenceImageUrl: 'https://example.com/logo.png',
         description: 'LOGO - LOGO description',
         role: 'element',
+        token: 'LOGO',
       },
     ]);
   });

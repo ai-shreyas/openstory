@@ -228,13 +228,38 @@ describe('buildModelInput', () => {
       expect(result.prompt).toBe(baseOptions.prompt);
     });
 
-    it('non-Kling models ignore references entirely', () => {
+    it('non-Kling models get no elements key and an unchanged prompt when no tokens are mentioned', () => {
       for (const key of Object.keys(IMAGE_TO_VIDEO_MODELS)) {
         if (key === 'kling_v3_pro') continue;
         const result = build(safeImageToVideoModel(key), { referenceImages });
         expect(result).not.toHaveProperty('elements');
         expect(result.prompt).toBe(baseOptions.prompt);
       }
+    });
+
+    it('non-Kling models substitute mentioned tokens with descriptions', () => {
+      const tokenRefs = [
+        {
+          referenceImageUrl: 'https://example.com/jack-sheet.png',
+          description: 'Jack - tall man with a scar',
+          role: 'character' as const,
+          token: 'Jack',
+        },
+        {
+          referenceImageUrl: 'https://example.com/logo.png',
+          description: 'ACME_LOGO - red circular badge',
+          role: 'element' as const,
+          token: 'ACME_LOGO',
+        },
+      ];
+      const result = build('grok_imagine_video_1_5', {
+        prompt: 'JACK holds up the ACME_LOGO to the camera',
+        referenceImages: tokenRefs,
+      });
+      expect(result).not.toHaveProperty('elements');
+      expect(result.prompt).toBe(
+        'Jack (tall man with a scar) holds up the ACME_LOGO (red circular badge) to the camera'
+      );
     });
   });
 
@@ -270,10 +295,13 @@ describe('buildModelInput', () => {
       ]);
     });
 
-    it('appends the @ImageN legend (still first, refs after)', () => {
+    it('declares the still as the starting frame and legends unmentioned refs', () => {
       const result = buildRef();
       expect(result.prompt).toContain(baseOptions.prompt);
-      expect(result.prompt).toContain('@Image1: the established shot');
+      expect(
+        typeof result.prompt === 'string' &&
+          result.prompt.startsWith('Use @Image1 as the starting frame.')
+      ).toBe(true);
       expect(result.prompt).toContain('@Image2: Jack - tall man with a scar');
       expect(result.prompt).toContain(
         '@Image3: ACME_LOGO - red circular badge'

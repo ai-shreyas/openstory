@@ -15,6 +15,10 @@ import type {
 import type { z } from 'zod';
 import { buildKlingElementsInput } from './build-kling-elements';
 import { buildReferenceVideoPrompt } from './build-reference-video-prompt';
+import {
+  inlineReferenceDescription,
+  substituteReferenceTags,
+} from './reference-legend';
 import { MOTION_TRANSFORMS, type MotionEndpointId } from './endpoint-map';
 import type { GenerateMotionOptions } from './motion-generation';
 import { getLogger } from '@/lib/observability/logger';
@@ -48,11 +52,13 @@ export function buildModelInput<T extends ImageToVideoModel>(
       `No motion transform registered for endpoint: ${endpointId}`
     );
   }
-  // Reference images (#873): only Kling v3 Pro accepts them, via its `elements`
-  // field. Build the elements array and append the matching `@ElementN` legend
-  // to the prompt. For every other model `references` stays empty, so `prompt`
-  // is unchanged and no `elements` key is passed (and the model's apiSchema
-  // would strip it anyway).
+  // Reference images (#873): only Kling v3 Pro accepts them on this path, via
+  // its `elements` field — canonical entity tokens in the prompt are bound
+  // inline as `@ElementN`. For every other model the images can't be attached,
+  // so tokens are substituted with their bible descriptions instead — a prompt
+  // written as "SCARLETT lifts the CORAL_LIPSTICK" stays self-contained. No
+  // `elements` key is passed for those models (the apiSchema would strip it
+  // anyway).
   const references = options.referenceImages ?? [];
   const kling =
     modelKey === 'kling_v3_pro' && references.length > 0
@@ -62,7 +68,17 @@ export function buildModelInput<T extends ImageToVideoModel>(
           modelConfig.maxPromptLength
         )
       : undefined;
-  const prompt = kling?.prompt ?? options.prompt;
+  const prompt =
+    kling?.prompt ??
+    (references.length > 0
+      ? substituteReferenceTags(
+          options.prompt,
+          references.map((ref) => ({
+            token: ref.token,
+            render: inlineReferenceDescription(ref),
+          }))
+        ).prompt
+      : options.prompt);
   const elements = kling?.elements.length ? kling.elements : undefined;
 
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion safe to cast here because we know the transform is valid

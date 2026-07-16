@@ -1,13 +1,58 @@
 /**
- * Shared helper for appending a reference-image legend to a motion prompt (#873).
+ * Shared helpers for binding reference images into a motion prompt (#873).
  *
- * Models that bind reference images to prompt tokens (Kling's `@ElementN`,
- * Seedance's `@ImageN`) need a legend mapping each token to what its image
- * shows. The legend is load-bearing — dropping it orphans the reference images
- * — so when the combined text exceeds the model's prompt limit we truncate the
- * BASE prompt and always keep the legend intact. Mirrors `truncateBasePrompt`
- * in reference-image-prompt.ts.
+ * The preferred binding is INLINE: prompts name entities by canonical token
+ * (a character's bible name, an element's UPPERCASE token), and
+ * `substituteReferenceTags` rewrites those occurrences into the video model's
+ * tag syntax (`@Image2`, `@Element1`) — matching how vendor examples weave
+ * tags into the narrative ("the fruit tea from @Image2"). A trailing legend
+ * line is the fallback for references never mentioned in the prompt; the
+ * legend is load-bearing — dropping it orphans the reference images — so when
+ * the combined text exceeds the model's prompt limit we truncate the BASE
+ * prompt and always keep the legend intact. Mirrors `truncateBasePrompt` in
+ * reference-image-prompt.ts.
  */
+
+import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
+
+/**
+ * Replace whole-token mentions in `prompt` with each entry's rendering.
+ * Matching is case-insensitive and word-bounded, so "SCARLETT"/"Scarlett"
+ * match a `Scarlett` token but "jacket" never matches `jack`. Returns which
+ * entries were found so callers can fall back to a legend for the rest.
+ */
+export function substituteReferenceTags(
+  prompt: string,
+  entries: Array<{ token?: string; render: string }>
+): { prompt: string; mentioned: boolean[] } {
+  let result = prompt;
+  const mentioned = entries.map(() => false);
+  entries.forEach((entry, index) => {
+    if (!entry.token) return;
+    const pattern = `(?<=^|[^A-Za-z0-9_])${escapeRegex(entry.token)}(?=[^A-Za-z0-9_]|$)`;
+    if (!new RegExp(pattern, 'i').test(result)) return;
+    mentioned[index] = true;
+    result = result.replace(new RegExp(pattern, 'gi'), entry.render);
+  });
+  return { prompt: result, mentioned };
+}
+
+/**
+ * Render a reference description for inline prose substitution on models with
+ * no reference-image support: `"Scarlett - Athletic build"` becomes
+ * `"Scarlett (Athletic build)"` so the sentence still reads naturally.
+ */
+export function inlineReferenceDescription(
+  ref: ReferenceImageDescription
+): string {
+  const match = ref.description.match(/^(.+?) - (.+)$/);
+  if (!match?.[1] || !match[2]) return ref.description;
+  return `${match[1]} (${match[2]})`;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export function appendLegendWithinLimit(
   basePrompt: string,

@@ -37,6 +37,7 @@ export function buildElementReferenceImages(
       referenceImageUrl: el.imageUrl,
       description: buildElementDescription(el),
       role: 'element' as const,
+      token: el.token,
     }));
 }
 
