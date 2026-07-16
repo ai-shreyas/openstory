@@ -142,8 +142,11 @@ export class CharacterBibleWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         imageModel,
         referenceImageUrl: talentMatch?.sheetImageUrl,
         talentMetadata: talentMatch?.sheetMetadata,
+        // Image-anchored, name-free: naming a person + "look exactly like"
+        // trips OpenAI's real-person likeness moderation (see
+        // buildCastingAttributes).
         talentDescription: talentMatch
-          ? `This character must look exactly like ${talentMatch.talentName}`
+          ? 'This character must exactly match the person shown in the reference image'
           : undefined,
         styleConfig: input.styleConfig,
       };
