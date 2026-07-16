@@ -74,6 +74,25 @@ export class MotionPromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<Motio
     // ============================================================
     const settled = await Promise.allSettled(
       scenes.map((scene, sceneIndex) => {
+        // The pipeline renders images BEFORE motion prompts precisely so the
+        // prompt can be conditioned on the actual still (#929). A scene with
+        // no still here means its image failed — fail the scene loudly (the
+        // rejection is collected below) rather than silently degrading to a
+        // text-only prompt. A degraded prompt is nondeterministic (the same
+        // pipeline produces different LLM requests depending on which
+        // failures happened) and unanchored to the frame it must animate.
+        // Explicit single-shot regenerates (scenes.ts / prompt-variants.ts)
+        // stay text-only-capable: there the trigger deliberately snapshots a
+        // null still because no image exists yet.
+        const startingFrameImageUrl =
+          startingFrameImageUrls?.[scene.sceneId] ?? null;
+        if (!startingFrameImageUrl) {
+          return Promise.reject(
+            new Error(
+              `scene ${scene.sceneId} has no rendered starting frame (its image generation failed or was skipped); refusing to generate an unanchored motion prompt`
+            )
+          );
+        }
         const sceneBefore = sceneIndex > 0 ? scenes[sceneIndex - 1] : undefined;
         const sceneAfter =
           sceneIndex < scenes.length - 1 ? scenes[sceneIndex + 1] : undefined;
@@ -94,8 +113,7 @@ export class MotionPromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<Motio
             ?.shotId,
           // Pass the rendered still per scene, snapshotted upstream (#929) —
           // never looked up inside the child workflow.
-          startingFrameImageUrl:
-            startingFrameImageUrls?.[scene.sceneId] ?? null,
+          startingFrameImageUrl,
         };
 
         return spawnAndAwaitChild<

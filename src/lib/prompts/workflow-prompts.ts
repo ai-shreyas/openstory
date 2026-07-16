@@ -582,7 +582,7 @@ Always populate the \`audio\` field:
     },
     {
       role: 'user',
-      content: `Generate the motion prompt for this scene. The rendered starting frame is attached below as an image (when available) — animate strictly from it.
+      content: `Generate the motion prompt for this scene. {{startingFrameNote}}
 
 <CURRENT_SCENE>
 {{scene}}

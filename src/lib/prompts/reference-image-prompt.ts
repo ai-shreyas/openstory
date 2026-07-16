@@ -47,10 +47,13 @@ const ROLE_ORDER: Record<
  * One-line identity guard replacing the old IMPORTANT paragraph: reference
  * images carry identity; they must never be reproduced as output subjects.
  * Doubles as the legend header so the whole reference section stays one
- * strippable unit.
+ * strippable unit. Phrased as cross-panel CONSISTENCY, not likeness
+ * replication — "match this person exactly" language (like enumerating
+ * face/skin features to copy) trips OpenAI's real-person likeness
+ * moderation on gpt-image edit endpoints.
  */
 const IDENTITY_GUARD =
-  'Reference images define identity — match each referenced person, object, and location exactly as shown; never render a reference image itself as a separate panel or subject.';
+  'Reference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.';
 
 /**
  * Strip everything this builder (or its predecessors) may have appended to a

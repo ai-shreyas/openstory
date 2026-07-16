@@ -37,7 +37,7 @@ export function getVariantImagePrompt(
 
 Layout: ${layout}
 ${sceneContext}
-Match Image 1 exactly: same character(s) (face, hair, skin, clothing), lighting, color grade, and texture.
+Every panel is a shot of the same scene as Image 1 — keep the characters, wardrobe, lighting, color grade, and texture consistent across all panels.
 
 No text, dialogue bubbles, scene numbers, or watermarks.
 `;
