@@ -261,7 +261,7 @@ export async function startAimockServer(): Promise<string> {
       record: {
         providers: { openai: 'https://openrouter.ai/api/v1' },
         fixturePath: RECORD_STAGING_DIR,
-        // Reasoning models (e.g. Grok 4.3 + structured output under concurrent
+        // Reasoning models (e.g. Grok 4.5 + structured output under concurrent
         // load) routinely leave 30s+ gaps between SSE chunks while thinking,
         // which trips aimock's default 30s body-idle timer and truncates the
         // recorded stream — recordings for the slowest calls are silently

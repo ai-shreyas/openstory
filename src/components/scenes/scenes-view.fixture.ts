@@ -21,7 +21,7 @@ export const fixtureSequence: Sequence = {
   updatedBy: '01KT2QSNQQNFCVAV1ASY9HRW90',
   styleId: '01KT2QRY2BWFJHT67CNQ3V9566',
   aspectRatio: '9:16',
-  analysisModel: 'x-ai/grok-4.3',
+  analysisModel: 'x-ai/grok-4.5',
   analysisDurationMs: 81570,
   imageModel: 'nano_banana_pro',
   videoModel: 'kling_v3_pro',

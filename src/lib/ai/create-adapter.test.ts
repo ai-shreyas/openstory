@@ -64,7 +64,7 @@ vi.doMock('@tanstack/ai-openrouter', () => ({
 // pattern.
 const { createAdapter, getPlatformLlmKey } = await import('./create-adapter');
 
-const MODEL = 'x-ai/grok-4.3';
+const MODEL = 'x-ai/grok-4.5';
 const FAL_URL = 'https://fal.run/openrouter/router/openai/v1';
 
 function lastCall(): AdapterCall {

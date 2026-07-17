@@ -3,7 +3,7 @@
     {
       "match": {
         "userMessage": "Cast the following talent into character roles. The user specifically selected these 1 talent members.\n\nCHARACTERS (1 available):\n- Character ID: scarlett\n  Name: Scarlett\n  Age: 20s\n  Gender: female\n  Ethnicity: Caucasian\n  Physical: Sun-kissed skin, blonde hair that lifts freely in the ocean breeze, slim athletic build, vivid coral lips after application\n\nTALENT TO CAST (1 selected by user):\n- Talent ID: 01KRMKES6TWAEC44S2S8PXZBM8\n  Name: Sienna Blake\n  Age: unspecified (infer from name if recognizable)\n  Gender: unspecified (infer from name if recognizable)\n  Ethnicity: unspecified\n  Physical/Description: Golden blonde, beach-tanned skin, effortless Bondi energy. Wide smile, freckles across the nose, the kind of face that sells skincare without trying. Perfect for product ads, lifestyle campaigns, and rom-com leads.\n\nREQUIREMENTS:\n- Match ALL 1 talent to characters (1 talent, 1 characters available)\n- Each talent gets exactly one character\n- Each character can only have one talent\n\n\nRespond with exactly 1 matches.",
-        "model": "x-ai/grok-4.3",
+        "model": "x-ai/grok-4.5",
         "turnIndex": 0,
         "hasToolResult": false
       },

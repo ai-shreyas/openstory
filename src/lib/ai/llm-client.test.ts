@@ -469,7 +469,7 @@ describe('llm-client', () => {
 
         await drain(
           callLLMStream({
-            model: 'x-ai/grok-4.3',
+            model: 'x-ai/grok-4.5',
             messages: [{ role: 'user', content: 'test' }],
             responseSchema: bigSchema,
           })
@@ -561,7 +561,7 @@ describe('llm-client', () => {
 
         await drain(
           callLLMStream({
-            model: 'x-ai/grok-4.3',
+            model: 'x-ai/grok-4.5',
             messages: [{ role: 'user', content: 'test' }],
           })
         );
