@@ -1,4 +1,5 @@
 import { getChannelHistoryFn } from '@/functions/realtime-history';
+import { useUser } from '@/hooks/use-user';
 import { useRealtime } from '@/lib/realtime/client';
 import type { StaleDetectedPayload } from '@/lib/realtime';
 import { useQueryClient } from '@tanstack/react-query';
@@ -66,13 +67,14 @@ function resolveStatusFromHistory(
  */
 export function useTalentSheetRealtime(talentId?: string) {
   const queryClient = useQueryClient();
+  const { data: user } = useUser();
   const [isGenerating, setIsGenerating] = useState(false);
   const [phase, setPhase] = useState<GenerationPhase>('sheet');
   const [error, setError] = useState<string | null>(null);
 
   // Replay channel history on mount to catch in-flight generation
   useEffect(() => {
-    if (!talentId) return;
+    if (!talentId || !user) return;
 
     getChannelHistoryFn({ data: { channel: `talent:${talentId}` } })
       .then((events) => {
@@ -94,7 +96,7 @@ export function useTalentSheetRealtime(talentId?: string) {
           err,
         });
       });
-  }, [talentId, queryClient]);
+  }, [talentId, queryClient, user]);
 
   const handleEvent = useCallback(
     (event: TalentRealtimeEvent) => {

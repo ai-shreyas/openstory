@@ -1,4 +1,5 @@
 import { getChannelHistoryFn } from '@/functions/realtime-history';
+import { useUser } from '@/hooks/use-user';
 import { useCallback, useEffect, useReducer } from 'react';
 import { z } from 'zod';
 import { useRealtime } from './client';
@@ -100,14 +101,16 @@ export function useShotPromptStream(
   enabled: boolean = true
 ) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const { data: user } = useUser();
   const channelId = shotId ? `shot-prompt:${shotId}` : undefined;
   const active = enabled && Boolean(channelId);
+  const canReplayHistory = active && Boolean(user);
 
   // Replay history on mount so a user who navigates back mid-regen sees the
   // accumulated text and the right status. Re-keys on shotId so switching
   // shots clears and re-fetches.
   useEffect(() => {
-    if (!active || !channelId) {
+    if (!canReplayHistory || !channelId) {
       dispatch({ type: 'RESET' });
       return;
     }
@@ -156,7 +159,7 @@ export function useShotPromptStream(
     return () => {
       cancelled = true;
     };
-  }, [active, channelId]);
+  }, [canReplayHistory, channelId]);
 
   const handleEvent = useCallback(
     (msg: {
