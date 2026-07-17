@@ -251,6 +251,13 @@ export async function startAimockServer(): Promise<string> {
     // CI replay, lenient while recording so the proxy/record path runs.
     strict: !E2E_RECORDING,
     logLevel: 'info',
+    // Recorded fixtures carry real streaming timings (ttft + inter-chunk
+    // delays) which replay at 1x by default — a full-pipeline replay would
+    // wait out every original LLM stream in real time. 100x fast-forwards
+    // (a 30s reasoning gap becomes 300ms) while still yielding between
+    // chunks, so concurrent streams keep interleaving like production.
+    // Recording is unaffected — record mode streams live from upstream.
+    replaySpeed: 100,
     requestTransform: falRequestTransform,
     // Record only when E2E_RECORD=1 (real key from .env.local). Default is
     // strict replay against the recorded fixtures — CI runs without the flag

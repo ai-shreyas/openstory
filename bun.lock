@@ -93,7 +93,7 @@
         "@chromatic-com/storybook": "^5.2.1",
         "@clack/prompts": "^1.4.0",
         "@cloudflare/vite-plugin": "^1.37.0",
-        "@copilotkit/aimock": "^1.35.0",
+        "@copilotkit/aimock": "^1.37.1",
         "@faker-js/faker": "^10.4.0",
         "@logtape/pretty": "^2.1.1",
         "@storybook/addon-a11y": "^10.4.0",
@@ -348,7 +348,7 @@
 
     "@content-collections/vite": ["@content-collections/vite@0.3.0", "", { "dependencies": { "@content-collections/integrations": "0.5.0" }, "peerDependencies": { "@content-collections/core": "^0.x", "vite": "^6 || ^7 || ^8" } }, "sha512-1YDIQNXRKfU4diHQswX8xxhBk+0cJTfC54RRQMNMGOWPnkREVcCySt8ZbPZ9/osx3ACT0+kiWvHRzOKMKPubYA=="],
 
-    "@copilotkit/aimock": ["@copilotkit/aimock@1.35.0", "", { "peerDependencies": { "jest": ">=29", "vitest": ">=3" }, "optionalPeers": ["jest", "vitest"], "bin": { "aimock": "dist/aimock-cli.js", "llmock": "dist/cli.js" } }, "sha512-dWtNUeaWD4jaC3Kv9oBiCoIczENM6u8pWBCmybn0/hSFEY57yqCtOGPsVNIG/YlmwbH8p5sgtL6xZzo1FnPi8g=="],
+    "@copilotkit/aimock": ["@copilotkit/aimock@1.37.1", "", { "peerDependencies": { "jest": ">=29", "vitest": ">=3" }, "optionalPeers": ["jest", "vitest"], "bin": { "aimock": "dist/aimock-cli.js", "llmock": "dist/cli.js" } }, "sha512-/9/IMQu1KzNAE3lP7bUx+RQQIbMjkar94oGy84PXhvt71XTay666Y+dLok3uJSLes/TrgSDIN2Bf7MMKIlbHIA=="],
 
     "@cspotcode/source-map-support": ["@cspotcode/source-map-support@0.8.1", "", { "dependencies": { "@jridgewell/trace-mapping": "0.3.9" } }, "sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw=="],
 
