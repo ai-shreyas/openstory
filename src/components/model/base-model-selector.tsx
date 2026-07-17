@@ -203,6 +203,7 @@ export const BaseModelSelector: React.FC<BaseModelSelectorProps> = ({
           variant="outline"
           className="w-full justify-between"
           disabled={disabled}
+          aria-label={`${label}: ${displayLabel}`}
         >
           <span className="text-sm truncate">{displayLabel}</span>
           <ChevronDown className="ml-2 size-4 shrink-0" />

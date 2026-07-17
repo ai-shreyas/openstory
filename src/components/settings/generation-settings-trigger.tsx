@@ -24,7 +24,12 @@ export const GenerationSettingsTrigger: FC<GenerationSettingsTriggerProps> = ({
   ].filter(Boolean);
 
   return (
-    <Button variant="outline" className="gap-2" {...props}>
+    <Button
+      variant="outline"
+      className="gap-2"
+      aria-label="Generation settings"
+      {...props}
+    >
       {aspectRatioData && (
         <AspectRatioIcon
           width={aspectRatioData.width}
