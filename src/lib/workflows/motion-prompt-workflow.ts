@@ -86,6 +86,13 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
     });
 
     const promptVariables = {
+      // Deterministic per input: the note states what IS attached, never a
+      // hedged "when available". The pipeline path always has a still (the
+      // batch workflow fails a scene without one); the text-only wording only
+      // appears for explicit user regenerates before any image exists.
+      startingFrameNote: startingFrameImageUrl
+        ? 'The rendered starting frame is attached below as an image — animate strictly from it.'
+        : 'No rendered starting frame exists yet — derive the motion strictly from the scene data below.',
       sceneBefore: sceneBefore
         ? JSON.stringify(sceneBefore, null, 2)
         : '(none)',

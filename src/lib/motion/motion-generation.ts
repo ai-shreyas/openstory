@@ -30,10 +30,18 @@ export type GenerateMotionOptions = {
    *  the model's native audio output (sfx/ambient/lip-sync). Omitting the
    *  flag lets the API schema default apply (true for audio-capable models). */
   generateAudio?: boolean;
+  /**
+   * Character + element reference images for identity consistency across the
+   * clip (#873). Only emitted for models that accept reference images (Kling
+   * v3 Pro, via its `elements` field); ignored by every other model.
+   */
+  referenceImages?: ReferenceImageDescription[];
 };
 
 import { ensureExternallyFetchableUrl } from '@/lib/storage/external-url';
-import { buildModelInput } from './build-model-input';
+import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
+import { buildModelInput, buildMotionRequest } from './build-model-input';
+import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -89,12 +97,41 @@ export async function submitMotionJob(
     falApiKeyInfo.key
   );
 
-  // Prepare the model input
-  const modelInput = buildModelInput(
-    { ...options, imageUrl },
-    modelConfig,
+  // Decide which endpoint this run submits to (#873). With cast/element refs,
+  // models that have a dedicated reference-to-video endpoint (Seedance) route
+  // there; everything else (incl. Kling, which carries refs inline as
+  // `elements`) stays on its image-to-video endpoint.
+  const hasReferenceImages = (options.referenceImages?.length ?? 0) > 0;
+  const endpoint = resolveMotionEndpoint(modelKey, hasReferenceImages);
+
+  // Reference images are emitted either inline (Kling's `elements`) or via the
+  // reference-to-video endpoint (Seedance). Both paths need externally-fetchable
+  // URLs — the same locally-served /r2/ swap imageUrl needs applies to the
+  // character sheets / element images. Models that don't emit refs keep the raw
+  // references: their URLs are never sent, but the builder still needs the
+  // tokens + descriptions to substitute entity tokens in the prompt.
+  const emitsReferences =
+    endpoint.usesReferenceEndpoint || modelKey === 'kling_v3_pro';
+  const referenceImages =
+    emitsReferences && options.referenceImages?.length
+      ? await Promise.all(
+          options.referenceImages.map(async (ref) => ({
+            ...ref,
+            referenceImageUrl: await ensureExternallyFetchableUrl(
+              ref.referenceImageUrl
+            ),
+          }))
+        )
+      : options.referenceImages;
+
+  // Prepare the model input — the reference-to-video endpoint has a different
+  // input shape (tagged image_urls[], no start-frame image_url). Shared with
+  // the scene editor's optimised-prompt preview via buildMotionRequest.
+  const optionsWithFetchableUrls = { ...options, imageUrl, referenceImages };
+  const modelInput = buildMotionRequest(
+    optionsWithFetchableUrls,
     modelKey
-  );
+  ).input;
 
   // Separate the prompt from the model options
   const { prompt: optimisedPrompt, ...modelOptions } = modelInput;
@@ -104,6 +141,7 @@ export async function submitMotionJob(
   // Log the submission details
   logger.info(`Submitting job with model: ${modelConfig.id}`, {
     provider: modelConfig.provider,
+    endpoint: endpoint.endpointId,
     promptLength: optimisedPrompt.length,
     modelOptions,
   });
@@ -112,7 +150,7 @@ export async function submitMotionJob(
   // Note this is typesafe - only options compatible with modelConfig.id are allowed
   // Important: fal.ai supports string for model ids that the client doesn't know about - so most new models _aren't_ typesafe
   const job = await generateVideo({
-    adapter: falVideo(modelConfig.id, {
+    adapter: falVideo(endpoint.endpointId, {
       apiKey: falApiKeyInfo.key,
     }),
     prompt: optimisedPrompt,

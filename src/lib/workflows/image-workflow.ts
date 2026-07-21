@@ -38,7 +38,6 @@ import { simpleHash } from '@/lib/utils/hash';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { ImageWorkflowInput } from '@/lib/workflow/types';
-import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import {
   computeImageWorkflowHashCurrent,
@@ -103,20 +102,22 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         );
 
         const model = input.model ?? DEFAULT_IMAGE_MODEL;
-        const params: ImageGenerationParams = {
-          model,
-          prompt: buildReferenceImagePrompt(
+        // The builder orders the URLs to match the prompt's Image numbering
+        // (primary → characters → locations → elements) — always send its
+        // referenceUrls, not the raw input order.
+        const { prompt: enhancedPrompt, referenceUrls } =
+          buildReferenceImagePrompt(
             input.prompt,
             input.referenceImages ?? [],
             IMAGE_MODELS[model].maxPromptLength
-          ).prompt,
+          );
+        const params: ImageGenerationParams = {
+          model,
+          prompt: enhancedPrompt,
           imageSize: input.imageSize ?? DEFAULT_IMAGE_SIZE,
           numImages: input.numImages ?? 1,
           seed: input.seed,
-          referenceImageUrls:
-            input.referenceImages?.map(
-              (ref: ReferenceImageDescription) => ref.referenceImageUrl
-            ) ?? [],
+          referenceImageUrls: referenceUrls,
           traceName: 'shot-image',
         };
 

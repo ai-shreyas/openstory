@@ -164,8 +164,10 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
       referenceImageUrl: defaultSheet?.imageUrl ?? undefined,
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
       talentMetadata: defaultSheet?.metadata ?? undefined,
+      // Image-anchored, name-free (see buildCastingAttributes): naming a
+      // person + "look exactly like" trips OpenAI's likeness moderation.
       talentDescription:
-        `This character must look exactly like ${talentWithSheets.name}. ${talentWithSheets.description ?? ''}`.trim(),
+        `This character must exactly match the person shown in the reference image. ${talentWithSheets.description ?? ''}`.trim(),
       imageModel: safeTextToImageModel(sequence.imageModel),
       affectedShotIds,
       styleConfig,

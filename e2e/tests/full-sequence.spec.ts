@@ -179,7 +179,8 @@ to camera.
 SCARLETT (V.O.)
 One shade. One summer.
 
-CLOSE ON LIPS — Scarlett swipes the colour, blots, smiles.
+CLOSE ON THE TUBE — the coral bullet twists up and catches the
+light. Scarlett smiles at her reflection, the colour already hers.
 
 EXT. BONDI BEACH PROMENADE - CONTINUOUS
 
@@ -255,6 +256,23 @@ SUPER:  CORAL.  OUT NOW.
       await fileInput.setInputFiles(
         resolve(import.meta.dirname, '../fixtures/broadcast-mic.jpg')
       );
+
+      // 7b. Switch image generation to Grok Imagine (quality). Its content
+      // checker is far less likeness-strict than GPT Image 2's, which kept
+      // rejecting talent-referenced beauty shots during fixture recording
+      // (makeup on a referenced face = OpenAI's blocked likeness class).
+      await page.getByRole('button', { name: 'Generation settings' }).click();
+      await page.getByRole('button', { name: /^Image Models?:/ }).click();
+      await page
+        .getByRole('menuitemcheckbox', { name: 'Grok Imagine Image Quality' })
+        .click();
+      await page.keyboard.press('Escape'); // checkbox items keep the menu open
+      await expect(
+        page.getByRole('button', {
+          name: 'Image Models: Grok Imagine Image Quality',
+        })
+      ).toBeVisible();
+      await page.keyboard.press('Escape'); // close the settings popover
 
       // 8. Generate — should kick off the workflow chain and navigate.
       // Vision analysis (analyzeDraftElementFn) is the long pole here; it can

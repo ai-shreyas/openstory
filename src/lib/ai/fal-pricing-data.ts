@@ -30,6 +30,10 @@ export const FAL_PRICING: Record<string, FalPricing> = {
     unitPrice: micros(14_000),
     unit: 'tokens',
   },
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video': {
+    unitPrice: micros(14_000),
+    unit: 'tokens',
+  },
   'fal-ai/ace-step-1.5': { unitPrice: micros(300), unit: 'seconds' },
   'fal-ai/ace-step/prompt-to-audio': {
     unitPrice: micros(200),

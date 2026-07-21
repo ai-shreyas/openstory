@@ -192,7 +192,15 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         workflowRunId,
       });
 
+      // The cropped tile rides through the builder as the primary reference so
+      // the prompt's Image numbering matches the image_urls array — prepending
+      // it afterwards would shift every legend/inline binding off by one.
       const allReferences = [
+        {
+          referenceImageUrl: input.croppedTileUrl,
+          description: 'The source shot to upscale — the output is this image',
+          role: 'primary' as const,
+        },
         ...(input.characterReferences ?? []).map((r) => ({
           ...r,
           role: r.role ?? ('character' as const),
@@ -202,7 +210,7 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
           role: r.role ?? ('location' as const),
         })),
       ];
-      const { prompt: enhancedPrompt, referenceUrls: charLocUrls } =
+      const { prompt: enhancedPrompt, referenceUrls } =
         buildReferenceImagePrompt(
           UPSCALE_PROMPT,
           allReferences,
@@ -218,7 +226,7 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
           model: 'nano_banana_2',
           prompt: enhancedPrompt,
           imageSize,
-          referenceImageUrls: [input.croppedTileUrl, ...charLocUrls],
+          referenceImageUrls: referenceUrls,
           numImages: 1,
           outputFormat: 'png',
         },

@@ -507,6 +507,12 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
               systemPrompts,
               outputSchema: config.responseSchema,
             });
+      // The orchestrator-validated result from the terminal
+      // `structured-output.complete` event (native mode only — the
+      // json_object fallback has no outputSchema, so no event). Preferred
+      // over the hand-accumulated text: it's what the library validated,
+      // and it survives any delta-assembly drift.
+      let structuredJson: string | null = null;
       try {
         for await (const event of eventStream) {
           if (
@@ -524,6 +530,13 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
             }
             continue;
           }
+          if (
+            event.type === 'CUSTOM' &&
+            event.name === 'structured-output.complete'
+          ) {
+            structuredJson = JSON.stringify(event.value.object);
+            continue;
+          }
           const runError = extractRunError(event);
           if (runError) {
             logger.error(`[LLM:${logName}:cf] Streaming call RUN_ERROR`, {
@@ -533,9 +546,17 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
           }
         }
         await flushDelta();
+        if (plan.mode === 'native' && structuredJson === null) {
+          // Native structured streams should always end with the complete
+          // event; falling back to accumulated text means the adapter didn't
+          // emit it (version drift) — the trailing Zod parse still guards.
+          logger.warn(
+            `[LLM:${logName}:cf] No structured-output.complete event received; falling back to accumulated text`
+          );
+        }
         logger.info(`[LLM:${logName}:cf] Streaming call succeeded`);
         return {
-          jsonText: accumulated,
+          jsonText: structuredJson ?? accumulated,
           costMicros: llmCostFromUsage(capturedUsage, modelId),
         };
       } finally {
@@ -565,7 +586,9 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
     });
   }
 
-  // Streaming accumulates the model’s raw text; the fence-tolerant parse
-  // covers the json_object fallback (native structured streams are plain JSON).
+  // Native streams return the orchestrator-validated object (serialized off
+  // the structured-output.complete event); the fence-tolerant parse covers
+  // the json_object fallback's raw accumulated text. The Zod parse runs
+  // either way — it's what narrows to the schema's inferred type.
   return config.responseSchema.parse(parseJsonObjectResponse(jsonText));
 }

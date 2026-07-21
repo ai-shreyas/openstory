@@ -75,7 +75,7 @@ describe('buildCastingAttributes', () => {
     expect(result.ethnicity).toBe('Caucasian');
   });
 
-  test('uses talent name in physicalDescription when talent metadata has no physicalDescription', () => {
+  test('anchors physicalDescription to the reference image (never the talent name) when talent metadata has no physicalDescription', () => {
     const sparseMetadata: CharacterBibleEntry = {
       ...talentMetadata,
       physicalDescription: '',
@@ -86,8 +86,10 @@ describe('buildCastingAttributes', () => {
       talentName: 'Elvis Presley',
     });
 
-    expect(result.physicalDescription).toContain('Elvis Presley');
-    expect(result.physicalDescription).toContain('real-world appearance');
+    // Naming a person + "match exactly" trips OpenAI's likeness moderation —
+    // the fallback must reference the image, not the talent's name.
+    expect(result.physicalDescription).not.toContain('Elvis Presley');
+    expect(result.physicalDescription).toContain('reference image');
   });
 
   test('consistencyTag is deterministic', () => {
@@ -288,7 +290,7 @@ describe('buildCharacterSheetPrompt with talent', () => {
     });
 
     expect(prompt).toContain('Elvis Presley');
-    expect(prompt).toContain('real-world appearance');
+    expect(prompt).toContain('reference image');
   });
 
   test('strengthened reference instruction mentions image priority', () => {

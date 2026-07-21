@@ -11,7 +11,10 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
+import {
+  IMAGE_TO_VIDEO_MODELS,
+  MOTION_REFERENCE_ENDPOINTS,
+} from '@/lib/ai/models';
 
 function runCommand(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -39,9 +42,16 @@ async function fetchOpenApiSpec(endpointId: string): Promise<OpenAPISpec> {
 }
 
 async function main() {
-  // Deduplicate endpoint IDs (kling_v3_pro and kling_v3_pro_no_audio share one)
+  // Deduplicate endpoint IDs (kling_v3_pro and kling_v3_pro_no_audio share one).
+  // Include the separate reference-to-video endpoints (#873) so their schemas
+  // are generated alongside the image-to-video ones.
   const endpointIds = [
-    ...new Set(Object.values(IMAGE_TO_VIDEO_MODELS).map((m) => m.id)),
+    ...new Set([
+      ...Object.values(IMAGE_TO_VIDEO_MODELS).map((m) => m.id),
+      ...Object.values(MOTION_REFERENCE_ENDPOINTS).map(
+        (config) => config.endpointId
+      ),
+    ]),
   ];
 
   console.log(
