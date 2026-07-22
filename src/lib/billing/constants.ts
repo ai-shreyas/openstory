@@ -14,7 +14,15 @@ export function isStripeEnabled(): boolean {
 /** Processing fee applied when purchasing credits (e.g., 0.05 = 5%). Not charged on usage. */
 export const PROCESSING_FEE_PERCENT = 0.05;
 
-/** Free credit granted to every new team on signup, in USD */
+/**
+ * Free credit granted to every new team on signup, in USD.
+ *
+ * Must cover at least one default storyboard (DEFAULT_IMAGE_MODEL, ~8 scenes,
+ * images only — motion/music off). Guarded by the "signup grant covers
+ * default storyboard" test in constants.test.ts. Preflight uses fal
+ * historical typicalUnitsPerCall (not raw unitPrice alone) so gpt-image-2
+ * estimates ~$0.22/image, not $1 (#1062).
+ */
 const SIGNUP_GRANT_USD = 10;
 
 /** Free credit granted to every new team on signup, in microdollars */

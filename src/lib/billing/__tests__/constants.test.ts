@@ -1,12 +1,16 @@
-import { micros, usdToMicros } from '../money';
+import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
+import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import { describe, expect, it } from 'vitest';
 import {
+  SIGNUP_GRANT_MICROS,
   formatProcessingFeePercent,
   processingFeeUsd,
   splitCheckoutAmounts,
   totalCheckoutCents,
   totalCheckoutUsd,
 } from '../constants';
+import { estimateStoryboardCost } from '../cost-estimation';
+import { micros, microsToUsd, usdToMicros } from '../money';
 
 describe('billing constants', () => {
   it('applies processing fee only at purchase', () => {
@@ -44,5 +48,23 @@ describe('billing constants', () => {
     expect(totalCheckoutCents(usdToMicros(10))).toBe(1_050);
     expect(totalCheckoutCents(micros(10_500_000))).toBe(1_103);
     expect(Number.isInteger(totalCheckoutCents(micros(10_010_000)))).toBe(true);
+  });
+
+  /**
+   * #1062: new users must be able to generate a storyboard on first try with
+   * product defaults (DEFAULT_IMAGE_MODEL, images only — motion/music off).
+   * If this fails, either raise SIGNUP_GRANT_USD or re-check default model
+   * pricing / storyboard cost assumptions.
+   */
+  it('signup grant covers a default storyboard pre-flight estimate', () => {
+    const defaultStoryboardCost = estimateStoryboardCost({
+      imageModel: DEFAULT_IMAGE_MODEL,
+      aspectRatio: DEFAULT_ASPECT_RATIO,
+    });
+
+    expect(
+      SIGNUP_GRANT_MICROS,
+      `SIGNUP_GRANT ($${microsToUsd(SIGNUP_GRANT_MICROS)}) must be ≥ default storyboard estimate ($${microsToUsd(defaultStoryboardCost).toFixed(2)} with ${DEFAULT_IMAGE_MODEL})`
+    ).toBeGreaterThanOrEqual(defaultStoryboardCost);
   });
 });

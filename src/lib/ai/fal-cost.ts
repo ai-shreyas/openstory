@@ -11,7 +11,10 @@ const logger = getLogger(['openstory', 'ai', 'fal-cost']);
  * duration, etc. in the unit count, so no per-model multipliers are needed.
  *
  * `estimateFalCost` predicts a cost BEFORE a generation runs (no `unitsBilled`
- * yet) for the pre-flight credit gate. It is deliberately rough.
+ * yet) for the pre-flight credit gate. For image/flat models it prefers
+ * `typicalUnitsPerCall` from fal's historical estimate (baked into
+ * fal-pricing-data.ts by `bun scripts/update-fal-pricing.ts`). Duration-based
+ * models still use parametric math from request params.
  */
 
 import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
@@ -78,11 +81,35 @@ export type FalCostEstimateParams = {
 };
 
 /**
+ * Predicted unitsBilled for one generation call of an image/flat model.
+ * Prefers fal historical average; falls back to 1 unit per call.
+ */
+function typicalImageUnitsPerCall(
+  typicalUnitsPerCall: number | undefined
+): number {
+  if (
+    typicalUnitsPerCall != null &&
+    Number.isFinite(typicalUnitsPerCall) &&
+    typicalUnitsPerCall > 0
+  ) {
+    return typicalUnitsPerCall;
+  }
+  return 1;
+}
+
+/**
  * Rough pre-flight cost estimate, used only for the credit-availability gate
- * before a generation runs. Predicts the billed unit count from the requested
- * parameters, then multiplies by `unitPrice`. Audio/resolution premiums are
- * intentionally ignored — the exact charge comes from `falCostFromUnits` once
- * fal reports `unitsBilled`.
+ * before a generation runs. Predicts the billed unit count, then multiplies
+ * by `unitPrice`. The exact charge comes from `falCostFromUnits` once fal
+ * reports `unitsBilled`.
+ *
+ * Image / flat models: use `typicalUnitsPerCall` from fal historical estimates
+ * (not unitPrice alone — openai/gpt-image-2 has unit_price=$1 with ~0.22
+ * units per high-quality image, so assuming 1 unit would over-gate ~5×).
+ *
+ * Duration models (seconds / minutes / tokens): parametric from request
+ * params — historical averages encode a random past duration and would be
+ * wrong for the requested length.
  */
 export function estimateFalCost(
   endpointId: string,
@@ -98,9 +125,22 @@ export function estimateFalCost(
   const duration = params.durationSeconds ?? 0;
 
   switch (pricing.unit) {
-    case 'images':
-    case 'flat':
-      return multiplyMicros(pricing.unitPrice, numImages);
+    case 'images': {
+      // One billable generation per image. Historical units capture quality /
+      // resolution premiums (e.g. nano-banana 1.5× at 2K, gpt-image-2 ≈ 0.22).
+      const unitsPerImage = typicalImageUnitsPerCall(
+        pricing.typicalUnitsPerCall
+      );
+      return multiplyMicros(pricing.unitPrice, unitsPerImage * numImages);
+    }
+
+    case 'flat': {
+      // Flat-rate video: one unit set per generation, not per "image".
+      const unitsPerCall = typicalImageUnitsPerCall(
+        pricing.typicalUnitsPerCall
+      );
+      return multiplyMicros(pricing.unitPrice, unitsPerCall);
+    }
 
     case 'megapixels': {
       const w = params.widthPx ?? 1024;
@@ -109,11 +149,15 @@ export function estimateFalCost(
       return multiplyMicros(pricing.unitPrice, megapixels * numImages);
     }
 
-    case 'compute_seconds':
-      return multiplyMicros(
-        pricing.unitPrice,
-        DEFAULT_COMPUTE_SECONDS * numImages
-      );
+    case 'compute_seconds': {
+      // Prefer historical compute time when fal has usage data; otherwise a
+      // fixed default (several compute-second models report $0 historical).
+      const secondsPerImage =
+        pricing.typicalUnitsPerCall != null && pricing.typicalUnitsPerCall > 0
+          ? pricing.typicalUnitsPerCall
+          : DEFAULT_COMPUTE_SECONDS;
+      return multiplyMicros(pricing.unitPrice, secondsPerImage * numImages);
+    }
 
     case 'seconds':
       return multiplyMicros(pricing.unitPrice, duration);

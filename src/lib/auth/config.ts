@@ -260,7 +260,7 @@ function createAuth() {
               role: 'owner',
             });
 
-            // Grant every new team a one-time welcome credit (#1047).
+            // Grant every new team a one-time welcome credit (#1047; preflight fixed in #1062).
             await createBillingMethods(db, team.id, user.id).addCredits(
               SIGNUP_GRANT_MICROS,
               {
