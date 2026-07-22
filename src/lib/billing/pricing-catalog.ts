@@ -62,10 +62,30 @@ function formatFalPrice(endpointId: string): {
     return { price: 'Contact support', detail: 'Pricing unavailable' };
   }
 
-  const usd = microsToUsd(pricing.unitPrice);
+  const unitUsd = microsToUsd(pricing.unitPrice);
   const unitLabel = FAL_UNIT_LABELS[pricing.unit];
+
+  // Prefer typical per-call cost when fal historical units differ from 1
+  // (e.g. gpt-image-2: unit_price=$1 but ~0.22 units → ~$0.22/image).
+  const typical =
+    pricing.typicalUnitsPerCall != null &&
+    pricing.typicalUnitsPerCall > 0 &&
+    (pricing.unit === 'images' || pricing.unit === 'flat')
+      ? unitUsd * pricing.typicalUnitsPerCall
+      : null;
+
+  if (typical != null && Math.abs(typical - unitUsd) > unitUsd * 0.05) {
+    return {
+      price: `~${formatUsd(typical)} / ${unitLabel}`,
+      detail:
+        pricing.unit === 'flat'
+          ? 'Typical cost per generation (billed from provider units)'
+          : 'Typical cost per image (billed from provider units)',
+    };
+  }
+
   return {
-    price: `${formatUsd(usd)} / ${unitLabel}`,
+    price: `${formatUsd(unitUsd)} / ${unitLabel}`,
     detail:
       pricing.unit === 'flat'
         ? 'Flat rate per video'

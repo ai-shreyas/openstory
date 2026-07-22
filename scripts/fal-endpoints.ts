@@ -6,6 +6,7 @@ import {
   EDIT_ENDPOINTS,
   IMAGE_MODELS,
   IMAGE_TO_VIDEO_MODELS,
+  MOTION_REFERENCE_ENDPOINTS,
 } from '@/lib/ai/models';
 
 export function getFalEndpointIds(): string[] {
@@ -13,6 +14,9 @@ export function getFalEndpointIds(): string[] {
   const image = Object.values(IMAGE_MODELS).map((m) => m.id);
   const audio = Object.values(AUDIO_MODELS).map((m) => m.id);
   const edit = Object.values(EDIT_ENDPOINTS);
+  const motionRef = Object.values(MOTION_REFERENCE_ENDPOINTS).map(
+    (m) => m.endpointId
+  );
 
-  return [...new Set([...video, ...image, ...edit, ...audio])];
+  return [...new Set([...video, ...image, ...edit, ...audio, ...motionRef])];
 }
