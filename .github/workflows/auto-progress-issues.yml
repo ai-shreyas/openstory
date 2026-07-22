@@ -5,7 +5,9 @@ on:
 
 jobs:
   progress-issue:
-    if: github.event.ref_type == 'branch'
+    # Forks can't read PROJECT_TOKEN and must never mutate the upstream org
+    # project, so branch creation there is a no-op instead of a failed run.
+    if: github.event.ref_type == 'branch' && github.repository == 'openstory-so/openstory'
     runs-on: ubuntu-latest
     permissions:
       issues: read
@@ -28,8 +30,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
           REPO: ${{ github.repository }}
+          # Passed as an env var rather than interpolated into the script, so a
+          # future loosening of the extract regex can't turn this into a shell
+          # injection sink.
+          ISSUE_NUMBER: ${{ steps.extract.outputs.issue_number }}
         run: |
-          ISSUE_NUMBER=${{ steps.extract.outputs.issue_number }}
           PROJECT_NUMBER=1
           ORG="openstory-so"
           STATUS_FIELD_ID="PVTSSF_lADODacWQM4BBrgJzg0HVm4"
