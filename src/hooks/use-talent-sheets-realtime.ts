@@ -1,4 +1,5 @@
 import { getChannelHistoryFn } from '@/functions/realtime-history';
+import { useUser } from '@/hooks/use-user';
 import { useRealtime } from '@/lib/realtime/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -30,6 +31,7 @@ type SheetProgressEvent = {
  */
 export function useTalentSheetsRealtime(talentIds: string[] = []) {
   const queryClient = useQueryClient();
+  const { data: user } = useUser();
   const [generatingStatus, setGeneratingStatus] = useState<
     Map<string, boolean>
   >(new Map());
@@ -45,6 +47,8 @@ export function useTalentSheetsRealtime(talentIds: string[] = []) {
 
   // Replay channel history for newly added talent IDs
   useEffect(() => {
+    if (!user) return;
+
     const newIds = talentIds.filter((id) => !checkedIds.current.has(id));
     if (newIds.length === 0) return;
 
@@ -78,7 +82,7 @@ export function useTalentSheetsRealtime(talentIds: string[] = []) {
           logger.error(`Failed to fetch history for talent:${id}:`, { err });
         });
     }
-  }, [talentIds]);
+  }, [talentIds, user]);
 
   const handleEvent = useCallback(
     (event: SheetProgressEvent) => {

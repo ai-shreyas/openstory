@@ -5,6 +5,7 @@ import {
   undiscardLibraryLocationSheetVariantFn,
 } from '@/functions/library-location-sheet-variants';
 import { libraryLocationKeys } from '@/hooks/use-sequence-locations';
+import { useUser } from '@/hooks/use-user';
 import type { LocationSheetVariant } from '@/lib/db/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -22,11 +23,14 @@ export const libraryLocationSheetVariantKeys = {
 export function useLibraryLocationDivergentVariants(options?: {
   refetchInterval?: number | false;
 }) {
+  const { data: user } = useUser();
+
   return useQuery<LocationSheetVariant[]>({
     queryKey: libraryLocationSheetVariantKeys.divergent(),
     queryFn: () => getLibraryLocationDivergentVariantsFn(),
     staleTime: 30_000,
     refetchInterval: options?.refetchInterval ?? false,
+    enabled: !!user,
   });
 }
 
