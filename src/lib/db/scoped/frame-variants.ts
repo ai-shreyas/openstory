@@ -266,6 +266,33 @@ export function createFrameVariantsMethods(db: Database) {
       return byFrame;
     },
 
+    /**
+     * The model of each shot's SELECTED image version across a sequence, keyed
+     * by the owning shot (#1066). Model identity lives on the version row that
+     * produced the bytes, so this is what generate/display resolve from — see
+     * `@/lib/ai/resolve-asset-models`. One join, so the batch read paths
+     * (smart retry, the editor's model bar) don't go N+1. Shots whose anchor
+     * frame has no selection are absent; the caller falls back a tier.
+     *
+     * Anchors only (`orderIndex 0`) — the same frame the shot's still surface
+     * projects from — so a shot's later frames can't collide on the shot key.
+     */
+    listSelectedModelsBySequence: async (
+      sequenceId: string
+    ): Promise<Map<string, string>> => {
+      const rows = await db
+        .select({ shotId: frames.shotId, model: frameVariants.model })
+        .from(frames)
+        .innerJoin(
+          frameVariants,
+          eq(frameVariants.id, frames.selectedImageVersionId)
+        )
+        .where(
+          and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0))
+        );
+      return new Map(rows.map((r) => [r.shotId, r.model]));
+    },
+
     /** The version the frame currently points at, or null if unset/dangling. */
     getSelected: async (frameId: string): Promise<FrameVariant | null> => {
       const [frame] = await db

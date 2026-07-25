@@ -317,6 +317,62 @@ describe('frameVariants.listByGroup', () => {
   });
 });
 
+describe('frameVariants.listSelectedModelsBySequence (#1066)', () => {
+  it("maps each shot to its SELECTED version's model, not the latest", async () => {
+    const m = createFrameVariantsMethods(db);
+    const selected = await m.appendVersion(
+      variantInput({ model: 'flux_2_max' })
+    );
+    // A newer version in another model that was never selected must NOT win —
+    // resolution follows the pointer, not recency.
+    await m.appendVersion(variantInput({ model: 'gpt_image_2' }));
+    await m.select(frameId, selected.id, { actorId: null });
+
+    expect([...(await m.listSelectedModelsBySequence(sequenceId))]).toEqual([
+      [shotId, 'flux_2_max'],
+    ]);
+  });
+
+  it('keys by shot id, not frame id (frame ids ≠ shot ids)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput());
+    await m.select(frameId, v.id, { actorId: null });
+
+    const models = await m.listSelectedModelsBySequence(sequenceId);
+    expect(models.has(shotId)).toBe(true);
+    expect(models.has(frameId)).toBe(false);
+  });
+
+  it('omits a frame with no selection', async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(variantInput());
+    expect(await m.listSelectedModelsBySequence(sequenceId)).toEqual(new Map());
+  });
+
+  it('ignores a non-anchor frame so it cannot collide on the shot key', async () => {
+    const m = createFrameVariantsMethods(db);
+    const [lastFrame] = await db
+      .insert(frames)
+      .values({ shotId, sequenceId, orderIndex: 1, role: 'last' })
+      .returning();
+    if (!lastFrame)
+      throw new Error('test setup: frame insert returned nothing');
+
+    const anchorVersion = await m.appendVersion(
+      variantInput({ model: 'flux_2_max' })
+    );
+    const lastVersion = await m.appendVersion(
+      variantInput({ frameId: lastFrame.id, model: 'gpt_image_2' })
+    );
+    await m.select(frameId, anchorVersion.id, { actorId: null });
+    await m.select(lastFrame.id, lastVersion.id, { actorId: null });
+
+    const models = await m.listSelectedModelsBySequence(sequenceId);
+    expect(models.size).toBe(1);
+    expect(models.get(shotId)).toBe('flux_2_max');
+  });
+});
+
 describe('frameVariants.isStale', () => {
   it('throws when the version does not exist', () => {
     const m = createFrameVariantsMethods(db);

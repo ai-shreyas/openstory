@@ -11,6 +11,7 @@ import {
   undiscardVariantFn,
   getSequenceImageModelsFn,
   getSequenceImageVariantsFn,
+  getSequenceSelectedModelsFn,
   getSequenceVideoModelsFn,
   getSequenceVideoVariantsFn,
 } from '@/functions/shots';
@@ -98,6 +99,25 @@ export function useSequenceImageVariants(sequenceId?: string) {
     queryFn: async () => {
       if (!sequenceId) throw new Error('sequenceId is required');
       return getSequenceImageVariantsFn({ data: { sequenceId } });
+    },
+    enabled: !!sequenceId,
+    staleTime: 30_000,
+  });
+}
+
+// The model recorded on each shot's selected image / video version (#1066).
+// Model identity lives on the version that produced the asset, so this is what
+// the editor resolves its displayed / generated-with model from. Invalidated by
+// the realtime image:progress + video:progress handlers, since a completed
+// convergent render repoints the selection.
+export function useSequenceSelectedModels(sequenceId?: string) {
+  return useQuery({
+    // Flat key, matching the sibling per-model queries — the realtime
+    // image/video progress handlers invalidate this exact shape.
+    queryKey: ['sequence-selected-models', sequenceId ?? ''],
+    queryFn: async () => {
+      if (!sequenceId) throw new Error('sequenceId is required');
+      return getSequenceSelectedModelsFn({ data: { sequenceId } });
     },
     enabled: !!sequenceId,
     staleTime: 30_000,

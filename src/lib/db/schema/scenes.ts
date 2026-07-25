@@ -1,7 +1,8 @@
 /**
  * Scenes Schema
- * Narrative units within a sequence — each owns an ordered list of shots,
- * a single look (image model) and a single motion character (video model).
+ * Narrative units within a sequence — each owns an ordered list of shots.
+ * A scene has no model of its own (#1066): the model that rendered an asset
+ * is recorded on the version row that produced it.
  *
  * A scene is the render unit: capable models render all its shots in one
  * multi-shot call, others render N per-shot calls and attach the assets here.
@@ -95,10 +96,10 @@ export const scenes = snakeCase.table(
     // Pointer to the selected row in `scene_script_versions` (#1030). The
     // column is a plain text id (no FK) to avoid a circular schema dependency.
     selectedScriptVersionId: text(),
-    // Model selection lives at scene level (one look, one motion character).
-    // NULL = inherit from the sequence default (#909 wires the UI later).
-    imageModel: text({ length: 100 }),
-    videoModel: text({ length: 100 }),
+    // NOTE: a scene deliberately has NO model columns (#1066). Model identity
+    // belongs to the row that recorded the generation — `frame_variants.model`
+    // for a still, `video_variants.model` for a clip — not to a narrative unit.
+    // Resolution reads the selected version; see @/lib/ai/resolve-asset-models.
     // Scene-render video columns — unused until #910, included now to avoid a
     // later ALTER. All nullable.
     videoUrl: text(),

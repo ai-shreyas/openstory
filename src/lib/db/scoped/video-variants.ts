@@ -173,6 +173,29 @@ export function createVideoVariantsMethods(db: Database) {
     },
 
     /**
+     * The model of each shot's SELECTED video version across a sequence, keyed
+     * by shot (#1066). Model identity lives on the version row that rendered
+     * the clip, so this is what generate/display resolve from — see
+     * `@/lib/ai/resolve-asset-models`. One join through the shot's render
+     * segment, so batch paths (smart retry, batch motion) don't go N+1. Shots
+     * with no segment or no selection are absent; the caller falls back a tier.
+     */
+    listSelectedModelsBySequence: async (
+      sequenceId: string
+    ): Promise<Map<string, string>> => {
+      const rows = await db
+        .select({ shotId: shots.id, model: videoVariants.model })
+        .from(shots)
+        .innerJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
+        .innerJoin(
+          videoVariants,
+          eq(videoVariants.id, renderSegments.selectedVideoVersionId)
+        )
+        .where(eq(shots.sequenceId, sequenceId));
+      return new Map(rows.map((r) => [r.shotId, r.model]));
+    },
+
+    /**
      * The version a shot's segment currently points at, or null if unset. The
      * shot resolves its segment via `shots.renderSegmentId`; the segment owns the
      * selection pointer.

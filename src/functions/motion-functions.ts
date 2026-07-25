@@ -7,12 +7,8 @@ import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 
-import {
-  AUDIO_MODELS,
-  DEFAULT_VIDEO_MODEL,
-  safeImageToVideoModel,
-} from '@/lib/ai/models';
-import { resolveSceneVideoModel } from '@/lib/ai/resolve-scene-models';
+import { AUDIO_MODELS } from '@/lib/ai/models';
+import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
 import { estimateVideoCost } from '@/lib/billing/cost-estimation';
 import {
   estimateBatchMotionCost,
@@ -25,7 +21,6 @@ import { generateMotionSchema } from '@/lib/schemas/shot.schemas';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
-import { dbSceneId } from '@/lib/db/schema';
 import type { BatchMotionMusicWorkflowInput } from '@/lib/workflow/types';
 
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
@@ -54,14 +49,16 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       throw new Error('Shot has no thumbnail to generate motion from');
     }
 
-    // Video model selection lives at the scene level (#909): explicit request
-    // model wins, else the shot's parent scene drives it, then the sequence.
-    const scene = shot.sceneId
-      ? await context.scopedDb.scenes.getById(dbSceneId(shot.sceneId))
-      : null;
-    const model = data.model
-      ? safeImageToVideoModel(data.model, DEFAULT_VIDEO_MODEL)
-      : resolveSceneVideoModel(scene, sequence);
+    // Model identity lives on the version that rendered the clip (#1066):
+    // explicit request model wins, else the version the shot's render segment
+    // currently points at, then the sequence default.
+    const selectedVersion =
+      await context.scopedDb.videoVariants.getSelectedByShot(shot.id);
+    const model = resolveVideoModel({
+      explicit: data.model,
+      selectedVersionModel: selectedVersion?.model,
+      sequenceModel: sequence.videoModel,
+    });
 
     const userEditedPrompt = Boolean(data.prompt);
     const selectedMotion =
@@ -221,20 +218,25 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       throw new Error('No eligible shots for motion generation');
     }
 
-    // Video model selection lives at the scene level (#909). Resolve each
-    // shot's model through its parent scene (an explicit batch `data.model`
-    // still overrides everything). Load scenes once to avoid an N+1.
-    const scenes = await context.scopedDb.scenes.listBySequence(sequence.id);
-    const scenesById = new Map<string, (typeof scenes)[number]>(
-      scenes.map((s) => [s.id, s])
-    );
+    // Model identity lives on the version that rendered each clip (#1066).
+    // Resolve each shot's model from its selected video version (an explicit
+    // batch `data.model` still overrides everything). One join, no N+1.
+    const selectedModelByShot =
+      await context.scopedDb.videoVariants.listSelectedModelsBySequence(
+        sequence.id
+      );
     const resolveShotVideoModel = (shot: (typeof allShots)[number]) =>
-      resolveBatchShotVideoModel(shot, scenesById, sequence, data.model);
+      resolveBatchShotVideoModel(
+        shot,
+        selectedModelByShot,
+        sequence,
+        data.model
+      );
 
-    // Sum per-shot costs — scenes may render with different (priced) models.
+    // Sum per-shot costs — shots may render with different (priced) models.
     const estimatedCost = estimateBatchMotionCost(
       eligibleShots,
-      scenesById,
+      selectedModelByShot,
       sequence,
       { explicitModel: data.model, duration: data.duration }
     );

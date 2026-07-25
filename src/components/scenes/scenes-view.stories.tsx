@@ -93,8 +93,9 @@ const meta = {
       });
 
       // Pre-populate the cache with mock data using the correct query keys.
-      // Scenes (#909) own model selection — the image/motion tab selectors read
-      // and write the selected shot's scene; without them those picks no-op.
+      // Scenes group the shots (they carry no model of their own, #1066); the
+      // model the image/motion tabs show is resolved per shot from its selected
+      // image/video version.
       queryClient.setQueryData(['shots', 'list', sequenceId], shots);
       queryClient.setQueryData(['scenes', 'list', sequenceId], scenes);
       queryClient.setQueryData(['sequences', 'detail', sequenceId], sequence);
@@ -142,7 +143,7 @@ export const RealSequence: Story = {
     docs: {
       description: {
         story:
-          'A real, fully-generated sequence pulled from the local database — the closest match to the live editor (flat shot list + scene-level model selectors in the image/motion tabs).',
+          'A real, fully-generated sequence pulled from the local database — the closest match to the live editor (flat shot list + per-asset model selectors in the image/motion tabs).',
       },
     },
   },

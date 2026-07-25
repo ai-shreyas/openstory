@@ -4,7 +4,7 @@ import {
   safeImageToVideoModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
-import { resolveSceneImageModel } from '@/lib/ai/resolve-scene-models';
+import { resolveImageModel } from '@/lib/ai/resolve-asset-models';
 import {
   estimateImageCost,
   estimateStoryboardCost,
@@ -14,7 +14,7 @@ import {
   aspectRatioToImageSize,
   getVariantGridConfig,
 } from '@/lib/constants/aspect-ratios';
-import { dbSceneId, type SequenceLocation } from '@/lib/db/schema';
+import { type SequenceLocation } from '@/lib/db/schema';
 import { locationMatchesTag } from '@/lib/db/scoped/sequence-locations';
 import { cropTileFromGrid } from '@/lib/image/image-crop';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
@@ -206,13 +206,17 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
     );
     const elementReferences = buildElementReferenceImages(matchedElements);
 
-    // Model selection lives at the scene level (#909): an explicit per-request
-    // model wins (one-off variant generation), otherwise the shot's parent
-    // scene drives it, falling back to the sequence default.
-    const scene = shot.sceneId
-      ? await context.scopedDb.scenes.getById(dbSceneId(shot.sceneId))
-      : null;
-    const model = data.model || resolveSceneImageModel(scene, sequence);
+    // Model identity lives on the version that produced the still (#1066): an
+    // explicit per-request model wins (one-off variant generation), else the
+    // frame's currently selected version, then the sequence default.
+    const selectedVersion = await context.scopedDb.frameVariants.getSelected(
+      frame.id
+    );
+    const model = resolveImageModel({
+      explicit: data.model,
+      selectedVersionModel: selectedVersion?.model,
+      sequenceModel: sequence.imageModel,
+    });
 
     await requireCredits(
       context.scopedDb,

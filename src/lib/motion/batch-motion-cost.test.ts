@@ -8,42 +8,39 @@ import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { snapDuration } from '@/lib/motion/motion-generation';
 
 const sequence = { videoModel: 'minimax_hailuo_02' };
-const sceneA = { videoModel: 'seedance_v2' };
-const sceneB = { videoModel: 'kling_v3_pro' };
-const scenesById = new Map([
-  ['scene-a', sceneA],
-  ['scene-b', sceneB],
+// `video_variants.model` of each shot's selected version (#1066).
+const selectedModelByShot = new Map([
+  ['shot-a', 'seedance_v2'],
+  ['shot-b', 'kling_v3_pro'],
 ]);
 
 describe('resolveBatchShotVideoModel', () => {
-  it('prefers the explicit batch model over scene and sequence', () => {
+  it('prefers the explicit batch model over the selected version and sequence', () => {
     expect(
       resolveBatchShotVideoModel(
-        { sceneId: 'scene-a' },
-        scenesById,
+        { id: 'shot-a' },
+        selectedModelByShot,
         sequence,
         'kling_v3_pro'
       )
     ).toBe('kling_v3_pro');
   });
 
-  it("resolves the shot's parent scene model when no explicit model", () => {
+  it("resolves the shot's selected video version model when no explicit model", () => {
     expect(
-      resolveBatchShotVideoModel({ sceneId: 'scene-a' }, scenesById, sequence)
+      resolveBatchShotVideoModel(
+        { id: 'shot-a' },
+        selectedModelByShot,
+        sequence
+      )
     ).toBe('seedance_v2');
   });
 
-  it('falls back to the sequence default when the shot has no scene', () => {
-    expect(
-      resolveBatchShotVideoModel({ sceneId: null }, scenesById, sequence)
-    ).toBe('minimax_hailuo_02');
-  });
-
-  it('falls back to the sequence default when the sceneId is unknown', () => {
+  it('falls back to the sequence default when the shot has no selected version', () => {
     expect(
       resolveBatchShotVideoModel(
-        { sceneId: 'scene-missing' },
-        scenesById,
+        { id: 'shot-never-rendered' },
+        selectedModelByShot,
         sequence
       )
     ).toBe('minimax_hailuo_02');
@@ -51,8 +48,8 @@ describe('resolveBatchShotVideoModel', () => {
 });
 
 describe('estimateBatchMotionCost', () => {
-  it('sums per-shot cost across scenes using different (priced) models', () => {
-    const shots = [{ sceneId: 'scene-a' }, { sceneId: 'scene-b' }];
+  it('sums per-shot cost across shots rendered by different (priced) models', () => {
+    const shots = [{ id: 'shot-a' }, { id: 'shot-b' }];
     const expected = addMicros(
       addMicros(
         ZERO_MICROS,
@@ -60,20 +57,20 @@ describe('estimateBatchMotionCost', () => {
       ),
       estimateVideoCost('kling_v3_pro', snapDuration(undefined, 'kling_v3_pro'))
     );
-    expect(estimateBatchMotionCost(shots, scenesById, sequence)).toEqual(
-      expected
-    );
+    expect(
+      estimateBatchMotionCost(shots, selectedModelByShot, sequence)
+    ).toEqual(expected);
   });
 
   it('prices every shot with the explicit batch model when given', () => {
-    const shots = [{ sceneId: 'scene-a' }, { sceneId: 'scene-b' }];
+    const shots = [{ id: 'shot-a' }, { id: 'shot-b' }];
     const perShot = estimateVideoCost(
       'kling_v3_pro',
       snapDuration(5, 'kling_v3_pro')
     );
     const expected = addMicros(addMicros(ZERO_MICROS, perShot), perShot);
     expect(
-      estimateBatchMotionCost(shots, scenesById, sequence, {
+      estimateBatchMotionCost(shots, selectedModelByShot, sequence, {
         explicitModel: 'kling_v3_pro',
         duration: 5,
       })
@@ -81,7 +78,7 @@ describe('estimateBatchMotionCost', () => {
   });
 
   it('is ZERO for an empty shot list', () => {
-    expect(estimateBatchMotionCost([], scenesById, sequence)).toEqual(
+    expect(estimateBatchMotionCost([], selectedModelByShot, sequence)).toEqual(
       ZERO_MICROS
     );
   });

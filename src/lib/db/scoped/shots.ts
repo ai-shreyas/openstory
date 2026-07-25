@@ -90,6 +90,7 @@ type ShotWithSequence = Shot & {
     | 'title'
     | 'status'
     | 'styleId'
+    | 'imageModel'
     | 'videoModel'
     | 'aspectRatio'
     | 'analysisModel'
@@ -403,6 +404,9 @@ export function createShotsMethods(db: Database) {
               title: true,
               status: true,
               styleId: true,
+              // Both model defaults: the shot-scoped generate paths resolve
+              // image AND video models against the sequence tier (#1066).
+              imageModel: true,
               videoModel: true,
               aspectRatio: true,
               analysisModel: true,

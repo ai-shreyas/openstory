@@ -256,6 +256,49 @@ describe('select', () => {
   });
 });
 
+describe('listSelectedModelsBySequence (#1066)', () => {
+  it("maps each shot to its SELECTED version's model, not the latest", async () => {
+    const first = await methods.appendVersion(
+      versionInput({ id: 'v-001', model: 'veo3_1' })
+    );
+    // A later render in a different model that was never selected must NOT
+    // become the shot's model — resolution follows the pointer, not recency.
+    await methods.appendVersion(
+      versionInput({ id: 'v-002', model: 'kling_v3_pro' })
+    );
+    await methods.select(shotId, first.id, { actorId: ACTOR });
+
+    expect([
+      ...(await methods.listSelectedModelsBySequence(sequenceId)),
+    ]).toEqual([[shotId, 'veo3_1']]);
+  });
+
+  it('omits a shot whose segment has no selection', async () => {
+    await methods.appendVersion(versionInput());
+    expect(await methods.listSelectedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
+  });
+
+  it('omits a shot with no render segment at all', async () => {
+    await db.insert(shots).values([
+      {
+        id: generateId(),
+        sequenceId,
+        sceneId,
+        orderIndex: 1,
+        renderSegmentId: null,
+      },
+    ]);
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+
+    const selected = await methods.listSelectedModelsBySequence(sequenceId);
+    expect(selected.size).toBe(1);
+    expect(selected.get(shotId)).toBe('veo3_1');
+  });
+});
+
 describe('discard / undiscard', () => {
   it('soft-hides and restores a version with matching events', async () => {
     const v = await methods.appendVersion(versionInput());

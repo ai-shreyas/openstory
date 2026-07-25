@@ -170,26 +170,19 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
   return { ...base, frame };
 }
 
-/** Minimal scene shape the retry path reads (#909): id + model overrides. */
-type SceneStub = {
-  id: string;
-  sequenceId: string;
-  imageModel: string | null;
-  videoModel: string | null;
+/**
+ * The model each shot's selected image / video version was rendered with
+ * (#1066) — `shotId → model`, exactly what the scoped bulk reads return.
+ */
+type SelectedModels = {
+  image?: Map<string, string>;
+  video?: Map<string, string>;
 };
-function makeScene(overrides: Partial<SceneStub> & { id: string }): SceneStub {
-  return {
-    sequenceId: 'seq_1',
-    imageModel: null,
-    videoModel: null,
-    ...overrides,
-  };
-}
 
 function makeContext(
   sequence: Sequence,
   shots: ShotWithImage[],
-  scenes: SceneStub[] = []
+  selectedModels: SelectedModels = {}
 ) {
   const updateStatus = vi.fn();
   const updateMusicFields = vi.fn();
@@ -200,9 +193,15 @@ function makeContext(
   // anchors here (keyed by shotId, never id-reuse).
   const listAnchorsBySequence = vi.fn(async () => shots.map((s) => s.frame));
   const listWithSheets = vi.fn(async () => []);
-  // Scenes own model selection (#909); when none are passed the list is empty →
-  // shots inherit the sequence default, preserving the legacy single-model path.
-  const listScenesBySequence = vi.fn(async () => scenes);
+  // Model identity lives on the version that produced each asset (#1066); an
+  // empty map means nothing has been rendered yet → shots inherit the sequence
+  // default, preserving the legacy single-model path.
+  const listSelectedImageModels = vi.fn(
+    async () => selectedModels.image ?? new Map<string, string>()
+  );
+  const listSelectedVideoModels = vi.fn(
+    async () => selectedModels.video ?? new Map<string, string>()
+  );
   // Motion prompt is resolved from the selected version now (#713); the retry
   // path reads it per shot. No selected version in these fixtures → resolution
   // falls back to the shot description.
@@ -210,7 +209,12 @@ function makeContext(
   const stub = {
     shots: { listBySequence, ensureAnchorFrames },
     frames: { listAnchorsBySequence },
-    scenes: { listBySequence: listScenesBySequence },
+    frameVariants: {
+      listSelectedModelsBySequence: listSelectedImageModels,
+    },
+    videoVariants: {
+      listSelectedModelsBySequence: listSelectedVideoModels,
+    },
     characters: { listWithSheets },
     shotPromptVersions: { getSelectedMotion },
     sequence: vi.fn(() => ({ updateStatus, updateMusicFields })),
@@ -426,13 +430,12 @@ describe('executeSmartRetry — partial retry status reset', () => {
   });
 });
 
-describe('executeSmartRetry — scene-level model selection (#909)', () => {
-  test("retries each failed image with its parent scene's model, summing cost per model", async () => {
+describe('executeSmartRetry — per-asset model selection (#1066)', () => {
+  test("retries each failed image with its selected version's model, summing cost per model", async () => {
     resetMocks();
-    // Two failed image shots in two scenes whose look models differ from each
-    // other and from the sequence default ('nano_banana_2').
-    const sceneA = makeScene({ id: 'scene-a', imageModel: 'gpt_image_2' });
-    const sceneB = makeScene({ id: 'scene-b', imageModel: 'flux_2_max' });
+    // Two failed image shots whose selected image versions were rendered by
+    // different models — both differing from the sequence default
+    // ('nano_banana_2').
     const shotA = makeShot({
       id: 'shot-a',
       sceneId: 'scene-a',
@@ -446,15 +449,17 @@ describe('executeSmartRetry — scene-level model selection (#909)', () => {
       thumbnailStatus: 'failed',
       imagePrompt: 'Look B',
     });
-    const { context } = makeContext(
-      makeSequence(),
-      [shotA, shotB],
-      [sceneA, sceneB]
-    );
+    const { context } = makeContext(makeSequence(), [shotA, shotB], {
+      image: new Map([
+        ['shot-a', 'gpt_image_2'],
+        ['shot-b', 'flux_2_max'],
+      ]),
+    });
 
     await executeSmartRetry(context);
 
-    // Each shot retries with its own scene's image model, not the sequence one.
+    // Each shot retries with the model that produced its current still, not
+    // the sequence default.
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/image',
       expect.objectContaining({ shotId: 'shot-a', model: 'gpt_image_2' }),
@@ -468,7 +473,7 @@ describe('executeSmartRetry — scene-level model selection (#909)', () => {
 
     // Pre-flight credit check sums per-shot costs across the two models —
     // a regression to single-model `multiply(cost, count)` pricing would diverge
-    // whenever the scenes use differently-priced models.
+    // whenever the shots were rendered by differently-priced models.
     const expectedCost = addMicros(
       addMicros(ZERO_MICROS, estimateImageCost('gpt_image_2', '16:9', 1)),
       estimateImageCost('flux_2_max', '16:9', 1)
@@ -477,10 +482,8 @@ describe('executeSmartRetry — scene-level model selection (#909)', () => {
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
   });
 
-  test("retries each failed motion video with its parent scene's video model", async () => {
+  test("retries each failed motion video with its selected version's model", async () => {
     resetMocks();
-    const sceneA = makeScene({ id: 'scene-a', videoModel: 'seedance_v2' });
-    const sceneB = makeScene({ id: 'scene-b', videoModel: 'kling_v3_pro' });
     const shotA = makeShot({
       id: 'shot-a',
       sceneId: 'scene-a',
@@ -496,11 +499,12 @@ describe('executeSmartRetry — scene-level model selection (#909)', () => {
       thumbnailStatus: 'completed',
       thumbnailUrl: 'https://cdn/b.jpg',
     });
-    const { context } = makeContext(
-      makeSequence(),
-      [shotA, shotB],
-      [sceneA, sceneB]
-    );
+    const { context } = makeContext(makeSequence(), [shotA, shotB], {
+      video: new Map([
+        ['shot-a', 'seedance_v2'],
+        ['shot-b', 'kling_v3_pro'],
+      ]),
+    });
 
     await executeSmartRetry(context);
 
