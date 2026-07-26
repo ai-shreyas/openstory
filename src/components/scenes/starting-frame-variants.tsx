@@ -1,0 +1,168 @@
+import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { useFalBillingGate } from '@/hooks/use-billing-gate';
+import { useGenerateVariants, useSelectVariant } from '@/hooks/use-shots';
+import type { TextToImageModel } from '@/lib/ai/models';
+import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { Grid2x2, Loader2 } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { toast } from 'sonner';
+import { VariantSelector } from './variant-selector';
+
+type StartingFrameVariantsProps = {
+  shot: ShotWithImage;
+  sequenceId: string;
+  /** Scene-level image model (#909) the variants are generated with. */
+  imageModel: TextToImageModel;
+  aspectRatio: AspectRatio;
+  /** Optimistic generating flag shared with the rest of the app (#882). */
+  generating: boolean;
+  onGenerateStart: () => void;
+};
+
+/**
+ * A "Variants" control overlaid on the starting frame (#986). Replaces the old
+ * Variants tab: the button lives on the canvas image, and clicking it opens a
+ * dialog with the variant grid so the alternates have room to display at full
+ * aspect ratio. Selecting a tile promotes it to the shot's starting frame.
+ */
+export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
+  shot,
+  sequenceId,
+  imageModel,
+  aspectRatio,
+  generating,
+  onGenerateStart,
+}) => {
+  const [open, setOpen] = useState(false);
+  const generateVariants = useGenerateVariants();
+  const selectVariant = useSelectVariant();
+  const {
+    needsBillingSetup: falNeedsBillingSetup,
+    showGate: showFalGate,
+    gateProps: falGateProps,
+    stripeEnabled,
+  } = useFalBillingGate();
+
+  const isGenerating =
+    generating ||
+    shot.variantImageStatus === 'generating' ||
+    generateVariants.isPending;
+
+  const handleGenerate = useCallback(async () => {
+    onGenerateStart();
+    try {
+      await generateVariants.mutateAsync({
+        sequenceId,
+        shotId: shot.id,
+        model: imageModel,
+      });
+    } catch (error) {
+      toast.error('Scene variants generation failed', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }, [onGenerateStart, generateVariants, sequenceId, shot.id, imageModel]);
+
+  const handleSelect = useCallback(
+    async (index: number) => {
+      try {
+        await selectVariant.mutateAsync({
+          sequenceId,
+          shotId: shot.id,
+          variantIndex: index,
+        });
+        setOpen(false);
+      } catch (error) {
+        toast.error('Failed to select variant', {
+          description: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    },
+    [selectVariant, sequenceId, shot.id]
+  );
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setOpen(true)}
+        className="absolute top-2 left-2 z-10 h-8 gap-1.5 bg-black/50 px-2 text-xs text-white hover:bg-black/70"
+        aria-label="Starting frame variants"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
+        {isGenerating ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Grid2x2 className="h-4 w-4" />
+        )}
+        Variants
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Starting frame variants</DialogTitle>
+            <DialogDescription>
+              Pick an alternate for this shot&apos;s starting frame, or generate
+              a new set.
+            </DialogDescription>
+          </DialogHeader>
+
+          {shot.variantImageUrl ? (
+            <VariantSelector
+              variantImageUrl={shot.variantImageUrl}
+              selectedVariantIndex={null}
+              onVariantSelect={(index) => void handleSelect(index)}
+              loading={isGenerating || selectVariant.isPending}
+              disabled={isGenerating || selectVariant.isPending}
+              aspectRatio={aspectRatio}
+            />
+          ) : (
+            <div className="rounded-lg border border-dashed border-muted-foreground/30 p-6 text-center text-sm text-muted-foreground">
+              No variants yet. Generate options for this starting frame.
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => {
+                if (falNeedsBillingSetup) {
+                  showFalGate();
+                  return;
+                }
+                void handleGenerate();
+              }}
+              disabled={isGenerating}
+              className="w-full sm:w-auto"
+            >
+              {isGenerating && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              {isGenerating
+                ? 'Generating…'
+                : shot.variantImageUrl
+                  ? 'Regenerate Variants'
+                  : 'Generate Variants'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <BillingGateDialog {...falGateProps} stripeEnabled={stripeEnabled} />
+    </>
+  );
+};

@@ -145,6 +145,7 @@ type Story = StoryObj<typeof meta>;
 export const RealSequence: Story = {
   args: {
     sequenceId: fixtureSequence.id,
+    search: {},
   },
   parameters: {
     sequence: fixtureSequence,

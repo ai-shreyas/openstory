@@ -7,31 +7,30 @@
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import type { SequenceElement } from '@/lib/db/schema';
+import type { SelectionTags } from '@/lib/scenes/scene-selection';
 import { matchElementsToScene } from '@/lib/workflows/scene-matching';
-import type { Shot } from '@/types/database';
 import { Link } from '@tanstack/react-router';
 import { ImagePlus, Loader2 } from 'lucide-react';
 
 type SceneElementsTabProps = {
-  shot?: Shot;
   sequenceId: string;
+  /** `null` = whole sequence (show all elements). */
+  tags: SelectionTags | null;
 };
 
 export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
-  shot,
   sequenceId,
+  tags,
 }) => {
   const { data: elements = [], isLoading } = useSequenceElements(sequenceId);
 
-  const elementTags = shot?.metadata?.continuity?.elementTags ?? [];
-  const sceneScript = shot?.metadata?.originalScript.extract ?? '';
+  const elementTags = tags?.elementTags ?? [];
+  const sceneScript = tags?.scriptExtracts.join('\n') ?? '';
 
-  const matchedIds = new Set(
-    matchElementsToScene(elements, elementTags, sceneScript).map((el) => el.id)
-  );
-  const sceneElements: SequenceElement[] = elements.filter((el) =>
-    matchedIds.has(el.id)
-  );
+  const sceneElements: SequenceElement[] =
+    tags === null
+      ? elements
+      : matchElementsToScene(elements, elementTags, sceneScript);
 
   if (isLoading) {
     return (
@@ -50,20 +49,13 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
           <ImagePlus className="h-8 w-8 text-muted-foreground/50" />
         </div>
         <p className="text-sm text-muted-foreground">
-          No elements in this scene
+          {tags === null ? 'No elements yet' : 'No elements in this selection'}
         </p>
         {elementTags.length > 0 && (
           <p className="mt-2 text-xs text-muted-foreground/70">
             Looking for: {elementTags.join(', ')}
           </p>
         )}
-        <Link
-          to="/sequences/$id/elements"
-          params={{ id: sequenceId }}
-          className="mt-4 text-xs text-primary hover:underline"
-        >
-          Manage elements
-        </Link>
       </div>
     );
   }
@@ -71,7 +63,7 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-        <span>Scene Elements</span>
+        <span>{tags === null ? 'All Elements' : 'Elements'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>
           {sceneElements.length} reference

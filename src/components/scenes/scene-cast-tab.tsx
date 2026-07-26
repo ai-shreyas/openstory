@@ -6,14 +6,15 @@
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import type { Character } from '@/lib/db/schema';
+import type { SelectionTags } from '@/lib/scenes/scene-selection';
 import { matchCharactersToScene } from '@/lib/workflows/scene-matching';
-import type { Shot } from '@/types/database';
 import { Link } from '@tanstack/react-router';
 import { Film, User } from 'lucide-react';
 
 type SceneCastTabProps = {
-  shot?: Shot;
   sequenceId: string;
+  /** `null` = whole sequence (show all cast). */
+  tags: SelectionTags | null;
 };
 
 type CastCardProps = {
@@ -88,17 +89,16 @@ const CastCardSkeleton: React.FC = () => (
 );
 
 export const SceneCastTab: React.FC<SceneCastTabProps> = ({
-  shot,
   sequenceId,
+  tags,
 }) => {
   const { data: characters, isLoading } = useSequenceCharacters(sequenceId);
 
-  // Get character tags from shot metadata
-  const characterTags = shot?.metadata?.continuity?.characterTags ?? [];
-
-  // Match characters to this shot
-  const shotCast = characters
-    ? matchCharactersToScene(characters, characterTags)
+  const characterTags = tags?.characterTags ?? [];
+  const scopedCast = characters
+    ? tags === null
+      ? characters
+      : matchCharactersToScene(characters, characterTags)
     : [];
 
   // Loading state
@@ -112,14 +112,15 @@ export const SceneCastTab: React.FC<SceneCastTabProps> = ({
     );
   }
 
-  // Empty state - no characters in this scene
-  if (shotCast.length === 0) {
+  if (scopedCast.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <div className="rounded-full bg-muted p-4 mb-4">
           <Film className="h-8 w-8 text-muted-foreground/50" />
         </div>
-        <p className="text-sm text-muted-foreground">No cast in this scene</p>
+        <p className="text-sm text-muted-foreground">
+          {tags === null ? 'No cast yet' : 'No cast in this selection'}
+        </p>
         {characterTags.length > 0 && (
           <p className="mt-2 text-xs text-muted-foreground/70">
             {characterTags.length} character tag
@@ -132,18 +133,16 @@ export const SceneCastTab: React.FC<SceneCastTabProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Scene cast header */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
-        <span>Scene Cast</span>
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+        <span>{tags === null ? 'All Cast' : 'Cast'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>
-          {shotCast.length} character{shotCast.length > 1 ? 's' : ''}
+          {scopedCast.length} character{scopedCast.length > 1 ? 's' : ''}
         </span>
       </div>
 
-      {/* Cast grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {shotCast.map((character) => (
+        {scopedCast.map((character) => (
           <CastCard
             key={character.id}
             character={character}

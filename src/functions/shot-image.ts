@@ -583,3 +583,29 @@ export const setVideoFromVariantFn = createServerFn({ method: 'POST' })
 
     return { shotId: shot.id, videoUrl };
   });
+
+const selectSegmentVideoVersionInputSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  versionId: ulidSchema,
+});
+
+/**
+ * Repoint a render segment's selection at a SPECIFIC version (#986) — the
+ * version-switcher analog of `setVideoFromVariantFn` (which only picks the
+ * latest for a model). `videoVariants.select` validates the version belongs to
+ * the shot's segment and is completed, repoints `selectedVideoVersionId`,
+ * mirrors the shot's `video*` columns, and logs `video.selected` — atomically.
+ */
+export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(selectSegmentVideoVersionInputSchema))
+  .handler(async ({ context, data }) => {
+    const { shot, scopedDb } = context;
+    const version = await scopedDb.videoVariants.select(
+      shot.id,
+      data.versionId,
+      { actorId: scopedDb.userId }
+    );
+    return { shotId: shot.id, videoUrl: version.url };
+  });

@@ -65,6 +65,11 @@ type ScenePlayerProps = {
    */
   retry?: { attempt: number; maxAttempts?: number };
   posterUrl?: string;
+  /**
+   * Extra node rendered absolutely inside the frame container (#986) — e.g. the
+   * starting-frame variants control. Positioned by the overlay itself.
+   */
+  frameOverlay?: React.ReactNode;
   onTimeUpdate?: (currentTime: number) => void;
   onEnded?: () => void;
 };
@@ -83,6 +88,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   progressMessage,
   retry,
   posterUrl,
+  frameOverlay,
   onTimeUpdate,
   onEnded,
 }) => {
@@ -365,6 +371,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               <span className="text-sm">Failed to generate video</span>
             </div>
           </div>
+          {frameOverlay}
         </div>
       ) : (
         <div
@@ -460,6 +467,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               Preview
             </span>
           )}
+          {frameOverlay}
         </div>
       )}
       <p

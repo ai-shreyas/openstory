@@ -2,7 +2,11 @@ import type { Frame } from '@/lib/db/schema';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
-import { SceneScriptPrompts, type TabValue } from './scene-script-prompts';
+import {
+  SceneScriptPrompts,
+  tabsForScope,
+  type TabValue,
+} from './scene-script-prompts';
 
 // The still-image surface moved off `shots` onto the anchor `frame` in #989;
 // the component reads the legacy projected names (`thumbnail*`/`image*`), so the
@@ -121,10 +125,10 @@ const meta: Meta<typeof SceneScriptPrompts> = {
   args: {
     sequenceId: 'seq-1',
     selectedTab: 'script' as TabValue,
+    visibleTabs: tabsForScope('shot'),
     onTabChange: fn(),
     regeneratingImages: new Set<string>(),
     regeneratingMotion: new Set<string>(),
-    regeneratingSceneVariants: new Set<string>(),
     onRegenerateStart: fn(),
     // Resolved per-asset models (#1066) — these are required props; without
     // them IMAGE_TO_VIDEO_MODELS[undefined] is undefined and the component

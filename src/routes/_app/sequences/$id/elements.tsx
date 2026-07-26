@@ -1,12 +1,13 @@
-import { ElementsView } from '@/components/element/elements-view';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
+/** Elements index is now the nothing-selected Elements facet (#986). */
 export const Route = createFileRoute('/_app/sequences/$id/elements')({
-  component: ElementsPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/sequences/$id/scenes',
+      params: { id: params.id },
+      search: { facet: 'elements' },
+    });
+  },
   staticData: { breadcrumb: 'Elements' },
 });
-
-function ElementsPage() {
-  const { id: sequenceId } = Route.useParams();
-  return <ElementsView sequenceId={sequenceId} />;
-}
