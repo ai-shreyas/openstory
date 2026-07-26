@@ -17,13 +17,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { buildMentionItems } from '@/components/scenes/prompt-mention/mention-items';
 import { MarkdownEditor } from '@/components/text-editor/markdown-editor';
-import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
-import { useSequenceElements } from '@/hooks/use-sequence-elements';
-import { useSequenceLocations } from '@/hooks/use-sequence-locations';
+import { useSequenceMentionItems } from '@/hooks/use-mention-items';
 import { shortenPromptFn } from '@/functions/ai';
-import { updateSceneScriptFn } from '@/functions/scenes';
 import { generateShotImageFn } from '@/functions/shot-image';
 import { generateShotMotionFn } from '@/functions/motion-functions';
 import { regenerateShotPromptFn } from '@/functions/prompt-variants';
@@ -45,8 +41,7 @@ import {
   shotStalenessKey,
   useShotStaleness,
 } from '@/hooks/use-shot-staleness';
-import { sequenceKeys } from '@/hooks/use-sequences';
-import { sceneKeys } from '@/hooks/use-scenes';
+import { useSaveSceneScript } from '@/hooks/use-scenes';
 import { useSaveShotPrompt } from '@/hooks/use-prompt-variants';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import {
@@ -119,8 +114,11 @@ export type TabDescriptor = { value: TabValue; label: string };
  */
 export function tabsForScope(scope: SelectionScope): TabDescriptor[] {
   if (scope === 'shot') {
+    // No Script tab: the script is scene-scoped (`scene_script_versions` is
+    // keyed by sceneId), so editing it from a shot would silently rewrite every
+    // sibling shot's text. Shot scope keeps only what a shot actually owns — its
+    // image and motion prompts.
     return [
-      { value: 'script', label: 'Script' },
       { value: 'cast', label: 'Cast' },
       { value: 'location', label: 'Locations' },
       { value: 'elements', label: 'Elements' },
@@ -130,6 +128,7 @@ export function tabsForScope(scope: SelectionScope): TabDescriptor[] {
   }
   if (scope === 'scenes') {
     return [
+      { value: 'script', label: 'Script' },
       { value: 'cast', label: 'Cast' },
       { value: 'location', label: 'Locations' },
       { value: 'elements', label: 'Elements' },
@@ -322,6 +321,15 @@ type SceneScriptPromptsProps = {
   facetShotIds?: string[] | null;
   /** Music facet editable only at sequence scope. */
   musicEditable?: boolean;
+  /**
+   * The scene the Script facet edits — the selected shot's scene at shot scope,
+   * the selected scene at scene scope. Undefined when the selection spans
+   * several scenes (or none), which renders the facet read-only rather than
+   * picking a target for the user.
+   */
+  scriptSceneId?: string;
+  /** That scene's current script extract (selected version, #1030). */
+  scriptText?: string;
 };
 
 export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
@@ -352,6 +360,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   onCompareDivergent,
   facetShotIds = null,
   musicEditable = false,
+  scriptSceneId,
+  scriptText,
 }) => {
   const divergentImageVariant = useMemo(
     () => shotDivergentVariants?.find((v) => v.variantType === 'image'),
@@ -391,7 +401,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const [editedScript, setEditedScript] = useState<string | undefined>(
     undefined
   );
-  const prevScriptShotIdRef = useRef<string | undefined>(undefined);
+  const prevScriptSceneIdRef = useRef<string | undefined>(undefined);
+  const prevPromptShotIdRef = useRef<string | undefined>(undefined);
 
   // Previous value tracking for prop-to-state sync (refs avoid extra re-renders)
   const prevImagePromptRef = useRef<string | undefined>(undefined);
@@ -445,20 +456,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     shotId: shot?.id,
   });
 
-  // Sequence-scoped lists power the @-mention autocomplete in both prompt
-  // editors. Same canonical tag the #683 server-side parser recognises.
-  const { data: mentionElements } = useSequenceElements(sequenceId);
-  const { data: mentionCharacters } = useSequenceCharacters(sequenceId);
-  const { data: mentionLocations } = useSequenceLocations(sequenceId);
-  const mentionItems = useMemo(
-    () =>
-      buildMentionItems({
-        characters: mentionCharacters ?? [],
-        elements: mentionElements ?? [],
-        locations: mentionLocations ?? [],
-      }),
-    [mentionCharacters, mentionElements, mentionLocations]
-  );
+  const {
+    items: mentionItems,
+    characters: mentionCharacters,
+    elements: mentionElements,
+    locations: mentionLocations,
+  } = useSequenceMentionItems(sequenceId);
   // The realtime hook owns the per-prompt-type stream status — `'pending'`
   // covers the window between a successful enqueue and the first delta, so
   // the button stays in its busy state without a sibling useState to sync.
@@ -644,42 +647,28 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   // Persist a scene-script edit via `scene_script_versions` (#1030). Repointing
   // the selected version flips prompt-input-hash staleness on the scene's shots
-  // without forking the sequence. (Duration is a separate, per-shot video
-  // parameter — see `ShotDurationField` on the Motion tab.)
-  const saveScriptMutation = useMutation({
-    mutationFn: async (nextExtract: string) => {
-      if (!shot?.id) {
-        throw new Error('shot required');
+  // without forking the sequence. Addressed by scene, not shot — see
+  // `updateSceneScriptFn`. (Duration is a separate, per-shot video parameter —
+  // see `ShotDurationField` on the Motion tab.)
+  const saveSceneScript = useSaveSceneScript(sequenceId);
+  const handleSaveScript = (nextExtract: string) => {
+    if (!scriptSceneId) return;
+    saveSceneScript.mutate(
+      { sceneId: scriptSceneId, extract: nextExtract },
+      {
+        onSuccess: () => {
+          setEditedScript(undefined);
+          toast.success('Scene saved');
+        },
+        onError: (error) => {
+          toast.error('Failed to save scene', {
+            description:
+              error instanceof Error ? error.message : 'Unknown error',
+          });
+        },
       }
-      return await updateSceneScriptFn({
-        data: { sequenceId, shotId: shot.id, extract: nextExtract },
-      });
-    },
-    onSuccess: async (updated) => {
-      setEditedScript(undefined);
-      queryClient.setQueryData(shotKeys.detail(updated.id), updated);
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: shotKeys.list(sequenceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: shotStalenessKey(updated.id),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: sequenceKeys.detail(sequenceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: sceneKeys.composedScript(sequenceId),
-        }),
-      ]);
-      toast.success('Scene saved');
-    },
-    onError: (error) => {
-      toast.error('Failed to save scene', {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
-    },
-  });
+    );
+  };
 
   // Per-prompt-type busy flag — `regeneratePromptMutation.variables` is the
   // payload of the in-flight request, so we know which tab's regenerate
@@ -710,8 +699,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     []
   );
 
-  // Get imagePrompt early so it can be used in handleShortenPrompt
-  const scriptText = shot?.metadata?.originalScript.extract;
   const imageModel = safeTextToImageModel(
     shot?.imageModel,
     DEFAULT_IMAGE_MODEL
@@ -1189,8 +1176,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     imagePrompt,
     shot,
     mentionCharacters,
-    mentionLocations,
     mentionElements,
+    mentionLocations,
     aspectRatio,
     absolutizeUrl,
   ]);
@@ -1207,14 +1194,20 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         safeImageToVideoModel(shot.motionModel, DEFAULT_VIDEO_MODEL));
 
   // Sync local state when props change (prev-value refs avoid extra re-renders)
-  if (shot?.id !== prevScriptShotIdRef.current) {
-    prevScriptShotIdRef.current = shot?.id;
-    setEditedScript(undefined);
+  if (shot?.id !== prevPromptShotIdRef.current) {
+    prevPromptShotIdRef.current = shot?.id;
     // A new shot starts with a clean slate — its own saved prompt loads below.
     dirtyImageRef.current = false;
     dirtyMotionRef.current = false;
     imageFocusedRef.current = false;
     motionFocusedRef.current = false;
+  }
+  // The script draft is keyed by SCENE, not shot: moving between shots of one
+  // scene must not discard an in-progress script edit, because they all edit
+  // the same script.
+  if (scriptSceneId !== prevScriptSceneIdRef.current) {
+    prevScriptSceneIdRef.current = scriptSceneId;
+    setEditedScript(undefined);
   }
 
   // Swap the draft to the persisted prompt when it changes server-side (a
@@ -1343,12 +1336,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
       <TabsContent value="script">
         <SceneScriptTab
-          shot={shot}
+          sceneId={scriptSceneId}
           scriptText={scriptText}
           editedScript={editedScript}
           onEditedScriptChange={setEditedScript}
-          isSaving={saveScriptMutation.isPending}
-          onSave={(nextExtract) => saveScriptMutation.mutate(nextExtract)}
+          isSaving={saveSceneScript.isPending}
+          onSave={handleSaveScript}
           isCopied={copiedTab === 'script'}
           onCopy={(text) => void handleCopy(text, 'script')}
           mentionItems={mentionItems}

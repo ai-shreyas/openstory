@@ -9,11 +9,12 @@
 import { Button } from '@/components/ui/button';
 import type { MentionItem } from '@/components/scenes/prompt-mention/mention-items';
 import { MarkdownEditor } from '@/components/text-editor/markdown-editor';
-import type { Shot } from '@/types/database';
 import { CopyIcon, Loader2 } from 'lucide-react';
 
 type SceneScriptTabProps = {
-  shot: Shot | undefined;
+  /** The scene being edited — absent when the selection resolves to no single
+   *  scene, which disables the editor rather than writing to a guessed target. */
+  sceneId: string | undefined;
   scriptText: string | undefined;
   editedScript: string | undefined;
   onEditedScriptChange: (value: string | undefined) => void;
@@ -26,7 +27,7 @@ type SceneScriptTabProps = {
 };
 
 export const SceneScriptTab: React.FC<SceneScriptTabProps> = ({
-  shot,
+  sceneId,
   scriptText,
   editedScript,
   onEditedScriptChange,
@@ -39,7 +40,18 @@ export const SceneScriptTab: React.FC<SceneScriptTabProps> = ({
   const savedScript = scriptText ?? '';
   const currentScript = editedScript ?? savedScript;
   const isDirty = editedScript !== undefined && editedScript !== savedScript;
-  const canSave = isDirty && !!shot?.metadata && !isSaving;
+  const canSave = isDirty && !!sceneId && !isSaving;
+
+  // A multi-scene selection has no single script to edit. Say so, rather than
+  // showing an empty editor that reads as "this scene has no script".
+  if (!sceneId) {
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        Select a single scene to edit its script, or use the Script view to edit
+        them all in one document.
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -59,7 +71,7 @@ export const SceneScriptTab: React.FC<SceneScriptTabProps> = ({
             onValueChange={(value) => onEditedScriptChange(value)}
             placeholder="Enter the script text for this scene…"
             className="min-h-[180px] pr-10"
-            disabled={!shot || isSaving}
+            disabled={!sceneId || isSaving}
             mentionItems={mentionItems}
           />
           <Button

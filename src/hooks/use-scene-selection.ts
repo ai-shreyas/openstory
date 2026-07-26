@@ -1,8 +1,11 @@
 import {
   ascendSelection,
   clearSelection,
+  DEFAULT_CANVAS_VIEW,
   parseSelectionFromSearch,
+  selectScene,
   selectShot,
+  type CanvasView,
   type SceneFacet,
   type SceneSelection,
   type ScenesSearch,
@@ -29,24 +32,54 @@ export function useSceneSelection({
     [scenes, shot]
   );
 
+  const view = search.view ?? DEFAULT_CANVAS_VIEW;
+
   const setSelection = useCallback(
     (next: SceneSelection, facet?: SceneFacet) => {
       void navigate({
         to: '/sequences/$id/scenes',
         params: { id: sequenceId },
-        search: selectionToSearchParams(next, facet ?? search.facet) as Record<
-          string,
-          string | undefined
-        >,
+        search: selectionToSearchParams(
+          next,
+          facet ?? search.facet,
+          search.view
+        ) as Record<string, string | undefined>,
         replace: false,
       });
     },
-    [navigate, sequenceId, search.facet]
+    [navigate, sequenceId, search.facet, search.view]
+  );
+
+  const setView = useCallback(
+    (next: CanvasView) => {
+      void navigate({
+        to: '/sequences/$id/scenes',
+        params: { id: sequenceId },
+        search: selectionToSearchParams(selection, search.facet, next),
+        replace: true,
+      });
+    },
+    [navigate, sequenceId, selection, search.facet]
   );
 
   const handleSelectScene = useCallback(
     (sceneId: string, additive: boolean) => {
       setSelection(toggleSceneInSelection(selection, sceneId, additive));
+    },
+    [selection, setSelection]
+  );
+
+  /** Idempotent — for surfaces where selection follows focus rather than being
+   *  a click-to-toggle (see `selectScene`). */
+  const handleFocusScene = useCallback(
+    (sceneId: string) => {
+      if (
+        selection.sceneIds.length === 1 &&
+        selection.sceneIds[0] === sceneId
+      ) {
+        return;
+      }
+      setSelection(selectScene(sceneId));
     },
     [selection, setSelection]
   );
@@ -76,21 +109,24 @@ export function useSceneSelection({
       void navigate({
         to: '/sequences/$id/scenes',
         params: { id: sequenceId },
-        search: selectionToSearchParams(selection, facet),
+        search: selectionToSearchParams(selection, facet, search.view),
         replace: true,
       });
     },
-    [navigate, sequenceId, selection]
+    [navigate, sequenceId, selection, search.view]
   );
 
   return {
     selection,
     setSelection,
     handleSelectScene,
+    handleFocusScene,
     handleSelectShot,
     handleClearSelection,
     handleAscendSelection,
     facet: search.facet,
     setFacet,
+    view,
+    setView,
   };
 }

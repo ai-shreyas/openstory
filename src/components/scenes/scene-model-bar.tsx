@@ -1,5 +1,6 @@
 import { AspectRatioIcon } from '@/components/icons/aspect-ratio-icon';
 import { ModelBadge } from '@/components/model/model-badge';
+import { Button } from '@/components/ui/button';
 import { SequenceImageModelSelector } from '@/components/model/sequence-image-model-selector';
 import { SequenceVideoModelSelector } from '@/components/model/sequence-video-model-selector';
 import { StyleBadge } from '@/components/style/style-badge';
@@ -10,6 +11,8 @@ import {
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
 import type { SelectionScope } from '@/lib/scenes/scene-selection';
+import { Link } from '@tanstack/react-router';
+import { CopyPlus } from 'lucide-react';
 
 /**
  * Scope header for the inspector, plus — at sequence scope — the settings that
@@ -118,6 +121,21 @@ export const SceneModelBar: React.FC<SceneModelBarProps> = ({
                 label="Video"
               />
             </>
+          )}
+
+          {/* The escape hatch for the three fixed rows above: they can only
+              change by re-running analysis, which produces a new sequence
+              (#1037, formerly on the script page). A plain Link, not a dialog —
+              it lands on the real composer with everything pre-populated, so
+              Enhance, style recommendations and element drop all come for free
+              rather than being reproduced in a modal. */}
+          {sequenceId && (
+            <Button variant="outline" size="sm" className="w-full" asChild>
+              <Link to="/sequences/new" search={{ from: sequenceId }}>
+                <CopyPlus className="mr-2 h-3.5 w-3.5" />
+                Generate Copy…
+              </Link>
+            </Button>
           )}
         </div>
       )}

@@ -3,7 +3,9 @@ import { OpenStoryLogo } from '@/components/icons/openstory-logo';
 import { PageContainer } from '@/components/layout/page-container';
 import { ScriptView } from '@/components/script/script-view';
 import { SampleVideoShowcase } from '@/components/style/sample-video-showcase';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useBillingGate } from '@/hooks/use-billing-gate';
+import { useSequence } from '@/hooks/use-sequences';
 import { useStyles } from '@/hooks/use-styles';
 import { useUser } from '@/hooks/use-user';
 import { briefForStyle } from '@/lib/style/brief-for-style';
@@ -37,9 +39,16 @@ function dismissBillingPrompt() {
 // `prefill=style` narrows that to style-only — select the style but leave the
 // prompt blank (the styles page "Use this style" CTA). Optional, no default —
 // a bare /sequences/new must stay a bare URL (no 307 rewrite).
+// `from` carries a source sequence id — the "Generate Copy" entry point (#1037).
+// Rather than reproduce the composer in a dialog, that action just lands here
+// with everything pre-populated: the source's composed script, style, aspect
+// ratio and models, and `sourceSequenceId` set so elements carry over. An id in
+// the URL (not the script itself) keeps the link short, shareable and
+// reload-safe — a 50k-character script could never live in a query param.
 const searchSchema = z.object({
   style: z.string().optional(),
   prefill: z.enum(['style']).optional(),
+  from: z.string().optional(),
 });
 
 export const Route = createFileRoute('/_app/sequences/new')({
@@ -55,7 +64,14 @@ export const Route = createFileRoute('/_app/sequences/new')({
 
 function NewSequencePage() {
   const navigate = useNavigate();
-  const { style: styleParam, prefill } = Route.useSearch();
+  const { style: styleParam, prefill, from } = Route.useSearch();
+  // Copy mode (#1037): hand the composer the source sequence and it seeds its
+  // script + every generation setting from it, and creates with
+  // `sourceSequenceId`. `allowScriptEdit` re-enables the editor, which is
+  // read-only when the composer shows an analysed sequence's derived script —
+  // correct there (the canonical text lives in scene versions), wrong here
+  // (this text is only the seed for a new analysis, nothing writes back).
+  const { data: sourceSequence } = useSequence(from ?? '');
   // Session is prefetched in _app/route.tsx beforeLoad, so this is settled on
   // first render — no flash for signed-in users.
   const { data: user } = useUser();
@@ -171,6 +187,13 @@ function NewSequencePage() {
     [navigate]
   );
 
+  // Copy mode's Cancel goes back to the sequence you copied from, not to a
+  // blank composer — you came from somewhere specific.
+  const handleCancelCopy = useCallback(() => {
+    if (!from) return;
+    void navigate({ to: '/sequences/$id/scenes', params: { id: from } });
+  }, [from, navigate]);
+
   const billingGate = (
     <BillingGateDialog
       open={billingOpen}
@@ -185,6 +208,24 @@ function NewSequencePage() {
     />
   );
 
+  // Copy mode MUST wait for the source sequence before mounting the composer:
+  // ScriptView seeds script, style, aspect ratio and models in `useState`
+  // initialisers, and nothing re-syncs them afterwards. Mounted early it would
+  // latch onto the defaults — blank script, first style in the list — and still
+  // offer "Generate Copy", producing a copy of nothing. Navigating from the
+  // sequence hides this (its detail query is already cached); a direct link or
+  // a reload does not.
+  if (from && !sourceSequence) {
+    return (
+      <div className="h-full">
+        {billingGate}
+        <PageContainer maxWidth="narrow" fullHeight>
+          <Skeleton className="h-96 w-full" />
+        </PageContainer>
+      </div>
+    );
+  }
+
   // Signed-in: the script box fills the screen. Logged-out: lead with the logo
   // and tagline, then show a scrollable showcase of canonical style samples
   // below the script box (#956).
@@ -194,12 +235,15 @@ function NewSequencePage() {
         {billingGate}
         <PageContainer maxWidth="narrow" fullHeight>
           <ScriptView
-            key={composerKey}
+            key={from ? `copy:${from}` : composerKey}
             loading={false}
             onSuccess={handleSuccess}
-            initialScript={seedScript}
-            initialStyleId={seedStyleId}
-            onStyleChange={handleStyleChange}
+            sequence={sourceSequence}
+            allowScriptEdit={!!from}
+            onCancel={handleCancelCopy}
+            initialScript={from ? undefined : seedScript}
+            initialStyleId={from ? undefined : seedStyleId}
+            onStyleChange={from ? undefined : handleStyleChange}
           />
         </PageContainer>
       </div>

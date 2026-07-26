@@ -3,7 +3,10 @@ import { MotionProgressBanner } from '@/components/generation/motion-progress-ba
 import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
 import { DivergenceCompareDialog } from '@/components/scenes/divergence-compare-dialog';
 import { MobileSceneDrawer } from '@/components/scenes/mobile-scene-drawer';
+import { CanvasViewToggle } from '@/components/scenes/canvas-view-toggle';
+import { CopyScriptButton } from '@/components/scenes/copy-script-button';
 import { SceneCanvas } from '@/components/scenes/scene-canvas';
+import { SceneScriptDocument } from '@/components/scenes/scene-script-document';
 import type { BatchGenerateMotionArgs } from '@/components/scenes/scene-list';
 import { SceneList } from '@/components/scenes/scene-list';
 import { SceneModelBar } from '@/components/scenes/scene-model-bar';
@@ -231,10 +234,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const {
     selection,
     handleSelectScene,
+    handleFocusScene,
     handleSelectShot,
     handleClearSelection,
     handleAscendSelection,
     setFacet,
+    view,
+    setView,
   } = useSceneSelection({ search, sequenceId });
 
   const [selectedTab, setSelectedTab] = useState<TabValue>(() =>
@@ -627,6 +633,24 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     }
     return [];
   }, [scope, selectedShot, selection.sceneIds, scenesById]);
+
+  // The scene the Script facet targets: exactly one, or none. At shot scope
+  // that's the shot's own scene; at scene scope the single selected scene. A
+  // multi-scene selection leaves it undefined so the facet reads rather than
+  // silently writing to whichever scene happened to be first.
+  const scriptScene =
+    selectedScenes.length === 1 ? selectedScenes[0] : undefined;
+  // Canonical text is the SELECTED script version, which `getShotsFn` already
+  // overlays onto each shot's metadata (#1030). Falls back to the scene row's
+  // analysis-time script for a scene whose shots haven't loaded yet.
+  const scriptText = useMemo(() => {
+    if (!scriptScene) return undefined;
+    const sceneShot = shots?.find((s) => s.sceneId === scriptScene.id);
+    return (
+      sceneShot?.metadata?.originalScript.extract ??
+      scriptScene.originalScript?.extract
+    );
+  }, [scriptScene, shots]);
 
   // Model identity lives on the version that produced the asset (#1066), so the
   // tabs target whatever the selected shot's selected image/video version was
@@ -1258,40 +1282,59 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         </div>
 
         <div className="flex flex-1 min-h-0 min-w-0 flex-col md:flex-row">
-          <div className="flex flex-1 min-h-0 min-w-0">
-            <SceneCanvas
-              selection={selection}
-              shots={shots}
-              loadError={shotsError}
-              playerShots={playerShots}
-              sequence={sequence}
-              aspectRatio={aspectRatio}
-              selectedTab={effectiveTab}
-              overrideImageUrl={previewVariantUrl}
-              overrideVideoUrl={previewVariantVideoUrl}
-              badgeMessage={playerBadgeMessage}
-              modelMismatchLabel={
-                effectiveTab === 'image-prompt' &&
-                activeImageModelLabel &&
-                curSelectedShotId &&
-                shotsMissingActiveImage.has(curSelectedShotId)
-                  ? `Not generated with ${activeImageModelLabel}`
-                  : null
-              }
-              progressMessage={
-                generationState.phases.find((p) => p.status === 'active')
-                  ?.phaseName
-              }
-              retry={selectedShotRetry}
-              playerClassName={PLAYER_MAX_H}
-              playerWrapperClassName={PLAYER_MAX_W_BY_RATIO[aspectRatio]}
-              onSelectShot={handleSelectShot}
-              sceneImageModel={resolvedImageModel}
-              regeneratingSceneVariants={regeneratingSceneVariants}
-              onGenerateSceneVariantsStart={(id) =>
-                handleRegenerateStart(id, 'scene-variants')
+          <div className="flex flex-1 min-h-0 min-w-0 flex-col">
+            <CanvasViewToggle
+              view={view}
+              onViewChange={setView}
+              trailing={
+                view === 'script' ? (
+                  <CopyScriptButton sequenceId={sequenceId} />
+                ) : null
               }
             />
+            {view === 'script' ? (
+              <SceneScriptDocument
+                sequenceId={sequenceId}
+                scenes={scenes}
+                shots={shots}
+                selectedSceneIds={selectedScenes.map((s) => s.id)}
+                onSelectScene={handleFocusScene}
+              />
+            ) : (
+              <SceneCanvas
+                selection={selection}
+                shots={shots}
+                loadError={shotsError}
+                playerShots={playerShots}
+                sequence={sequence}
+                aspectRatio={aspectRatio}
+                selectedTab={effectiveTab}
+                overrideImageUrl={previewVariantUrl}
+                overrideVideoUrl={previewVariantVideoUrl}
+                badgeMessage={playerBadgeMessage}
+                modelMismatchLabel={
+                  effectiveTab === 'image-prompt' &&
+                  activeImageModelLabel &&
+                  curSelectedShotId &&
+                  shotsMissingActiveImage.has(curSelectedShotId)
+                    ? `Not generated with ${activeImageModelLabel}`
+                    : null
+                }
+                progressMessage={
+                  generationState.phases.find((p) => p.status === 'active')
+                    ?.phaseName
+                }
+                retry={selectedShotRetry}
+                playerClassName={PLAYER_MAX_H}
+                playerWrapperClassName={PLAYER_MAX_W_BY_RATIO[aspectRatio]}
+                onSelectShot={handleSelectShot}
+                sceneImageModel={resolvedImageModel}
+                regeneratingSceneVariants={regeneratingSceneVariants}
+                onGenerateSceneVariantsStart={(id) =>
+                  handleRegenerateStart(id, 'scene-variants')
+                }
+              />
+            )}
           </div>
 
           {/* Mirrors SceneList's inset card: outer div owns the padding, inner
@@ -1341,6 +1384,8 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   onCompareDivergent={(variant) => setCompareVariant(variant)}
                   facetShotIds={facetShotIds}
                   musicEditable={scope === 'sequence'}
+                  scriptSceneId={scriptScene?.id}
+                  scriptText={scriptText}
                 />
               </ScrollArea>
             </div>
@@ -1390,6 +1435,8 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 onCompareDivergent={(variant) => setCompareVariant(variant)}
                 facetShotIds={facetShotIds}
                 musicEditable={scope === 'sequence'}
+                scriptSceneId={scriptScene?.id}
+                scriptText={scriptText}
               />
             </ScrollArea>
           </div>

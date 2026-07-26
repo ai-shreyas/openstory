@@ -110,6 +110,16 @@ export const ScriptView: FC<{
   /** Notified when the user picks a style, so the new-sequence page can mirror
    *  it into `?style=`. Not called for the auto-selected default. */
   onStyleChange?: (styleId: string) => void;
+  /**
+   * Allow editing an analysed sequence's derived script (#1037).
+   *
+   * Normally that text is read-only here: it's the composed scene-script
+   * document, whose canonical home is `scene_script_versions` and whose editor
+   * is the Scenes script view — typing into it would edit nothing. On the
+   * copy-a-sequence path (`/sequences/new?from=`) it's just the seed for a new
+   * analysis, so it must be editable.
+   */
+  allowScriptEdit?: boolean;
 }> = ({
   teamId,
   sequence,
@@ -121,12 +131,15 @@ export const ScriptView: FC<{
   initialScript,
   initialStyleId,
   onStyleChange,
+  allowScriptEdit = false,
 }) => {
   const isEditing = !!sequence?.id;
   const { data: composedScriptData } = useComposedScript(sequence?.id);
   const composedScript = composedScriptData?.script;
-  // Analyzed sequences derive the document from scene versions (#1030).
-  const isDerivedScript = isEditing && !!composedScript;
+  // Analyzed sequences derive the document from scene versions (#1030), so the
+  // text is read-only — unless we're seeding a copy, where it feeds a fresh
+  // analysis rather than standing in for the canonical version.
+  const isDerivedScript = isEditing && !!composedScript && !allowScriptEdit;
   const baseScript = composedScript ?? sequence?.script;
 
   // Local script override — undefined means "show the canonical baseScript".

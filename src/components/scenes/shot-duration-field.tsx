@@ -13,9 +13,11 @@
  * scenes make the two coincide; multi-shot scenes (#910) won't.
  *
  * Options come from the selected motion model's JSON Schema, so the user can
- * only pick a value the model accepts. If the saved value isn't in that set
- * (the model changed since the last save, or legacy data), snapping surfaces a
- * pending edit so Save re-anchors the shot onto a valid duration.
+ * only pick a value the model accepts. A stored value outside that set (the
+ * shot renders through a different model than it was saved against, or legacy
+ * data) is shown snapped, with a note — not as a pending edit. The render path
+ * snaps it too (`resolveShotDuration`), so nothing is broken and there is
+ * nothing the user must do.
  */
 
 import { Button } from '@/components/ui/button';
@@ -31,7 +33,11 @@ import { updateShotDurationFn } from '@/functions/shots';
 import { sequenceKeys } from '@/hooks/use-sequences';
 import { shotStalenessKey } from '@/hooks/use-shot-staleness';
 import { shotKeys } from '@/hooks/use-shots';
-import { IMAGE_TO_VIDEO_MODELS, type ImageToVideoModel } from '@/lib/ai/models';
+import {
+  IMAGE_TO_VIDEO_MODELS,
+  videoModelDisplayName,
+  type ImageToVideoModel,
+} from '@/lib/ai/models';
 import { MOTION_JSON_SCHEMAS } from '@/lib/motion/endpoint-map';
 import { snapDuration } from '@/lib/motion/motion-generation';
 import { getDurationValues, numericOf } from '@/lib/motion/motion-transform';
@@ -69,13 +75,16 @@ export const ShotDurationField: React.FC<ShotDurationFieldProps> = ({
     MOTION_JSON_SCHEMAS[IMAGE_TO_VIDEO_MODELS[motionModel].id]
   ).map(numericOf);
   const snappedSavedSeconds = snapDuration(savedSeconds, motionModel);
-  const isSavedOutOfRange =
-    savedSeconds !== undefined && snappedSavedSeconds !== savedSeconds;
   const currentSeconds = editedSeconds ?? snappedSavedSeconds;
-  const isDirty =
-    editedSeconds !== undefined
-      ? editedSeconds !== savedSeconds
-      : isSavedOutOfRange;
+  // Dirty means the USER changed it. A stored value outside the current model's
+  // set deliberately does NOT count: `resolveShotDuration` snaps at render time
+  // anyway, so the mismatch is harmless — and because the set is per-model, a
+  // shot whose model differs from the sequence default would otherwise sit
+  // permanently "unsaved", showing Save/Cancel on a field nobody touched. It's
+  // surfaced as a note below instead.
+  const isDirty = editedSeconds !== undefined && editedSeconds !== savedSeconds;
+  const rendersSnapped =
+    savedSeconds !== undefined && snappedSavedSeconds !== savedSeconds;
 
   const saveMutation = useMutation({
     mutationFn: async (durationSeconds: number) => {
@@ -193,11 +202,20 @@ export const ShotDurationField: React.FC<ShotDurationFieldProps> = ({
         )}
       </div>
 
-      {isDirty && (
+      {/* The snapped-value line is purely informational — there is nothing to
+          fix, so it carries no call to action: Save only appears once the user
+          changes the value, and telling them to save would point at a button
+          that isn't on screen. */}
+      {isDirty ? (
         <p className="text-xs text-muted-foreground">
           Saving will mark the rendered video as stale. Prompts are unaffected.
         </p>
-      )}
+      ) : rendersSnapped ? (
+        <p className="text-xs text-muted-foreground">
+          Stored as {savedSeconds}s — {videoModelDisplayName(motionModel)}{' '}
+          renders it at {snappedSavedSeconds}s.
+        </p>
+      ) : null}
     </div>
   );
 };

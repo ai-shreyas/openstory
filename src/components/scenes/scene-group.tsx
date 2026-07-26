@@ -30,9 +30,6 @@ type SceneGroupProps = {
   modelMissingLabel?: string | null;
 };
 
-const isCompleted = (shot: ShotWithImage) =>
-  shot.thumbnailStatus === 'completed' && shot.videoStatus === 'completed';
-
 const SceneGroupComponent: React.FC<SceneGroupProps> = ({
   scene,
   shots,
@@ -117,7 +114,6 @@ const SceneGroupComponent: React.FC<SceneGroupProps> = ({
                   shot={shot}
                   aspectRatio={aspectRatio}
                   isActive={shot.id === selectedShotId}
-                  isCompleted={isCompleted(shot)}
                   onSelect={() => onSelectShot(shot.id)}
                   variant="horizontal"
                   isRegeneratingImage={regeneratingImages.has(shot.id)}

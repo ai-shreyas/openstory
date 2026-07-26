@@ -35,10 +35,21 @@ export const SCENE_FACETS = [
 
 export type SceneFacet = (typeof SCENE_FACETS)[number];
 
+/**
+ * What the centre column shows. `canvas` is the player/frame preview; `script`
+ * is the scene-block document — the whole script, read top-to-bottom, editable
+ * a scene at a time. Both rails (spine, inspector) and the selection are shared,
+ * so this is a view of the same object rather than a different page.
+ */
+const CANVAS_VIEWS = ['canvas', 'script'] as const;
+export type CanvasView = (typeof CANVAS_VIEWS)[number];
+export const DEFAULT_CANVAS_VIEW: CanvasView = 'canvas';
+
 export const scenesSearchSchema = z.object({
   scenes: z.string().optional(),
   shot: z.string().optional(),
   facet: z.enum(SCENE_FACETS).optional(),
+  view: z.enum(CANVAS_VIEWS).optional(),
 });
 
 export type ScenesSearch = z.infer<typeof scenesSearchSchema>;
@@ -62,7 +73,8 @@ export function parseSelectionFromSearch(search: {
 
 export function selectionToSearchParams(
   selection: SceneSelection,
-  facet?: SceneFacet
+  facet?: SceneFacet,
+  view?: CanvasView
 ): ScenesSearch {
   const params: ScenesSearch = {};
   if (selection.shotId) {
@@ -71,6 +83,8 @@ export function selectionToSearchParams(
     params.scenes = selection.sceneIds.join(',');
   }
   if (facet) params.facet = facet;
+  // The default view stays out of the URL so a plain /scenes link is canonical.
+  if (view && view !== DEFAULT_CANVAS_VIEW) params.view = view;
   return params;
 }
 
@@ -170,6 +184,20 @@ export function toggleSceneInSelection(
   return has && selection.sceneIds.length === 1
     ? { sceneIds: [] }
     : { sceneIds: [sceneId] };
+}
+
+/**
+ * Select exactly one scene, idempotently.
+ *
+ * Distinct from {@link toggleSceneInSelection}, whose non-additive branch
+ * deselects a scene that is already the sole selection — right for the spine,
+ * where a click is a toggle, but wrong wherever selection follows focus: the
+ * script document re-fires selection whenever focus re-enters a block (e.g.
+ * after its Save button unmounts), and a toggle there would clear the very
+ * scene the user is editing.
+ */
+export function selectScene(sceneId: string): SceneSelection {
+  return { sceneIds: [sceneId] };
 }
 
 export function selectShot(shotId: string): SceneSelection {

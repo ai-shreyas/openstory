@@ -266,10 +266,6 @@ const SceneListComponent: React.FC<SceneListProps> = ({
                 shot={shot}
                 aspectRatio={aspectRatio}
                 isActive={shot.id === selection.shotId}
-                isCompleted={
-                  shot.thumbnailStatus === 'completed' &&
-                  shot.videoStatus === 'completed'
-                }
                 onSelect={() => onSelectShot(shot.id)}
                 variant="horizontal"
                 isRegeneratingImage={regeneratingImages.has(shot.id)}
