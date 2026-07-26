@@ -16,7 +16,14 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        // Radix gives the viewport's inner wrapper an INLINE `display: table;
+        // min-width: 100%`, so it sizes to its widest child and can grow past a
+        // fixed-width container — content then wraps to that wider box and gets
+        // clipped, taking any `w-full` sibling (e.g. a TabsList) with it.
+        // Forcing `display: block` clamps it to the viewport. `!` is required to
+        // beat Radix's inline style. Safe here: no ScrollArea in the app scrolls
+        // horizontally, which is the only thing `display: table` buys.
+        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:block!"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
