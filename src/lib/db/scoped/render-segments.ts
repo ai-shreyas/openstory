@@ -47,6 +47,14 @@ export function createRenderSegmentsMethods(db: Database) {
         .where(eq(renderSegments.sceneId, sceneId));
     },
 
+    /** Every segment in a sequence — the read the Scenes editor groups shots by. */
+    listBySequence: async (sequenceId: string): Promise<RenderSegment[]> => {
+      return await db
+        .select()
+        .from(renderSegments)
+        .where(eq(renderSegments.sequenceId, sequenceId));
+    },
+
     /**
      * Resolve the render segment a shot belongs to, materializing the degenerate
      * 1:1 segment on first use. Idempotent: the per-shot segment reuses the

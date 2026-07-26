@@ -1,13 +1,13 @@
-import { TalentView } from '@/components/talent/talent-view';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
+/** Cast index is now the nothing-selected Cast facet (#986). */
 export const Route = createFileRoute('/_app/sequences/$id/cast/')({
-  component: CastPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/sequences/$id/scenes',
+      params: { id: params.id },
+      search: { facet: 'cast' },
+    });
+  },
   staticData: { breadcrumb: 'Cast' },
 });
-
-function CastPage() {
-  const { id: sequenceId } = Route.useParams();
-
-  return <TalentView sequenceId={sequenceId} />;
-}

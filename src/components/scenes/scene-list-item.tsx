@@ -10,7 +10,7 @@ import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
-import { Check, Loader2 } from 'lucide-react';
+import { Loader2, Play } from 'lucide-react';
 import { memo } from 'react';
 import { SceneThumbnail } from './scene-thumbnail';
 
@@ -18,7 +18,6 @@ type SceneListItemProps = {
   shot?: ShotWithImage | undefined;
   aspectRatio: AspectRatio;
   isActive?: boolean;
-  isCompleted?: boolean;
   onSelect?: () => void;
   variant?: 'stacked' | 'horizontal' | 'responsive';
   isRegeneratingImage?: boolean;
@@ -40,7 +39,6 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   shot,
   aspectRatio,
   isActive = false,
-  isCompleted = false,
   onSelect,
   variant = 'responsive',
   isRegeneratingImage = false,
@@ -52,10 +50,14 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
 }) => {
   // Divergent alternate takes precedence: promoting it resolves staleness too.
   const showDivergentDot = !!divergentVariantId;
-  const showStatusIndicator =
-    !showDivergentDot &&
-    (isCompleted ||
-      (shot && (isRegeneratingImage || isRegeneratingMotion || !isCompleted)));
+  // Motion state lives on the thumbnail as a play badge: solid = the shot has
+  // a video, pulsing = motion is generating. Image regeneration keeps the
+  // corner spinner (the thumbnail itself is what's being replaced). The old
+  // corner tick is gone — a green check on every finished shot was noise on a
+  // list where "finished" is the normal state.
+  const hasVideo = shot?.videoStatus === 'completed' && !!shot.videoUrl;
+  const isGeneratingVideo =
+    !!shot && (shot.videoStatus === 'generating' || isRegeneratingMotion);
   // Extract scene data from shot metadata
   const metadata = shot?.metadata;
 
@@ -107,32 +109,14 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
           />
         </div>
       )}
-      {showStatusIndicator && isCompleted && (
-        <Check
+      {!showDivergentDot && shot && isRegeneratingImage && (
+        <Loader2
           className={cn(
-            'absolute right-4 top-4 z-10 h-6 w-6 p-1 rounded-full',
-            'bg-success text-success-foreground'
+            'absolute right-4 top-4 z-10 h-6 w-6 p-1 rounded-full animate-spin',
+            'bg-primary/10 text-primary'
           )}
         />
       )}
-      {showStatusIndicator &&
-        shot &&
-        !isCompleted &&
-        (isRegeneratingImage || isRegeneratingMotion) && (
-          <Loader2
-            className={cn(
-              'absolute right-4 top-4 z-10 h-6 w-6 p-1 rounded-full animate-spin',
-              'bg-primary/10 text-primary'
-            )}
-          />
-        )}
-      {showStatusIndicator &&
-        shot &&
-        !isCompleted &&
-        !isRegeneratingImage &&
-        !isRegeneratingMotion && (
-          <Skeleton className="absolute right-4 top-4 z-10 h-6 w-6 rounded-full" />
-        )}
 
       <CardHeader>
         <div
@@ -145,7 +129,7 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
         >
           <div
             className={cn(
-              'relative w-full',
+              'w-full',
               aspectRatio === '9:16' && [
                 variant === 'responsive' &&
                   '@[280px]/scene:w-20 @[280px]/scene:shrink-0',
@@ -158,26 +142,42 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
               ]
             )}
           >
-            <SceneThumbnail
-              thumbnailUrl={shot?.thumbnailUrl}
-              previewThumbnailUrl={shot?.previewThumbnailUrl}
-              thumbnailStatus={shot?.thumbnailStatus || undefined}
-              alt={title ?? 'Scene thumbnail'}
-              aspectRatio={aspectRatio}
-              className="w-full rounded-md"
-            />
-            {modelMissing && (
-              <span
-                className="absolute bottom-1 left-1 rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-medium leading-none text-white"
-                aria-label={
-                  modelMissingLabel
-                    ? `Not generated with ${modelMissingLabel}`
-                    : 'Not generated with the selected model'
-                }
-              >
-                No {modelMissingLabel}
-              </span>
-            )}
+            {/* Badges anchor to the thumbnail, not the (taller) text row. */}
+            <div className="relative">
+              <SceneThumbnail
+                thumbnailUrl={shot?.thumbnailUrl}
+                previewThumbnailUrl={shot?.previewThumbnailUrl}
+                thumbnailStatus={shot?.thumbnailStatus || undefined}
+                alt={title ?? 'Scene thumbnail'}
+                aspectRatio={aspectRatio}
+                className="w-full rounded-md"
+              />
+              {(hasVideo || isGeneratingVideo) && (
+                <span
+                  aria-label={
+                    isGeneratingVideo ? 'Generating motion…' : 'Motion ready'
+                  }
+                  className={cn(
+                    'absolute bottom-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-background/60 text-foreground/80',
+                    isGeneratingVideo && 'motion-safe:animate-pulse'
+                  )}
+                >
+                  <Play className="h-2.5 w-2.5 fill-current" />
+                </span>
+              )}
+              {modelMissing && (
+                <span
+                  className="absolute bottom-1 left-1 rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-medium leading-none text-white"
+                  aria-label={
+                    modelMissingLabel
+                      ? `Not generated with ${modelMissingLabel}`
+                      : 'Not generated with the selected model'
+                  }
+                >
+                  No {modelMissingLabel}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -204,7 +204,6 @@ const areEqual = (
   if (
     prevProps.aspectRatio !== nextProps.aspectRatio ||
     prevProps.isActive !== nextProps.isActive ||
-    prevProps.isCompleted !== nextProps.isCompleted ||
     prevProps.variant !== nextProps.variant ||
     prevProps.isRegeneratingImage !== nextProps.isRegeneratingImage ||
     prevProps.isRegeneratingMotion !== nextProps.isRegeneratingMotion ||

@@ -192,15 +192,19 @@ testWithUser.describe('Variant Selection', () => {
 
     // Also wait for the shot thumbnail to be visible
     // Shots load via a separate API call from the sequence data, so needs its own timeout
-    await expect(page.getByRole('img', { name: 'Scene 1' })).toBeVisible({
+    const shotThumbnail = page.getByRole('img', { name: 'Scene 1' });
+    await expect(shotThumbnail).toBeVisible({
       timeout: 15000,
     });
 
-    const variantsTab = page.getByRole('tab', { name: /Variants/i });
-    await expect(variantsTab).toBeVisible({ timeout: 10000 });
-
-    // Click the Variants tab
-    await variantsTab.click();
+    // Variants moved from a tab to a dialog opened from the canvas image (#986):
+    // select the shot, then open the variants dialog from the starting frame.
+    await shotThumbnail.click();
+    const variantsButton = page.getByRole('button', {
+      name: 'Starting frame variants',
+    });
+    await expect(variantsButton).toBeVisible({ timeout: 10000 });
+    await variantsButton.click();
 
     const variantGrid = page.getByRole('grid', { name: 'Variant selection' });
 

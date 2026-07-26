@@ -31,21 +31,28 @@ function videoModelName(model: string): string {
 }
 
 /**
- * Top-level video-model switcher for the sequence header (#545). Replaces the
- * old read-only video-model chip once any video variants exist: lists the
- * distinct models that have generated a video for this sequence (derived from
- * shot_variants) and lets the viewer pick which model's output to display.
- * The selection is viewer-local (localStorage via useActiveVideoModel).
+ * Sequence-wide video-model switcher (#545). Lists the distinct models that
+ * have generated a video for this sequence (derived from shot_variants) and
+ * lets the viewer pick which model's output to display; also hosts "Add a
+ * model" and the sequence-wide Set. The view selection is viewer-local
+ * (localStorage via useActiveVideoModel).
  *
  * "Mixed" is shown when more than one model has output and the viewer has not
  * pinned a specific one — i.e. each scene shows its own model's video.
+ *
+ * Lives in the Scenes inspector at sequence scope as the ONLY video-model
+ * control there, styled as a badge to match the rows beside it. Degrades to a
+ * read-only badge before any video exists, and renders nothing at all when the
+ * sequence has no video model (motion off). See the image selector's note.
  */
 export const SequenceVideoModelSelector = ({
   sequenceId,
   sequenceVideoModel,
+  label,
 }: {
   sequenceId: string;
   sequenceVideoModel?: string | null;
+  label?: string;
 }) => {
   const { data: models } = useSequenceVideoModels(sequenceId);
   const { data: variants } = useSequenceVideoVariants(sequenceId);
@@ -71,11 +78,21 @@ export const SequenceVideoModelSelector = ({
     [variants, sequenceVideoModel, shotToScene]
   );
 
+  const withLabel = (content: React.ReactNode) =>
+    label ? (
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        {content}
+      </div>
+    ) : (
+      content
+    );
+
   // No video variants generated yet — fall back to the read-only chip showing
   // the sequence's configured model (or render nothing when motion is off).
   if (!models || models.length === 0) {
     if (!sequenceVideoModel) return null;
-    return (
+    return withLabel(
       <Badge variant="secondary" className="text-xs">
         {videoModelName(sequenceVideoModel)}
       </Badge>
@@ -83,18 +100,18 @@ export const SequenceVideoModelSelector = ({
   }
 
   const firstModel = models[0];
-  const label = activeVideoModel
+  const activeLabel = activeVideoModel
     ? videoModelName(activeVideoModel)
     : models.length === 1 && firstModel
       ? videoModelName(firstModel)
       : 'Mixed';
 
-  return (
+  const dropdown = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" aria-label="Select video model">
           <Badge variant="secondary" className="text-xs cursor-pointer gap-1">
-            {label}
+            {activeLabel}
             <ChevronDown className="size-3" />
           </Badge>
         </button>
@@ -148,4 +165,6 @@ export const SequenceVideoModelSelector = ({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+
+  return withLabel(dropdown);
 };

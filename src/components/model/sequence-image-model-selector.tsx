@@ -26,18 +26,28 @@ function imageModelName(model: string): string {
 }
 
 /**
- * Top-level image-model switcher for the sequence header. Lists the distinct
- * image models that have generated for this sequence (shot_variants) and lets
- * the viewer pick which model's image the scenes view shows; also hosts the
- * "Add a model" picker (#547). "Mixed" when more than one model has output and
- * none is pinned. Replaces the read-only ImageModelBadge.
+ * Sequence-wide image-model switcher. Lists the distinct image models that have
+ * generated for this sequence (shot_variants) and lets the viewer pick which
+ * model's image the scenes view shows; also hosts the "Add a model" picker
+ * (#547) and the sequence-wide Set.
+ *
+ * Lives in the Scenes inspector at sequence scope as the ONLY image-model
+ * control there, styled as a badge to match the Style / Script rows beside it.
+ * Before anything has generated it degrades to a read-only badge naming the
+ * model the first render will use — that seed is chosen on the Script tab,
+ * alongside the other pre-generation settings.
+ *
+ * `label` is rendered inside so the whole row disappears when there is nothing
+ * to show (no variants and no configured model).
  */
 export const SequenceImageModelSelector = ({
   sequenceId,
   sequenceImageModel,
+  label,
 }: {
   sequenceId: string;
   sequenceImageModel?: string | null;
+  label?: string;
 }) => {
   const { data: models } = useSequenceImageModels(sequenceId);
   const { data: variants } = useSequenceImageVariants(sequenceId);
@@ -66,9 +76,19 @@ export const SequenceImageModelSelector = ({
     [variants, sequenceImageModel, shotToScene]
   );
 
+  const withLabel = (content: React.ReactNode) =>
+    label ? (
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        {content}
+      </div>
+    ) : (
+      content
+    );
+
   if (!models || models.length === 0) {
     if (!sequenceImageModel) return null;
-    return (
+    return withLabel(
       <Badge variant="secondary" className="text-xs">
         {imageModelName(sequenceImageModel)}
       </Badge>
@@ -76,18 +96,18 @@ export const SequenceImageModelSelector = ({
   }
 
   const firstModel = models[0];
-  const label = activeImageModel
+  const activeLabel = activeImageModel
     ? imageModelName(activeImageModel)
     : models.length === 1 && firstModel
       ? imageModelName(firstModel)
       : 'Mixed';
 
-  return (
+  const dropdown = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" aria-label="Select image model">
           <Badge variant="secondary" className="text-xs cursor-pointer gap-1">
-            {label}
+            {activeLabel}
             <ChevronDown className="size-3" />
           </Badge>
         </button>
@@ -141,4 +161,6 @@ export const SequenceImageModelSelector = ({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+
+  return withLabel(dropdown);
 };

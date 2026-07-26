@@ -1,8 +1,8 @@
 import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
+import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
 import { ImageModelSelector } from '@/components/model/image-model-selector';
 import { MotionModelSelector } from '@/components/model/motion-model-selector';
-import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { PromptHistorySheet } from '@/components/prompts/prompt-history-sheet';
 import { DivergentAlternateBanner } from '@/components/staleness/divergent-alternate-banner';
 import { StalenessIndicator } from '@/components/staleness/staleness-indicator';
@@ -17,13 +17,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { buildMentionItems } from '@/components/scenes/prompt-mention/mention-items';
 import { MarkdownEditor } from '@/components/text-editor/markdown-editor';
-import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
-import { useSequenceElements } from '@/hooks/use-sequence-elements';
-import { useSequenceLocations } from '@/hooks/use-sequence-locations';
+import { useSequenceMentionItems } from '@/hooks/use-mention-items';
 import { shortenPromptFn } from '@/functions/ai';
-import { updateSceneScriptFn } from '@/functions/scenes';
 import { generateShotImageFn } from '@/functions/shot-image';
 import { generateShotMotionFn } from '@/functions/motion-functions';
 import { regenerateShotPromptFn } from '@/functions/prompt-variants';
@@ -31,18 +27,21 @@ import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import {
   shotKeys,
-  useGenerateVariants,
-  useSelectVariant,
+  useSelectSegmentVideoVersion,
   useSetImageFromVariant,
   useSetVideoFromVariant,
 } from '@/hooks/use-shots';
+import {
+  SegmentVideoPanel,
+  segmentPanelIsInformative,
+} from '@/components/scenes/segment-video-panel';
+import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import {
   type ShotStaleness,
   shotStalenessKey,
   useShotStaleness,
 } from '@/hooks/use-shot-staleness';
-import { sequenceKeys } from '@/hooks/use-sequences';
-import { sceneKeys } from '@/hooks/use-scenes';
+import { useSaveSceneScript } from '@/hooks/use-scenes';
 import { useSaveShotPrompt } from '@/hooks/use-prompt-variants';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import {
@@ -86,24 +85,62 @@ import { CopyIcon, History, Loader2, Minimize2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ShotStalenessBanners } from './shot-staleness-banners';
+import {
+  SCENE_FACETS,
+  type SceneFacet,
+  type SelectionScope,
+} from '@/lib/scenes/scene-selection';
 import { SceneCastTab } from './scene-cast-tab';
 import { SceneElementsTab } from './scene-elements-tab';
 import { SceneLocationTab } from './scene-location-tab';
+import { SceneMusicFacet } from './scene-music-facet';
 import { SceneScriptTab } from './scene-script-tab';
-import { VariantSelector } from './variant-selector';
+import { ShotDurationField } from './shot-duration-field';
 
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'ui', 'scenes', 'scene-script-prompts']);
 
-export type TabValue =
-  | 'script'
-  | 'image-prompt'
-  | 'motion-prompt'
-  | 'scene-variants'
-  | 'cast'
-  | 'location'
-  | 'elements';
+/** Inspector tab values ARE the URL facet tokens — one set, no mapping. */
+export type TabValue = SceneFacet;
+
+export type TabDescriptor = { value: TabValue; label: string };
+
+/**
+ * The inspector tabs shown for a given selection scope (#986). Tabs are
+ * level-aware: prompt/script tabs need a single scene, music is a sequence-wide
+ * concern, and cast/locations/elements apply at every level. Starting-frame
+ * variants moved out of the tabs onto the canvas, so they're absent here.
+ */
+export function tabsForScope(scope: SelectionScope): TabDescriptor[] {
+  if (scope === 'shot') {
+    // No Script tab: the script is scene-scoped (`scene_script_versions` is
+    // keyed by sceneId), so editing it from a shot would silently rewrite every
+    // sibling shot's text. Shot scope keeps only what a shot actually owns — its
+    // image and motion prompts.
+    return [
+      { value: 'cast', label: 'Cast' },
+      { value: 'location', label: 'Locations' },
+      { value: 'elements', label: 'Elements' },
+      { value: 'image-prompt', label: 'Image' },
+      { value: 'motion-prompt', label: 'Video' },
+    ];
+  }
+  if (scope === 'scenes') {
+    return [
+      { value: 'script', label: 'Script' },
+      { value: 'cast', label: 'Cast' },
+      { value: 'location', label: 'Locations' },
+      { value: 'elements', label: 'Elements' },
+    ];
+  }
+  return [
+    { value: 'cast', label: 'Cast' },
+    { value: 'location', label: 'Locations' },
+    { value: 'elements', label: 'Elements' },
+    { value: 'music', label: 'Music' },
+  ];
+}
 
 function isInsufficientCreditsError(error: unknown): boolean {
   if (error instanceof Error) {
@@ -116,15 +153,7 @@ function isInsufficientCreditsError(error: unknown): boolean {
 }
 
 function isValidTabValue(value: string): value is TabValue {
-  return (
-    value === 'script' ||
-    value === 'image-prompt' ||
-    value === 'motion-prompt' ||
-    value === 'scene-variants' ||
-    value === 'cast' ||
-    value === 'location' ||
-    value === 'elements'
-  );
+  return (SCENE_FACETS as readonly string[]).includes(value);
 }
 
 /** Compact copy-to-clipboard icon for prompt headers. */
@@ -244,10 +273,11 @@ type SceneScriptPromptsProps = {
   shot?: ShotWithImage | undefined;
   sequenceId: string;
   selectedTab: TabValue;
+  /** Tabs to render for the current selection scope (#986). */
+  visibleTabs: TabDescriptor[];
   onTabChange: (tab: TabValue) => void;
   regeneratingImages: Set<string>;
   regeneratingMotion: Set<string>;
-  regeneratingSceneVariants: Set<string>;
   onRegenerateStart: (
     shotId: string,
     type: 'image' | 'motion' | 'scene-variants'
@@ -257,6 +287,10 @@ type SceneScriptPromptsProps = {
   variantForSelectedModel?: FrameVariant;
   /** The selected shot's video variant for the effective video model (#545). */
   videoVariantForSelectedModel?: ShotVariant;
+  /** The render segment the selected shot belongs to (#986), if any. */
+  segment?: SequenceSegment;
+  /** Precomputed 1-based shot-span label for `segment` ("Shot 1" / "Shots 1–3"). */
+  segmentSpanLabel?: string;
   /**
    * The models the shot's currently selected image / video versions were
    * rendered with (#1066), or the sequence default when nothing is selected
@@ -274,29 +308,44 @@ type SceneScriptPromptsProps = {
   onVideoModelChange?: (model: ImageToVideoModel) => void;
   /** Current style category, used to snap style-restricted motion models. */
   styleCategory?: string;
-  /** Current style name, used in recommendation tooltips. */
+  /** Style name, shown alongside the model selectors. */
   styleName?: string;
-  /** Style-recommended image model — drives the "Recommended" badge. */
+  /** Style-recommended models, surfaced as a hint in the selectors. */
   recommendedImageModel?: string | null;
-  /** Style-recommended video model — drives the "Recommended" badge. */
   recommendedVideoModel?: string | null;
   /** Live divergent alternates for the current shot across variant types. */
   shotDivergentVariants?: ShotVariant[];
   onCompareDivergent?: (variant: ShotVariant) => void;
+  /** Selection-scoped facet tags (#986). `null` = whole sequence. */
+  /** Shot ids in the current selection; `null` = whole sequence. */
+  facetShotIds?: string[] | null;
+  /** Music facet editable only at sequence scope. */
+  musicEditable?: boolean;
+  /**
+   * The scene the Script facet edits — the selected shot's scene at shot scope,
+   * the selected scene at scene scope. Undefined when the selection spans
+   * several scenes (or none), which renders the facet read-only rather than
+   * picking a target for the user.
+   */
+  scriptSceneId?: string;
+  /** That scene's current script extract (selected version, #1030). */
+  scriptText?: string;
 };
 
 export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   shot,
   sequenceId,
   selectedTab,
+  visibleTabs,
   onTabChange,
   regeneratingImages,
   regeneratingMotion,
-  regeneratingSceneVariants,
   onRegenerateStart,
   aspectRatio,
   variantForSelectedModel,
   videoVariantForSelectedModel,
+  segment,
+  segmentSpanLabel,
   resolvedImageModel,
   resolvedVideoModel,
   imageModelStatuses,
@@ -309,6 +358,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   recommendedVideoModel,
   shotDivergentVariants,
   onCompareDivergent,
+  facetShotIds = null,
+  musicEditable = false,
+  scriptSceneId,
+  scriptText,
 }) => {
   const divergentImageVariant = useMemo(
     () => shotDivergentVariants?.find((v) => v.variantType === 'image'),
@@ -348,10 +401,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const [editedScript, setEditedScript] = useState<string | undefined>(
     undefined
   );
-  const [editedDurationSeconds, setEditedDurationSeconds] = useState<
-    number | undefined
-  >(undefined);
-  const prevScriptShotIdRef = useRef<string | undefined>(undefined);
+  const prevScriptSceneIdRef = useRef<string | undefined>(undefined);
+  const prevPromptShotIdRef = useRef<string | undefined>(undefined);
 
   // Previous value tracking for prop-to-state sync (refs avoid extra re-renders)
   const prevImagePromptRef = useRef<string | undefined>(undefined);
@@ -372,10 +423,27 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const motionFocusedRef = useRef(false);
 
   const queryClient = useQueryClient();
-  const generateVariants = useGenerateVariants();
-  const selectVariant = useSelectVariant();
   const setImageFromVariant = useSetImageFromVariant();
   const setVideoFromVariant = useSetVideoFromVariant();
+  const selectSegmentVideoVersion = useSelectSegmentVideoVersion();
+
+  const handleSelectSegmentVersion = useCallback(
+    (versionId: string) => {
+      if (!shot) return;
+      selectSegmentVideoVersion.mutate(
+        { sequenceId, shotId: shot.id, versionId },
+        {
+          onError: (error) => {
+            toast.error('Failed to switch video version', {
+              description:
+                error instanceof Error ? error.message : 'Unknown error',
+            });
+          },
+        }
+      );
+    },
+    [shot, sequenceId, selectSegmentVideoVersion]
+  );
   const {
     needsBillingSetup: falNeedsBillingSetup,
     showGate: showFalGate,
@@ -388,20 +456,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     shotId: shot?.id,
   });
 
-  // Sequence-scoped lists power the @-mention autocomplete in both prompt
-  // editors. Same canonical tag the #683 server-side parser recognises.
-  const { data: mentionElements } = useSequenceElements(sequenceId);
-  const { data: mentionCharacters } = useSequenceCharacters(sequenceId);
-  const { data: mentionLocations } = useSequenceLocations(sequenceId);
-  const mentionItems = useMemo(
-    () =>
-      buildMentionItems({
-        characters: mentionCharacters ?? [],
-        elements: mentionElements ?? [],
-        locations: mentionLocations ?? [],
-      }),
-    [mentionCharacters, mentionElements, mentionLocations]
-  );
+  const {
+    items: mentionItems,
+    characters: mentionCharacters,
+    elements: mentionElements,
+    locations: mentionLocations,
+  } = useSequenceMentionItems(sequenceId);
   // The realtime hook owns the per-prompt-type stream status — `'pending'`
   // covers the window between a successful enqueue and the first delta, so
   // the button stays in its busy state without a sibling useState to sync.
@@ -585,55 +645,30 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     });
   }, [shotPromptStream.motion.status, shotId, sequenceId, queryClient]);
 
-  // Persist a scene-script and/or duration edit via `scene_script_versions`
-  // (#1030). Repointing the selected version flips prompt-input-hash staleness
-  // on the scene's shots without forking the sequence.
-  const saveScriptMutation = useMutation({
-    mutationFn: async (input: {
-      nextExtract: string;
-      nextDurationSeconds: number | undefined;
-    }) => {
-      if (!shot?.id) {
-        throw new Error('shot required');
-      }
-      const { nextExtract, nextDurationSeconds } = input;
-      return await updateSceneScriptFn({
-        data: {
-          sequenceId,
-          shotId: shot.id,
-          extract: nextExtract,
-          ...(nextDurationSeconds !== undefined
-            ? { durationSeconds: nextDurationSeconds }
-            : {}),
+  // Persist a scene-script edit via `scene_script_versions` (#1030). Repointing
+  // the selected version flips prompt-input-hash staleness on the scene's shots
+  // without forking the sequence. Addressed by scene, not shot — see
+  // `updateSceneScriptFn`. (Duration is a separate, per-shot video parameter —
+  // see `ShotDurationField` on the Motion tab.)
+  const saveSceneScript = useSaveSceneScript(sequenceId);
+  const handleSaveScript = (nextExtract: string) => {
+    if (!scriptSceneId) return;
+    saveSceneScript.mutate(
+      { sceneId: scriptSceneId, extract: nextExtract },
+      {
+        onSuccess: () => {
+          setEditedScript(undefined);
+          toast.success('Scene saved');
         },
-      });
-    },
-    onSuccess: async (updated) => {
-      setEditedScript(undefined);
-      setEditedDurationSeconds(undefined);
-      queryClient.setQueryData(shotKeys.detail(updated.id), updated);
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: shotKeys.list(sequenceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: shotStalenessKey(updated.id),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: sequenceKeys.detail(sequenceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: sceneKeys.composedScript(sequenceId),
-        }),
-      ]);
-      toast.success('Scene saved');
-    },
-    onError: (error) => {
-      toast.error('Failed to save scene', {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
-    },
-  });
+        onError: (error) => {
+          toast.error('Failed to save scene', {
+            description:
+              error instanceof Error ? error.message : 'Unknown error',
+          });
+        },
+      }
+    );
+  };
 
   // Per-prompt-type busy flag — `regeneratePromptMutation.variables` is the
   // payload of the in-flight request, so we know which tab's regenerate
@@ -664,8 +699,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     []
   );
 
-  // Get imagePrompt early so it can be used in handleShortenPrompt
-  const scriptText = shot?.metadata?.originalScript.extract;
   const imageModel = safeTextToImageModel(
     shot?.imageModel,
     DEFAULT_IMAGE_MODEL
@@ -945,42 +978,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     showFalGate,
   ]);
 
-  const handleGenerateSceneVariants = useCallback(async () => {
-    if (!shot?.id || !shot.sequenceId) return;
-
-    onRegenerateStart(shot.id, 'scene-variants');
-
-    try {
-      await generateVariants.mutateAsync({
-        sequenceId: shot.sequenceId,
-        shotId: shot.id,
-        model: regenImageModel,
-      });
-    } catch (error) {
-      toast.error('Scene variants generation failed', {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }, [shot, generateVariants, regenImageModel, onRegenerateStart]);
-
-  const handleVariantSelect = useCallback(
-    async (index: number) => {
-      if (!shot?.id || !shot.sequenceId) return;
-      try {
-        await selectVariant.mutateAsync({
-          sequenceId: shot.sequenceId,
-          shotId: shot.id,
-          variantIndex: index,
-        });
-      } catch (error) {
-        toast.error('Failed to select variant', {
-          description: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
-    },
-    [shot, selectVariant]
-  );
-
   // The shot's selected motion prompt, projected from its version row (#713) —
   // metadata.prompts.motion no longer exists.
   const motionPromptData = shot?.motionPromptData ?? null;
@@ -1179,8 +1176,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     imagePrompt,
     shot,
     mentionCharacters,
-    mentionLocations,
     mentionElements,
+    mentionLocations,
     aspectRatio,
     absolutizeUrl,
   ]);
@@ -1197,15 +1194,20 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         safeImageToVideoModel(shot.motionModel, DEFAULT_VIDEO_MODEL));
 
   // Sync local state when props change (prev-value refs avoid extra re-renders)
-  if (shot?.id !== prevScriptShotIdRef.current) {
-    prevScriptShotIdRef.current = shot?.id;
-    setEditedScript(undefined);
-    setEditedDurationSeconds(undefined);
+  if (shot?.id !== prevPromptShotIdRef.current) {
+    prevPromptShotIdRef.current = shot?.id;
     // A new shot starts with a clean slate — its own saved prompt loads below.
     dirtyImageRef.current = false;
     dirtyMotionRef.current = false;
     imageFocusedRef.current = false;
     motionFocusedRef.current = false;
+  }
+  // The script draft is keyed by SCENE, not shot: moving between shots of one
+  // scene must not discard an in-progress script edit, because they all edit
+  // the same script.
+  if (scriptSceneId !== prevScriptSceneIdRef.current) {
+    prevScriptSceneIdRef.current = scriptSceneId;
+    setEditedScript(undefined);
   }
 
   // Swap the draft to the persisted prompt when it changes server-side (a
@@ -1251,10 +1253,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     shot?.videoStatus === 'generating' ||
     (shot?.id ? regeneratingMotion.has(shot.id) : false);
 
-  const isGeneratingSceneVariants =
-    shot?.variantImageStatus === 'generating' ||
-    (shot?.id ? regeneratingSceneVariants.has(shot.id) : false);
-
   return (
     <Tabs
       value={selectedTab}
@@ -1292,60 +1290,58 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="scene-variants">Variants</SelectItem>
-            <SelectItem value="script">Script</SelectItem>
-            <SelectItem value="cast">Cast</SelectItem>
-            <SelectItem value="location">Location</SelectItem>
-            <SelectItem value="elements">Elements</SelectItem>
-            <SelectItem value="image-prompt">Image</SelectItem>
-            <SelectItem value="motion-prompt">Motion</SelectItem>
+            {visibleTabs.map((t) => (
+              <SelectItem key={t.value} value={t.value}>
+                {t.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>
 
-      {/* Desktop: Tab buttons */}
-      <TabsList className="hidden md:flex">
-        <TabsTrigger value="scene-variants">Variants</TabsTrigger>
-        <TabsTrigger value="script">Script</TabsTrigger>
-        <TabsTrigger value="cast">Cast</TabsTrigger>
-        <TabsTrigger value="location">Location</TabsTrigger>
-        <TabsTrigger value="elements">Elements</TabsTrigger>
-        <TabsTrigger value="image-prompt" className="gap-1.5">
-          Image
-          {staleness?.visualPrompt === 'stale' && (
-            <StalenessIndicator
-              artifact="visual-prompt"
-              entityType="shot"
-              density="corner-dot"
-              isRegenerating={isRegeneratingVisualPrompt}
-            />
-          )}
-        </TabsTrigger>
-        <TabsTrigger value="motion-prompt" className="gap-1.5">
-          Motion
-          {staleness?.motionPrompt === 'stale' && (
-            <StalenessIndicator
-              artifact="motion-prompt"
-              entityType="shot"
-              density="corner-dot"
-              isRegenerating={isRegeneratingMotionPrompt}
-            />
-          )}
-        </TabsTrigger>
+      {/* Desktop: Tab buttons — level-aware, distributed across the panel. */}
+      <TabsList className="hidden w-full md:flex">
+        {visibleTabs.map((t) => (
+          <TabsTrigger
+            key={t.value}
+            value={t.value}
+            className={
+              t.value === 'image-prompt' || t.value === 'motion-prompt'
+                ? 'gap-1.5'
+                : undefined
+            }
+          >
+            {t.label}
+            {t.value === 'image-prompt' &&
+              staleness?.visualPrompt === 'stale' && (
+                <StalenessIndicator
+                  artifact="visual-prompt"
+                  entityType="shot"
+                  density="corner-dot"
+                  isRegenerating={isRegeneratingVisualPrompt}
+                />
+              )}
+            {t.value === 'motion-prompt' &&
+              staleness?.motionPrompt === 'stale' && (
+                <StalenessIndicator
+                  artifact="motion-prompt"
+                  entityType="shot"
+                  density="corner-dot"
+                  isRegenerating={isRegeneratingMotionPrompt}
+                />
+              )}
+          </TabsTrigger>
+        ))}
       </TabsList>
 
       <TabsContent value="script">
         <SceneScriptTab
-          shot={shot}
-          sequenceId={sequenceId}
+          sceneId={scriptSceneId}
           scriptText={scriptText}
-          motionModel={effectiveMotionModel}
           editedScript={editedScript}
           onEditedScriptChange={setEditedScript}
-          editedDurationSeconds={editedDurationSeconds}
-          onEditedDurationChange={setEditedDurationSeconds}
-          isSaving={saveScriptMutation.isPending}
-          onSave={(payload) => saveScriptMutation.mutate(payload)}
+          isSaving={saveSceneScript.isPending}
+          onSave={handleSaveScript}
           isCopied={copiedTab === 'script'}
           onCopy={(text) => void handleCopy(text, 'script')}
           mentionItems={mentionItems}
@@ -1605,6 +1601,31 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
       <TabsContent value="motion-prompt">
         <div className="space-y-4">
+          {/* Segment context (#986): video renders per render segment, not per
+              shot. When this shot's segment spans multiple shots, has re-rolls to
+              switch between, or is stale, surface it; otherwise (today's
+              one-shot-per-segment reality) this stays hidden and the tab is
+              unchanged. */}
+          {segmentPanelIsInformative(segment) && (
+            <SegmentVideoPanel
+              segment={segment}
+              spanLabel={segmentSpanLabel ?? ''}
+              onSelectVersion={handleSelectSegmentVersion}
+              selecting={selectSegmentVideoVersion.isPending}
+            />
+          )}
+
+          {/* Duration is a video parameter, not a prompt driver — it belongs
+              beside the model whose schema defines its legal values and the
+              segment its value tiles into, not under the scene script. Keyed by
+              shot so switching scenes drops any unsaved draft. */}
+          <ShotDurationField
+            key={shot?.id}
+            shot={shot}
+            sequenceId={sequenceId}
+            motionModel={effectiveMotionModel}
+          />
+
           {/* Thinking bar while the model reasons, before the regenerated
               prompt starts streaming back ('pending' → first delta). */}
           <ThinkingBar active={shotPromptStream.motion.status === 'pending'} />
@@ -1863,79 +1884,20 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         </div>
       </TabsContent>
 
-      <TabsContent value="scene-variants">
-        <div className="space-y-4">
-          {/* Variant Selector */}
-          {shot?.variantImageUrl ? (
-            <VariantSelector
-              variantImageUrl={shot.variantImageUrl}
-              selectedVariantIndex={null} // TODO: Store selected variant index in frame metadata if needed
-              onVariantSelect={(index) => void handleVariantSelect(index)}
-              loading={isGeneratingSceneVariants || selectVariant.isPending}
-              disabled={isGeneratingSceneVariants || selectVariant.isPending}
-              aspectRatio={aspectRatio}
-            />
-          ) : (
-            <div className="rounded-lg border border-dashed border-muted-foreground/30 p-8 text-center text-sm text-muted-foreground">
-              No variant image available. Generate variants to see options.
-            </div>
-          )}
-
-          {/* Model selector — per-asset (#1066). */}
-          <div className="space-y-2">
-            <span className="text-sm font-medium">Model</span>
-            <ImageModelSelector
-              selectedModel={effectiveImageModel}
-              onModelChange={(model) => onImageModelChange?.(model)}
-              disabled={isGenerating || isGeneratingSceneVariants}
-              recommendedImageModel={recommendedImageModel}
-              styleName={styleName}
-              generatedStatuses={imageModelStatuses}
-            />
-            <p className="text-xs text-muted-foreground">
-              Changing the model applies to the next generation.
-            </p>
-          </div>
-
-          {/* Regenerate button */}
-          <Button
-            onClick={() => {
-              if (falNeedsBillingSetup) {
-                showFalGate();
-                return;
-              }
-              void handleGenerateSceneVariants();
-            }}
-            disabled={
-              isGenerating ||
-              isGeneratingSceneVariants ||
-              generateVariants.isPending ||
-              !shot
-            }
-            className="w-full"
-          >
-            {(isGeneratingSceneVariants || generateVariants.isPending) && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            {isGeneratingSceneVariants || generateVariants.isPending
-              ? 'Generating…'
-              : shot?.variantImageUrl
-                ? 'Regenerate Scene Variants'
-                : 'Generate Scene Variants'}
-          </Button>
-        </div>
-      </TabsContent>
-
       <TabsContent value="cast">
-        <SceneCastTab shot={shot} sequenceId={sequenceId} />
+        <SceneCastTab sequenceId={sequenceId} shotIds={facetShotIds} />
       </TabsContent>
 
       <TabsContent value="location">
-        <SceneLocationTab shot={shot} sequenceId={sequenceId} />
+        <SceneLocationTab sequenceId={sequenceId} shotIds={facetShotIds} />
       </TabsContent>
 
       <TabsContent value="elements">
-        <SceneElementsTab shot={shot} sequenceId={sequenceId} />
+        <SceneElementsTab sequenceId={sequenceId} shotIds={facetShotIds} />
+      </TabsContent>
+
+      <TabsContent value="music">
+        <SceneMusicFacet sequenceId={sequenceId} editable={musicEditable} />
       </TabsContent>
 
       <BillingGateDialog {...falGateProps} stripeEnabled={stripeEnabled} />

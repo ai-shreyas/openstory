@@ -4,10 +4,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { ShotVariant } from '@/lib/db/schema';
+import type { SceneRow, ShotVariant } from '@/lib/db/schema';
+import type { SceneSelection } from '@/lib/scenes/scene-selection';
+import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { cn } from '@/lib/utils';
 import { Loader2, Video } from 'lucide-react';
 import { memo, useMemo, useRef, useState } from 'react';
+import { SceneGroup } from './scene-group';
 import { SceneListItem } from './scene-list-item';
 
 export type BatchGenerateMotionArgs = {
@@ -21,38 +25,41 @@ export type BatchGenerateMotionArgs = {
 
 type SceneListProps = {
   shots?: ShotWithImage[] | undefined;
-  selectedShotId?: string;
+  scenes?: SceneRow[] | undefined;
+  /** Render segments (#986) — bracket the shots sharing one video per scene. */
+  segments?: SequenceSegment[] | undefined;
+  /** Shots/scenes query failure — shown instead of the list (never skeletons). */
+  loadError?: Error | null;
+  /** Segments query failure — brackets/stale badges are missing, say so. */
+  segmentsError?: Error | null;
+  selection: SceneSelection;
   aspectRatio: AspectRatio;
+  onSelectScene: (sceneId: string, additive: boolean) => void;
   onSelectShot: (shotId: string) => void;
+  onClearSelection: () => void;
   regeneratingImages: Set<string>;
   regeneratingMotion: Set<string>;
   onBatchGenerateMotion?: (args: BatchGenerateMotionArgs) => Promise<void>;
   musicPromptsReady: boolean;
-  /** Hide the batch motion button (e.g. while auto-generate motion is in flight). */
   hideBatchButton?: boolean;
-  /** Live divergent alternates for the current sequence (filtered per-shot). */
   divergentVariants?: ShotVariant[];
   onCompareDivergent?: (variant: ShotVariant) => void;
-  /** Initial music model for the batch selector (from `sequence.musicModel`). */
   initialMusicModel?: AudioModel;
-  /**
-   * Scenes the pinned image model hasn't generated yet (#547). Those cards show
-   * a "No {model}" badge so the thumbnail (which still shows the primary image)
-   * isn't mistaken for the pinned model's output.
-   */
   modelMissingShotIds?: Set<string>;
-  /** Name of the pinned image model, for the per-card "No {model}" badge. */
   modelMissingLabel?: string | null;
 };
 
-const isCompleted = (shot: ShotWithImage) =>
-  shot.thumbnailStatus === 'completed' && shot.videoStatus === 'completed';
-
 const SceneListComponent: React.FC<SceneListProps> = ({
   shots,
-  selectedShotId,
+  scenes,
+  segments,
+  loadError,
+  segmentsError,
+  selection,
   aspectRatio,
+  onSelectScene,
   onSelectShot,
+  onClearSelection,
   regeneratingImages,
   regeneratingMotion,
   onBatchGenerateMotion,
@@ -141,54 +148,140 @@ const SceneListComponent: React.FC<SceneListProps> = ({
     !motionPromptsReady ||
     (includeMusic && !musicPromptsReady);
 
-  const renderShotCard = (shot: ShotWithImage) => {
-    const divergent = divergentByShotId.get(shot.id);
-    return (
-      <SceneListItem
-        key={shot.id}
-        shot={shot}
-        aspectRatio={aspectRatio}
-        isActive={shot.id === selectedShotId}
-        isCompleted={isCompleted(shot)}
-        onSelect={() => onSelectShot(shot.id)}
-        isRegeneratingImage={regeneratingImages.has(shot.id)}
-        isRegeneratingMotion={regeneratingMotion.has(shot.id)}
-        divergentVariantId={divergent?.id}
-        onCompareDivergent={
-          divergent ? () => onCompareDivergent?.(divergent) : undefined
-        }
-        modelMissing={
-          !!modelMissingLabel && (modelMissingShotIds?.has(shot.id) ?? false)
-        }
-        modelMissingLabel={modelMissingLabel}
-      />
-    );
-  };
+  const shotsBySceneId = useMemo(() => {
+    const map = new Map<string, ShotWithImage[]>();
+    for (const shot of shots ?? []) {
+      if (!shot.sceneId) continue;
+      const list = map.get(shot.sceneId) ?? [];
+      list.push(shot);
+      map.set(shot.sceneId, list);
+    }
+    return map;
+  }, [shots]);
+
+  // Shots without a scene row (sequences predating the scenes table) still
+  // render — dropping them would silently hide selectable shots.
+  const unassignedShots = useMemo(
+    () => (shots ?? []).filter((shot) => !shot.sceneId),
+    [shots]
+  );
+
+  const groupedScenes = useMemo(() => {
+    if (!scenes?.length) return [];
+    return scenes.map((scene) => ({
+      scene,
+      shots: shotsBySceneId.get(scene.id) ?? [],
+    }));
+  }, [scenes, shotsBySceneId]);
+
+  const isLoading = shots === undefined || scenes === undefined;
+
+  const segmentsById = useMemo(() => {
+    const map = new Map<string, SequenceSegment>();
+    for (const segment of segments ?? []) map.set(segment.id, segment);
+    return map;
+  }, [segments]);
+
+  const isWholeSequence = selection.sceneIds.length === 0 && !selection.shotId;
 
   return (
-    <div className="flex h-full w-[280px] lg:w-[480px] flex-col rounded-lg border bg-background">
-      {/* Header */}
+    <div className="flex h-full w-[280px] lg:w-[360px] flex-col rounded-lg border bg-background">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Scenes
         </h2>
       </div>
 
-      {/* Scene list */}
+      <button
+        type="button"
+        onClick={onClearSelection}
+        title={
+          isWholeSequence
+            ? 'Whole sequence selected'
+            : 'Show the whole sequence (Esc zooms out one level at a time)'
+        }
+        className={cn(
+          'border-b px-4 py-2.5 text-left text-sm transition-colors hover:bg-muted/40',
+          isWholeSequence && 'bg-primary/5 font-medium text-primary'
+        )}
+      >
+        Whole sequence
+      </button>
+
       <ScrollArea className="flex-1 min-h-0">
         <div className="flex flex-col gap-3 p-4">
-          {(shots === undefined || shots.length === 0) &&
+          {loadError && (
+            <p role="alert" className="text-sm text-destructive">
+              Failed to load scenes: {loadError.message}
+            </p>
+          )}
+
+          {!loadError && segmentsError && (
+            <p role="alert" className="text-xs text-destructive">
+              Failed to load video segments: {segmentsError.message}
+            </p>
+          )}
+
+          {!loadError &&
+            isLoading &&
             [1, 2, 3].map((i) => (
-              <SceneListItem
-                key={`shot-skeleton-${i}`}
-                shot={undefined}
-                aspectRatio={aspectRatio}
-                isActive={false}
-                isCompleted={false}
+              <div
+                key={`scene-skeleton-${i}`}
+                className="h-20 animate-pulse rounded-lg border bg-muted/40"
               />
             ))}
 
-          {shots && shots.map(renderShotCard)}
+          {!loadError &&
+            !isLoading &&
+            groupedScenes.length === 0 &&
+            unassignedShots.length === 0 && (
+              <p className="text-sm text-muted-foreground">No scenes yet.</p>
+            )}
+
+          {groupedScenes.map(({ scene, shots: sceneShots }) => (
+            <SceneGroup
+              key={scene.id}
+              scene={scene}
+              shots={sceneShots}
+              segmentsById={segmentsById}
+              isSceneSelected={selection.sceneIds.includes(scene.id)}
+              selectedShotId={selection.shotId}
+              aspectRatio={aspectRatio}
+              onSelectScene={onSelectScene}
+              onSelectShot={onSelectShot}
+              regeneratingImages={regeneratingImages}
+              regeneratingMotion={regeneratingMotion}
+              divergentByShotId={divergentByShotId}
+              onCompareDivergent={onCompareDivergent}
+              modelMissingShotIds={modelMissingShotIds}
+              modelMissingLabel={modelMissingLabel}
+            />
+          ))}
+
+          {unassignedShots.map((shot) => {
+            const divergent = divergentByShotId.get(shot.id);
+            return (
+              <SceneListItem
+                key={shot.id}
+                shot={shot}
+                aspectRatio={aspectRatio}
+                isActive={shot.id === selection.shotId}
+                onSelect={() => onSelectShot(shot.id)}
+                variant="horizontal"
+                isRegeneratingImage={regeneratingImages.has(shot.id)}
+                isRegeneratingMotion={regeneratingMotion.has(shot.id)}
+                divergentVariantId={divergent?.id}
+                onCompareDivergent={
+                  divergent ? () => onCompareDivergent?.(divergent) : undefined
+                }
+                modelMissing={
+                  !!modelMissingLabel &&
+                  (modelMissingShotIds?.has(shot.id) ?? false)
+                }
+                modelMissingLabel={modelMissingLabel}
+              />
+            );
+          })}
         </div>
       </ScrollArea>
 
@@ -271,9 +364,14 @@ const areEqual = (
   nextProps: SceneListProps
 ): boolean => {
   if (
-    prevProps.selectedShotId !== nextProps.selectedShotId ||
+    prevProps.selection !== nextProps.selection ||
+    prevProps.scenes !== nextProps.scenes ||
+    prevProps.segments !== nextProps.segments ||
+    prevProps.loadError !== nextProps.loadError ||
+    prevProps.segmentsError !== nextProps.segmentsError ||
     prevProps.aspectRatio !== nextProps.aspectRatio ||
     prevProps.musicPromptsReady !== nextProps.musicPromptsReady ||
+    prevProps.hideBatchButton !== nextProps.hideBatchButton ||
     prevProps.initialMusicModel !== nextProps.initialMusicModel ||
     prevProps.modelMissingLabel !== nextProps.modelMissingLabel ||
     prevProps.modelMissingShotIds !== nextProps.modelMissingShotIds
@@ -290,7 +388,10 @@ const areEqual = (
 
   if (
     prevProps.onBatchGenerateMotion !== nextProps.onBatchGenerateMotion ||
-    prevProps.onCompareDivergent !== nextProps.onCompareDivergent
+    prevProps.onCompareDivergent !== nextProps.onCompareDivergent ||
+    prevProps.onSelectScene !== nextProps.onSelectScene ||
+    prevProps.onSelectShot !== nextProps.onSelectShot ||
+    prevProps.onClearSelection !== nextProps.onClearSelection
   ) {
     return false;
   }

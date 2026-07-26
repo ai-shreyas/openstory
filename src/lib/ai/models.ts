@@ -270,6 +270,16 @@ export function isValidImageToVideoModel(
 }
 
 /**
+ * Friendly display name for a video model id ("Kling v3 Pro"); returns the raw
+ * id for an unrecognized (e.g. retired) model rather than hiding it.
+ */
+export function videoModelDisplayName(model: string): string {
+  return isValidImageToVideoModel(model)
+    ? IMAGE_TO_VIDEO_MODELS[model].name
+    : model;
+}
+
+/**
  * Safely cast database string to TextToImageModel with validation
  * Falls back to default if invalid
  * @param value - Database string value (potentially invalid)

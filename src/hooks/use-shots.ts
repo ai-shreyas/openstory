@@ -18,9 +18,11 @@ import {
 import {
   generateShotVariantsFn,
   selectShotVariantFn,
+  selectSegmentVideoVersionFn,
   setImageFromVariantFn,
   setVideoFromVariantFn,
 } from '@/functions/shot-image';
+import { segmentKeys } from '@/hooks/use-segments';
 import type { GenerateVariantInput as SchemaGenerateVariantInput } from '@/lib/schemas/shot.schemas';
 
 type GenerateVariantInput = SchemaGenerateVariantInput & {
@@ -429,6 +431,10 @@ export function useSetImageFromVariant() {
       await queryClient.invalidateQueries({
         queryKey: ['sequence-selected-models', sequenceId],
       });
+      // The selected image also feeds segment staleness (#986/#990).
+      await queryClient.invalidateQueries({
+        queryKey: segmentKeys.list(sequenceId),
+      });
     },
   });
 }
@@ -497,6 +503,55 @@ export function useSetVideoFromVariant() {
       });
       // Repointed the segment's `selectedVideoVersionId` — the editor's model
       // source (#1066). See useSetImageFromVariant for why this matters.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
+      });
+      // Repoints the segment's selected version (#986) — refresh the panel.
+      await queryClient.invalidateQueries({
+        queryKey: segmentKeys.list(sequenceId),
+      });
+    },
+  });
+}
+
+// Hook for selecting a SPECIFIC video version for a shot's render segment (#986)
+// — the version-switcher analog of useSetVideoFromVariant. Repoints the segment
+// and mirrors the shot's video for playback; refreshes shot + segment caches.
+export function useSelectSegmentVideoVersion() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { shotId: string; videoUrl: string | null },
+    Error,
+    { sequenceId: string; shotId: string; versionId: string }
+  >({
+    mutationFn: async (input) => {
+      return selectSegmentVideoVersionFn({ data: input });
+    },
+    onSuccess: async (data, { sequenceId, shotId }) => {
+      if (data.videoUrl) {
+        const videoUrl = data.videoUrl;
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (oldShots) =>
+            oldShots?.map((f) =>
+              f.id === shotId
+                ? { ...f, videoUrl, videoStatus: 'completed' as const }
+                : f
+            )
+        );
+      }
+      await queryClient.invalidateQueries({
+        queryKey: shotKeys.list(sequenceId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: segmentKeys.list(sequenceId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-video-variants', sequenceId],
+      });
+      // Selecting a version repoints `selectedVideoVersionId`, which is the
+      // editor's model source (#1066) — keep the model dropdown in sync.
       await queryClient.invalidateQueries({
         queryKey: ['sequence-selected-models', sequenceId],
       });

@@ -1,10 +1,35 @@
 import { ScriptView } from '@/components/script/script-view';
+import { getComposedScriptFn } from '@/functions/scenes';
+import { sceneKeys } from '@/hooks/use-scenes';
 import { useSequence } from '@/hooks/use-sequences';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/_app/sequences/$id/script')({
   component: ScriptPage,
   staticData: { breadcrumb: 'Script' },
+  /**
+   * Once a sequence is analysed its script lives in `scene_script_versions` and
+   * is edited scene-by-scene in the Scenes script view (#1037). This page only
+   * ever showed that composed document read-only, with a full re-analysis fork
+   * as the sole way to change it — a dead end. So an analysed sequence is sent
+   * to the editable surface; the page stays for the pre-analysis composer.
+   *
+   * `ensureQueryData` primes the same cache entry `useComposedScript` reads, so
+   * the check costs nothing extra on the not-yet-analysed path.
+   */
+  loader: async ({ params, context: { queryClient } }) => {
+    const composed = await queryClient.ensureQueryData({
+      queryKey: sceneKeys.composedScript(params.id),
+      queryFn: () => getComposedScriptFn({ data: { sequenceId: params.id } }),
+    });
+    if (composed.script.trim().length > 0) {
+      throw redirect({
+        to: '/sequences/$id/scenes',
+        params: { id: params.id },
+        search: { view: 'script' },
+      });
+    }
+  },
 });
 
 function ScriptPage() {

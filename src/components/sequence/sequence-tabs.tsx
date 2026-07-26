@@ -1,4 +1,5 @@
 import { Link, useMatchRoute, useNavigate } from '@tanstack/react-router';
+import { useComposedScript } from '@/hooks/use-scenes';
 import { cn } from '@/lib/utils';
 import {
   Select,
@@ -7,15 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  FileText,
-  Film,
-  Grid3X3,
-  ImagePlus,
-  MapPin,
-  Music,
-  Users,
-} from 'lucide-react';
+import { FileText, Grid3X3 } from 'lucide-react';
 
 type SequenceTabsProps = {
   sequenceId: string;
@@ -28,48 +21,39 @@ type TabItem = {
 };
 
 // Landing tab when no sub-path is specified. `useSequenceTabItems` returns
-// this as `tabs[0]`; keep them in sync.
+// this as `tabs[0]`; keep them in sync. The Script route redirects an analysed
+// sequence into the Scenes script view (#1037), so this stays correct for both.
 export function getDefaultSequenceTabPath(sequenceId: string): string {
   return `/sequences/${sequenceId}/script`;
 }
 
+/**
+ * Once a sequence is analysed there is only one destination: Scenes. Its script
+ * is no longer a separate page but a view of the Scenes canvas (#1037), reached
+ * by the Canvas/Script toggle, so a top-level Script tab would just bounce
+ * through a redirect into the very view the toggle already offers.
+ *
+ * Before analysis the Script page IS the composer, and Scenes has nothing to
+ * show — so that's when the pair is worth rendering.
+ */
 function useSequenceTabItems(sequenceId: string): TabItem[] {
+  const { data: composed } = useComposedScript(sequenceId);
+  const isAnalysed = (composed?.script.trim().length ?? 0) > 0;
+
+  const scenes: TabItem = {
+    label: 'Scenes',
+    href: `/sequences/${sequenceId}/scenes`,
+    icon: <Grid3X3 className="h-4 w-4" />,
+  };
+  if (isAnalysed) return [scenes];
+
   return [
     {
       label: 'Script',
       href: getDefaultSequenceTabPath(sequenceId),
       icon: <FileText className="h-4 w-4" />,
     },
-    {
-      label: 'Scenes',
-      href: `/sequences/${sequenceId}/scenes`,
-      icon: <Grid3X3 className="h-4 w-4" />,
-    },
-    {
-      label: 'Cast',
-      href: `/sequences/${sequenceId}/cast`,
-      icon: <Users className="h-4 w-4" />,
-    },
-    {
-      label: 'Locations',
-      href: `/sequences/${sequenceId}/locations`,
-      icon: <MapPin className="h-4 w-4" />,
-    },
-    {
-      label: 'Elements',
-      href: `/sequences/${sequenceId}/elements`,
-      icon: <ImagePlus className="h-4 w-4" />,
-    },
-    {
-      label: 'Music',
-      href: `/sequences/${sequenceId}/music`,
-      icon: <Music className="h-4 w-4" />,
-    },
-    {
-      label: 'Theatre',
-      href: `/sequences/${sequenceId}/theatre`,
-      icon: <Film className="h-4 w-4" />,
-    },
+    scenes,
   ];
 }
 
@@ -85,6 +69,9 @@ export const SequenceTabs: React.FC<SequenceTabsProps> = ({ sequenceId }) => {
   );
   const activeTab = activeIndex >= 0 ? tabs[activeIndex] : tabs[0];
   if (!activeTab) return null;
+  // A single destination is not a choice — an analysed sequence has only
+  // Scenes, so the bar would be a lone always-active chip taking canvas height.
+  if (tabs.length < 2) return null;
   const activeHref = activeTab.href;
 
   return (

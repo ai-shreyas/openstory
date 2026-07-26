@@ -344,7 +344,7 @@ SUPER:  CORAL.  OUT NOW.
       //     default "Variants" tab (the multi-model scene-review UX, #545)
       //     shows the still image instead — leaving the only <video> in the
       //     DOM the hidden next-scene prefetch (`<video preload="auto">`).
-      //     Select the Motion tab once (it persists across scene selection) so
+      //     Select the Video tab once (it persists across scene selection) so
       //     each scene's player renders its <video>; that player video is
       //     ordered before the prefetch in the DOM, so `.first()` resolves to
       //     it.
@@ -352,31 +352,24 @@ SUPER:  CORAL.  OUT NOW.
       const sceneCount = await sceneItems.count();
       expect(sceneCount, 'sequence has at least one scene').toBeGreaterThan(0);
       await sceneItems.first().click();
-      await page.getByRole('tab', { name: 'Motion' }).click();
+      await page.getByRole('tab', { name: 'Video' }).click();
       const playerVideo = page.locator('video').first();
       for (let i = 0; i < sceneCount; i++) {
         await sceneItems.nth(i).click();
         await expectPlayableMedia(playerVideo, `scene ${i + 1} video`);
       }
 
-      // 12. Music playback at /sequences/:id/music — the view renders a
-      //     native <audio controls src={musicUrl} preload="metadata"> once
-      //     `musicStatus === 'completed'` (src/components/music/music-view.tsx).
-      await page.goto(`/sequences/${sequenceId}/music`);
+      // 12. Music playback in the Scenes editor Music facet (#986).
+      await page.goto(`/sequences/${sequenceId}/scenes?facet=music`);
       await expectPlayableMedia(
         page.locator('audio').first(),
         'sequence music'
       );
 
-      // 13. Live playback at /sequences/:id/theatre — TheatreView now uses
-      //     the mediabunny SequencePlayer which renders to a <canvas>, not a
-      //     <video>. The PlayerControls (and therefore the Play button) only
-      //     mount once SequencePlayerEngine.prepare() resolves, which means
-      //     every scene video + the music URL decoded successfully via
-      //     mediabunny's UrlSource. A visible Play button is a strong signal
-      //     that the underlying media is healthy.
-      //     (src/components/theatre/sequence-player.tsx)
-      await page.goto(`/sequences/${sequenceId}/theatre`);
+      // 13. Whole-sequence playback in the Scenes canvas (#986) — nothing
+      //     selected uses SequencePlayer (mediabunny → <canvas>). Play only
+      //     mounts after prepare() resolves.
+      await page.goto(`/sequences/${sequenceId}/scenes`);
 
       // Wait for either the Play button (success) or the player error state.
       // A hanging prepare() (common with raw AI-generated motion clips during

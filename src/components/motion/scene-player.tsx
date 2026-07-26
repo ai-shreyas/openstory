@@ -65,6 +65,11 @@ type ScenePlayerProps = {
    */
   retry?: { attempt: number; maxAttempts?: number };
   posterUrl?: string;
+  /**
+   * Extra node rendered absolutely inside the frame container (#986) — e.g. the
+   * starting-frame variants control. Positioned by the overlay itself.
+   */
+  frameOverlay?: React.ReactNode;
   onTimeUpdate?: (currentTime: number) => void;
   onEnded?: () => void;
 };
@@ -83,6 +88,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   progressMessage,
   retry,
   posterUrl,
+  frameOverlay,
   onTimeUpdate,
   onEnded,
 }) => {
@@ -124,7 +130,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
         window.location.origin
       ).href;
       await navigator.clipboard.writeText(absoluteUrl);
-      toast.success('Image URL copied');
+      toast.success('Start frame URL copied');
     } catch {
       toast.error('Failed to copy URL');
     }
@@ -136,7 +142,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
       const absoluteUrl = new URL(currentShot.videoUrl, window.location.origin)
         .href;
       await navigator.clipboard.writeText(absoluteUrl);
-      toast.success('Video URL copied');
+      toast.success('Segment URL copied');
     } catch {
       toast.error('Failed to copy URL');
     }
@@ -346,7 +352,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => void handleCopyImageUrl()}>
                   <Link className="h-4 w-4" />
-                  Copy scene image URL
+                  Copy start frame URL
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -365,6 +371,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               <span className="text-sm">Failed to generate video</span>
             </div>
           </div>
+          {frameOverlay}
         </div>
       ) : (
         <div
@@ -391,19 +398,19 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
                 {currentShot.thumbnailUrl && (
                   <DropdownMenuItem onClick={() => void handleCopyImageUrl()}>
                     <Link className="h-4 w-4" />
-                    Copy scene image URL
+                    Copy start frame URL
                   </DropdownMenuItem>
                 )}
                 {currentShot.videoUrl && (
                   <DropdownMenuItem onClick={() => void handleCopyVideoUrl()}>
                     <VideoIcon className="h-4 w-4" />
-                    Copy scene video URL
+                    Copy segment URL
                   </DropdownMenuItem>
                 )}
                 {hasCompletedVideo && downloadData?.downloadUrl && (
                   <DropdownMenuItem onClick={handleDownloadVideo}>
                     <Download className="h-4 w-4" />
-                    Download scene video
+                    Download segment video
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -460,6 +467,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               Preview
             </span>
           )}
+          {frameOverlay}
         </div>
       )}
       <p
