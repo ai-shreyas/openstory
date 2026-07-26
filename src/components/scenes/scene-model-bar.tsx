@@ -1,61 +1,76 @@
-import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
-import { ImageModelSelector } from '@/components/model/image-model-selector';
-import { MotionModelSelector } from '@/components/model/motion-model-selector';
+import { AspectRatioIcon } from '@/components/icons/aspect-ratio-icon';
+import { ModelBadge } from '@/components/model/model-badge';
+import { SequenceImageModelSelector } from '@/components/model/sequence-image-model-selector';
+import { SequenceVideoModelSelector } from '@/components/model/sequence-video-model-selector';
+import { StyleBadge } from '@/components/style/style-badge';
 import { Kbd } from '@/components/ui/kbd';
 import type { ImageToVideoModel, TextToImageModel } from '@/lib/ai/models';
+import {
+  getAspectRatioData,
+  type AspectRatio,
+} from '@/lib/constants/aspect-ratios';
 import type { SelectionScope } from '@/lib/scenes/scene-selection';
 
 /**
- * Scope header for the inspector, plus the sequence's default models.
+ * Scope header for the inspector, plus — at sequence scope — the settings that
+ * apply to the whole sequence.
  *
- * Model selectors appear at SEQUENCE scope only. A sequence default is the one
- * persisted model setting left (`sequences.imageModel` / `videoModel`) — it
- * seeds the first generation when nothing has been rendered yet.
+ * Sequence scope is the only home for these now: style, aspect ratio and the
+ * script model are fixed at generation time (changing them means re-running the
+ * script from the Script tab), while the image and video rows switch which
+ * model's output the canvas shows. Every row is one badge, so the block reads
+ * as a settings summary rather than a second set of pickers. It replaced the
+ * pill bar that used to sit above the Script/Scenes tabs.
  *
  * Scene scope deliberately shows no model UI: a scene has no model identity
  * (#1066 moved it onto `frame_variants` / `video_variants`), so a selector here
  * would re-create the scene-level setting the schema just dropped.
  *
  * Shot scope shows none either — the Image and Video tabs own their own model
- * picker, next to the prompt and preview it affects.
+ * picker, next to the prompt and preview it affects. Music model likewise lives
+ * on the sequence-scope Music tab.
  */
 type SceneModelBarProps = {
   scope: SelectionScope;
+  sequenceId?: string;
   resolvedSequenceImageModel: TextToImageModel;
   resolvedSequenceVideoModel: ImageToVideoModel;
-  imageModelStatuses?: Map<string, ModelGenerationStatus>;
-  videoModelStatuses?: Map<string, ModelGenerationStatus>;
-  onSequenceImageModelChange?: (model: TextToImageModel) => void;
-  onSequenceVideoModelChange?: (model: ImageToVideoModel) => void;
-  styleName?: string;
-  recommendedImageModel?: string | null;
-  recommendedVideoModel?: string | null;
-  isUpdating?: boolean;
+  styleId?: string;
+  aspectRatio?: AspectRatio;
+  /** The LLM that analysed the script into scenes. Fixed post-analysis. */
+  analysisModel?: string;
 };
 
 const scopeLabel: Record<SelectionScope, string> = {
-  sequence: 'Sequence default',
+  sequence: 'Sequence settings',
   scenes: 'Scene assets',
   shot: 'Shot assets',
 };
 
+const SettingRow: React.FC<{ label: string; children: React.ReactNode }> = ({
+  label,
+  children,
+}) => (
+  <div className="flex items-center justify-between gap-2">
+    <span className="text-sm text-muted-foreground">{label}</span>
+    {children}
+  </div>
+);
+
 export const SceneModelBar: React.FC<SceneModelBarProps> = ({
   scope,
+  sequenceId,
   resolvedSequenceImageModel,
   resolvedSequenceVideoModel,
-  imageModelStatuses,
-  videoModelStatuses,
-  onSequenceImageModelChange,
-  onSequenceVideoModelChange,
-  styleName,
-  recommendedImageModel,
-  recommendedVideoModel,
-  isUpdating = false,
+  styleId,
+  aspectRatio,
+  analysisModel,
 }) => {
-  const showSequenceModels = scope === 'sequence';
+  const showSequenceSettings = scope === 'sequence';
+  const ratio = aspectRatio ? getAspectRatioData(aspectRatio) : undefined;
 
   return (
-    <div className="space-y-3 border-b px-4 py-3">
+    <div className="space-y-3 px-4 py-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {scopeLabel[scope]}
@@ -67,35 +82,44 @@ export const SceneModelBar: React.FC<SceneModelBarProps> = ({
           </span>
         )}
       </div>
-      {showSequenceModels && (
-        <>
-          <div className="space-y-2">
-            <span className="text-sm font-medium">Image</span>
-            <ImageModelSelector
-              selectedModel={resolvedSequenceImageModel}
-              onModelChange={(model) => onSequenceImageModelChange?.(model)}
-              disabled={isUpdating}
-              recommendedImageModel={recommendedImageModel}
-              styleName={styleName}
-              generatedStatuses={imageModelStatuses}
-            />
-          </div>
-          <div className="space-y-2">
-            <span className="text-sm font-medium">Video</span>
-            <MotionModelSelector
-              selectedModel={resolvedSequenceVideoModel}
-              onModelChange={(model) => onSequenceVideoModelChange?.(model)}
-              disabled={isUpdating}
-              recommendedVideoModel={recommendedVideoModel}
-              styleName={styleName}
-              generatedStatuses={videoModelStatuses}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Seeds the first generation. Per-shot models are set on the Image and
-            Video tabs.
-          </p>
-        </>
+      {showSequenceSettings && (
+        <div className="space-y-2">
+          <SettingRow label="Style">
+            <StyleBadge styleId={styleId} />
+          </SettingRow>
+          <SettingRow label="Aspect ratio">
+            <span className="flex items-center gap-1.5">
+              {ratio && (
+                <AspectRatioIcon
+                  width={ratio.width}
+                  height={ratio.height}
+                  size="sm"
+                />
+              )}
+              <span className="font-mono text-sm">{aspectRatio}</span>
+            </span>
+          </SettingRow>
+          <SettingRow label="Script">
+            <ModelBadge model={analysisModel} />
+          </SettingRow>
+          {/* Both degrade to a plain badge until something has generated, so
+                every row here reads the same; the dropdown adds switching,
+                add-a-model and the sequence-wide Set once there is output. */}
+          {sequenceId && (
+            <>
+              <SequenceImageModelSelector
+                sequenceId={sequenceId}
+                sequenceImageModel={resolvedSequenceImageModel}
+                label="Image"
+              />
+              <SequenceVideoModelSelector
+                sequenceId={sequenceId}
+                sequenceVideoModel={resolvedSequenceVideoModel}
+                label="Video"
+              />
+            </>
+          )}
+        </div>
       )}
     </div>
   );

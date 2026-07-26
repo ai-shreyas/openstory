@@ -222,7 +222,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         />
       ) : undefined;
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 md:p-8">
+      <div className="flex flex-1 flex-col items-center gap-4 px-4 py-4 md:px-8">
         <ScenePlayer
           shots={playerShots}
           selectedShotId={selection.shotId}
@@ -257,7 +257,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 md:p-8">
+    <div className="flex flex-1 flex-col items-center gap-4 px-4 py-4 md:px-8">
       {sequence && (
         <div className="w-full max-w-4xl">
           <SequencePlayer

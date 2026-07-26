@@ -1,16 +1,10 @@
 import { RouteErrorFallback } from '@/components/error/route-error-fallback';
-import { ModelBadge } from '@/components/model/model-badge';
-import { SequenceAudioModelSelector } from '@/components/model/sequence-audio-model-selector';
-import { SequenceImageModelSelector } from '@/components/model/sequence-image-model-selector';
-import { SequenceVideoModelSelector } from '@/components/model/sequence-video-model-selector';
 import { routeParams } from '@/components/layout/breadcrumbs';
 import {
   SequenceTabs,
   getDefaultSequenceTabPath,
   useSequenceTabItems,
 } from '@/components/sequence/sequence-tabs';
-import { PageHeader } from '@/components/typography/page-header';
-import { StyleBadge } from '@/components/style/style-badge';
 import { getSequenceFn } from '@/functions/sequences';
 import { sequenceKeys, useSequence } from '@/hooks/use-sequences';
 import { useSwipeNavigation } from '@/hooks/use-swipe-navigation';
@@ -81,24 +75,10 @@ function SequenceLayout() {
     <div className="flex h-full flex-col">
       <div className="mx-auto w-full max-w-[1920px] shrink-0 space-y-1 px-6 pt-4">
         <h1 className="sr-only">{sequence?.title ?? 'Sequence'}</h1>
-        <PageHeader>
-          <div className="hidden md:flex flex-row flex-wrap items-center gap-2">
-            <ModelBadge model={sequence?.analysisModel} />
-            <StyleBadge styleId={sequence?.styleId} />
-            <SequenceImageModelSelector
-              sequenceId={sequenceId}
-              sequenceImageModel={sequence?.imageModel}
-            />
-            <SequenceVideoModelSelector
-              sequenceId={sequenceId}
-              sequenceVideoModel={sequence?.videoModel}
-            />
-            <SequenceAudioModelSelector
-              sequenceId={sequenceId}
-              sequenceMusicModel={sequence?.musicModel}
-            />
-          </div>
-        </PageHeader>
+        {/* The model/style pill bar that used to live here moved into the
+            Scenes inspector at sequence scope (style, aspect ratio, script +
+            image/video models) and the Music tab (music model) — settings sit
+            next to what they affect, and the canvas keeps the vertical space. */}
         <SequenceTabs sequenceId={sequenceId} />
       </div>
       <div

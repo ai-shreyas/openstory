@@ -24,7 +24,6 @@ import { useSceneSelection } from '@/hooks/use-scene-selection';
 import { useSequenceSegments } from '@/hooks/use-segments';
 import { useScenesBySequence } from '@/hooks/use-scenes';
 import { sequenceKeys, useSequence } from '@/hooks/use-sequences';
-import { updateSequenceFn } from '@/functions/sequences';
 import {
   shotKeys,
   useDiscardVariant,
@@ -72,7 +71,7 @@ import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
 import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -731,41 +730,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     [videoVariantsByShot, sceneShotIds, resolvedVideoModel]
   );
 
-  // Only the sequence default is persisted (#1066). The per-asset model is a
-  // pick held in view state until a generation makes it durable on the version.
-  const updateSequenceModels = useMutation({
-    mutationFn: (data: {
-      imageModel?: TextToImageModel;
-      videoModel?: ImageToVideoModel;
-    }) =>
-      updateSequenceFn({
-        data: { sequenceId, ...data },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: sequenceKeys.detail(sequenceId),
-      });
-    },
-    onError: (error) => {
-      toast.error('Failed to update sequence model', {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
-    },
-  });
-
-  const handleSequenceImageModelChange = useCallback(
-    (model: TextToImageModel) => {
-      updateSequenceModels.mutate({ imageModel: model });
-    },
-    [updateSequenceModels]
-  );
-  const handleSequenceVideoModelChange = useCallback(
-    (model: ImageToVideoModel) => {
-      updateSequenceModels.mutate({ videoModel: model });
-    },
-    [updateSequenceModels]
-  );
-
   const handleImageModelChange = useCallback(
     (model: TextToImageModel) => {
       if (!curSelectedShotId) return;
@@ -1330,72 +1294,68 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             />
           </div>
 
-          <div className="hidden md:flex w-[380px] lg:w-[420px] shrink-0 flex-col border-l bg-background">
-            <SceneModelBar
-              scope={scope}
-              resolvedSequenceImageModel={resolvedSequenceImageModel}
-              resolvedSequenceVideoModel={resolvedSequenceVideoModel}
-              imageModelStatuses={sceneImageModelStatuses}
-              videoModelStatuses={sceneVideoModelStatuses}
-              onSequenceImageModelChange={handleSequenceImageModelChange}
-              onSequenceVideoModelChange={handleSequenceVideoModelChange}
-              styleName={styleName}
-              recommendedImageModel={recommendedImageModel}
-              recommendedVideoModel={recommendedVideoModel}
-              isUpdating={updateSequenceModels.isPending}
-            />
-            <ScrollArea className="flex-1 min-h-0 px-4 pb-4">
-              <SceneScriptPrompts
-                shot={selectedShot}
+          {/* Mirrors SceneList's inset card: outer div owns the padding, inner
+              owns the rounded border — so both rails read as the same object. */}
+          <div className="hidden md:block shrink-0 pr-4 py-4">
+            <div className="flex h-full w-[380px] lg:w-[420px] flex-col rounded-lg border bg-background">
+              <SceneModelBar
+                scope={scope}
                 sequenceId={sequenceId}
-                selectedTab={effectiveTab}
-                visibleTabs={visibleTabs}
-                onTabChange={(tab) => {
-                  setSelectedTab(tab);
-                  setFacet(tab);
-                }}
-                regeneratingImages={regeneratingImages}
-                regeneratingMotion={regeneratingMotion}
-                onRegenerateStart={handleRegenerateStart}
+                resolvedSequenceImageModel={resolvedSequenceImageModel}
+                resolvedSequenceVideoModel={resolvedSequenceVideoModel}
+                styleId={sequence?.styleId ?? undefined}
                 aspectRatio={aspectRatio}
-                variantForSelectedModel={variantForSelectedModel}
-                videoVariantForSelectedModel={videoVariantForSelectedModel}
-                segment={selectedSegment}
-                segmentSpanLabel={selectedSegmentSpanLabel}
-                resolvedImageModel={resolvedImageModel}
-                resolvedVideoModel={resolvedVideoModel}
-                imageModelStatuses={sceneImageModelStatuses}
-                videoModelStatuses={sceneVideoModelStatuses}
-                onImageModelChange={handleImageModelChange}
-                onVideoModelChange={handleVideoModelChange}
-                styleName={styleName}
-                recommendedImageModel={recommendedImageModel}
-                recommendedVideoModel={recommendedVideoModel}
-                styleCategory={styleCategory}
-                shotDivergentVariants={divergentVariants?.filter(
-                  (v) => v.shotId === curSelectedShotId
-                )}
-                onCompareDivergent={(variant) => setCompareVariant(variant)}
-                facetShotIds={facetShotIds}
-                musicEditable={scope === 'sequence'}
+                analysisModel={sequence?.analysisModel ?? undefined}
               />
-            </ScrollArea>
+              <ScrollArea className="flex-1 min-h-0 px-4 pb-4">
+                <SceneScriptPrompts
+                  shot={selectedShot}
+                  sequenceId={sequenceId}
+                  selectedTab={effectiveTab}
+                  visibleTabs={visibleTabs}
+                  onTabChange={(tab) => {
+                    setSelectedTab(tab);
+                    setFacet(tab);
+                  }}
+                  regeneratingImages={regeneratingImages}
+                  regeneratingMotion={regeneratingMotion}
+                  onRegenerateStart={handleRegenerateStart}
+                  aspectRatio={aspectRatio}
+                  variantForSelectedModel={variantForSelectedModel}
+                  videoVariantForSelectedModel={videoVariantForSelectedModel}
+                  segment={selectedSegment}
+                  segmentSpanLabel={selectedSegmentSpanLabel}
+                  resolvedImageModel={resolvedImageModel}
+                  resolvedVideoModel={resolvedVideoModel}
+                  imageModelStatuses={sceneImageModelStatuses}
+                  videoModelStatuses={sceneVideoModelStatuses}
+                  onImageModelChange={handleImageModelChange}
+                  onVideoModelChange={handleVideoModelChange}
+                  styleName={styleName}
+                  recommendedImageModel={recommendedImageModel}
+                  recommendedVideoModel={recommendedVideoModel}
+                  styleCategory={styleCategory}
+                  shotDivergentVariants={divergentVariants?.filter(
+                    (v) => v.shotId === curSelectedShotId
+                  )}
+                  onCompareDivergent={(variant) => setCompareVariant(variant)}
+                  facetShotIds={facetShotIds}
+                  musicEditable={scope === 'sequence'}
+                />
+              </ScrollArea>
+            </div>
           </div>
 
           <div className="md:hidden shrink-0 border-t bg-background pb-20 max-h-[45vh]">
             <ScrollArea className="h-full px-4 pt-4 max-h-[45vh]">
               <SceneModelBar
                 scope={scope}
+                sequenceId={sequenceId}
                 resolvedSequenceImageModel={resolvedSequenceImageModel}
                 resolvedSequenceVideoModel={resolvedSequenceVideoModel}
-                imageModelStatuses={sceneImageModelStatuses}
-                videoModelStatuses={sceneVideoModelStatuses}
-                onSequenceImageModelChange={handleSequenceImageModelChange}
-                onSequenceVideoModelChange={handleSequenceVideoModelChange}
-                styleName={styleName}
-                recommendedImageModel={recommendedImageModel}
-                recommendedVideoModel={recommendedVideoModel}
-                isUpdating={updateSequenceModels.isPending}
+                styleId={sequence?.styleId ?? undefined}
+                aspectRatio={aspectRatio}
+                analysisModel={sequence?.analysisModel ?? undefined}
               />
               <SceneScriptPrompts
                 shot={selectedShot}
