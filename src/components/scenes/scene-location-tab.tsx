@@ -4,61 +4,16 @@
  */
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { facetIdsForShots, useSceneFacetMaps } from '@/hooks/use-scene-facets';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
-import type { SequenceLocation } from '@/lib/db/schema';
-import type { SelectionTags } from '@/lib/scenes/scene-selection';
 import { Link } from '@tanstack/react-router';
 import { ExternalLink, MapPin } from 'lucide-react';
 
 type SceneLocationTabProps = {
   sequenceId: string;
-  /** `null` = whole sequence (show all locations). */
-  tags: SelectionTags | null;
+  /** Shots in the current selection. `null` = whole sequence (show all). */
+  shotIds: string[] | null;
 };
-
-/**
- * Match a location to a shot's environmentTag
- * Replicates logic from sequence-locations.ts locationMatchesTag
- */
-function locationMatchesTag(
-  location: SequenceLocation,
-  environmentTag: string
-): boolean {
-  if (!environmentTag) return false;
-
-  const consistencyTag = (location.consistencyTag ?? '').toLowerCase();
-  const locName = location.name.toLowerCase();
-  const locId = location.locationId.toLowerCase();
-  const envTagLower = environmentTag.toLowerCase();
-
-  // Check if any of the location identifiers match the environment tag
-  if (consistencyTag && envTagLower.includes(consistencyTag)) return true;
-  if (envTagLower.includes(locName)) return true;
-  if (envTagLower.includes(locId)) return true;
-
-  // Also check if location name contains the env tag (reverse match)
-  if (locName.includes(envTagLower)) return true;
-
-  return false;
-}
-
-function matchLocationsToTags(
-  locations: SequenceLocation[],
-  environmentTags: string[]
-): SequenceLocation[] {
-  if (environmentTags.length === 0) return [];
-  const matched = new Set<string>();
-  const results: SequenceLocation[] = [];
-  for (const location of locations) {
-    for (const tag of environmentTags) {
-      if (locationMatchesTag(location, tag) && !matched.has(location.id)) {
-        matched.add(location.id);
-        results.push(location);
-      }
-    }
-  }
-  return results;
-}
 
 type DetailRowProps = {
   label: string;
@@ -80,16 +35,19 @@ const DetailRow: React.FC<DetailRowProps> = ({ label, value }) => {
 
 export const SceneLocationTab: React.FC<SceneLocationTabProps> = ({
   sequenceId,
-  tags,
+  shotIds,
 }) => {
   const { data: locations, isLoading } = useSequenceLocations(sequenceId);
+  const { data: facetMaps } = useSceneFacetMaps(sequenceId);
 
-  const environmentTags = tags?.environmentTags ?? [];
-  const scopedLocations = locations
-    ? tags === null
+  // Membership is resolved server-side (same match the render path uses); the
+  // selection is applied here as a set lookup, not a re-derivation.
+  const scopedIds = facetIdsForShots(facetMaps?.locationIdsByShot, shotIds);
+  const scopedLocations = !locations
+    ? []
+    : scopedIds === null
       ? locations
-      : matchLocationsToTags(locations, environmentTags)
-    : [];
+      : locations.filter((l) => scopedIds.has(l.id));
 
   // Loading state
   if (isLoading) {
@@ -112,15 +70,10 @@ export const SceneLocationTab: React.FC<SceneLocationTabProps> = ({
           <MapPin className="h-8 w-8 text-muted-foreground/50" />
         </div>
         <p className="text-sm text-muted-foreground">
-          {tags === null
+          {shotIds === null
             ? 'No locations yet'
             : 'No locations in this selection'}
         </p>
-        {environmentTags.length > 0 && (
-          <p className="mt-2 text-xs text-muted-foreground/70">
-            Looking for: {environmentTags.join(', ')}
-          </p>
-        )}
       </div>
     );
   }
@@ -128,7 +81,7 @@ export const SceneLocationTab: React.FC<SceneLocationTabProps> = ({
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-        <span>{tags === null ? 'All Locations' : 'Locations'}</span>
+        <span>{shotIds === null ? 'All Locations' : 'Locations'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>{scopedLocations.length}</span>
       </div>

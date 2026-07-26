@@ -5,32 +5,29 @@
  */
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { facetIdsForShots, useSceneFacetMaps } from '@/hooks/use-scene-facets';
 import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import type { SequenceElement } from '@/lib/db/schema';
-import type { SelectionTags } from '@/lib/scenes/scene-selection';
-import { matchElementsToScene } from '@/lib/workflows/scene-matching';
 import { Link } from '@tanstack/react-router';
 import { ImagePlus, Loader2 } from 'lucide-react';
 
 type SceneElementsTabProps = {
   sequenceId: string;
   /** `null` = whole sequence (show all elements). */
-  tags: SelectionTags | null;
+  /** Shots in the current selection. `null` = whole sequence (show all). */
+  shotIds: string[] | null;
 };
 
 export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
   sequenceId,
-  tags,
+  shotIds,
 }) => {
   const { data: elements = [], isLoading } = useSequenceElements(sequenceId);
+  const { data: facetMaps } = useSceneFacetMaps(sequenceId);
 
-  const elementTags = tags?.elementTags ?? [];
-  const sceneScript = tags?.scriptExtracts.join('\n') ?? '';
-
+  const scopedIds = facetIdsForShots(facetMaps?.elementIdsByShot, shotIds);
   const sceneElements: SequenceElement[] =
-    tags === null
-      ? elements
-      : matchElementsToScene(elements, elementTags, sceneScript);
+    scopedIds === null ? elements : elements.filter((e) => scopedIds.has(e.id));
 
   if (isLoading) {
     return (
@@ -49,13 +46,10 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
           <ImagePlus className="h-8 w-8 text-muted-foreground/50" />
         </div>
         <p className="text-sm text-muted-foreground">
-          {tags === null ? 'No elements yet' : 'No elements in this selection'}
+          {shotIds === null
+            ? 'No elements yet'
+            : 'No elements in this selection'}
         </p>
-        {elementTags.length > 0 && (
-          <p className="mt-2 text-xs text-muted-foreground/70">
-            Looking for: {elementTags.join(', ')}
-          </p>
-        )}
       </div>
     );
   }
@@ -63,7 +57,7 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-        <span>{tags === null ? 'All Elements' : 'Elements'}</span>
+        <span>{shotIds === null ? 'All Elements' : 'Elements'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>
           {sceneElements.length} reference

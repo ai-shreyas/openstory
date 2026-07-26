@@ -94,7 +94,6 @@ import {
   SCENE_FACETS,
   type SceneFacet,
   type SelectionScope,
-  type SelectionTags,
 } from '@/lib/scenes/scene-selection';
 import { SceneCastTab } from './scene-cast-tab';
 import { SceneElementsTab } from './scene-elements-tab';
@@ -318,7 +317,8 @@ type SceneScriptPromptsProps = {
   shotDivergentVariants?: ShotVariant[];
   onCompareDivergent?: (variant: ShotVariant) => void;
   /** Selection-scoped facet tags (#986). `null` = whole sequence. */
-  selectionTags?: SelectionTags | null;
+  /** Shot ids in the current selection; `null` = whole sequence. */
+  facetShotIds?: string[] | null;
   /** Music facet editable only at sequence scope. */
   musicEditable?: boolean;
 };
@@ -349,7 +349,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   recommendedVideoModel,
   shotDivergentVariants,
   onCompareDivergent,
-  selectionTags: facetTags = null,
+  facetShotIds = null,
   musicEditable = false,
 }) => {
   const divergentImageVariant = useMemo(
@@ -1899,15 +1899,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       </TabsContent>
 
       <TabsContent value="cast">
-        <SceneCastTab sequenceId={sequenceId} tags={facetTags} />
+        <SceneCastTab sequenceId={sequenceId} shotIds={facetShotIds} />
       </TabsContent>
 
       <TabsContent value="location">
-        <SceneLocationTab sequenceId={sequenceId} tags={facetTags} />
+        <SceneLocationTab sequenceId={sequenceId} shotIds={facetShotIds} />
       </TabsContent>
 
       <TabsContent value="elements">
-        <SceneElementsTab sequenceId={sequenceId} tags={facetTags} />
+        <SceneElementsTab sequenceId={sequenceId} shotIds={facetShotIds} />
       </TabsContent>
 
       <TabsContent value="music">

@@ -51,7 +51,7 @@ import {
 } from '@/lib/ai/models';
 import {
   selectionScope,
-  selectionTags,
+  selectionShots,
   type SceneFacet,
   type ScenesSearch,
 } from '@/lib/scenes/scene-selection';
@@ -598,10 +598,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     [visibleTabs, selectedTab]
   );
 
-  const facetTagSet = useMemo(
-    () => (shots ? selectionTags(selection, shots) : null),
-    [selection, shots]
-  );
+  // Shot ids in scope; `null` = whole sequence, so facets show the full
+  // library. Facet MEMBERSHIP is resolved server-side (see use-scene-facets) —
+  // this only says which shots are selected.
+  const facetShotIds = useMemo(() => {
+    if (scope === 'sequence') return null;
+    return (shots ? selectionShots(selection, shots) : []).map((s) => s.id);
+  }, [scope, selection, shots]);
 
   // Scenes group the shots; they carry no model of their own (#1066) — model
   // identity lives on the selected frame_variants / video_variants row.
@@ -709,23 +712,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     }
     return set;
   }, [selectedScenes, shots, scope]);
-  // The model each in-scope shot's selected version was rendered with (#1066).
-  // The bar collapses these to one value, or "Mixed" when they disagree.
-  const scopedImageModels = useMemo(
-    () =>
-      [...sceneShotIds].map(
-        (id) => selectedModels?.imageModelByShot[id] ?? null
-      ),
-    [sceneShotIds, selectedModels]
-  );
-  const scopedVideoModels = useMemo(
-    () =>
-      [...sceneShotIds].map(
-        (id) => selectedModels?.videoModelByShot[id] ?? null
-      ),
-    [sceneShotIds, selectedModels]
-  );
-
   const sceneImageModelStatuses = useMemo(
     () =>
       buildSceneModelStatuses(
@@ -1349,14 +1335,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               scope={scope}
               resolvedSequenceImageModel={resolvedSequenceImageModel}
               resolvedSequenceVideoModel={resolvedSequenceVideoModel}
-              scopedImageModels={scopedImageModels}
-              scopedVideoModels={scopedVideoModels}
               imageModelStatuses={sceneImageModelStatuses}
               videoModelStatuses={sceneVideoModelStatuses}
               onSequenceImageModelChange={handleSequenceImageModelChange}
               onSequenceVideoModelChange={handleSequenceVideoModelChange}
-              onAssetImageModelChange={handleImageModelChange}
-              onAssetVideoModelChange={handleVideoModelChange}
               styleName={styleName}
               recommendedImageModel={recommendedImageModel}
               recommendedVideoModel={recommendedVideoModel}
@@ -1394,7 +1376,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   (v) => v.shotId === curSelectedShotId
                 )}
                 onCompareDivergent={(variant) => setCompareVariant(variant)}
-                selectionTags={facetTagSet}
+                facetShotIds={facetShotIds}
                 musicEditable={scope === 'sequence'}
               />
             </ScrollArea>
@@ -1406,14 +1388,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 scope={scope}
                 resolvedSequenceImageModel={resolvedSequenceImageModel}
                 resolvedSequenceVideoModel={resolvedSequenceVideoModel}
-                scopedImageModels={scopedImageModels}
-                scopedVideoModels={scopedVideoModels}
                 imageModelStatuses={sceneImageModelStatuses}
                 videoModelStatuses={sceneVideoModelStatuses}
                 onSequenceImageModelChange={handleSequenceImageModelChange}
                 onSequenceVideoModelChange={handleSequenceVideoModelChange}
-                onAssetImageModelChange={handleImageModelChange}
-                onAssetVideoModelChange={handleVideoModelChange}
                 styleName={styleName}
                 recommendedImageModel={recommendedImageModel}
                 recommendedVideoModel={recommendedVideoModel}
@@ -1450,7 +1428,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   (v) => v.shotId === curSelectedShotId
                 )}
                 onCompareDivergent={(variant) => setCompareVariant(variant)}
-                selectionTags={facetTagSet}
+                facetShotIds={facetShotIds}
                 musicEditable={scope === 'sequence'}
               />
             </ScrollArea>

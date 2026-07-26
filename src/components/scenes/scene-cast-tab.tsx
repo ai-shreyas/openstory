@@ -4,17 +4,16 @@
  */
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { facetIdsForShots, useSceneFacetMaps } from '@/hooks/use-scene-facets';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import type { Character } from '@/lib/db/schema';
-import type { SelectionTags } from '@/lib/scenes/scene-selection';
-import { matchCharactersToScene } from '@/lib/workflows/scene-matching';
 import { Link } from '@tanstack/react-router';
 import { Film, User } from 'lucide-react';
 
 type SceneCastTabProps = {
   sequenceId: string;
-  /** `null` = whole sequence (show all cast). */
-  tags: SelectionTags | null;
+  /** Shots in the current selection. `null` = whole sequence (show all). */
+  shotIds: string[] | null;
 };
 
 type CastCardProps = {
@@ -90,16 +89,17 @@ const CastCardSkeleton: React.FC = () => (
 
 export const SceneCastTab: React.FC<SceneCastTabProps> = ({
   sequenceId,
-  tags,
+  shotIds,
 }) => {
   const { data: characters, isLoading } = useSequenceCharacters(sequenceId);
+  const { data: facetMaps } = useSceneFacetMaps(sequenceId);
 
-  const characterTags = tags?.characterTags ?? [];
-  const scopedCast = characters
-    ? tags === null
+  const scopedIds = facetIdsForShots(facetMaps?.characterIdsByShot, shotIds);
+  const scopedCast = !characters
+    ? []
+    : scopedIds === null
       ? characters
-      : matchCharactersToScene(characters, characterTags)
-    : [];
+      : characters.filter((c) => scopedIds.has(c.id));
 
   // Loading state
   if (isLoading) {
@@ -119,14 +119,8 @@ export const SceneCastTab: React.FC<SceneCastTabProps> = ({
           <Film className="h-8 w-8 text-muted-foreground/50" />
         </div>
         <p className="text-sm text-muted-foreground">
-          {tags === null ? 'No cast yet' : 'No cast in this selection'}
+          {shotIds === null ? 'No cast yet' : 'No cast in this selection'}
         </p>
-        {characterTags.length > 0 && (
-          <p className="mt-2 text-xs text-muted-foreground/70">
-            {characterTags.length} character tag
-            {characterTags.length > 1 ? 's' : ''} found but no matches
-          </p>
-        )}
       </div>
     );
   }
@@ -134,7 +128,7 @@ export const SceneCastTab: React.FC<SceneCastTabProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-        <span>{tags === null ? 'All Cast' : 'Cast'}</span>
+        <span>{shotIds === null ? 'All Cast' : 'Cast'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>
           {scopedCast.length} character{scopedCast.length > 1 ? 's' : ''}
