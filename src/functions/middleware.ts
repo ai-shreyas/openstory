@@ -74,6 +74,7 @@ type PartialSequence = {
   title: string;
   status: string;
   styleId: string | null;
+  imageModel: string;
   videoModel: string;
   aspectRatio: AspectRatio;
   analysisModel: string;

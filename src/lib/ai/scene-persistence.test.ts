@@ -84,8 +84,6 @@ function makeSceneRow(id: string, orderIndex: number): SceneRow {
     musicDesign: null,
     originalScript: null,
     selectedScriptVersionId: null,
-    imageModel: null,
-    videoModel: null,
     videoUrl: null,
     videoPath: null,
     videoStatus: 'pending',

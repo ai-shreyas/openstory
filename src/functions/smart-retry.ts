@@ -11,9 +11,9 @@ import {
   safeTextToImageModel,
 } from '@/lib/ai/models';
 import {
-  resolveSceneImageModel,
-  resolveSceneVideoModel,
-} from '@/lib/ai/resolve-scene-models';
+  resolveImageModel,
+  resolveVideoModel,
+} from '@/lib/ai/resolve-asset-models';
 import {
   estimateImageCost,
   estimateStoryboardCost,
@@ -23,7 +23,7 @@ import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { dbSceneId, type Character, type Sequence } from '@/lib/db/schema';
+import { type Character, type Sequence } from '@/lib/db/schema';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { projectShotWithImage } from '@/lib/shots/shot-with-image';
@@ -161,21 +161,34 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   const retried: string[] = [];
   let totalCost = ZERO_MICROS;
 
-  // Model selection lives at the scene level (#909) — resolve each failed
-  // shot's image/video model through its parent scene, falling back to the
-  // sequence default. Load scenes once to avoid an N+1.
-  const scenes = await context.scopedDb.scenes.listBySequence(sequence.id);
-  const scenesById = new Map(scenes.map((s) => [s.id, s]));
+  // Model identity lives on the version that produced each asset (#1066).
+  // Every shot here is in a failed state, so the FAILED attempt's model is the
+  // one the user actually asked for — it outranks the (older, still selected)
+  // successful version, which is what a retry would otherwise silently re-run.
+  // Four joins, no N+1.
+  const [
+    selectedImageModels,
+    selectedVideoModels,
+    failedImageModels,
+    failedVideoModels,
+  ] = await Promise.all([
+    context.scopedDb.frameVariants.listSelectedModelsBySequence(sequence.id),
+    context.scopedDb.videoVariants.listSelectedModelsBySequence(sequence.id),
+    context.scopedDb.frameVariants.listLastFailedModelsBySequence(sequence.id),
+    context.scopedDb.videoVariants.listLastFailedModelsBySequence(sequence.id),
+  ]);
   const imageModelFor = (shot: (typeof shotsWithImage)[number]) =>
-    resolveSceneImageModel(
-      shot.sceneId ? scenesById.get(dbSceneId(shot.sceneId)) : null,
-      sequence
-    );
+    resolveImageModel({
+      lastFailedAttemptModel: failedImageModels.get(shot.id),
+      selectedVersionModel: selectedImageModels.get(shot.id),
+      sequenceModel: sequence.imageModel,
+    });
   const videoModelFor = (shot: (typeof shotsWithImage)[number]) =>
-    resolveSceneVideoModel(
-      shot.sceneId ? scenesById.get(dbSceneId(shot.sceneId)) : null,
-      sequence
-    );
+    resolveVideoModel({
+      lastFailedAttemptModel: failedVideoModels.get(shot.id),
+      selectedVersionModel: selectedVideoModels.get(shot.id),
+      sequenceModel: sequence.videoModel,
+    });
 
   // Collect failed items and estimate costs
   const failedImageShots = shotsWithImage.filter(

@@ -266,7 +266,80 @@ export function createFrameVariantsMethods(db: Database) {
       return byFrame;
     },
 
-    /** The version the frame currently points at, or null if unset/dangling. */
+    /**
+     * The model of each shot's SELECTED image version across a sequence, keyed
+     * by the owning shot (#1066). Model identity lives on the version row that
+     * produced the bytes, so this is what generate/display resolve from — see
+     * `@/lib/ai/resolve-asset-models`. One join, so the batch read paths
+     * (smart retry, the editor's model bar) don't go N+1. Shots whose anchor
+     * frame has no selection are absent; the caller falls back a tier.
+     *
+     * Anchors only (`orderIndex 0`) — the same frame the shot's still surface
+     * projects from — so a shot's later frames can't collide on the shot key.
+     *
+     * Discarded versions are excluded, matching every sibling read here: a
+     * discarded version is hidden from the variant strip, so resolving from it
+     * would show a model the user can no longer see.
+     */
+    listSelectedModelsBySequence: async (
+      sequenceId: string
+    ): Promise<Map<string, string>> => {
+      const rows = await db
+        .select({ shotId: frames.shotId, model: frameVariants.model })
+        .from(frames)
+        .innerJoin(
+          frameVariants,
+          eq(frameVariants.id, frames.selectedImageVersionId)
+        )
+        .where(
+          and(
+            eq(frames.sequenceId, sequenceId),
+            eq(frames.orderIndex, 0),
+            isNull(frameVariants.discardedAt)
+          )
+        );
+      return new Map(rows.map((r) => [r.shotId, r.model]));
+    },
+
+    /**
+     * The `model` of each shot's newest FAILED image version, keyed by the
+     * owning shot (#1066). A shot in a failed state is mid-attempt: this is the
+     * model the user actually asked for, and it outranks the (older, still
+     * selected) successful version when resolving a retry — otherwise a retry
+     * silently re-runs the previous model. Anchors only, like the sibling above.
+     */
+    listLastFailedModelsBySequence: async (
+      sequenceId: string
+    ): Promise<Map<string, string>> => {
+      const rows = await db
+        .select({
+          shotId: frames.shotId,
+          model: frameVariants.model,
+          versionId: frameVariants.id,
+        })
+        .from(frames)
+        .innerJoin(frameVariants, eq(frameVariants.frameId, frames.id))
+        .where(
+          and(
+            eq(frames.sequenceId, sequenceId),
+            eq(frames.orderIndex, 0),
+            eq(frameVariants.kind, 'model'),
+            eq(frameVariants.status, 'failed'),
+            isNull(frameVariants.discardedAt)
+          )
+        )
+        .orderBy(asc(frameVariants.id));
+      // asc by id (≈ time) → last write per shot wins.
+      const byShot = new Map<string, string>();
+      for (const row of rows) byShot.set(row.shotId, row.model);
+      return byShot;
+    },
+
+    /**
+     * The version the frame currently points at, or null if unset, dangling, or
+     * discarded (see {@link listSelectedModelsBySequence} for why discarded is
+     * excluded).
+     */
     getSelected: async (frameId: string): Promise<FrameVariant | null> => {
       const [frame] = await db
         .select({ selected: frames.selectedImageVersionId })
@@ -276,8 +349,34 @@ export function createFrameVariantsMethods(db: Database) {
       const [version] = await db
         .select()
         .from(frameVariants)
-        .where(eq(frameVariants.id, frame.selected));
+        .where(
+          and(
+            eq(frameVariants.id, frame.selected),
+            isNull(frameVariants.discardedAt)
+          )
+        );
       return version ?? null;
+    },
+
+    /**
+     * The newest FAILED version for a frame, or null. The single-shot analog of
+     * {@link listLastFailedModelsBySequence}.
+     */
+    getLastFailed: async (frameId: string): Promise<FrameVariant | null> => {
+      const rows = await db
+        .select()
+        .from(frameVariants)
+        .where(
+          and(
+            eq(frameVariants.frameId, frameId),
+            eq(frameVariants.kind, 'model'),
+            eq(frameVariants.status, 'failed'),
+            isNull(frameVariants.discardedAt)
+          )
+        )
+        .orderBy(desc(frameVariants.id))
+        .limit(1);
+      return rows[0] ?? null;
     },
 
     /**

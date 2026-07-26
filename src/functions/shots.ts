@@ -25,6 +25,7 @@ import {
   updateShotSchema,
 } from '@/lib/schemas/shot.schemas';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
+import { typedFromEntries } from '@/lib/utils/typed-object';
 import {
   enrichShotWithSceneScript,
   loadSelectedScriptsBySequence,
@@ -353,6 +354,42 @@ export const getSequenceVideoVariantsFn = createServerFn({ method: 'GET' })
       context.sequence.id
     );
     return projectVideoVariants(versions);
+  });
+
+/**
+ * The model recorded on each shot's SELECTED image / video version (#1066).
+ * Model identity lives on the version row that produced the asset, so the
+ * editor resolves the model it shows (and generates with) from this — via the
+ * same `resolveImageModel`/`resolveVideoModel` the server write paths use.
+ * Shots with no selection are simply absent, and the caller falls back to the
+ * sequence default.
+ */
+export const getSequenceSelectedModelsFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .handler(async ({ context }) => {
+    const [image, video, failedImage, failedVideo] = await Promise.all([
+      context.scopedDb.frameVariants.listSelectedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.videoVariants.listSelectedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.frameVariants.listLastFailedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.videoVariants.listLastFailedModelsBySequence(
+        context.sequence.id
+      ),
+    ]);
+    // Plain records, not Maps — this crosses the server-fn JSON boundary.
+    return {
+      imageModelByShot: typedFromEntries([...image]),
+      videoModelByShot: typedFromEntries([...video]),
+      // The failed-attempt tier, so the editor shows the same model a retry
+      // would run (#1066) rather than the older selected one.
+      failedImageModelByShot: typedFromEntries([...failedImage]),
+      failedVideoModelByShot: typedFromEntries([...failedVideo]),
+    };
   });
 
 export const createShotFn = createServerFn({ method: 'POST' })

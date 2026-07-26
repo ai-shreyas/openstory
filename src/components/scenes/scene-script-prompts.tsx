@@ -253,23 +253,24 @@ type SceneScriptPromptsProps = {
     type: 'image' | 'motion' | 'scene-variants'
   ) => void;
   aspectRatio?: AspectRatio;
-  /** Image variant (frame_variants, #989) for the scene's look model. */
+  /** Image variant (frame_variants, #989) for the shot's look model. */
   variantForSelectedModel?: FrameVariant;
-  /** The selected scene's video variant for the effective video model (#545). */
+  /** The selected shot's video variant for the effective video model (#545). */
   videoVariantForSelectedModel?: ShotVariant;
   /**
-   * Resolved scene-level models (#909). Model selection lives on the scene, so
-   * the image/motion tab selectors are seeded with these, and changing one
-   * persists to the scene (whole-scene change) via the handlers below.
+   * The models the shot's currently selected image / video versions were
+   * rendered with (#1066), or the sequence default when nothing is selected
+   * yet. These seed the image/motion tab selectors; changing one is a pick for
+   * the NEXT generation (see the handlers below), not a write.
    */
-  sceneImageModel: TextToImageModel;
-  sceneVideoModel: ImageToVideoModel;
+  resolvedImageModel: TextToImageModel;
+  resolvedVideoModel: ImageToVideoModel;
   /** Per-scene generation status by model — drives the ✓/⟳/! dropdown markers. */
   imageModelStatuses?: Map<string, ModelGenerationStatus>;
   videoModelStatuses?: Map<string, ModelGenerationStatus>;
-  /** Persist a new look model on the selected shot's scene (#909). */
+  /** Pick the look model the next image generation runs with (#1066). */
   onImageModelChange?: (model: TextToImageModel) => void;
-  /** Persist a new motion model on the selected shot's scene (#909). */
+  /** Pick the motion model the next video generation runs with (#1066). */
   onVideoModelChange?: (model: ImageToVideoModel) => void;
   /** Current style category, used to snap style-restricted motion models. */
   styleCategory?: string;
@@ -296,8 +297,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   aspectRatio,
   variantForSelectedModel,
   videoVariantForSelectedModel,
-  sceneImageModel,
-  sceneVideoModel,
+  resolvedImageModel,
+  resolvedVideoModel,
   imageModelStatuses,
   videoModelStatuses,
   onImageModelChange,
@@ -669,14 +670,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     shot?.imageModel,
     DEFAULT_IMAGE_MODEL
   );
-  // Model selection lives on the scene (#909): the image tab targets the
-  // scene's look model, so the previewed variant + Generate/Set state all agree.
-  const effectiveImageModel = sceneImageModel;
-  const regenImageModel = sceneImageModel;
-  // The scene's motion model, snapped to an aspect-ratio compatible model.
+  // Model identity lives on the version that produced the asset (#1066): the
+  // image tab targets the shot's resolved look model, so the previewed variant
+  // + Generate/Set state all agree.
+  const effectiveImageModel = resolvedImageModel;
+  const regenImageModel = resolvedImageModel;
+  // The resolved motion model, snapped to an aspect-ratio compatible model.
   const aspectCompatibleMotion = aspectRatio
-    ? getCompatibleModel(sceneVideoModel, aspectRatio)
-    : sceneVideoModel;
+    ? getCompatibleModel(resolvedVideoModel, aspectRatio)
+    : resolvedVideoModel;
   const motionModelConfig = IMAGE_TO_VIDEO_MODELS[aspectCompatibleMotion];
   // Fall back to the default when the snapped model is gated to a different
   // style category (e.g. Seedance 2 is animation-only).
@@ -1445,9 +1447,9 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             )}
           </div>
 
-          {/* Model selector — model selection is scene-level (#909): picking a
-              model here persists to the whole scene, so all its shots share a
-              look. */}
+          {/* Model selector — the model is per-asset (#1066): this is seeded
+              from the shot's selected image version and picking a different one
+              applies to the next generation. */}
           <div className="space-y-2">
             <span className="text-sm font-medium">Model</span>
             <ImageModelSelector
@@ -1459,7 +1461,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               generatedStatuses={imageModelStatuses}
             />
             <p className="text-xs text-muted-foreground">
-              Changing the model sets it for the whole scene.
+              Changing the model applies to the next generation.
             </p>
           </div>
 
@@ -1683,8 +1685,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             )}
           </div>
 
-          {/* Model selector — scene-level (#909): the chosen motion model
-              applies to every shot in the scene. */}
+          {/* Model selector — per-asset (#1066): seeded from the shot's selected
+              video version; a pick applies to the next generation. */}
           <div className="space-y-2">
             <span className="text-sm font-medium">Model</span>
             <MotionModelSelector
@@ -1698,7 +1700,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               generatedStatuses={videoModelStatuses}
             />
             <p className="text-xs text-muted-foreground">
-              Changing the model sets it for the whole scene.
+              Changing the model applies to the next generation.
             </p>
           </div>
 
@@ -1879,7 +1881,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             </div>
           )}
 
-          {/* Model selector — scene-level (#909). */}
+          {/* Model selector — per-asset (#1066). */}
           <div className="space-y-2">
             <span className="text-sm font-medium">Model</span>
             <ImageModelSelector
@@ -1891,7 +1893,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               generatedStatuses={imageModelStatuses}
             />
             <p className="text-xs text-muted-foreground">
-              Changing the model sets it for the whole scene.
+              Changing the model applies to the next generation.
             </p>
           </div>
 

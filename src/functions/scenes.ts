@@ -1,10 +1,6 @@
 import { computeMotionPromptInputHash } from '@/lib/ai/input-hash';
-import {
-  isValidImageToVideoModel,
-  isValidTextToImageModel,
-} from '@/lib/ai/models';
 import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
-import { dbSceneId, type NewScene } from '@/lib/db/schema';
+import { dbSceneId } from '@/lib/db/schema';
 import {
   composeSequenceScriptFromDb,
   projectShotForClient,
@@ -26,71 +22,11 @@ export const getScenesFn = createServerFn({ method: 'GET' })
     return context.scopedDb.scenes.listBySequence(context.sequence.id);
   });
 
-// `null` resets a field back to inheriting the sequence default; omitting a
-// field leaves it untouched. A non-null value must be a known model id —
-// the type guards narrow the inferred output to the branded model types, so
-// `SceneModelInput` carries `TextToImageModel`/`ImageToVideoModel` (not bare
-// `string`) and the validation work isn't discarded downstream.
-export const sceneModelSchema = z.object({
-  sequenceId: ulidSchema,
-  sceneId: ulidSchema,
-  imageModel: z
-    .string()
-    .refine(isValidTextToImageModel, { message: 'Unknown image model' })
-    .nullable()
-    .optional(),
-  videoModel: z
-    .string()
-    .refine(isValidImageToVideoModel, { message: 'Unknown video model' })
-    .nullable()
-    .optional(),
-});
-
-export type SceneModelInput = z.infer<typeof sceneModelSchema>;
-
-/**
- * Guard that the scene exists and belongs to the access-checked sequence —
- * the scene id is caller-supplied, so a mismatch must not write across
- * sequences. Mirrors the precondition helpers in `sequence-variants`.
- */
-export function assertSceneOwnedBySequence<T extends { sequenceId: string }>(
-  scene: T | null | undefined,
-  sequenceId: string
-): asserts scene is T {
-  if (!scene || scene.sequenceId !== sequenceId) {
-    throw new Error('Scene not found for this sequence');
-  }
-}
-
-/**
- * Build the column patch from validated input. Only fields actually present
- * are written; `null` clears the override back to inheriting the sequence.
- */
-export function buildSceneModelPatch(
-  data: SceneModelInput
-): Pick<NewScene, 'imageModel' | 'videoModel'> {
-  const patch: Pick<NewScene, 'imageModel' | 'videoModel'> = {};
-  if ('imageModel' in data) patch.imageModel = data.imageModel ?? null;
-  if ('videoModel' in data) patch.videoModel = data.videoModel ?? null;
-  return patch;
-}
-
-/**
- * Set (or clear) a scene's image/video model override (#909). Model selection
- * lives at the scene level — a scene has a *look* (image model) and a *motion
- * character* (video model). Passing `null` for a field resets it to inherit the
- * sequence default.
- */
-export const updateSceneModelFn = createServerFn({ method: 'POST' })
-  .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(sceneModelSchema))
-  .handler(async ({ data, context }) => {
-    const scene = await context.scopedDb.scenes.getById(
-      dbSceneId(data.sceneId)
-    );
-    assertSceneOwnedBySequence(scene, context.sequence.id);
-    return context.scopedDb.scenes.update(scene.id, buildSceneModelPatch(data));
-  });
+// NOTE: there is no `updateSceneModelFn` (#1066). A scene has no model of its
+// own — model identity belongs to the version row that recorded the generation
+// (`frame_variants.model` / `video_variants.model`). Picking a model in the
+// editor is a per-request choice that becomes durable when the version it
+// produces is selected; see `@/lib/ai/resolve-asset-models`.
 
 /** Composed sequence script from selected scene versions (#1030). */
 export const getComposedScriptFn = createServerFn({ method: 'GET' })

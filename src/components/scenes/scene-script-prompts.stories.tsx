@@ -126,11 +126,11 @@ const meta: Meta<typeof SceneScriptPrompts> = {
     regeneratingMotion: new Set<string>(),
     regeneratingSceneVariants: new Set<string>(),
     onRegenerateStart: fn(),
-    // Scene-level model selection (#909) — these are required props; without
+    // Resolved per-asset models (#1066) — these are required props; without
     // them IMAGE_TO_VIDEO_MODELS[undefined] is undefined and the component
     // crashes on `'requiredStyleCategory' in undefined`.
-    sceneImageModel: 'gpt_image_2',
-    sceneVideoModel: 'seedance_v2',
+    resolvedImageModel: 'gpt_image_2',
+    resolvedVideoModel: 'seedance_v2',
   },
   decorators: [
     (Story) => (

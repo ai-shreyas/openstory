@@ -4,7 +4,10 @@ import {
   safeImageToVideoModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
-import { resolveSceneImageModel } from '@/lib/ai/resolve-scene-models';
+import {
+  resolveImageModel,
+  resolveUpscaleModel,
+} from '@/lib/ai/resolve-asset-models';
 import {
   estimateImageCost,
   estimateStoryboardCost,
@@ -14,7 +17,7 @@ import {
   aspectRatioToImageSize,
   getVariantGridConfig,
 } from '@/lib/constants/aspect-ratios';
-import { dbSceneId, type SequenceLocation } from '@/lib/db/schema';
+import { type SequenceLocation } from '@/lib/db/schema';
 import { locationMatchesTag } from '@/lib/db/scoped/sequence-locations';
 import { cropTileFromGrid } from '@/lib/image/image-crop';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
@@ -206,13 +209,20 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
     );
     const elementReferences = buildElementReferenceImages(matchedElements);
 
-    // Model selection lives at the scene level (#909): an explicit per-request
-    // model wins (one-off variant generation), otherwise the shot's parent
-    // scene drives it, falling back to the sequence default.
-    const scene = shot.sceneId
-      ? await context.scopedDb.scenes.getById(dbSceneId(shot.sceneId))
-      : null;
-    const model = data.model || resolveSceneImageModel(scene, sequence);
+    // Model identity lives on the version that produced the still (#1066): an
+    // explicit per-request model wins (one-off variant generation), else the
+    // model of a failed attempt still awaiting retry, else the frame's
+    // currently selected version, then the sequence default.
+    const [selectedVersion, lastFailed] = await Promise.all([
+      context.scopedDb.frameVariants.getSelected(frame.id),
+      context.scopedDb.frameVariants.getLastFailed(frame.id),
+    ]);
+    const model = resolveImageModel({
+      explicit: data.model,
+      lastFailedAttemptModel: lastFailed?.model,
+      selectedVersionModel: selectedVersion?.model,
+      sequenceModel: sequence.imageModel,
+    });
 
     await requireCredits(
       context.scopedDb,
@@ -430,9 +440,16 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       shot.metadata?.metadata?.location ?? ''
     );
 
+    // Price the model that will actually render the upscale (#1066) — the same
+    // resolution the workflow performs, so the estimate can't drift from the
+    // charge.
     await requireCredits(
       context.scopedDb,
-      estimateImageCost('nano_banana_2', sequence.aspectRatio, 1),
+      estimateImageCost(
+        resolveUpscaleModel(sheet.model),
+        sequence.aspectRatio,
+        1
+      ),
       { errorMessage: 'Insufficient credits for variant upscale' }
     );
 
@@ -449,6 +466,10 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       // The framing version the upscaled tile derives from (#989) — the upscale
       // workflow records it as `frame_variants.sourceVariantId`.
       sourceVariantId: sheet.id,
+      // Upscale on the model that generated the grid (#1066) — it's an edit of
+      // that model's output, and the version it writes becomes the frame's
+      // selection, i.e. what the shot resolves its model from.
+      sourceModel: sheet.model,
     };
 
     const workflowRunId = await triggerWorkflow(

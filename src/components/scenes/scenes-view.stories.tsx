@@ -93,11 +93,23 @@ const meta = {
       });
 
       // Pre-populate the cache with mock data using the correct query keys.
-      // Scenes (#909) own model selection — the image/motion tab selectors read
-      // and write the selected shot's scene; without them those picks no-op.
+      // Scenes group the shots (they carry no model of their own, #1066); the
+      // model the image/motion tabs show is resolved per shot from its selected
+      // image/video version.
       queryClient.setQueryData(['shots', 'list', sequenceId], shots);
       queryClient.setQueryData(['scenes', 'list', sequenceId], scenes);
       queryClient.setQueryData(['sequences', 'detail', sequenceId], sequence);
+      // The per-shot resolved models the tab selectors read (#1066). Seeded
+      // empty: this fixture has no version rows, so every shot falls back to
+      // the sequence default — the same answer the live editor gives for a
+      // shot that has never generated. Without the key the query would never
+      // settle and the story couldn't exercise resolution at all.
+      queryClient.setQueryData(['sequence-selected-models', sequenceId], {
+        imageModelByShot: {},
+        videoModelByShot: {},
+        failedImageModelByShot: {},
+        failedVideoModelByShot: {},
+      });
       if (style) {
         queryClient.setQueryData(['styles', 'detail', style.id], style);
       }
@@ -126,7 +138,7 @@ type Story = StoryObj<typeof meta>;
 /**
  * Real sequence (MAKEUP AD, 9:16) captured from local D1, so the editor renders
  * exactly as it does live: a flat shot list with the image/motion tab selectors
- * resolving each scene's look/motion models. Media URLs are swapped for public
+ * resolving each shot's per-asset look/motion models. Media URLs are swapped for public
  * placeholders (stored R2 paths are origin-relative and don't resolve from the
  * Storybook origin). Regenerate via scratchpad/gen-fixture.mjs.
  */
@@ -142,7 +154,7 @@ export const RealSequence: Story = {
     docs: {
       description: {
         story:
-          'A real, fully-generated sequence pulled from the local database — the closest match to the live editor (flat shot list + scene-level model selectors in the image/motion tabs).',
+          'A real, fully-generated sequence pulled from the local database — the closest match to the live editor (flat shot list + per-asset model selectors in the image/motion tabs).',
       },
     },
   },

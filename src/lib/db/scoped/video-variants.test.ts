@@ -97,6 +97,58 @@ async function seed() {
   ]);
 }
 
+/**
+ * A second sequence in the same team, with its own scene / segment / shot. Used
+ * to prove the sequence-scoped reads don't leak across sequences.
+ */
+async function seedSecondSequence() {
+  const [team] = await db.select().from(teams);
+  const [style] = await db.select().from(styles);
+  if (!team || !style) throw new Error('seed: seed() must run first');
+
+  const otherSequenceId = generateId();
+  const otherSceneId = generateId();
+  const otherSegmentId = generateId();
+  const otherShotId = generateId();
+
+  await db.insert(sequences).values([
+    {
+      id: otherSequenceId,
+      teamId: team.id,
+      title: 'Other',
+      styleId: style.id,
+    },
+  ]);
+  await db.insert(scenes).values([
+    {
+      id: dbSceneId(otherSceneId),
+      sequenceId: otherSequenceId,
+      orderIndex: 0,
+    },
+  ]);
+  await db.insert(renderSegments).values([
+    {
+      id: otherSegmentId,
+      sceneId: otherSceneId,
+      sequenceId: otherSequenceId,
+    },
+  ]);
+  await db.insert(shots).values([
+    {
+      id: otherShotId,
+      sequenceId: otherSequenceId,
+      sceneId: otherSceneId,
+      orderIndex: 0,
+      renderSegmentId: otherSegmentId,
+    },
+  ]);
+  return {
+    sequenceId: otherSequenceId,
+    shotId: otherShotId,
+    segmentId: otherSegmentId,
+  };
+}
+
 function versionInput(
   overrides: Partial<NewVideoVariant> = {}
 ): NewVideoVariant {
@@ -253,6 +305,135 @@ describe('select', () => {
     await expect(
       methods.select(otherShotId, v.id, { actorId: ACTOR })
     ).rejects.toThrow(/belongs to segment/);
+  });
+});
+
+describe('listSelectedModelsBySequence (#1066)', () => {
+  it("maps each shot to its SELECTED version's model, not the latest", async () => {
+    const first = await methods.appendVersion(
+      versionInput({ id: 'v-001', model: 'veo3_1' })
+    );
+    // A later render in a different model that was never selected must NOT
+    // become the shot's model — resolution follows the pointer, not recency.
+    await methods.appendVersion(
+      versionInput({ id: 'v-002', model: 'kling_v3_pro' })
+    );
+    await methods.select(shotId, first.id, { actorId: ACTOR });
+
+    expect([
+      ...(await methods.listSelectedModelsBySequence(sequenceId)),
+    ]).toEqual([[shotId, 'veo3_1']]);
+  });
+
+  it('omits a shot whose segment has no selection', async () => {
+    await methods.appendVersion(versionInput());
+    expect(await methods.listSelectedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
+  });
+
+  it('omits a shot with no render segment at all', async () => {
+    await db.insert(shots).values([
+      {
+        id: generateId(),
+        sequenceId,
+        sceneId,
+        orderIndex: 1,
+        renderSegmentId: null,
+      },
+    ]);
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+
+    const selected = await methods.listSelectedModelsBySequence(sequenceId);
+    expect(selected.size).toBe(1);
+    expect(selected.get(shotId)).toBe('veo3_1');
+  });
+
+  it('never returns a shot from another sequence', async () => {
+    // This read decides which model a user is BILLED for — a missing sequence
+    // filter would leak another team's shots into the map.
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+
+    const other = await seedSecondSequence();
+    const otherVersion = await methods.appendVersion(
+      versionInput({
+        renderSegmentId: other.segmentId,
+        sequenceId: other.sequenceId,
+        model: 'kling_v3_pro',
+        manifest: [
+          {
+            shotId: other.shotId,
+            motionPromptVersionId: null,
+            frameVersionId: null,
+            durationMs: 3000,
+          },
+        ],
+      })
+    );
+    await methods.select(other.shotId, otherVersion.id, { actorId: ACTOR });
+
+    const selected = await methods.listSelectedModelsBySequence(sequenceId);
+    expect(selected.size).toBe(1);
+    expect(selected.has(other.shotId)).toBe(false);
+  });
+
+  it('omits a selected version that has been discarded', async () => {
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+    await methods.discard(v.id, { actorId: ACTOR });
+
+    expect(await methods.listSelectedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
+    expect(await methods.getSelectedByShot(shotId)).toBeNull();
+  });
+});
+
+describe('listLastFailedModelsBySequence (#1066)', () => {
+  it('maps each shot to its NEWEST failed version model', async () => {
+    await methods.appendVersion(
+      versionInput({ model: 'kling_v3_pro', status: 'failed', url: null })
+    );
+    await methods.appendVersion(
+      versionInput({ model: 'seedance_v2', status: 'failed', url: null })
+    );
+
+    expect(
+      (await methods.listLastFailedModelsBySequence(sequenceId)).get(shotId)
+    ).toBe('seedance_v2');
+  });
+
+  it('ignores completed versions', async () => {
+    await methods.appendVersion(versionInput());
+    expect(await methods.listLastFailedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
+  });
+
+  it('never returns a shot from another sequence', async () => {
+    const other = await seedSecondSequence();
+    await methods.appendVersion(
+      versionInput({
+        renderSegmentId: other.segmentId,
+        sequenceId: other.sequenceId,
+        model: 'kling_v3_pro',
+        status: 'failed',
+        url: null,
+        manifest: [
+          {
+            shotId: other.shotId,
+            motionPromptVersionId: null,
+            frameVersionId: null,
+            durationMs: 3000,
+          },
+        ],
+      })
+    );
+    expect(await methods.listLastFailedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
   });
 });
 

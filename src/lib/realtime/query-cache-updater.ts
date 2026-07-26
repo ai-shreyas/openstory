@@ -208,6 +208,13 @@ export function updateQueryCacheFromEvent(
           ['sequence-image-models', sequenceId],
           `image-models:${sequenceId}`
         );
+        // A convergent image write repoints `frames.selectedImageVersionId`,
+        // which is what the editor resolves its model from (#1066).
+        debouncedInvalidate(
+          queryClient,
+          ['sequence-selected-models', sequenceId],
+          `selected-models:${sequenceId}`
+        );
       }
       break;
     }
@@ -261,6 +268,13 @@ export function updateQueryCacheFromEvent(
           queryClient,
           ['sequence-video-models', sequenceId],
           `video-models:${sequenceId}`
+        );
+        // A convergent video write repoints the render segment's
+        // `selectedVideoVersionId` — the editor's model source (#1066).
+        debouncedInvalidate(
+          queryClient,
+          ['sequence-selected-models', sequenceId],
+          `selected-models:${sequenceId}`
         );
       }
       break;

@@ -11,6 +11,7 @@ import {
   undiscardVariantFn,
   getSequenceImageModelsFn,
   getSequenceImageVariantsFn,
+  getSequenceSelectedModelsFn,
   getSequenceVideoModelsFn,
   getSequenceVideoVariantsFn,
 } from '@/functions/shots';
@@ -98,6 +99,25 @@ export function useSequenceImageVariants(sequenceId?: string) {
     queryFn: async () => {
       if (!sequenceId) throw new Error('sequenceId is required');
       return getSequenceImageVariantsFn({ data: { sequenceId } });
+    },
+    enabled: !!sequenceId,
+    staleTime: 30_000,
+  });
+}
+
+// The model recorded on each shot's selected image / video version (#1066).
+// Model identity lives on the version that produced the asset, so this is what
+// the editor resolves its displayed / generated-with model from. Invalidated by
+// the realtime image:progress + video:progress handlers, since a completed
+// convergent render repoints the selection.
+export function useSequenceSelectedModels(sequenceId?: string) {
+  return useQuery({
+    // Flat key, matching the sibling per-model queries — the realtime
+    // image/video progress handlers invalidate this exact shape.
+    queryKey: ['sequence-selected-models', sequenceId ?? ''],
+    queryFn: async () => {
+      if (!sequenceId) throw new Error('sequenceId is required');
+      return getSequenceSelectedModelsFn({ data: { sequenceId } });
     },
     enabled: !!sequenceId,
     staleTime: 30_000,
@@ -402,6 +422,13 @@ export function useSetImageFromVariant() {
       await queryClient.invalidateQueries({
         queryKey: shotKeys.list(sequenceId),
       });
+      // This repointed `frames.selectedImageVersionId`, which is what the
+      // editor resolves its model from (#1066). Without this the dropdown keeps
+      // the pre-Set model AND sends it as the explicit model on the next
+      // generation — a billed render in the model just replaced.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
+      });
     },
   });
 }
@@ -467,6 +494,11 @@ export function useSetVideoFromVariant() {
       });
       await queryClient.invalidateQueries({
         queryKey: ['sequence-video-variants', sequenceId],
+      });
+      // Repointed the segment's `selectedVideoVersionId` — the editor's model
+      // source (#1066). See useSetImageFromVariant for why this matters.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
       });
     },
   });

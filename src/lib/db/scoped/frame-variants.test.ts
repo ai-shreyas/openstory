@@ -83,6 +83,44 @@ async function seed() {
   frameId = frame.id;
 }
 
+/**
+ * A second sequence in the same team, with its own shot + anchor frame. Used to
+ * prove the sequence-scoped reads don't leak across sequences.
+ */
+async function seedSecondSequence() {
+  const [team] = await db.select().from(teams);
+  const [style] = await db.select().from(styles);
+  if (!team || !style) throw new Error('test setup: seed() must run first');
+
+  const otherSequenceId = generateId();
+  await db.insert(sequences).values({
+    id: otherSequenceId,
+    teamId: team.id,
+    title: 'Other',
+    styleId: style.id,
+  });
+  const [shot] = await db
+    .insert(shots)
+    .values({ sequenceId: otherSequenceId, orderIndex: 0 })
+    .returning();
+  if (!shot) throw new Error('test setup: shot insert returned nothing');
+  const [frame] = await db
+    .insert(frames)
+    .values({
+      shotId: shot.id,
+      sequenceId: otherSequenceId,
+      orderIndex: 0,
+      role: 'first',
+    })
+    .returning();
+  if (!frame) throw new Error('test setup: frame insert returned nothing');
+  return {
+    sequenceId: otherSequenceId,
+    shotId: shot.id,
+    frameId: frame.id,
+  };
+}
+
 function variantInput(
   overrides: Partial<NewFrameVariant> = {}
 ): NewFrameVariant {
@@ -314,6 +352,153 @@ describe('frameVariants.listByGroup', () => {
     });
     expect(framingGroup).toHaveLength(1);
     expect(framingGroup[0]?.kind).toBe('framing');
+  });
+});
+
+describe('frameVariants.listSelectedModelsBySequence (#1066)', () => {
+  it("maps each shot to its SELECTED version's model, not the latest", async () => {
+    const m = createFrameVariantsMethods(db);
+    const selected = await m.appendVersion(
+      variantInput({ model: 'flux_2_max' })
+    );
+    // A newer version in another model that was never selected must NOT win —
+    // resolution follows the pointer, not recency.
+    await m.appendVersion(variantInput({ model: 'gpt_image_2' }));
+    await m.select(frameId, selected.id, { actorId: null });
+
+    expect([...(await m.listSelectedModelsBySequence(sequenceId))]).toEqual([
+      [shotId, 'flux_2_max'],
+    ]);
+  });
+
+  it('keys by shot id, not frame id (frame ids ≠ shot ids)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput());
+    await m.select(frameId, v.id, { actorId: null });
+
+    const models = await m.listSelectedModelsBySequence(sequenceId);
+    expect(models.has(shotId)).toBe(true);
+    expect(models.has(frameId)).toBe(false);
+  });
+
+  it('omits a frame with no selection', async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(variantInput());
+    expect(await m.listSelectedModelsBySequence(sequenceId)).toEqual(new Map());
+  });
+
+  it('ignores a non-anchor frame so it cannot collide on the shot key', async () => {
+    const m = createFrameVariantsMethods(db);
+    const [lastFrame] = await db
+      .insert(frames)
+      .values({ shotId, sequenceId, orderIndex: 1, role: 'last' })
+      .returning();
+    if (!lastFrame)
+      throw new Error('test setup: frame insert returned nothing');
+
+    const anchorVersion = await m.appendVersion(
+      variantInput({ model: 'flux_2_max' })
+    );
+    const lastVersion = await m.appendVersion(
+      variantInput({ frameId: lastFrame.id, model: 'gpt_image_2' })
+    );
+    await m.select(frameId, anchorVersion.id, { actorId: null });
+    await m.select(lastFrame.id, lastVersion.id, { actorId: null });
+
+    const models = await m.listSelectedModelsBySequence(sequenceId);
+    expect(models.size).toBe(1);
+    expect(models.get(shotId)).toBe('flux_2_max');
+  });
+
+  it('never returns a shot from another sequence', async () => {
+    // This read decides which model a user is BILLED for — a missing sequence
+    // filter would leak another team's shots into the map.
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput());
+    await m.select(frameId, v.id, { actorId: null });
+
+    const other = await seedSecondSequence();
+    const otherVersion = await m.appendVersion(
+      variantInput({
+        frameId: other.frameId,
+        sequenceId: other.sequenceId,
+        model: 'gpt_image_2',
+      })
+    );
+    await m.select(other.frameId, otherVersion.id, { actorId: null });
+
+    const models = await m.listSelectedModelsBySequence(sequenceId);
+    expect(models.size).toBe(1);
+    expect(models.has(other.shotId)).toBe(false);
+  });
+
+  it('omits a selected version that has been discarded', async () => {
+    // A discarded version is hidden from the variant strip, so resolving the
+    // shot's model from it would show a model the user can no longer see.
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput());
+    await m.select(frameId, v.id, { actorId: null });
+    await m.discard(v.id, { actorId: null });
+
+    expect(await m.listSelectedModelsBySequence(sequenceId)).toEqual(new Map());
+    expect(await m.getSelected(frameId)).toBeNull();
+  });
+
+  it("returns an upscale's model — it is the model that rendered it", async () => {
+    // The upscale runs on the model that generated the grid (#1066), so its
+    // `kind:'framing'` row carries the shot's real look model and resolution
+    // reads it directly. Pinning the upscale to one model instead would make
+    // this row silently redefine the shot's model.
+    const m = createFrameVariantsMethods(db);
+    const upscaled = await m.appendVersion(
+      variantInput({ kind: 'framing', model: 'flux_2_max' })
+    );
+    await m.select(frameId, upscaled.id, { actorId: null });
+
+    expect((await m.listSelectedModelsBySequence(sequenceId)).get(shotId)).toBe(
+      'flux_2_max'
+    );
+  });
+});
+
+describe('frameVariants.listLastFailedModelsBySequence (#1066)', () => {
+  it('maps each shot to its NEWEST failed version model', async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(
+      variantInput({ model: 'phota', status: 'failed', url: null })
+    );
+    await m.appendVersion(
+      variantInput({ model: 'flux_2_max', status: 'failed', url: null })
+    );
+
+    expect(
+      (await m.listLastFailedModelsBySequence(sequenceId)).get(shotId)
+    ).toBe('flux_2_max');
+  });
+
+  it('ignores completed versions', async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(variantInput({ model: 'gpt_image_2' }));
+    expect(await m.listLastFailedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
+  });
+
+  it('never returns a shot from another sequence', async () => {
+    const m = createFrameVariantsMethods(db);
+    const other = await seedSecondSequence();
+    await m.appendVersion(
+      variantInput({
+        frameId: other.frameId,
+        sequenceId: other.sequenceId,
+        model: 'flux_2_max',
+        status: 'failed',
+        url: null,
+      })
+    );
+    expect(await m.listLastFailedModelsBySequence(sequenceId)).toEqual(
+      new Map()
+    );
   });
 });
 
