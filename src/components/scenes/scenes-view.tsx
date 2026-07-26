@@ -464,36 +464,65 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
   // tabs target whatever the selected shot's selected image/video version was
   // rendered with. A pick in the dropdown is a per-request override for the
   // NEXT generation — it becomes durable once that version is selected, so it's
-  // held per-shot in view state rather than written anywhere. Pairing the pick
-  // with its shot id (instead of resetting via an effect) drops it the moment
-  // the selection moves to another shot.
+  // held in view state rather than written anywhere.
+  //
+  // A pick therefore has to EXPIRE, or it outranks fresher server truth forever
+  // (it sits at the `explicit` tier, above everything). It carries the model it
+  // was made against, and stops applying as soon as that changes — which covers
+  // the pick's own generation completing, a "Set", a sequence-wide Set, and a
+  // teammate's change alike. Derived during render, so no effect syncs state.
+  // A FAILED generation doesn't move the selection, so the pick survives for a
+  // retry, which is the behaviour you want.
   const { data: selectedModels } = useSequenceSelectedModels(sequenceId);
   const [imageModelPick, setImageModelPick] = useState<{
     shotId: string;
     model: TextToImageModel;
+    basedOn: string | null;
   } | null>(null);
   const [videoModelPick, setVideoModelPick] = useState<{
     shotId: string;
     model: ImageToVideoModel;
+    basedOn: string | null;
   } | null>(null);
+
+  const selectedImageModelForShot = curSelectedShotId
+    ? (selectedModels?.imageModelByShot[curSelectedShotId] ?? null)
+    : null;
+  const selectedVideoModelForShot = curSelectedShotId
+    ? (selectedModels?.videoModelByShot[curSelectedShotId] ?? null)
+    : null;
+
+  // A pick applies only to its own shot, and only while the model it was made
+  // against still stands.
+  const activeImagePick =
+    imageModelPick &&
+    imageModelPick.shotId === curSelectedShotId &&
+    imageModelPick.basedOn === selectedImageModelForShot
+      ? imageModelPick.model
+      : null;
+  const activeVideoPick =
+    videoModelPick &&
+    videoModelPick.shotId === curSelectedShotId &&
+    videoModelPick.basedOn === selectedVideoModelForShot
+      ? videoModelPick.model
+      : null;
+
   const resolvedImageModel = resolveImageModel({
-    explicit:
-      imageModelPick && imageModelPick.shotId === curSelectedShotId
-        ? imageModelPick.model
-        : null,
-    selectedVersionModel: curSelectedShotId
-      ? selectedModels?.imageModelByShot[curSelectedShotId]
+    explicit: activeImagePick,
+    // Show the model a retry would actually run for a failed shot, so the
+    // dropdown and the server agree (#1066).
+    lastFailedAttemptModel: curSelectedShotId
+      ? selectedModels?.failedImageModelByShot[curSelectedShotId]
       : null,
+    selectedVersionModel: selectedImageModelForShot,
     sequenceModel: sequence?.imageModel,
   });
   const resolvedVideoModel = resolveVideoModel({
-    explicit:
-      videoModelPick && videoModelPick.shotId === curSelectedShotId
-        ? videoModelPick.model
-        : null,
-    selectedVersionModel: curSelectedShotId
-      ? selectedModels?.videoModelByShot[curSelectedShotId]
+    explicit: activeVideoPick,
+    lastFailedAttemptModel: curSelectedShotId
+      ? selectedModels?.failedVideoModelByShot[curSelectedShotId]
       : null,
+    selectedVersionModel: selectedVideoModelForShot,
     sequenceModel: sequence?.videoModel,
   });
 
@@ -527,16 +556,24 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
   const handleImageModelChange = useCallback(
     (model: TextToImageModel) => {
       if (!curSelectedShotId) return;
-      setImageModelPick({ shotId: curSelectedShotId, model });
+      setImageModelPick({
+        shotId: curSelectedShotId,
+        model,
+        basedOn: selectedImageModelForShot,
+      });
     },
-    [curSelectedShotId]
+    [curSelectedShotId, selectedImageModelForShot]
   );
   const handleVideoModelChange = useCallback(
     (model: ImageToVideoModel) => {
       if (!curSelectedShotId) return;
-      setVideoModelPick({ shotId: curSelectedShotId, model });
+      setVideoModelPick({
+        shotId: curSelectedShotId,
+        model,
+        basedOn: selectedVideoModelForShot,
+      });
     },
-    [curSelectedShotId]
+    [curSelectedShotId, selectedVideoModelForShot]
   );
 
   // In-flight retry state (#882) for the selected shot. Image retry matters
@@ -565,9 +602,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     return selectedShotVariants.find((v) => v.model === effectiveImageModel);
   }, [selectedShotVariants, effectiveImageModel]);
 
-  // Motion mirror: the scene's video model drives the motion-prompt tab's
-  // variant + Set/Generate state. Excludes divergent / discarded alternates so
-  // only the primary per-model row is matched.
+  // Motion mirror: the shot's resolved video model (#1066) drives the
+  // motion-prompt tab's variant + Set/Generate state. Excludes divergent /
+  // discarded alternates so only the primary per-model row is matched.
   const effectiveVideoModel = resolvedVideoModel;
 
   const videoVariantForSelectedModel = useMemo(() => {

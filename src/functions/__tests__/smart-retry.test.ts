@@ -177,6 +177,9 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
 type SelectedModels = {
   image?: Map<string, string>;
   video?: Map<string, string>;
+  /** `shotId → model` of each shot's newest FAILED version (#1066). */
+  failedImage?: Map<string, string>;
+  failedVideo?: Map<string, string>;
 };
 
 function makeContext(
@@ -202,6 +205,14 @@ function makeContext(
   const listSelectedVideoModels = vi.fn(
     async () => selectedModels.video ?? new Map<string, string>()
   );
+  // The failed-attempt tier (#1066): every shot smart retry touches is in a
+  // failed state, so the model that failed outranks the older selected one.
+  const listFailedImageModels = vi.fn(
+    async () => selectedModels.failedImage ?? new Map<string, string>()
+  );
+  const listFailedVideoModels = vi.fn(
+    async () => selectedModels.failedVideo ?? new Map<string, string>()
+  );
   // Motion prompt is resolved from the selected version now (#713); the retry
   // path reads it per shot. No selected version in these fixtures → resolution
   // falls back to the shot description.
@@ -211,9 +222,11 @@ function makeContext(
     frames: { listAnchorsBySequence },
     frameVariants: {
       listSelectedModelsBySequence: listSelectedImageModels,
+      listLastFailedModelsBySequence: listFailedImageModels,
     },
     videoVariants: {
       listSelectedModelsBySequence: listSelectedVideoModels,
+      listLastFailedModelsBySequence: listFailedVideoModels,
     },
     characters: { listWithSheets },
     shotPromptVersions: { getSelectedMotion },
@@ -516,6 +529,78 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/motion',
       expect.objectContaining({ shotId: 'shot-b', model: 'kling_v3_pro' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+  });
+
+  test('retries the model that FAILED, not the older successful one', async () => {
+    resetMocks();
+    // shot-a's still came from gpt_image_2. The user then tried flux_2_max and
+    // it failed — that failed version is not selectable, so without the
+    // failed-attempt tier the retry would silently re-run gpt_image_2: the
+    // model the user had already moved on from.
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      thumbnailStatus: 'failed',
+      imagePrompt: 'Look A',
+    });
+    const { context } = makeContext(makeSequence(), [shotA], {
+      image: new Map([['shot-a', 'gpt_image_2']]),
+      failedImage: new Map([['shot-a', 'flux_2_max']]),
+    });
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/image',
+      expect.objectContaining({ shotId: 'shot-a', model: 'flux_2_max' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+    // …and it is priced as flux_2_max, so the estimate matches the charge.
+    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
+      addMicros(ZERO_MICROS, estimateImageCost('flux_2_max', '16:9', 1))
+    );
+  });
+
+  test('retries the failed video model over the older selected one', async () => {
+    resetMocks();
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      videoStatus: 'failed',
+      thumbnailStatus: 'completed',
+      thumbnailUrl: 'https://cdn/a.jpg',
+    });
+    const { context } = makeContext(makeSequence(), [shotA], {
+      video: new Map([['shot-a', 'seedance_v2']]),
+      failedVideo: new Map([['shot-a', 'veo3_1']]),
+    });
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/motion',
+      expect.objectContaining({ shotId: 'shot-a', model: 'veo3_1' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+  });
+
+  test('falls back to the sequence default when nothing was ever rendered', async () => {
+    resetMocks();
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      thumbnailStatus: 'failed',
+      imagePrompt: 'Look A',
+    });
+    const { context } = makeContext(makeSequence(), [shotA]);
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/image',
+      expect.objectContaining({ shotId: 'shot-a', model: 'nano_banana_2' }),
       expect.objectContaining({ label: expect.any(String) })
     );
   });

@@ -367,11 +367,17 @@ export const getSequenceVideoVariantsFn = createServerFn({ method: 'GET' })
 export const getSequenceSelectedModelsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    const [image, video] = await Promise.all([
+    const [image, video, failedImage, failedVideo] = await Promise.all([
       context.scopedDb.frameVariants.listSelectedModelsBySequence(
         context.sequence.id
       ),
       context.scopedDb.videoVariants.listSelectedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.frameVariants.listLastFailedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.videoVariants.listLastFailedModelsBySequence(
         context.sequence.id
       ),
     ]);
@@ -379,6 +385,10 @@ export const getSequenceSelectedModelsFn = createServerFn({ method: 'GET' })
     return {
       imageModelByShot: typedFromEntries([...image]),
       videoModelByShot: typedFromEntries([...video]),
+      // The failed-attempt tier, so the editor shows the same model a retry
+      // would run (#1066) rather than the older selected one.
+      failedImageModelByShot: typedFromEntries([...failedImage]),
+      failedVideoModelByShot: typedFromEntries([...failedVideo]),
     };
   });
 

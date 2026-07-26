@@ -52,10 +52,13 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
     // Model identity lives on the version that rendered the clip (#1066):
     // explicit request model wins, else the version the shot's render segment
     // currently points at, then the sequence default.
-    const selectedVersion =
-      await context.scopedDb.videoVariants.getSelectedByShot(shot.id);
+    const [selectedVersion, lastFailed] = await Promise.all([
+      context.scopedDb.videoVariants.getSelectedByShot(shot.id),
+      context.scopedDb.videoVariants.getLastFailedByShot(shot.id),
+    ]);
     const model = resolveVideoModel({
       explicit: data.model,
+      lastFailedAttemptModel: lastFailed?.model,
       selectedVersionModel: selectedVersion?.model,
       sequenceModel: sequence.videoModel,
     });
@@ -221,22 +224,20 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
     // Model identity lives on the version that rendered each clip (#1066).
     // Resolve each shot's model from its selected video version (an explicit
     // batch `data.model` still overrides everything). One join, no N+1.
-    const selectedModelByShot =
-      await context.scopedDb.videoVariants.listSelectedModelsBySequence(
+    const [selected, lastFailed] = await Promise.all([
+      context.scopedDb.videoVariants.listSelectedModelsBySequence(sequence.id),
+      context.scopedDb.videoVariants.listLastFailedModelsBySequence(
         sequence.id
-      );
+      ),
+    ]);
+    const shotModels = { selected, lastFailed };
     const resolveShotVideoModel = (shot: (typeof allShots)[number]) =>
-      resolveBatchShotVideoModel(
-        shot,
-        selectedModelByShot,
-        sequence,
-        data.model
-      );
+      resolveBatchShotVideoModel(shot, shotModels, sequence, data.model);
 
     // Sum per-shot costs — shots may render with different (priced) models.
     const estimatedCost = estimateBatchMotionCost(
       eligibleShots,
-      selectedModelByShot,
+      shotModels,
       sequence,
       { explicitModel: data.model, duration: data.duration }
     );

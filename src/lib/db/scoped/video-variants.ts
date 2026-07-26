@@ -22,7 +22,7 @@
 import type { Database } from '@/lib/db/client';
 import { renderSegments, shots, videoVariants } from '@/lib/db/schema';
 import type { NewVideoVariant, VideoVariant } from '@/lib/db/schema';
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { buildRenderSegmentSelect } from './render-segments';
 import { buildEventInsert } from './sequence-events';
 import { buildShotVideoMirror, type CompletedVideoVariant } from './shots';
@@ -176,9 +176,11 @@ export function createVideoVariantsMethods(db: Database) {
      * The model of each shot's SELECTED video version across a sequence, keyed
      * by shot (#1066). Model identity lives on the version row that rendered
      * the clip, so this is what generate/display resolve from — see
-     * `@/lib/ai/resolve-asset-models`. One join through the shot's render
+     * `@/lib/ai/resolve-asset-models`. Joined through the shot's render
      * segment, so batch paths (smart retry, batch motion) don't go N+1. Shots
      * with no segment or no selection are absent; the caller falls back a tier.
+     *
+     * Discarded versions are excluded, matching every sibling read here.
      */
     listSelectedModelsBySequence: async (
       sequenceId: string
@@ -191,14 +193,49 @@ export function createVideoVariantsMethods(db: Database) {
           videoVariants,
           eq(videoVariants.id, renderSegments.selectedVideoVersionId)
         )
-        .where(eq(shots.sequenceId, sequenceId));
+        .where(
+          and(
+            eq(shots.sequenceId, sequenceId),
+            isNull(videoVariants.discardedAt)
+          )
+        );
       return new Map(rows.map((r) => [r.shotId, r.model]));
     },
 
     /**
-     * The version a shot's segment currently points at, or null if unset. The
-     * shot resolves its segment via `shots.renderSegmentId`; the segment owns the
-     * selection pointer.
+     * The `model` of each shot's newest FAILED video version, keyed by shot
+     * (#1066) — the motion analog of `frameVariants.listLastFailedModelsBySequence`.
+     * A shot mid-failed-attempt resolves to the model that failed, so a retry
+     * re-runs what the user asked for rather than the older selected model.
+     */
+    listLastFailedModelsBySequence: async (
+      sequenceId: string
+    ): Promise<Map<string, string>> => {
+      const rows = await db
+        .select({ shotId: shots.id, model: videoVariants.model })
+        .from(shots)
+        .innerJoin(
+          videoVariants,
+          eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+        )
+        .where(
+          and(
+            eq(shots.sequenceId, sequenceId),
+            eq(videoVariants.status, 'failed'),
+            isNull(videoVariants.discardedAt)
+          )
+        )
+        .orderBy(asc(videoVariants.id));
+      // asc by id (≈ time) → last write per shot wins.
+      const byShot = new Map<string, string>();
+      for (const row of rows) byShot.set(row.shotId, row.model);
+      return byShot;
+    },
+
+    /**
+     * The version a shot's segment currently points at, or null if unset or
+     * discarded. The shot resolves its segment via `shots.renderSegmentId`; the
+     * segment owns the selection pointer.
      */
     getSelectedByShot: async (shotId: string): Promise<VideoVariant | null> => {
       const [shot] = await db
@@ -214,8 +251,40 @@ export function createVideoVariantsMethods(db: Database) {
       const [version] = await db
         .select()
         .from(videoVariants)
-        .where(eq(videoVariants.id, segment.selected));
+        .where(
+          and(
+            eq(videoVariants.id, segment.selected),
+            isNull(videoVariants.discardedAt)
+          )
+        );
       return version ?? null;
+    },
+
+    /**
+     * The newest FAILED version for a shot's segment, or null. The single-shot
+     * analog of {@link listLastFailedModelsBySequence}.
+     */
+    getLastFailedByShot: async (
+      shotId: string
+    ): Promise<VideoVariant | null> => {
+      const [shot] = await db
+        .select({ segmentId: shots.renderSegmentId })
+        .from(shots)
+        .where(eq(shots.id, shotId));
+      if (!shot?.segmentId) return null;
+      const rows = await db
+        .select()
+        .from(videoVariants)
+        .where(
+          and(
+            eq(videoVariants.renderSegmentId, shot.segmentId),
+            eq(videoVariants.status, 'failed'),
+            isNull(videoVariants.discardedAt)
+          )
+        )
+        .orderBy(desc(videoVariants.id))
+        .limit(1);
+      return rows[0] ?? null;
     },
 
     /**

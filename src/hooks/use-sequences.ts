@@ -121,6 +121,11 @@ export function useSetSequenceModel() {
         queryClient.invalidateQueries({
           queryKey: ['shots', 'list', sequenceId],
         }),
+        // This repoints the selection on EVERY frame / segment in the sequence,
+        // which is what the editor resolves its model from (#1066).
+        queryClient.invalidateQueries({
+          queryKey: ['sequence-selected-models', sequenceId],
+        }),
       ]);
     },
   });

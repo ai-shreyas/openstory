@@ -18,20 +18,31 @@ import { addMicros, ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
 import { snapDuration } from '@/lib/motion/motion-generation';
 
 type BatchShot = { id: string };
-type SequenceModelFields = { videoModel?: string | null };
-/** `shotId → video_variants.model` of the shot's selected version (#1066). */
-type SelectedModelByShot = ReadonlyMap<string, string>;
+type SequenceModelFields = { videoModel: string | null | undefined };
+/**
+ * The per-shot model maps the batch resolves from (#1066), both keyed by SHOT
+ * id. Grouped in one object rather than passed as two positional
+ * `ReadonlyMap<string, string>` params, which are structurally identical and so
+ * silently swappable at the call site.
+ */
+export type BatchShotModels = {
+  /** `video_variants.model` of the shot's selected version. */
+  selected: ReadonlyMap<string, string>;
+  /** `video_variants.model` of the shot's newest failed version. */
+  lastFailed: ReadonlyMap<string, string>;
+};
 
 /** Resolve the video model a single batch shot renders with. */
 export function resolveBatchShotVideoModel(
   shot: BatchShot,
-  selectedModelByShot: SelectedModelByShot,
+  models: BatchShotModels,
   sequence: SequenceModelFields,
-  explicitModel?: string | null
+  explicitModel?: ImageToVideoModel | null
 ): ImageToVideoModel {
   return resolveVideoModel({
     explicit: explicitModel,
-    selectedVersionModel: selectedModelByShot.get(shot.id),
+    lastFailedAttemptModel: models.lastFailed.get(shot.id),
+    selectedVersionModel: models.selected.get(shot.id),
     sequenceModel: sequence.videoModel,
   });
 }
@@ -43,14 +54,14 @@ export function resolveBatchShotVideoModel(
  */
 export function estimateBatchMotionCost(
   shots: BatchShot[],
-  selectedModelByShot: SelectedModelByShot,
+  models: BatchShotModels,
   sequence: SequenceModelFields,
-  opts: { explicitModel?: string | null; duration?: number } = {}
+  opts: { explicitModel?: ImageToVideoModel | null; duration?: number } = {}
 ): Microdollars {
   return shots.reduce((sum, shot) => {
     const model = resolveBatchShotVideoModel(
       shot,
-      selectedModelByShot,
+      models,
       sequence,
       opts.explicitModel
     );

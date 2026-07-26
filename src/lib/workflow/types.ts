@@ -600,6 +600,13 @@ export interface UpscaleShotVariantWorkflowInput extends SequenceWorkflowContext
    * Recorded as `frame_variants.sourceVariantId` on the upscaled framing version.
    */
   sourceVariantId?: string | null;
+  /**
+   * `model` of that grid sheet — the model that generated the tile being
+   * upscaled (#1066). The upscale renders on it so the result isn't restyled,
+   * and so the version it writes carries the shot's real look model. Falls back
+   * to `UPSCALE_FALLBACK_MODEL` when the model has no edit endpoint.
+   */
+  sourceModel?: string | null;
 }
 
 export interface UpscaleShotVariantWorkflowResult {

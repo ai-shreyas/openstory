@@ -10,6 +10,7 @@
  */
 
 import { IMAGE_MODELS } from '@/lib/ai/models';
+import { resolveUpscaleModel } from '@/lib/ai/resolve-asset-models';
 import { ZERO_MICROS } from '@/lib/billing/money';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
 import {
@@ -162,8 +163,11 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
       throw new WorkflowValidationError('sequenceId and teamId are required');
     }
 
+    // Derived from the payload, so it survives a step replay unchanged.
+    const upscaleModel = resolveUpscaleModel(input.sourceModel);
+
     logger.info(
-      `[UpscaleShotVariantWorkflow] Starting upscale for shot ${shotId}`
+      `[UpscaleShotVariantWorkflow] Starting upscale for shot ${shotId} with model ${upscaleModel}`
     );
 
     const upscaleResult = await step.do('upscale-image', async () => {
@@ -181,12 +185,14 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
       }
 
       // Record the in-flight framing version (the upscaled tile), pointing back
-      // at the grid sheet it was cropped from.
+      // at the grid sheet it was cropped from. `model` is the model that
+      // actually renders the upscale — this version becomes the frame's
+      // selection, so it is also what the shot resolves its model from (#1066).
       const version = await scopedDb.frameVariants.appendVersion({
         frameId: frame.id,
         sequenceId,
         kind: 'framing',
-        model: 'nano_banana_2',
+        model: upscaleModel,
         sourceVariantId: input.sourceVariantId ?? null,
         status: 'generating',
         workflowRunId,
@@ -214,7 +220,7 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         buildReferenceImagePrompt(
           UPSCALE_PROMPT,
           allReferences,
-          IMAGE_MODELS.nano_banana_2.maxPromptLength
+          IMAGE_MODELS[upscaleModel].maxPromptLength
         );
 
       const imageSize = input.aspectRatio
@@ -223,7 +229,7 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
 
       const result = await generateImageWithProvider(
         {
-          model: 'nano_banana_2',
+          model: upscaleModel,
           prompt: enhancedPrompt,
           imageSize,
           referenceImageUrls: referenceUrls,
@@ -249,9 +255,9 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         scopedDb,
         costMicros: upscaleResult.cost,
         usedOwnKey: upscaleResult.usedOwnKey,
-        description: 'Variant upscale (nano_banana_2)',
+        description: `Variant upscale (${upscaleModel})`,
         idempotencyKey: `${event.instanceId}:upscale`,
-        metadata: { shotId, sequenceId },
+        metadata: { shotId, sequenceId, model: upscaleModel },
         workflowName: 'UpscaleShotVariantWorkflow',
       });
     });

@@ -422,6 +422,13 @@ export function useSetImageFromVariant() {
       await queryClient.invalidateQueries({
         queryKey: shotKeys.list(sequenceId),
       });
+      // This repointed `frames.selectedImageVersionId`, which is what the
+      // editor resolves its model from (#1066). Without this the dropdown keeps
+      // the pre-Set model AND sends it as the explicit model on the next
+      // generation — a billed render in the model just replaced.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
+      });
     },
   });
 }
@@ -487,6 +494,11 @@ export function useSetVideoFromVariant() {
       });
       await queryClient.invalidateQueries({
         queryKey: ['sequence-video-variants', sequenceId],
+      });
+      // Repointed the segment's `selectedVideoVersionId` — the editor's model
+      // source (#1066). See useSetImageFromVariant for why this matters.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
       });
     },
   });

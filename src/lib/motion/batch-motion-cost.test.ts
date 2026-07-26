@@ -9,17 +9,20 @@ import { snapDuration } from '@/lib/motion/motion-generation';
 
 const sequence = { videoModel: 'minimax_hailuo_02' };
 // `video_variants.model` of each shot's selected version (#1066).
-const selectedModelByShot = new Map([
-  ['shot-a', 'seedance_v2'],
-  ['shot-b', 'kling_v3_pro'],
-]);
+const shotModels = {
+  selected: new Map([
+    ['shot-a', 'seedance_v2'],
+    ['shot-b', 'kling_v3_pro'],
+  ]),
+  lastFailed: new Map<string, string>(),
+};
 
 describe('resolveBatchShotVideoModel', () => {
   it('prefers the explicit batch model over the selected version and sequence', () => {
     expect(
       resolveBatchShotVideoModel(
         { id: 'shot-a' },
-        selectedModelByShot,
+        shotModels,
         sequence,
         'kling_v3_pro'
       )
@@ -28,11 +31,7 @@ describe('resolveBatchShotVideoModel', () => {
 
   it("resolves the shot's selected video version model when no explicit model", () => {
     expect(
-      resolveBatchShotVideoModel(
-        { id: 'shot-a' },
-        selectedModelByShot,
-        sequence
-      )
+      resolveBatchShotVideoModel({ id: 'shot-a' }, shotModels, sequence)
     ).toBe('seedance_v2');
   });
 
@@ -40,10 +39,41 @@ describe('resolveBatchShotVideoModel', () => {
     expect(
       resolveBatchShotVideoModel(
         { id: 'shot-never-rendered' },
-        selectedModelByShot,
+        shotModels,
         sequence
       )
     ).toBe('minimax_hailuo_02');
+  });
+
+  it("prefers a failed attempt's model over the older selected version", () => {
+    // shot-a's last render failed on veo3_1; re-running the batch must retry
+    // that model, not silently fall back to the selected seedance_v2.
+    const withFailure = {
+      selected: shotModels.selected,
+      lastFailed: new Map([['shot-a', 'veo3_1']]),
+    };
+    expect(
+      resolveBatchShotVideoModel({ id: 'shot-a' }, withFailure, sequence)
+    ).toBe('veo3_1');
+    // Shots without a failure are untouched.
+    expect(
+      resolveBatchShotVideoModel({ id: 'shot-b' }, withFailure, sequence)
+    ).toBe('kling_v3_pro');
+  });
+
+  it('still lets an explicit batch model override a failed attempt', () => {
+    const withFailure = {
+      selected: shotModels.selected,
+      lastFailed: new Map([['shot-a', 'veo3_1']]),
+    };
+    expect(
+      resolveBatchShotVideoModel(
+        { id: 'shot-a' },
+        withFailure,
+        sequence,
+        'kling_v3_pro'
+      )
+    ).toBe('kling_v3_pro');
   });
 });
 
@@ -57,9 +87,9 @@ describe('estimateBatchMotionCost', () => {
       ),
       estimateVideoCost('kling_v3_pro', snapDuration(undefined, 'kling_v3_pro'))
     );
-    expect(
-      estimateBatchMotionCost(shots, selectedModelByShot, sequence)
-    ).toEqual(expected);
+    expect(estimateBatchMotionCost(shots, shotModels, sequence)).toEqual(
+      expected
+    );
   });
 
   it('prices every shot with the explicit batch model when given', () => {
@@ -70,7 +100,7 @@ describe('estimateBatchMotionCost', () => {
     );
     const expected = addMicros(addMicros(ZERO_MICROS, perShot), perShot);
     expect(
-      estimateBatchMotionCost(shots, selectedModelByShot, sequence, {
+      estimateBatchMotionCost(shots, shotModels, sequence, {
         explicitModel: 'kling_v3_pro',
         duration: 5,
       })
@@ -78,7 +108,7 @@ describe('estimateBatchMotionCost', () => {
   });
 
   it('is ZERO for an empty shot list', () => {
-    expect(estimateBatchMotionCost([], selectedModelByShot, sequence)).toEqual(
+    expect(estimateBatchMotionCost([], shotModels, sequence)).toEqual(
       ZERO_MICROS
     );
   });
