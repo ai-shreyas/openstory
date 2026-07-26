@@ -498,6 +498,54 @@ export const updateShotFn = createServerFn({ method: 'POST' })
     return context.scopedDb.shots.update(shotId, shotUpdate);
   });
 
+const updateShotDurationSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  durationSeconds: z.number().positive(),
+});
+
+/**
+ * Set a shot's duration — a **video** parameter, not a prompt driver.
+ *
+ * `sceneInputContext` (input-hash.ts) deliberately allowlists `durationSeconds`
+ * OUT of the prompt hashes, so changing it re-stales the render
+ * (`computeShotVideoInputHash`) and nothing else. That's why this is its own
+ * endpoint rather than a field on `updateSceneScriptFn`: a duration edit must
+ * not append a `scene_script_versions` row or touch prompt staleness.
+ *
+ * A scene has no duration of its own — its duration is the sum of its shots'
+ * (`tileSceneIntoSegments` reads exactly these values against the model cap).
+ * The `metadata.metadata.durationSeconds` write is the legacy mirror kept in
+ * step so the `resolveShotDuration` fallback can't read a stale value.
+ */
+export const updateShotDurationFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(updateShotDurationSchema))
+  .handler(async ({ data, context }) => {
+    const { shot, scene, script, scopedDb } = context;
+
+    const patch: Parameters<typeof scopedDb.shots.update>[1] = {
+      durationMs: Math.round(data.durationSeconds * 1000),
+    };
+    if (scene) {
+      patch.metadata = {
+        ...scene,
+        metadata: {
+          ...(scene.metadata ?? {
+            title: '',
+            location: '',
+            timeOfDay: '',
+            storyBeat: '',
+          }),
+          durationSeconds: data.durationSeconds,
+        },
+      };
+    }
+
+    const updated = (await scopedDb.shots.update(shot.id, patch)) ?? shot;
+    return projectShotForClient(updated, script);
+  });
+
 export const deleteShotFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(shotIdInputSchema))

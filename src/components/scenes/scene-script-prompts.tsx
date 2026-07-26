@@ -100,6 +100,7 @@ import { SceneElementsTab } from './scene-elements-tab';
 import { SceneLocationTab } from './scene-location-tab';
 import { SceneMusicFacet } from './scene-music-facet';
 import { SceneScriptTab } from './scene-script-tab';
+import { ShotDurationField } from './shot-duration-field';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -390,9 +391,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const [editedScript, setEditedScript] = useState<string | undefined>(
     undefined
   );
-  const [editedDurationSeconds, setEditedDurationSeconds] = useState<
-    number | undefined
-  >(undefined);
   const prevScriptShotIdRef = useRef<string | undefined>(undefined);
 
   // Previous value tracking for prop-to-state sync (refs avoid extra re-renders)
@@ -644,32 +642,21 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     });
   }, [shotPromptStream.motion.status, shotId, sequenceId, queryClient]);
 
-  // Persist a scene-script and/or duration edit via `scene_script_versions`
-  // (#1030). Repointing the selected version flips prompt-input-hash staleness
-  // on the scene's shots without forking the sequence.
+  // Persist a scene-script edit via `scene_script_versions` (#1030). Repointing
+  // the selected version flips prompt-input-hash staleness on the scene's shots
+  // without forking the sequence. (Duration is a separate, per-shot video
+  // parameter — see `ShotDurationField` on the Motion tab.)
   const saveScriptMutation = useMutation({
-    mutationFn: async (input: {
-      nextExtract: string;
-      nextDurationSeconds: number | undefined;
-    }) => {
+    mutationFn: async (nextExtract: string) => {
       if (!shot?.id) {
         throw new Error('shot required');
       }
-      const { nextExtract, nextDurationSeconds } = input;
       return await updateSceneScriptFn({
-        data: {
-          sequenceId,
-          shotId: shot.id,
-          extract: nextExtract,
-          ...(nextDurationSeconds !== undefined
-            ? { durationSeconds: nextDurationSeconds }
-            : {}),
-        },
+        data: { sequenceId, shotId: shot.id, extract: nextExtract },
       });
     },
     onSuccess: async (updated) => {
       setEditedScript(undefined);
-      setEditedDurationSeconds(undefined);
       queryClient.setQueryData(shotKeys.detail(updated.id), updated);
       await Promise.all([
         queryClient.invalidateQueries({
@@ -1223,7 +1210,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   if (shot?.id !== prevScriptShotIdRef.current) {
     prevScriptShotIdRef.current = shot?.id;
     setEditedScript(undefined);
-    setEditedDurationSeconds(undefined);
     // A new shot starts with a clean slate — its own saved prompt loads below.
     dirtyImageRef.current = false;
     dirtyMotionRef.current = false;
@@ -1358,15 +1344,11 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       <TabsContent value="script">
         <SceneScriptTab
           shot={shot}
-          sequenceId={sequenceId}
           scriptText={scriptText}
-          motionModel={effectiveMotionModel}
           editedScript={editedScript}
           onEditedScriptChange={setEditedScript}
-          editedDurationSeconds={editedDurationSeconds}
-          onEditedDurationChange={setEditedDurationSeconds}
           isSaving={saveScriptMutation.isPending}
-          onSave={(payload) => saveScriptMutation.mutate(payload)}
+          onSave={(nextExtract) => saveScriptMutation.mutate(nextExtract)}
           isCopied={copiedTab === 'script'}
           onCopy={(text) => void handleCopy(text, 'script')}
           mentionItems={mentionItems}
@@ -1639,6 +1621,17 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               selecting={selectSegmentVideoVersion.isPending}
             />
           )}
+
+          {/* Duration is a video parameter, not a prompt driver — it belongs
+              beside the model whose schema defines its legal values and the
+              segment its value tiles into, not under the scene script. Keyed by
+              shot so switching scenes drops any unsaved draft. */}
+          <ShotDurationField
+            key={shot?.id}
+            shot={shot}
+            sequenceId={sequenceId}
+            motionModel={effectiveMotionModel}
+          />
 
           {/* Thinking bar while the model reasons, before the regenerated
               prompt starts streaming back ('pending' → first delta). */}

@@ -43,13 +43,16 @@ const updateSceneScriptSchema = z.object({
   sequenceId: ulidSchema,
   shotId: ulidSchema,
   extract: z.string(),
-  durationSeconds: z.number().positive().optional(),
 });
 
 /**
  * Edit a scene's script by appending a `scene_script_versions` row and
  * repointing `selectedScriptVersionId` (#1030). Prompt-input-hash staleness
  * picks up the new `originalScript` automatically; no sequence fork.
+ *
+ * Duration is NOT edited here — it is a video parameter, not a prompt driver
+ * (see `updateShotDurationFn`), and it lives per-shot while the script lives
+ * per-scene.
  */
 export const updateSceneScriptFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
@@ -105,31 +108,9 @@ export const updateSceneScriptFn = createServerFn({ method: 'POST' })
       }
     }
 
-    const shotPatch: Parameters<typeof scopedDb.shots.update>[1] = {};
-    if (data.durationSeconds !== undefined) {
-      shotPatch.durationMs = Math.round(data.durationSeconds * 1000);
-      shotPatch.metadata = {
-        ...scene,
-        metadata: {
-          ...(scene.metadata ?? {
-            title: '',
-            location: '',
-            timeOfDay: '',
-            storyBeat: '',
-          }),
-          durationSeconds: data.durationSeconds,
-        },
-      };
-    }
-
-    const updatedShot =
-      Object.keys(shotPatch).length > 0
-        ? ((await scopedDb.shots.update(shot.id, shotPatch)) ?? shot)
-        : shot;
-
     const refreshedScript =
       (await scopedDb.sceneScriptVersions.getSelected(sceneId))?.content ??
       currentScript;
 
-    return projectShotForClient(updatedShot, refreshedScript);
+    return projectShotForClient(shot, refreshedScript);
   });

@@ -1,46 +1,24 @@
 /**
  * Scene Script Tab
- * Edits the scene script extract and duration. Duration options are sourced
- * from the selected motion model's JSON Schema so the user can only pick
- * values the model accepts.
+ * Edits the scene script extract. Duration is NOT edited here — it is a video
+ * parameter (hashed only by `computeShotVideoInputHash`) and lives per-shot,
+ * so it sits on the Motion tab next to the model that defines its legal values
+ * and the segment it feeds. See `ShotDurationField`.
  */
 
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import type { MentionItem } from '@/components/scenes/prompt-mention/mention-items';
 import { MarkdownEditor } from '@/components/text-editor/markdown-editor';
-import { estimateSceneDurationFn } from '@/functions/ai';
-import { IMAGE_TO_VIDEO_MODELS, type ImageToVideoModel } from '@/lib/ai/models';
-import { MOTION_JSON_SCHEMAS } from '@/lib/motion/endpoint-map';
-import { snapDuration } from '@/lib/motion/motion-generation';
-import { getDurationValues, numericOf } from '@/lib/motion/motion-transform';
 import type { Shot } from '@/types/database';
-import { useMutation } from '@tanstack/react-query';
-import { CopyIcon, Loader2, Sparkles } from 'lucide-react';
-import { toast } from 'sonner';
-
-type SceneScriptTabSavePayload = {
-  nextExtract: string;
-  nextDurationSeconds: number | undefined;
-};
+import { CopyIcon, Loader2 } from 'lucide-react';
 
 type SceneScriptTabProps = {
   shot: Shot | undefined;
-  sequenceId: string;
   scriptText: string | undefined;
-  motionModel: ImageToVideoModel;
   editedScript: string | undefined;
   onEditedScriptChange: (value: string | undefined) => void;
-  editedDurationSeconds: number | undefined;
-  onEditedDurationChange: (value: number | undefined) => void;
   isSaving: boolean;
-  onSave: (payload: SceneScriptTabSavePayload) => void;
+  onSave: (nextExtract: string) => void;
   isCopied: boolean;
   onCopy: (text: string) => void;
   /** Pills the script's bare slugs for elements/cast/locations. */
@@ -49,13 +27,9 @@ type SceneScriptTabProps = {
 
 export const SceneScriptTab: React.FC<SceneScriptTabProps> = ({
   shot,
-  sequenceId,
   scriptText,
-  motionModel,
   editedScript,
   onEditedScriptChange,
-  editedDurationSeconds,
-  onEditedDurationChange,
   isSaving,
   onSave,
   isCopied,
@@ -64,72 +38,8 @@ export const SceneScriptTab: React.FC<SceneScriptTabProps> = ({
 }) => {
   const savedScript = scriptText ?? '';
   const currentScript = editedScript ?? savedScript;
-  const isScriptDirty =
-    editedScript !== undefined && editedScript !== savedScript;
-
-  const savedDurationSeconds =
-    shot?.durationMs && shot.durationMs > 0
-      ? shot.durationMs / 1000
-      : shot?.metadata?.metadata?.durationSeconds;
-
-  // Drive the options off the selected motion model's JSON Schema so the user
-  // can only pick a value the model actually accepts. If the saved value isn't
-  // in the set (model changed since last save, or legacy data), snapping
-  // surfaces a pending edit so Save re-anchors the shot onto a valid duration.
-  const durationOptions = getDurationValues(
-    MOTION_JSON_SCHEMAS[IMAGE_TO_VIDEO_MODELS[motionModel].id]
-  ).map(numericOf);
-  const snappedSavedSeconds = snapDuration(savedDurationSeconds, motionModel);
-  const isSavedOutOfRange =
-    savedDurationSeconds !== undefined &&
-    snappedSavedSeconds !== savedDurationSeconds;
-  const currentDurationSeconds = editedDurationSeconds ?? snappedSavedSeconds;
-  const isDurationDirty =
-    editedDurationSeconds !== undefined
-      ? editedDurationSeconds !== savedDurationSeconds
-      : isSavedOutOfRange;
-
-  const estimateMutation = useMutation({
-    mutationFn: async () => {
-      if (!shot?.id) throw new Error('shot required');
-      if (!currentScript.trim()) throw new Error('script is empty');
-      return estimateSceneDurationFn({
-        data: {
-          sequenceId,
-          shotId: shot.id,
-          extract: currentScript,
-        },
-      });
-    },
-    onSuccess: ({ durationSeconds }) => {
-      const snapped = snapDuration(durationSeconds, motionModel);
-      onEditedDurationChange(snapped);
-      toast.success(`Suggested duration: ${snapped}s`);
-    },
-    onError: (error) => {
-      toast.error('Duration estimate failed', {
-        description: error instanceof Error ? error.message : 'Unknown error',
-      });
-    },
-  });
-
-  const isDirty = isScriptDirty || isDurationDirty;
-  const isEstimating = estimateMutation.isPending;
-  const canSave = isDirty && !!shot?.metadata && !isSaving && !isEstimating;
-  const canEstimate =
-    !!shot && !!currentScript.trim() && !isSaving && !isEstimating;
-
-  const handleCancel = () => {
-    onEditedScriptChange(undefined);
-    onEditedDurationChange(undefined);
-  };
-
-  const handleSave = () => {
-    onSave({
-      nextExtract: currentScript,
-      nextDurationSeconds: isDurationDirty ? currentDurationSeconds : undefined,
-    });
-  };
+  const isDirty = editedScript !== undefined && editedScript !== savedScript;
+  const canSave = isDirty && !!shot?.metadata && !isSaving;
 
   return (
     <div className="space-y-3">
@@ -169,53 +79,20 @@ export const SceneScriptTab: React.FC<SceneScriptTabProps> = ({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <label htmlFor="scene-duration-input" className="text-sm font-medium">
-          Duration (seconds)
-        </label>
-        <div className="flex items-center gap-2">
-          <Select
-            value={String(currentDurationSeconds)}
-            onValueChange={(value) => onEditedDurationChange(Number(value))}
-            disabled={!shot || isSaving || isEstimating}
-          >
-            <SelectTrigger id="scene-duration-input" className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {durationOptions.map((seconds) => (
-                <SelectItem key={seconds} value={String(seconds)}>
-                  {seconds}s
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => estimateMutation.mutate()}
-            disabled={!canEstimate}
-          >
-            {isEstimating ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="mr-2 h-4 w-4" />
-            )}
-            {isEstimating ? 'Estimating…' : 'Estimate'}
-          </Button>
-        </div>
-      </div>
-
       <div className="flex items-center justify-end gap-2">
         <Button
           size="sm"
           variant="outline"
-          onClick={handleCancel}
+          onClick={() => onEditedScriptChange(undefined)}
           disabled={!isDirty || isSaving}
         >
           Cancel
         </Button>
-        <Button size="sm" onClick={handleSave} disabled={!canSave}>
+        <Button
+          size="sm"
+          onClick={() => onSave(currentScript)}
+          disabled={!canSave}
+        >
           {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {isSaving ? 'Saving…' : 'Save'}
         </Button>
