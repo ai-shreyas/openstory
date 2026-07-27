@@ -9,7 +9,7 @@
 import type { Database } from '@/lib/db/client';
 import { scenes } from '@/lib/db/schema';
 import type { DbSceneId, NewScene, SceneRow } from '@/lib/db/schema';
-import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 
 type SceneOrderBy = 'orderIndex' | 'createdAt' | 'updatedAt';
 
@@ -122,6 +122,32 @@ export function createScenesMethods(db: Database) {
       const result = await db
         .delete(scenes)
         .where(eq(scenes.sequenceId, sequenceId));
+      // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime
+      return result.rowsAffected ?? 0;
+    },
+
+    /**
+     * Drop scenes at `orderIndex >= minOrderIndex` for a sequence. Used after
+     * an upsert-based rewrite when a re-analyze produced fewer scenes than
+     * before — the stream/reconcile path keeps stable row ids for the kept
+     * indexes, so we only remove the tail.
+     *
+     * Callers must ensure no `shots.scene_id` still points at those rows:
+     * the migration-added FK is bare `REFERENCES scenes(id)` (no ON DELETE
+     * SET NULL), so a delete with live shot links fails (#1072).
+     */
+    deleteFromOrderIndex: async (
+      sequenceId: string,
+      minOrderIndex: number
+    ): Promise<number> => {
+      const result = await db
+        .delete(scenes)
+        .where(
+          and(
+            eq(scenes.sequenceId, sequenceId),
+            gte(scenes.orderIndex, minOrderIndex)
+          )
+        );
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime
       return result.rowsAffected ?? 0;
     },

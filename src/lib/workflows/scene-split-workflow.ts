@@ -41,11 +41,10 @@ import type { TokenUsage } from '@tanstack/ai';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
 import {
   buildSceneInsert,
-  buildSceneInserts,
   buildSceneShotLinks,
 } from '@/lib/ai/scene-persistence';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
-import type { NewShot } from '@/lib/db/schema';
+import { dbSceneId, type NewShot } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { ShotWithAnchorFrame } from '@/lib/db/scoped/shots';
 import { getChatPrompt } from '@/lib/prompts';
@@ -591,22 +590,27 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
       });
     }
 
-    // Step 4b (#908 / #1072): authoritative rewrite of `scenes` rows + shot
-    // links after reconcile. Streaming already upserts a 1:1 scenes↔shots
-    // mapping as each analysis scene lands (so the spine groups mid-run), and
-    // reconcile re-links any shots the stream missed. This step rewrites from
-    // the final reconciled set so a re-analyze with a different scene count
-    // cannot leave orphan orderIndexes, then seeds scene_script_versions.
-    // Multi-shot emission (#910) keeps this rewrite; only the stream helper
-    // changes when one scene owns N shots.
+    // Step 4b (#908 / #1072): authoritative upsert of `scenes` rows + shot
+    // links after reconcile. Streaming and reconcile already wrote 1:1 rows;
+    // this step re-upserts the final set (stable ids via orderIndex), re-links
+    // shots, seeds scene_script_versions, and trims orphan tail rows if a
+    // re-analyze produced fewer scenes.
     //
-    // Idempotent on replay: delete-then-recreate within the step.
+    // Do NOT delete-then-recreate: `shots.scene_id` is a bare
+    // `REFERENCES scenes(id)` in the migration (no ON DELETE SET NULL), so
+    // deleting stream-linked scenes fails with DrizzleQueryError (#1072).
     if (sequenceId && reconciled.scenes.length > 0) {
       await step.do('persist-scenes', async () => {
-        await scopedDb.scenes.deleteBySequence(sequenceId);
-
-        const sceneInserts = buildSceneInserts(sequenceId, reconciled.scenes);
-        const sceneRows = await scopedDb.scenes.createBulk(sceneInserts);
+        const sceneRows = [];
+        for (let index = 0; index < reconciled.scenes.length; index++) {
+          const scene = reconciled.scenes[index];
+          if (!scene) continue;
+          sceneRows.push(
+            await scopedDb.scenes.upsert(
+              buildSceneInsert(sequenceId, scene, index)
+            )
+          );
+        }
 
         // Link each shot to its scene row by analysisSceneId → orderIndex →
         // row (see buildSceneShotLinks — keyed on the unique orderIndex, not
@@ -624,6 +628,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           );
         }
 
+        const keptSceneIds = new Set(sceneRows.map((row) => row.id));
         const missingShotIds: string[] = [];
         for (const { shotId, sceneId, shotNumber } of links) {
           const updated = await scopedDb.shots.update(
@@ -639,6 +644,24 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
             { sequenceId, missingShotIds }
           );
         }
+
+        // Before trimming orphan tail scenes, clear any shot links that still
+        // point at them (re-analyze edge: fewer scenes than last run). The
+        // migration FK is RESTRICT-by-default without ON DELETE SET NULL.
+        const allShots = await scopedDb.shots.listBySequence(sequenceId);
+        for (const shot of allShots) {
+          if (shot.sceneId && !keptSceneIds.has(dbSceneId(shot.sceneId))) {
+            await scopedDb.shots.update(
+              shot.id,
+              { sceneId: null, shotNumber: null },
+              { throwOnMissing: false }
+            );
+          }
+        }
+        await scopedDb.scenes.deleteFromOrderIndex(
+          sequenceId,
+          reconciled.scenes.length
+        );
 
         await scopedDb.sceneScriptVersions.seedSplitFromSceneRows(sceneRows);
       });

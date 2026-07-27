@@ -192,6 +192,30 @@ export function analyzeFailures(
     requiresFullRetry = true;
   }
 
+  // Mid-pipeline crash (e.g. scene-split after streaming some shots, #1072):
+  // later phases never ran, so the only "failures" are missing motion/music
+  // prompts. That is not a real music-prompt failure — smart-retry would
+  // mislead. Prefer the sequence statusError and force full regenerate.
+  const onlyMissingDownstreamArtifacts =
+    groups.length > 0 &&
+    groups.every(
+      (g) => g.category === 'music-prompt' || g.category === 'motion-prompts'
+    );
+  if (
+    sequence.status === 'failed' &&
+    sequence.statusError &&
+    onlyMissingDownstreamArtifacts
+  ) {
+    return {
+      requiresFullRetry: true,
+      headline: 'Generation failed \u2014 full retry required',
+      groups: [],
+      totalFailures: 1,
+      hasFailed: true,
+      error: sequence.statusError,
+    };
+  }
+
   const totalFailures = groups.reduce(
     (sum, g) => sum + Math.max(g.shots.length, 1),
     0
