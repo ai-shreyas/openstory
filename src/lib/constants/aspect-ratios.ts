@@ -87,3 +87,51 @@ export const getAspectRatioClassName = (aspectRatio: AspectRatio): string => {
   };
   return mapping[aspectRatio];
 };
+
+/**
+ * Width ÷ height for layout math (fit-in-box, canvas sizing).
+ */
+export const aspectRatioValue = (aspectRatio: AspectRatio): number => {
+  const data = getAspectRatioData(aspectRatio);
+  if (!data) return 16 / 9;
+  return data.width / data.height;
+};
+
+/**
+ * Largest box of `aspectRatio` that fits inside `boxWidth` × `boxHeight`.
+ * Used by the Scenes canvas so 9:16 fills available height without overflowing,
+ * and 16:9 fills width without exceeding the stage.
+ */
+export const fitAspectRatioInBox = (
+  boxWidth: number,
+  boxHeight: number,
+  aspectRatio: AspectRatio
+): { width: number; height: number } => {
+  if (boxWidth <= 0 || boxHeight <= 0) {
+    return { width: 0, height: 0 };
+  }
+  const ar = aspectRatioValue(aspectRatio);
+  let width = boxWidth;
+  let height = width / ar;
+  if (height > boxHeight) {
+    height = boxHeight;
+    width = height * ar;
+  }
+  return { width, height };
+};
+
+/**
+ * Tailwind classes that size a frame to the largest aspect-correct rectangle
+ * inside a `container-type: size` parent (uses cqw/cqh). Full class names so
+ * Tailwind JIT always sees them.
+ */
+export const getCanvasFitClassName = (aspectRatio: AspectRatio): string => {
+  const mapping: Record<AspectRatio, string> = {
+    '16:9':
+      'aspect-video w-[min(100cqw,calc(100cqh*16/9))] h-[min(100cqh,calc(100cqw*9/16))]',
+    '9:16':
+      'aspect-[9/16] w-[min(100cqw,calc(100cqh*9/16))] h-[min(100cqh,calc(100cqw*16/9))]',
+    '1:1': 'aspect-square w-[min(100cqw,100cqh)] h-[min(100cqh,100cqw)]',
+  };
+  return mapping[aspectRatio];
+};

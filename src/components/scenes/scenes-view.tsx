@@ -62,10 +62,7 @@ import {
   resolveImageModel,
   resolveVideoModel,
 } from '@/lib/ai/resolve-asset-models';
-import {
-  DEFAULT_ASPECT_RATIO,
-  type AspectRatio,
-} from '@/lib/constants/aspect-ratios';
+import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { FrameVariant, SceneRow, ShotVariant } from '@/lib/db/schema';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
@@ -177,15 +174,6 @@ const CompareWithPromptDiff: React.FC<{
     />
   );
 };
-
-// Full class names required for Tailwind JIT to detect at build time
-// Split into max-width (for the wrapper, enables centering) and max-height (for the player div)
-const PLAYER_MAX_W_BY_RATIO: Record<AspectRatio, string> = {
-  '16:9': 'max-w-[calc(50vh*1.7777777777777777)]',
-  '9:16': 'max-w-[calc(50vh*0.5625)]',
-  '1:1': 'max-w-[50vh]',
-};
-const PLAYER_MAX_H = 'max-h-[50vh]';
 
 type RegenerationType = 'image' | 'motion' | 'scene-variants';
 
@@ -1342,8 +1330,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                     ?.phaseName
                 }
                 retry={selectedShotRetry}
-                playerClassName={PLAYER_MAX_H}
-                playerWrapperClassName={PLAYER_MAX_W_BY_RATIO[aspectRatio]}
                 onSelectShot={handleSelectShot}
                 sceneImageModel={resolvedImageModel}
                 regeneratingSceneVariants={regeneratingSceneVariants}

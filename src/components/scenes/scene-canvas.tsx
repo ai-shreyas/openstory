@@ -1,4 +1,5 @@
 import { ScenePlayer } from '@/components/motion/scene-player';
+import { CanvasMediaStage } from '@/components/scenes/canvas-media-stage';
 import { StartingFrameVariants } from '@/components/scenes/starting-frame-variants';
 import { SequencePlayer } from '@/components/theatre/sequence-player';
 import { useSequenceExport } from '@/components/theatre/use-sequence-export';
@@ -42,8 +43,6 @@ type SceneCanvasProps = {
   modelMismatchLabel?: string | null;
   progressMessage?: string;
   retry?: { attempt: number; maxAttempts?: number };
-  playerClassName?: string;
-  playerWrapperClassName?: string;
   onSelectShot?: (shotId: string) => void;
   /** Scene-level image model (#909) used to generate starting-frame variants. */
   sceneImageModel?: TextToImageModel;
@@ -163,8 +162,6 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
   modelMismatchLabel,
   progressMessage,
   retry,
-  playerClassName,
-  playerWrapperClassName,
   onSelectShot,
   sceneImageModel,
   regeneratingSceneVariants,
@@ -188,7 +185,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
 
   if (loadError) {
     return (
-      <div className="flex flex-1 items-center justify-center p-8">
+      <div className="flex min-h-0 flex-1 items-center justify-center p-8">
         <p
           role="alert"
           className="max-w-md text-center text-sm text-destructive"
@@ -201,9 +198,9 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
 
   if (!shots) {
     return (
-      <div className="flex flex-1 items-center justify-center p-8">
-        <Skeleton className="aspect-video w-full max-w-2xl" />
-      </div>
+      <CanvasMediaStage aspectRatio={aspectRatio}>
+        <Skeleton className="h-full w-full rounded-lg" />
+      </CanvasMediaStage>
     );
   }
 
@@ -222,7 +219,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         />
       ) : undefined;
     return (
-      <div className="flex flex-1 flex-col items-center gap-4 px-4 py-4 md:px-8">
+      <CanvasMediaStage aspectRatio={aspectRatio}>
         <ScenePlayer
           shots={playerShots}
           selectedShotId={selection.shotId}
@@ -236,17 +233,17 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
           progressMessage={progressMessage}
           retry={retry}
           posterUrl={sequence?.posterUrl ?? undefined}
-          className={playerClassName}
-          wrapperClassName={playerWrapperClassName}
+          className="h-full max-h-none w-full"
+          wrapperClassName="h-full w-full"
           frameOverlay={frameOverlay}
         />
-      </div>
+      </CanvasMediaStage>
     );
   }
 
   if (playbackScenes.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 py-16">
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 py-16">
         <Film className="h-8 w-8 text-muted-foreground" />
         <p className="text-muted-foreground">No scenes ready to play yet</p>
         <p className="max-w-md text-center text-sm text-muted-foreground">
@@ -256,25 +253,26 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
     );
   }
 
+  if (!sequence) {
+    return null;
+  }
+
   return (
-    <div className="flex flex-1 flex-col items-center gap-4 px-4 py-4 md:px-8">
-      {sequence && (
-        <div className="w-full max-w-4xl">
-          <SequencePlayer
-            scenes={playbackScenes}
-            musicUrl={scope === 'sequence' ? (sequence.musicUrl ?? null) : null}
-            musicLoudnessGainDb={null}
-            musicEnabled={scope === 'sequence' ? sequence.includeMusic : false}
-            onMusicEnabledChange={(enabled) => setMusicEnabled.mutate(enabled)}
-            aspectRatio={aspectRatio}
-            overlayActions={
-              scope === 'sequence' ? (
-                <TheatreShareOverlay sequence={sequence} />
-              ) : undefined
-            }
-          />
-        </div>
-      )}
-    </div>
+    <CanvasMediaStage aspectRatio={aspectRatio}>
+      <SequencePlayer
+        scenes={playbackScenes}
+        musicUrl={scope === 'sequence' ? (sequence.musicUrl ?? null) : null}
+        musicLoudnessGainDb={null}
+        musicEnabled={scope === 'sequence' ? sequence.includeMusic : false}
+        onMusicEnabledChange={(enabled) => setMusicEnabled.mutate(enabled)}
+        aspectRatio={aspectRatio}
+        className="h-full max-h-none w-full"
+        overlayActions={
+          scope === 'sequence' ? (
+            <TheatreShareOverlay sequence={sequence} />
+          ) : undefined
+        }
+      />
+    </CanvasMediaStage>
   );
 };

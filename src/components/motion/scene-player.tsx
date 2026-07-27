@@ -301,7 +301,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
     : (overrideVideoUrl ?? currentShot.videoUrl ?? '');
 
   return (
-    <div className={cn('flex w-full flex-col', wrapperClassName)}>
+    <div className={cn('relative flex w-full flex-col', wrapperClassName)}>
       {hasFailedVideo ? (
         <div
           className={cn(
@@ -432,7 +432,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             src={playbackVideoUrl}
             posterSrc={displayImage}
             aspectRatio={aspectRatio}
-            className="w-full"
+            className="h-full w-full"
             autoPlay={shouldAutoPlay}
             onTimeUpdate={onTimeUpdate}
             onPause={handlePause}
@@ -469,9 +469,11 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           {frameOverlay}
         </div>
       )}
+      {/* Sits just under the frame; CanvasMediaStage reserves a caption band
+          so this is not clipped when 9:16 fills the stage (#1074). */}
       <p
         className={cn(
-          'text-xs italic py-1 transition-opacity duration-300',
+          'pointer-events-none absolute inset-x-0 top-full pt-1 text-center text-xs italic transition-opacity duration-300',
           isPreviewImage
             ? 'text-muted-foreground opacity-100'
             : 'opacity-0 select-none'
