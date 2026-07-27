@@ -1381,6 +1381,21 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             </Alert>
           )}
 
+          {/* Prompt-stale banner — above the field so it reads with the text
+              it refers to, not below History / actions. Hide while regenerating
+              so "Inputs changed" doesn't sit over a streaming field. */}
+          {staleness?.visualPrompt === 'stale' &&
+            !isRegeneratingVisualPrompt && (
+              <StalenessIndicator
+                artifact="visual-prompt"
+                entityType="shot"
+                density="inline"
+                onRegenerate={() =>
+                  regeneratePromptMutation.mutate({ promptType: 'visual' })
+                }
+              />
+            )}
+
           {/* Editable prompt */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1392,7 +1407,13 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               </label>
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground">
-                  {(editedImagePrompt || imagePrompt || '').length} characters
+                  {
+                    (isAwaitingVisualPrompt
+                      ? shotPromptStream.visual.text
+                      : editedImagePrompt || imagePrompt || ''
+                    ).length
+                  }{' '}
+                  characters
                 </span>
                 <PromptCopyButton
                   text={editedImagePrompt || imagePrompt || ''}
@@ -1406,7 +1427,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             <MarkdownEditor
               id="image-prompt-input"
               value={
-                isStreamingVisualPrompt
+                isAwaitingVisualPrompt
                   ? shotPromptStream.visual.text
                   : editedImagePrompt || imagePrompt || ''
               }
@@ -1420,14 +1441,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                 imageFocusedRef.current = true;
               }}
               placeholder={
-                isStreamingVisualPrompt
-                  ? 'Streaming prompt…'
-                  : isGenerating
-                    ? 'Prompt is being generated…'
-                    : 'Enter image prompt… (type @ to insert elements, cast, locations)'
+                isAwaitingVisualPrompt
+                  ? isStreamingVisualPrompt
+                    ? 'Streaming prompt…'
+                    : 'Regenerating prompt…'
+                  : 'Enter image prompt… (type @ to insert elements, cast, locations)'
               }
               className="min-h-[120px]"
-              disabled={isGenerating || isStreamingVisualPrompt}
+              // Lock while streaming so local edits can't fight the LLM.
+              disabled={isAwaitingVisualPrompt}
               mentionItems={mentionItems}
             />
             {visualPromptDirty && (
@@ -1465,13 +1487,13 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             <ImageModelSelector
               selectedModel={effectiveImageModel}
               onModelChange={(model) => onImageModelChange?.(model)}
-              disabled={isGenerating}
               recommendedImageModel={recommendedImageModel}
               styleName={styleName}
               generatedStatuses={imageModelStatuses}
             />
             <p className="text-xs text-muted-foreground">
-              Changing the model applies to the next generation.
+              Changing the model applies to the next generation. In-flight gens
+              still finish into history.
             </p>
           </div>
 
@@ -1503,7 +1525,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               onClick={() => void handleShortenPrompt()}
               disabled={
                 shortenStatus.loading ||
-                isGenerating ||
                 !editedImagePrompt ||
                 editedImagePrompt.length < 20
               }
@@ -1526,19 +1547,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               History
             </Button>
           </div>
-
-          {/* Prompt-stale regenerate banner */}
-          {staleness?.visualPrompt === 'stale' && (
-            <StalenessIndicator
-              artifact="visual-prompt"
-              entityType="shot"
-              density="inline"
-              onRegenerate={() =>
-                regeneratePromptMutation.mutate({ promptType: 'visual' })
-              }
-              isRegenerating={isRegeneratingVisualPrompt}
-            />
-          )}
 
           {/* Explicit regenerate-prompt button — streams a fresh LLM
               completion straight into the textarea so the user sees the
@@ -1644,6 +1652,19 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               prompt starts streaming back ('pending' → first delta). */}
           <ThinkingBar active={shotPromptStream.motion.status === 'pending'} />
 
+          {/* Prompt-stale banner — above the field (same as image tab). */}
+          {staleness?.motionPrompt === 'stale' &&
+            !isRegeneratingMotionPrompt && (
+              <StalenessIndicator
+                artifact="motion-prompt"
+                entityType="shot"
+                density="inline"
+                onRegenerate={() =>
+                  regeneratePromptMutation.mutate({ promptType: 'motion' })
+                }
+              />
+            )}
+
           {/* Editable raw motion prompt */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1655,7 +1676,13 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               </label>
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground">
-                  {(editedMotionPrompt || rawMotionPrompt).length} characters
+                  {
+                    (isAwaitingMotionPrompt
+                      ? shotPromptStream.motion.text
+                      : editedMotionPrompt || rawMotionPrompt
+                    ).length
+                  }{' '}
+                  characters
                 </span>
                 <PromptCopyButton
                   text={editedMotionPrompt || rawMotionPrompt}
@@ -1669,7 +1696,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             <MarkdownEditor
               id="motion-prompt-input"
               value={
-                isStreamingMotionPrompt
+                isAwaitingMotionPrompt
                   ? shotPromptStream.motion.text
                   : editedMotionPrompt || rawMotionPrompt
               }
@@ -1681,16 +1708,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                 motionFocusedRef.current = true;
               }}
               placeholder={
-                isStreamingMotionPrompt
-                  ? 'Streaming prompt…'
-                  : isGeneratingMotion
-                    ? 'Prompt is being generated…'
-                    : 'Enter motion prompt… (type @ to insert elements, cast, locations)'
+                isAwaitingMotionPrompt
+                  ? isStreamingMotionPrompt
+                    ? 'Streaming prompt…'
+                    : 'Regenerating prompt…'
+                  : 'Enter motion prompt… (type @ to insert elements, cast, locations)'
               }
               className="min-h-[120px]"
-              disabled={
-                isGenerating || isGeneratingMotion || isStreamingMotionPrompt
-              }
+              // Lock while streaming so local edits can't fight the LLM.
+              disabled={isAwaitingMotionPrompt}
               mentionItems={mentionItems}
             />
             {motionPromptDirty && (
@@ -1727,7 +1753,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             <MotionModelSelector
               selectedModel={effectiveMotionModel}
               onModelChange={(model) => onVideoModelChange?.(model)}
-              disabled={isGenerating || isGeneratingMotion}
               aspectRatio={aspectRatio}
               styleCategory={styleCategory}
               recommendedVideoModel={recommendedVideoModel}
@@ -1789,19 +1814,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             <History className="mr-2 h-4 w-4" />
             History
           </Button>
-
-          {/* Prompt-stale regenerate banner */}
-          {staleness?.motionPrompt === 'stale' && (
-            <StalenessIndicator
-              artifact="motion-prompt"
-              entityType="shot"
-              density="inline"
-              onRegenerate={() =>
-                regeneratePromptMutation.mutate({ promptType: 'motion' })
-              }
-              isRegenerating={isRegeneratingMotionPrompt}
-            />
-          )}
 
           {/* Explicit regenerate-prompt button — streams a fresh LLM
               completion straight into the textarea. See the image-prompt tab

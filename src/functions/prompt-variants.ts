@@ -396,11 +396,10 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
       return { workflowRunId: null, alreadyUpToDate: true } as const;
     }
 
-    // Stream incremental deltas only on the explicit force-regen path — the
-    // user is actively watching the shot in that case. The auto-staleness
-    // path can land later when the user isn't viewing this shot, so we skip
-    // the realtime publishes to avoid burning Redis ops for a stream nobody
-    // is consuming.
+    // Always stream deltas for this endpoint — it's only invoked from the
+    // shot inspector (stale banner or force regenerate), so a viewer is
+    // watching. Binding emitStreaming to `force` alone left the stale-banner
+    // path silent (no shotPrompt.streaming events → textarea never updates).
     // Fields common to both prompt workflows. The two trigger calls below build
     // their input in a NARROWED, per-type block (not a `A | B` union) so the
     // compiler enforces each workflow's required fields — a union literal only
@@ -420,7 +419,7 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
       styleConfig: ctx.styleConfig,
       analysisModelId:
         getAnalysisModelById(ctx.analysisModel)?.id ?? DEFAULT_ANALYSIS_MODEL,
-      emitStreaming: data.force === true,
+      emitStreaming: true,
     };
 
     // Force-regen needs a unique dedup ID per click so the workflow trigger
