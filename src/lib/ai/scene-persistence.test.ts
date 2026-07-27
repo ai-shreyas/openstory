@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { dbSceneId } from '@/lib/db/schema';
 import type { SceneRow } from '@/lib/db/schema';
 import type { Scene } from './scene-analysis.schema';
-import { buildSceneInserts, buildSceneShotLinks } from './scene-persistence';
+import {
+  buildSceneInsert,
+  buildSceneInserts,
+  buildSceneShotLinks,
+} from './scene-persistence';
 
 function makeScene(overrides: Partial<Scene> = {}): Scene {
   return {
@@ -27,6 +31,22 @@ function makeScene(overrides: Partial<Scene> = {}): Scene {
     ...overrides,
   };
 }
+
+describe('buildSceneInsert', () => {
+  it('maps a single analysis scene onto a scene row at the given orderIndex', () => {
+    const row = buildSceneInsert('seq-1', makeScene(), 3);
+    expect(row).toMatchObject({
+      sequenceId: 'seq-1',
+      orderIndex: 3,
+      location: 'INT. OFFICE - DAY',
+      timeOfDay: 'day',
+      storyBeat: 'introduction',
+      title: 'Entrance',
+    });
+    expect(row.continuity?.environmentTag).toBe('office');
+    expect(row.originalScript?.extract).toBe('A man walks in.');
+  });
+});
 
 describe('buildSceneInserts', () => {
   it('maps scene-level fields onto scene rows with 0-based orderIndex', () => {

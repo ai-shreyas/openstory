@@ -1,5 +1,6 @@
 import { characterSheetVariantKeys } from '@/hooks/use-character-sheet-variants';
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
+import { sceneKeys } from '@/hooks/use-scenes';
 import { shotKeys } from '@/hooks/use-shots';
 import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
@@ -104,11 +105,18 @@ export function updateQueryCacheFromEvent(
 
   switch (eventName) {
     case 'generation.shot:created':
-      // Debounced invalidation - multiple rapid events = one refetch
+      // Debounced invalidation - multiple rapid events = one refetch.
+      // Stream-time scene-split now also writes a `scenes` row + sceneId
+      // link for each shot (#1072), so the spine list must refetch too.
       debouncedInvalidate(
         queryClient,
         shotKeys.list(sequenceId),
         `shots:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
       );
       break;
 
@@ -506,7 +514,7 @@ export function updateQueryCacheFromEvent(
       break;
 
     case 'generation.scene:updated': {
-      // Update shot metadata title in cache by matching sceneId
+      // Update shot metadata title in cache by matching analysis sceneId
       const sceneId = getString(data, 'sceneId');
       const title = getString(data, 'title');
       if (sceneId && title) {
@@ -529,10 +537,37 @@ export function updateQueryCacheFromEvent(
             })
         );
       }
+      // Stream also upserts the scenes row (title/location/…) — refetch the
+      // spine grouping source so scene headers stay in sync (#1072).
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        shotKeys.list(sequenceId),
+        `shots:${sequenceId}`
+      );
       break;
     }
 
+    case 'generation.scene:new':
+      // Analysis now persists a scenes row as each scene completes (#1072).
+      // Refetch so the spine grows scene groups live instead of only after
+      // the late bulk persist-scenes step.
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        shotKeys.list(sequenceId),
+        `shots:${sequenceId}`
+      );
+      break;
+
     // Phase events don't need cache updates (UI-only via reducer state)
-    // scene:new events don't need cache updates (analysis phase, no shots yet)
   }
 }

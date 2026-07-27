@@ -16,6 +16,34 @@ import type { DbSceneId, NewScene, SceneRow } from '@/lib/db/schema';
 import type { Scene } from './scene-analysis.schema';
 
 /**
+ * Build one `scenes` insert row for a single analysis scene at a known
+ * 0-based `orderIndex`. Used during streaming split so the spine can group
+ * shots under scene headers as soon as each scene lands — not only after the
+ * final bulk `persist-scenes` step.
+ *
+ * Today analysis is still 1 scene = 1 shot; multi-shot emission (#910) will
+ * keep calling this once per narrative scene and attach N shots to the same
+ * row via `shots.sceneId`.
+ */
+export function buildSceneInsert(
+  sequenceId: string,
+  scene: Scene,
+  orderIndex: number
+): NewScene {
+  return {
+    sequenceId,
+    orderIndex,
+    location: scene.metadata?.location ?? null,
+    timeOfDay: scene.metadata?.timeOfDay ?? null,
+    storyBeat: scene.metadata?.storyBeat ?? null,
+    title: scene.metadata?.title ?? null,
+    continuity: scene.continuity ?? null,
+    musicDesign: scene.musicDesign ?? null,
+    originalScript: scene.originalScript,
+  };
+}
+
+/**
  * Build the `scenes` insert rows for a sequence from the ordered analysis
  * scenes. `orderIndex` is the scene's position in the analysis output (0-based),
  * which is the unique key the `scenes` table sorts and de-duplicates on.
@@ -24,17 +52,9 @@ export function buildSceneInserts(
   sequenceId: string,
   scenes: ReadonlyArray<Scene>
 ): NewScene[] {
-  return scenes.map((scene, index) => ({
-    sequenceId,
-    orderIndex: index,
-    location: scene.metadata?.location ?? null,
-    timeOfDay: scene.metadata?.timeOfDay ?? null,
-    storyBeat: scene.metadata?.storyBeat ?? null,
-    title: scene.metadata?.title ?? null,
-    continuity: scene.continuity ?? null,
-    musicDesign: scene.musicDesign ?? null,
-    originalScript: scene.originalScript,
-  }));
+  return scenes.map((scene, index) =>
+    buildSceneInsert(sequenceId, scene, index)
+  );
 }
 
 /** A shot→scene link to apply via `shots.update`. */
