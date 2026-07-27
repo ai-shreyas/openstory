@@ -109,6 +109,7 @@ const mockShot = {
     imagePrompt: null,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: null,
     visualPromptInputHash: null,
     createdAt: new Date(),

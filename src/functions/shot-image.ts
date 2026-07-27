@@ -609,3 +609,137 @@ export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
     );
     return { shotId: shot.id, videoUrl: version.url };
   });
+
+// ---------------------------------------------------------------------------
+// Image / video version history (#1070)
+// ---------------------------------------------------------------------------
+
+/**
+ * Client-facing image version row for the history sheet. `selected` is derived
+ * from the frame's `selectedImageVersionId` pointer so the UI can mark Current
+ * without a second round-trip.
+ */
+export type ShotImageVersionRow = {
+  id: string;
+  model: string;
+  kind: 'model' | 'framing';
+  status: string;
+  url: string | null;
+  previewUrl: string | null;
+  createdAt: Date;
+  selected: boolean;
+};
+
+/**
+ * Client-facing video version row for the history sheet. Same shape as the
+ * segment panel's versions, plus the selection flag for Current.
+ */
+export type ShotVideoVersionRow = {
+  id: string;
+  model: string;
+  status: string;
+  url: string | null;
+  previewUrl: string | null;
+  createdAt: Date;
+  selected: boolean;
+};
+
+const shotHistoryListInputSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+});
+
+/**
+ * Append-only image generation history for a shot's anchor frame (#1070).
+ * Newest first. Only `kind: 'model'` rows — framing rows are the 3×3 grid
+ * sheet / tile picks used by the Frame variants picker, not still history.
+ * Includes in-flight / failed rows so the sheet can show progress and errors;
+ * discarded rows stay hidden (soft-hide is undoable elsewhere).
+ */
+export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(shotHistoryListInputSchema))
+  .handler(async ({ context }): Promise<ShotImageVersionRow[]> => {
+    const { frame, scopedDb } = context;
+    const versions = await scopedDb.frameVariants.listByFrame(frame.id);
+    // listByFrame is oldest-first (ULID asc); reverse for newest-first history.
+    return [...versions]
+      .reverse()
+      .filter((v) => v.kind === 'model')
+      .map((v) => ({
+        id: v.id,
+        model: v.model,
+        kind: v.kind,
+        status: v.status,
+        url: v.url,
+        previewUrl: v.previewUrl,
+        createdAt: v.createdAt,
+        selected: v.id === frame.selectedImageVersionId,
+      }));
+  });
+
+/**
+ * Append-only video render history for the shot's render segment (#1070).
+ * Newest first. Empty when the shot has never been assigned a segment.
+ */
+export const listShotVideoVersionsFn = createServerFn({ method: 'GET' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(shotHistoryListInputSchema))
+  .handler(async ({ context }): Promise<ShotVideoVersionRow[]> => {
+    const { shot, scopedDb } = context;
+    if (!shot.renderSegmentId) return [];
+
+    const [segment, versions] = await Promise.all([
+      scopedDb.renderSegments.getById(shot.renderSegmentId),
+      scopedDb.videoVariants.listBySegment(shot.renderSegmentId),
+    ]);
+    const selectedId = segment?.selectedVideoVersionId ?? null;
+    // listBySegment is oldest-first; reverse for newest-first history.
+    return [...versions].reverse().map((v) => ({
+      id: v.id,
+      model: v.model,
+      status: v.status,
+      url: v.url,
+      previewUrl: v.previewUrl,
+      createdAt: v.createdAt,
+      selected: v.id === selectedId,
+    }));
+  });
+
+const selectFrameImageVersionInputSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  versionId: ulidSchema,
+});
+
+/**
+ * Repoint a frame's selection at a SPECIFIC image version (#1070) — the image
+ * analog of `selectSegmentVideoVersionFn`. `frameVariants.select` validates the
+ * version belongs to the frame and is completed, mirrors image fields onto the
+ * frame, and logs `image.selected`. Downstream video is cleared so the player
+ * doesn't keep a clip conditioned on the previous still.
+ */
+export const selectFrameImageVersionFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(selectFrameImageVersionInputSchema))
+  .handler(async ({ context, data }) => {
+    const { shot, frame, scopedDb } = context;
+
+    const version = await scopedDb.frameVariants.select(
+      frame.id,
+      data.versionId,
+      { actorId: scopedDb.userId }
+    );
+
+    // A new still invalidates downstream video (same as setImageFromVariantFn).
+    await scopedDb.shots.update(shot.id, {
+      videoUrl: null,
+      videoPath: null,
+      videoStatus: 'pending',
+      videoWorkflowRunId: null,
+      videoGeneratedAt: null,
+      videoError: null,
+    });
+
+    return { shotId: shot.id, thumbnailUrl: version.url };
+  });

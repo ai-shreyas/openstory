@@ -12,6 +12,7 @@
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
 import {
+  framePromptVersions,
   frameVariants,
   frames,
   sequenceEvents,
@@ -39,6 +40,7 @@ let frameId = '';
 async function seed() {
   await db.delete(sequenceEvents);
   await db.delete(frameVariants);
+  await db.delete(framePromptVersions);
   await db.delete(frames);
   await db.delete(shots);
   await db.delete(sequences);
@@ -253,6 +255,163 @@ describe('frameVariants.select', () => {
       model: 'm2',
       prevVersionId: v1.id,
     });
+  });
+
+  it('restores the linked visual prompt when selecting a stamped version (#1070)', async () => {
+    const m = createFrameVariantsMethods(db);
+
+    const [oldPrompt] = await db
+      .insert(framePromptVersions)
+      .values({
+        frameId,
+        text: 'Wide shot of the moon base',
+        source: 'ai-generated',
+        inputHash: 'prompt-hash-old',
+        analysisModel: 'claude',
+      })
+      .returning();
+    const [newPrompt] = await db
+      .insert(framePromptVersions)
+      .values({
+        frameId,
+        text: 'Close-up of the lunar rover',
+        source: 'user-edit',
+        inputHash: 'prompt-hash-new',
+        analysisModel: null,
+      })
+      .returning();
+    if (!oldPrompt || !newPrompt) {
+      throw new Error('test setup: prompt insert failed');
+    }
+
+    // Live frame currently points at the newer prompt.
+    await db
+      .update(frames)
+      .set({
+        imagePrompt: newPrompt.text,
+        visualPromptInputHash: newPrompt.inputHash,
+        selectedImagePromptVersionId: newPrompt.id,
+      })
+      .where(eq(frames.id, frameId));
+
+    // An older still that was generated from the old prompt.
+    const olderStill = await m.appendVersion(
+      variantInput({
+        url: 'https://cdn/old.png',
+        storagePath: 'r2/old.png',
+        inputHash: 'image-hash-old',
+        promptVersionId: oldPrompt.id,
+      })
+    );
+    const newerStill = await m.appendVersion(
+      variantInput({
+        url: 'https://cdn/new.png',
+        storagePath: 'r2/new.png',
+        inputHash: 'image-hash-new',
+        promptVersionId: newPrompt.id,
+      })
+    );
+
+    await m.select(frameId, newerStill.id, { actorId: null });
+    await m.select(frameId, olderStill.id, { actorId: null });
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.selectedImageVersionId).toBe(olderStill.id);
+    expect(frame.imageUrl).toBe('https://cdn/old.png');
+    expect(frame.selectedImagePromptVersionId).toBe(oldPrompt.id);
+    expect(frame.imagePrompt).toBe('Wide shot of the moon base');
+    expect(frame.visualPromptInputHash).toBe('prompt-hash-old');
+
+    const promptEvents = await db
+      .select()
+      .from(sequenceEvents)
+      .where(eq(sequenceEvents.kind, 'prompt.selected'));
+    expect(promptEvents.length).toBeGreaterThanOrEqual(1);
+    const restored = promptEvents.find(
+      (e) =>
+        e.data &&
+        typeof e.data === 'object' &&
+        'fromImageVersionId' in e.data &&
+        e.data.fromImageVersionId === olderStill.id
+    );
+    expect(restored).toBeDefined();
+  });
+
+  it('clears pendingPromoteVersionId when selecting a different version (#1070)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const current = await m.appendVersion(
+      variantInput({ url: 'https://cdn/current.png' })
+    );
+    const other = await m.appendVersion(
+      variantInput({ url: 'https://cdn/other.png' })
+    );
+    await m.select(frameId, current.id, { actorId: null });
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: 'in-flight-ver' })
+      .where(eq(frames.id, frameId));
+
+    await m.select(frameId, other.id, { actorId: null });
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.pendingPromoteVersionId).toBeNull();
+    expect(frame?.selectedImageVersionId).toBe(other.id);
+  });
+
+  it('keeps pendingPromoteVersionId when re-selecting the current version', async () => {
+    const m = createFrameVariantsMethods(db);
+    const current = await m.appendVersion(variantInput());
+    await m.select(frameId, current.id, { actorId: null });
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: 'in-flight-ver' })
+      .where(eq(frames.id, frameId));
+
+    await m.select(frameId, current.id, { actorId: null });
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.pendingPromoteVersionId).toBe('in-flight-ver');
+  });
+
+  it('selects without touching the prompt when promptVersionId is null (legacy)', async () => {
+    const m = createFrameVariantsMethods(db);
+    await db
+      .update(frames)
+      .set({
+        imagePrompt: 'Keep me',
+        visualPromptInputHash: 'keep-hash',
+        selectedImagePromptVersionId: null,
+      })
+      .where(eq(frames.id, frameId));
+
+    const v = await m.appendVersion(
+      variantInput({ promptVersionId: null, inputHash: 'img' })
+    );
+    await m.select(frameId, v.id, { actorId: null });
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Keep me');
+    expect(frame.visualPromptInputHash).toBe('keep-hash');
+    expect(
+      await db
+        .select()
+        .from(sequenceEvents)
+        .where(eq(sequenceEvents.kind, 'prompt.selected'))
+    ).toHaveLength(0);
   });
 
   it('refuses to select a non-completed version (would blank the frame)', async () => {

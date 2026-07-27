@@ -4,6 +4,7 @@ import type { LibraryLocation } from '@/lib/db/schema';
 import { cn } from '@/lib/utils';
 import { Link } from '@tanstack/react-router';
 import { Loader2, MapPin } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type LocationLibraryCardProps = {
   location: LibraryLocation;
@@ -32,9 +33,11 @@ export const LocationLibraryCard: React.FC<LocationLibraryCardProps> = ({
         {/* Preview image - 16:9 aspect ratio for locations */}
         <div className="aspect-video bg-muted relative">
           {previewUrl ? (
-            <img
+            <AppImage
               src={previewUrl}
               alt={location.name}
+              width={160}
+              height={160}
               className={cn(
                 'w-full h-full object-cover',
                 isGenerating && 'opacity-50'

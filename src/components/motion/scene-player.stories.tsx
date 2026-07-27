@@ -42,6 +42,7 @@ const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
     imagePrompt: shot.imagePrompt,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: shot.thumbnailInputHash,
     visualPromptInputHash: shot.visualPromptInputHash,
     createdAt: shot.createdAt,

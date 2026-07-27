@@ -80,6 +80,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     imagePrompt: null,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: null,
     visualPromptInputHash: null,
     createdAt: new Date(),

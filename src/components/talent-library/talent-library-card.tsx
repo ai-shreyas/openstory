@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { Link } from '@tanstack/react-router';
 import { ImageIcon, Loader2, Sparkles, Star, User } from 'lucide-react';
 import type React from 'react';
+import { AppImage } from '@/components/ui/app-image';
 
 type TalentLibraryCardProps = {
   talent: TalentWithSheets;
@@ -43,9 +44,11 @@ export const TalentLibraryCard: React.FC<TalentLibraryCardProps> = ({
         {/* Preview image */}
         <div className="aspect-square bg-muted relative">
           {previewUrl ? (
-            <img
+            <AppImage
               src={previewUrl}
               alt={talent.name}
+              width={160}
+              height={160}
               className={cn(
                 'w-full h-full object-cover',
                 isGenerating && 'opacity-50'

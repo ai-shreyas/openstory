@@ -201,7 +201,7 @@ testWithUser.describe('Variant Selection', () => {
     // select the shot, then open the variants dialog from the starting frame.
     await shotThumbnail.click();
     const variantsButton = page.getByRole('button', {
-      name: 'Starting frame variants',
+      name: 'Frame variants',
     });
     await expect(variantsButton).toBeVisible({ timeout: 10000 });
     await variantsButton.click();

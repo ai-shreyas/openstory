@@ -47,6 +47,10 @@ export const renderSegments = snakeCase.table(
     // chosen `video_variants` version for this segment. NULL until a render is
     // selected.
     selectedVideoVersionId: text(),
+    // Soft pointer to the in-flight `video_variants` row that should become
+    // primary when it completes (#1070). Same last-kickoff / explicit-select
+    // cancel / fail-clear rules as `frames.pendingPromoteVersionId`.
+    pendingPromoteVersionId: text(), // → video_variants.id
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())
       .notNull(),

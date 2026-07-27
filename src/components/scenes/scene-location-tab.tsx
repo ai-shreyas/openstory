@@ -8,6 +8,7 @@ import { facetIdsForShots, useSceneFacetMaps } from '@/hooks/use-scene-facets';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
 import { Link } from '@tanstack/react-router';
 import { ExternalLink, MapPin } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type SceneLocationTabProps = {
   sequenceId: string;
@@ -116,9 +117,11 @@ export const SceneLocationTab: React.FC<SceneLocationTabProps> = ({
 
           <div className="relative aspect-video overflow-hidden rounded-lg bg-muted">
             {shotLocation.referenceImageUrl ? (
-              <img
+              <AppImage
                 src={shotLocation.referenceImageUrl}
                 alt={shotLocation.name}
+                width={160}
+                height={160}
                 className="h-full w-full object-cover"
               />
             ) : (

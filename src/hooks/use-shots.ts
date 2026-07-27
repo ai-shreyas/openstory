@@ -17,12 +17,19 @@ import {
 } from '@/functions/shots';
 import {
   generateShotVariantsFn,
+  listShotImageVersionsFn,
+  listShotVideoVersionsFn,
+  selectFrameImageVersionFn,
   selectShotVariantFn,
   selectSegmentVideoVersionFn,
   setImageFromVariantFn,
   setVideoFromVariantFn,
+  type ShotImageVersionRow,
+  type ShotVideoVersionRow,
 } from '@/functions/shot-image';
+import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { segmentKeys } from '@/hooks/use-segments';
+import { shotStalenessKey } from '@/hooks/use-shot-staleness';
 import type { GenerateVariantInput as SchemaGenerateVariantInput } from '@/lib/schemas/shot.schemas';
 
 type GenerateVariantInput = SchemaGenerateVariantInput & {
@@ -45,6 +52,12 @@ export const shotKeys = {
   detail: (id: string) => [...shotKeys.details(), id] as const,
   divergentVariants: (sequenceId: string) =>
     [...shotKeys.all, 'divergent-variants', sequenceId] as const,
+  /** Per-shot image version history (#1070). */
+  imageVersions: (shotId: string) =>
+    [...shotKeys.all, 'image-versions', shotId] as const,
+  /** Per-shot video version history (#1070). */
+  videoVersions: (shotId: string) =>
+    [...shotKeys.all, 'video-versions', shotId] as const,
 };
 
 // Distinct image models that have generated a variant for this sequence.
@@ -435,6 +448,13 @@ export function useSetImageFromVariant() {
       await queryClient.invalidateQueries({
         queryKey: segmentKeys.list(sequenceId),
       });
+      // select() may restore the still's linked visual prompt (#1070).
+      await queryClient.invalidateQueries({
+        queryKey: promptVariantKeys.shot('visual', shotId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: shotStalenessKey(shotId),
+      });
     },
   });
 }
@@ -555,6 +575,107 @@ export function useSelectSegmentVideoVersion() {
       await queryClient.invalidateQueries({
         queryKey: ['sequence-selected-models', sequenceId],
       });
+      await queryClient.invalidateQueries({
+        queryKey: shotKeys.videoVersions(shotId),
+      });
+    },
+  });
+}
+
+/**
+ * Image generation history for a shot's anchor frame (#1070). Newest first.
+ * Only fetched while the history sheet is open (`enabled`).
+ */
+export function useShotImageVersions(
+  args: { sequenceId: string; shotId: string },
+  options?: { enabled?: boolean }
+) {
+  return useQuery<ShotImageVersionRow[]>({
+    queryKey: shotKeys.imageVersions(args.shotId),
+    queryFn: () => listShotImageVersionsFn({ data: args }),
+    enabled: options?.enabled ?? true,
+    staleTime: 5_000,
+  });
+}
+
+/**
+ * Video render history for a shot's render segment (#1070). Newest first.
+ * Only fetched while the history sheet is open (`enabled`).
+ */
+export function useShotVideoVersions(
+  args: { sequenceId: string; shotId: string },
+  options?: { enabled?: boolean }
+) {
+  return useQuery<ShotVideoVersionRow[]>({
+    queryKey: shotKeys.videoVersions(args.shotId),
+    queryFn: () => listShotVideoVersionsFn({ data: args }),
+    enabled: options?.enabled ?? true,
+    staleTime: 5_000,
+  });
+}
+
+/**
+ * Select a specific image version for a shot's anchor frame (#1070) — the
+ * image analog of `useSelectSegmentVideoVersion`. Repoints the selection
+ * pointer and mirrors the still onto the frame. When the version was stamped
+ * with a `promptVersionId`, also restores that visual prompt so still + text
+ * stay paired.
+ */
+export function useSelectFrameImageVersion() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { shotId: string; thumbnailUrl: string | null },
+    Error,
+    { sequenceId: string; shotId: string; versionId: string }
+  >({
+    mutationFn: async (input) => selectFrameImageVersionFn({ data: input }),
+    onSuccess: async (data, { sequenceId, shotId }) => {
+      if (data.thumbnailUrl) {
+        const thumbnailUrl = data.thumbnailUrl;
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (oldShots) =>
+            oldShots?.map((f) =>
+              f.id === shotId
+                ? {
+                    ...f,
+                    thumbnailUrl,
+                    thumbnailStatus: 'completed' as const,
+                    videoUrl: null,
+                    videoStatus: 'pending' as const,
+                  }
+                : f
+            )
+        );
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.list(sequenceId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.detail(shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.imageVersions(shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['sequence-image-variants', sequenceId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['sequence-selected-models', sequenceId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: segmentKeys.list(sequenceId),
+        }),
+        // Prompt may have been restored with the still (#1070).
+        queryClient.invalidateQueries({
+          queryKey: promptVariantKeys.shot('visual', shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotStalenessKey(shotId),
+        }),
+      ]);
     },
   });
 }

@@ -39,10 +39,7 @@ import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { ImageWorkflowInput } from '@/lib/workflow/types';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-import {
-  computeImageWorkflowHashCurrent,
-  computeImageWorkflowHashFromDto,
-} from '@/lib/workflows/image-workflow-snapshot';
+import { computeImageWorkflowHashFromDto } from '@/lib/workflows/image-workflow-snapshot';
 import { shouldRecordUserEdit } from '@/lib/workflows/user-edit-predicate';
 import { getLogger } from '@/lib/observability/logger';
 
@@ -198,6 +195,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           );
         }
 
+        // Re-read after any prompt write so we stamp the prompt version that
+        // is actually selected for this gen (#1070). Selecting this still later
+        // restores that prompt so still + text stay paired.
+        const frameForStamp = await scopedDb.frames.getById(frame.id);
         const version = await scopedDb.frameVariants.appendVersion({
           frameId: frame.id,
           sequenceId: input.sequenceId,
@@ -205,7 +206,20 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           model,
           status: 'generating',
           workflowRunId,
+          promptVersionId:
+            frameForStamp?.selectedImagePromptVersionId ??
+            frame.selectedImagePromptVersionId ??
+            null,
         });
+
+        // Primary regen claims auto-promote; last kickoff wins (#1070).
+        // variantOnly add-model never claims the primary.
+        if (!input.variantOnly) {
+          await scopedDb.frames.setPendingPromoteVersionId(
+            frame.id,
+            version.id
+          );
+        }
 
         await getGenerationChannel(input.sequenceId).emit(
           'generation.image:progress',
@@ -339,68 +353,69 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           return { imageUrl: upload.url };
         }
 
-        // Mid-flight input drift: keep the version (stale-flagged via its
-        // inputHash) but DON'T repoint — the prior selection stays the primary.
-        const currentHash = snapshotHash
-          ? await computeImageWorkflowHashCurrent(input, scopedDb)
-          : null;
-        if (snapshotHash && currentHash !== snapshotHash) {
-          logger.info(
-            `[ImageWorkflow] Frame ${shotId} drifted (snapshot=${snapshotHash.slice(0, 8)} current=${currentHash?.slice(0, 8)}); retained version ${versionId} unselected`
-          );
-          // Reset the frame's in-flight status to a TERMINAL value — otherwise it
-          // stays 'generating' forever (the only path that clears it is
-          // `select`, which drift intentionally skips), leaving a perpetual
-          // spinner over the prior good still. The mirror/selection are
-          // untouched, so the prior selection (if any) remains the primary: a
-          // frame with a prior selection settles back to 'completed', a
-          // never-selected frame to 'pending'. Mirrors the reset the retired
-          // `buildDivergentRevertWrites` used to guarantee.
-          const driftStatus = frame.selectedImageVersionId
-            ? 'completed'
-            : 'pending';
-          await scopedDb.frames.setImageGenerationStatus(
-            frame.id,
+        // Re-read pending claim: last kickoff / explicit history select may have
+        // moved it since this run started (#1070).
+        const frameNow = await scopedDb.frames.getById(frame.id);
+        const shouldPromote = frameNow?.pendingPromoteVersionId === versionId;
+
+        if (shouldPromote) {
+          // Promote even if the prompt/refs drifted mid-flight — the still is
+          // stamped with its own inputHash and will surface as stale if the
+          // live prompt moved. Explicit selection is what cancels promote.
+          await scopedDb.frameVariants.select(frame.id, versionId, {
+            actorId: input.userId,
+          });
+          // A new still invalidates the shot's downstream video.
+          await scopedDb.shots.update(
+            shotId,
             {
-              imageStatus: driftStatus,
-              imageWorkflowRunId: null,
-              imageError: null,
+              videoUrl: null,
+              videoPath: null,
+              videoStatus: 'pending',
+              videoWorkflowRunId: null,
+              videoGeneratedAt: null,
+              videoError: null,
             },
             { throwOnMissing: false }
           );
           await channel.emit('generation.image:progress', {
             shotId,
-            status: driftStatus,
+            status: 'completed',
+            thumbnailUrl: upload.url,
             model,
           });
+          logger.info(`[ImageWorkflow] Uploaded + selected: ${upload.path}`);
           return { imageUrl: upload.url };
         }
 
-        // Select = pointer repoint + mirror + `image.selected` event (atomic).
-        await scopedDb.frameVariants.select(frame.id, versionId, {
-          actorId: input.userId,
-        });
-        // A new still invalidates the shot's downstream video (still on `shots`
-        // until Phase 3) — reset it so the user regenerates motion.
-        await scopedDb.shots.update(
-          shotId,
+        // Not the promote target — finalize into history only. Reset in-flight
+        // frame status so we don't leave a perpetual generating spinner.
+        const settleStatus = frameNow?.selectedImageVersionId
+          ? 'completed'
+          : 'pending';
+        await scopedDb.frames.setImageGenerationStatus(
+          frame.id,
           {
-            videoUrl: null,
-            videoPath: null,
-            videoStatus: 'pending',
-            videoWorkflowRunId: null,
-            videoGeneratedAt: null,
-            videoError: null,
+            imageStatus: settleStatus,
+            imageWorkflowRunId: null,
+            imageError: null,
           },
           { throwOnMissing: false }
         );
+        // Clear pending only if it still points at us (shouldn't if user
+        // cancelled; belt-and-suspenders if claim was stale).
+        await scopedDb.frames.clearPendingPromoteVersionIdIf(
+          frame.id,
+          versionId
+        );
         await channel.emit('generation.image:progress', {
           shotId,
-          status: 'completed',
-          thumbnailUrl: upload.url,
+          status: settleStatus,
           model,
         });
-        logger.info(`[ImageWorkflow] Uploaded + selected: ${upload.path}`);
+        logger.info(
+          `[ImageWorkflow] Uploaded unselected (pending promote moved): ${upload.path}`
+        );
         return { imageUrl: upload.url };
       });
       imageUrl = writeResult.imageUrl;
@@ -461,6 +476,18 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           { imageStatus: 'failed', imageError: error },
           { throwOnMissing: false }
         );
+        // Drop auto-promote if this run owned it (#1070).
+        if (anchor.pendingPromoteVersionId) {
+          const pending = await scopedDb.frameVariants.getById(
+            anchor.pendingPromoteVersionId
+          );
+          if (pending?.workflowRunId === event.instanceId) {
+            await scopedDb.frames.clearPendingPromoteVersionIdIf(
+              anchor.id,
+              pending.id
+            );
+          }
+        }
       }
     }
     await scopedDb.frameVariants.markFailedByWorkflowRun(

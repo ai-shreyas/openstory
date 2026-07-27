@@ -807,9 +807,24 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // a viewer-local *display* concern, handled in the player remap below.
   const effectiveImageModel = resolvedImageModel;
 
+  // Newest-first match for the tab model. `.find` on oldest-first order used to
+  // return the EARLIEST version, so "Set Image" appeared whenever the latest
+  // (selected) still didn't match v1's url — the opposite of what setImage
+  // actually applies (latest completed). Prefer an in-flight row so Regenerate
+  // shows Generating… mid-roll; else the latest completed (matches
+  // `setImageFromVariantFn`).
   const variantForSelectedModel = useMemo(() => {
     if (!selectedShotVariants) return undefined;
-    return selectedShotVariants.find((v) => v.model === effectiveImageModel);
+    const forModel = selectedShotVariants.filter(
+      (v) => v.model === effectiveImageModel
+    );
+    if (forModel.length === 0) return undefined;
+    const newestFirst = [...forModel].reverse();
+    return (
+      newestFirst.find((v) => v.status === 'generating') ??
+      newestFirst.find((v) => v.status === 'completed' && v.url) ??
+      newestFirst[0]
+    );
   }, [selectedShotVariants, effectiveImageModel]);
 
   // Motion mirror: the shot's resolved video model (#1066) drives the
@@ -829,34 +844,40 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       );
   }, [videoVariantsByShot, curSelectedShotId, effectiveVideoModel]);
 
+  // Canvas badges for the image/motion tabs. The model dropdown is a pick for
+  // the *next* generation (#1066) — do NOT swap the canvas to another model's
+  // still/clip while browsing models. That showed non-current media (and often
+  // looked like the wrong model) and fought the "applies to the next
+  // generation" copy. Set Image / Set Video in the inspector still repoint
+  // selection when the user opts in.
   const { previewVariantUrl, previewVariantVideoUrl, playerBadgeMessage } =
     useMemo(() => {
       const none = {
-        previewVariantUrl: null,
-        previewVariantVideoUrl: null,
-        playerBadgeMessage: null,
+        previewVariantUrl: null as string | null,
+        previewVariantVideoUrl: null as string | null,
+        playerBadgeMessage: null as string | null,
       };
       if (!selectedShot) return none;
 
-      // Image preview (image-prompt tab)
       if (effectiveTab === 'image-prompt') {
-        if (
-          variantForSelectedModel?.status === 'completed' &&
-          variantForSelectedModel.url &&
-          variantForSelectedModel.url !== selectedShot.thumbnailUrl
-        ) {
-          return {
-            ...none,
-            previewVariantUrl: variantForSelectedModel.url,
-            playerBadgeMessage: 'Click Set Image to use',
-          };
-        }
-        const shotImageModel = safeTextToImageModel(
+        const currentImageModel = safeTextToImageModel(
           selectedShot.imageModel,
           DEFAULT_IMAGE_MODEL
         );
+        // Same rule as the inspector Set Image button: only when the dropdown
+        // model is not the one that produced the current primary still.
         if (
-          effectiveImageModel !== shotImageModel &&
+          variantForSelectedModel?.status === 'completed' &&
+          variantForSelectedModel.url &&
+          effectiveImageModel !== currentImageModel
+        ) {
+          return {
+            ...none,
+            playerBadgeMessage: 'Click Set Image to use this model',
+          };
+        }
+        if (
+          effectiveImageModel !== currentImageModel &&
           !variantForSelectedModel
         ) {
           return {
@@ -867,27 +888,23 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         return none;
       }
 
-      // Video preview (motion-prompt tab) — mirror of the image flow (#545)
       if (effectiveTab === 'motion-prompt') {
-        if (
-          videoVariantForSelectedModel?.status === 'completed' &&
-          videoVariantForSelectedModel.url &&
-          videoVariantForSelectedModel.url !== selectedShot.videoUrl
-        ) {
-          return {
-            ...none,
-            previewVariantVideoUrl: videoVariantForSelectedModel.url,
-            playerBadgeMessage: 'Click Set Video to use',
-          };
-        }
-        const shotVideoModel = safeImageToVideoModel(
+        const currentVideoModel = safeImageToVideoModel(
           selectedShot.motionModel,
           DEFAULT_VIDEO_MODEL
         );
-        // Prompt when the scene's video model differs from the shot's current
-        // one and no variant exists yet for it.
         if (
-          effectiveVideoModel !== shotVideoModel &&
+          videoVariantForSelectedModel?.status === 'completed' &&
+          videoVariantForSelectedModel.url &&
+          effectiveVideoModel !== currentVideoModel
+        ) {
+          return {
+            ...none,
+            playerBadgeMessage: 'Click Set Video to use this model',
+          };
+        }
+        if (
+          effectiveVideoModel !== currentVideoModel &&
           !videoVariantForSelectedModel
         ) {
           return {

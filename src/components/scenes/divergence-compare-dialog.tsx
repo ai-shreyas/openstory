@@ -1,4 +1,5 @@
 import { PromptDiffView } from '@/components/prompts/prompt-diff-view';
+import { AppImage } from '@/components/ui/app-image';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -69,13 +70,11 @@ const AssetPreview: React.FC<{
   }
   if (kind === 'image') {
     return (
-      // Compare-dialog is a transient surface; the unpic optimisation pipeline
-      // adds little here and the variant URL may already be a CDN-resized one.
-      // Plain img keeps this simple and aligns with the existing variant
-      // selector dialog.
-      <img
+      <AppImage
         src={url}
         alt={alt}
+        width={640}
+        height={360}
         className="aspect-video w-full rounded-md object-cover"
       />
     );

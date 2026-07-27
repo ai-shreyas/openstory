@@ -20,7 +20,7 @@
 import type { Database } from '@/lib/db/client';
 import { renderSegments, shots } from '@/lib/db/schema';
 import type { RenderSegment } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 /** The shot fields {@link createRenderSegmentsMethods.ensureForShot} needs. */
 export type ShotForSegment = {
@@ -99,6 +99,39 @@ export function createRenderSegmentsMethods(db: Database) {
         .where(eq(renderSegments.sequenceId, sequenceId));
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime
       return result.rowsAffected ?? 0;
+    },
+
+    /**
+     * Claim auto-promote for a primary video gen (#1070). Last kickoff wins.
+     * Pass `null` to cancel. Soft pointer; no FK.
+     */
+    setPendingPromoteVersionId: async (
+      segmentId: string,
+      versionId: string | null
+    ): Promise<void> => {
+      await db
+        .update(renderSegments)
+        .set({ pendingPromoteVersionId: versionId, updatedAt: new Date() })
+        .where(eq(renderSegments.id, segmentId));
+    },
+
+    /**
+     * Clear pending only when it still points at `versionId` — older jobs must
+     * not wipe a newer kickoff's claim.
+     */
+    clearPendingPromoteVersionIdIf: async (
+      segmentId: string,
+      versionId: string
+    ): Promise<void> => {
+      await db
+        .update(renderSegments)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(renderSegments.id, segmentId),
+            eq(renderSegments.pendingPromoteVersionId, versionId)
+          )
+        );
     },
   };
 }

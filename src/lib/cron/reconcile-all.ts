@@ -187,6 +187,13 @@ async function reconcileFrameVariantsPass(db: Database): Promise<number> {
       .update(frameVariants)
       .set({ status: next })
       .where(eq(frameVariants.id, row.id));
+    // Drop auto-promote claim if this stuck version held it (#1070).
+    if (next === 'failed') {
+      await db
+        .update(frames)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(eq(frames.pendingPromoteVersionId, row.id));
+    }
     updated++;
   }
   return updated;

@@ -967,6 +967,7 @@ export const fixtureShots: ShotWithImage[] = fixtureShotRows.map((shot) => {
     imagePrompt: shot.imagePrompt,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: shot.thumbnailInputHash,
     visualPromptInputHash: shot.visualPromptInputHash,
     createdAt: shot.createdAt,

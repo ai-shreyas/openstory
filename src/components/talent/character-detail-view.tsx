@@ -35,6 +35,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { RecastConfirmDialog } from './recast-confirm-dialog';
 import { TalentPickerDialog } from './talent-picker-dialog';
+import { AppImage } from '@/components/ui/app-image';
 
 type CharacterDetailViewProps = {
   sequenceId: string;
@@ -318,9 +319,11 @@ export const CharacterDetailView: React.FC<CharacterDetailViewProps> = ({
           {/* Character sheet image - 16:9 aspect ratio */}
           <div className="relative aspect-video overflow-hidden rounded-lg bg-muted">
             {character.sheetImageUrl && !isSheetGenerating ? (
-              <img
+              <AppImage
                 src={character.sheetImageUrl}
                 alt={character.name}
+                width={160}
+                height={160}
                 className="h-full w-full object-cover"
               />
             ) : isSheetGenerating ? (

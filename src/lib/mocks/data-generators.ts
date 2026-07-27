@@ -150,6 +150,7 @@ const generateMockShot = (
     imagePrompt: shotBase.imagePrompt,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: shotBase.thumbnailInputHash,
     visualPromptInputHash: shotBase.visualPromptInputHash,
     createdAt: shotBase.createdAt,
