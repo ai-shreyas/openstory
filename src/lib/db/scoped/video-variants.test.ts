@@ -252,6 +252,20 @@ describe('listBySequence / listModelsForSequence', () => {
   });
 });
 
+describe('listBySegment (#1070)', () => {
+  it('lists non-discarded versions for one segment, oldest-first', async () => {
+    const a = await methods.appendVersion(versionInput({ model: 'veo3_1' }));
+    const b = await methods.appendVersion(
+      versionInput({ model: 'kling_v3_pro' })
+    );
+    const discarded = await methods.appendVersion(versionInput());
+    await methods.discard(discarded.id, { actorId: ACTOR });
+
+    const listed = await methods.listBySegment(segmentId);
+    expect(listed.map((v) => v.id)).toEqual([a.id, b.id]);
+  });
+});
+
 describe('select', () => {
   it('repoints the segment, mirrors shot video*, and logs the event', async () => {
     const v = await methods.appendVersion(versionInput());

@@ -158,6 +158,24 @@ export function createVideoVariantsMethods(db: Database) {
         .orderBy(asc(videoVariants.id));
     },
 
+    /**
+     * Every non-discarded version for one render segment, oldest-first.
+     * Drives the per-shot video history sheet (#1070) without scanning the
+     * whole sequence.
+     */
+    listBySegment: async (renderSegmentId: string): Promise<VideoVariant[]> => {
+      return await db
+        .select()
+        .from(videoVariants)
+        .where(
+          and(
+            eq(videoVariants.renderSegmentId, renderSegmentId),
+            isNull(videoVariants.discardedAt)
+          )
+        )
+        .orderBy(asc(videoVariants.id));
+    },
+
     /** Distinct model names that have a (non-discarded) version in a sequence. */
     listModelsForSequence: async (sequenceId: string): Promise<string[]> => {
       const rows = await db

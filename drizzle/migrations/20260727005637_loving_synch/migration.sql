@@ -1,0 +1,1 @@
+ALTER TABLE `frame_variants` ADD `prompt_version_id` text;

@@ -727,8 +727,14 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     variantForSelectedModel?.status === 'completed' &&
     !!variantForSelectedModel.url;
   const variantIsGenerating = variantForSelectedModel?.status === 'generating';
+  // Set Image only when the dropdown model differs from the model that
+  // produced the *current* primary still. Comparing URLs to the latest
+  // re-roll was wrong: same model + older selected version still showed Set
+  // Image, and a newer unselected re-roll looked "not current" (#1070).
   const variantAlreadySet =
-    variantIsCompleted && variantForSelectedModel.url === shot?.thumbnailUrl;
+    variantIsCompleted &&
+    !!shot?.thumbnailUrl &&
+    effectiveImageModel === imageModel;
 
   // Has the selected image model produced an image for this scene — drives
   // Generate vs Regenerate (mirror of videoModelGenerated). Variant row (any
@@ -761,9 +767,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     !!videoVariantForSelectedModel.url;
   const videoVariantIsGenerating =
     videoVariantForSelectedModel?.status === 'generating';
+  // Same rule as image: Set Video only when the dropdown model isn't the one
+  // that produced the current primary clip (not URL equality to latest).
+  const currentVideoModel = safeImageToVideoModel(
+    shot?.motionModel,
+    DEFAULT_VIDEO_MODEL
+  );
   const videoVariantAlreadySet =
     videoVariantIsCompleted &&
-    videoVariantForSelectedModel.url === shot?.videoUrl;
+    !!shot?.videoUrl &&
+    effectiveMotionModel === currentVideoModel;
 
   const handleSetVideoFromVariant = useCallback(async () => {
     if (!shot?.id || !shot.sequenceId) return;
@@ -1266,6 +1279,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       <ShotStalenessBanners
         shotId={shot?.id}
         sequenceId={sequenceId}
+        isRegenerating={isGenerating}
         onRegenerate={() => {
           onTabChange('image-prompt');
           if (falNeedsBillingSetup) {
@@ -1506,7 +1520,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               variant="outline"
               onClick={() => setHistoryOpen('visual')}
               disabled={!shot}
-              aria-label="Show visual prompt history"
+              aria-label="Show visual history"
             >
               <History className="mr-2 h-4 w-4" />
               History
@@ -1770,7 +1784,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             onClick={() => setHistoryOpen('motion')}
             disabled={!shot}
             className="w-full"
-            aria-label="Show motion prompt history"
+            aria-label="Show motion history"
           >
             <History className="mr-2 h-4 w-4" />
             History

@@ -141,10 +141,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           getAspectRatioClassName(aspectRatio)
         )}
       >
+        {/* key forces a fresh <img> when the still changes so the browser
+            never keeps the previous shot's decoded bitmap after a switch. */}
         <img
+          key={posterSrc}
           src={posterSrc}
           alt="Scene thumbnail"
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-0 h-full w-full object-cover"
         />
       </div>
     );

@@ -198,6 +198,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           );
         }
 
+        // Re-read after any prompt write so we stamp the prompt version that
+        // is actually selected for this gen (#1070). Selecting this still later
+        // restores that prompt so still + text stay paired.
+        const frameForStamp = await scopedDb.frames.getById(frame.id);
         const version = await scopedDb.frameVariants.appendVersion({
           frameId: frame.id,
           sequenceId: input.sequenceId,
@@ -205,6 +209,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           model,
           status: 'generating',
           workflowRunId,
+          promptVersionId:
+            frameForStamp?.selectedImagePromptVersionId ??
+            frame.selectedImagePromptVersionId ??
+            null,
         });
 
         await getGenerationChannel(input.sequenceId).emit(

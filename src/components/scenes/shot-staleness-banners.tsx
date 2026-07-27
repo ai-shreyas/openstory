@@ -5,6 +5,12 @@ type ShotStalenessBannersProps = {
   shotId?: string;
   sequenceId: string;
   onRegenerate: () => void;
+  /**
+   * Image regen already in flight (optimistic local set or server
+   * `thumbnailStatus === 'generating'`). Hides the stale-image banner so
+   * "Inputs changed" doesn't linger over a regenerating still.
+   */
+  isRegenerating?: boolean;
   // Retained for API stability. Image divergence is retired (#989) — image
   // variants live in `frame_variants` with selection as a pointer, so there is
   // no divergent image alternate to compare/promote/discard here anymore.
@@ -28,10 +34,15 @@ export const ShotStalenessBanners: React.FC<ShotStalenessBannersProps> = ({
   shotId,
   sequenceId,
   onRegenerate,
+  isRegenerating = false,
 }) => {
   const { data: staleness } = useShotStaleness({ sequenceId, shotId });
 
   if (!shotId) return null;
+
+  // Once regenerate is in flight the stale warning is obsolete — the main
+  // Generate button already shows Generating… (#1070).
+  if (isRegenerating) return null;
 
   // Suppress the thumbnail banner when the visual prompt is also stale: the
   // visual-prompt banner inside the Image tab is the prerequisite action
@@ -43,6 +54,7 @@ export const ShotStalenessBanners: React.FC<ShotStalenessBannersProps> = ({
         artifact="thumbnail"
         entityType="shot"
         onRegenerate={onRegenerate}
+        isRegenerating={isRegenerating}
       />
     );
   }

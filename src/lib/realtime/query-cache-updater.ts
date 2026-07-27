@@ -229,6 +229,14 @@ export function updateQueryCacheFromEvent(
           ['sequence-selected-models', sequenceId],
           `selected-models:${sequenceId}`
         );
+        // Open history sheet (#1070) — new row + Current badge.
+        if (shotId) {
+          debouncedInvalidate(
+            queryClient,
+            shotKeys.imageVersions(shotId),
+            `image-versions:${shotId}`
+          );
+        }
       }
       break;
     }
@@ -290,6 +298,14 @@ export function updateQueryCacheFromEvent(
           ['sequence-selected-models', sequenceId],
           `selected-models:${sequenceId}`
         );
+        // Open history sheet (#1070) — new row + Current badge.
+        if (shotId) {
+          debouncedInvalidate(
+            queryClient,
+            shotKeys.videoVersions(shotId),
+            `video-versions:${shotId}`
+          );
+        }
       }
       break;
     }

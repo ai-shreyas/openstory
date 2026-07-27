@@ -26,7 +26,7 @@ import {
   Share2,
   VideoIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { VideoPlayer } from './video-player';
 import { VideoStateOverlay } from './video-state-overlay';
@@ -95,27 +95,21 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
 
   const imageDimensions = aspectRatioToDimensions(aspectRatio);
-  // Get current shot and next shot
-  const [currentShotIndex, setCurrentShotIndex] = useState(
-    shots?.findIndex((shot) => shot.id === selectedShotId) ?? -1
-  );
-  useEffect(() => {
-    // We could use a useMemo here, but we want to support not having to have a callback to set the selected shot id
-    setCurrentShotIndex(
-      shots?.findIndex((shot) => shot.id === selectedShotId) ?? -1
-    );
-  }, [selectedShotId, shots]);
-
+  // Derive the current shot synchronously from selection — do NOT park the
+  // index in useState+useEffect. That lagged one render behind selectedShotId,
+  // so on the image tab (where the VideoPlayer key is a constant empty src)
+  // the previous shot's still stayed on screen after switching shots (#1070).
+  const currentShotIndex =
+    shots?.findIndex((shot) => shot.id === selectedShotId) ?? -1;
   const currentShot =
     shots && currentShotIndex >= 0 ? shots[currentShotIndex] : undefined;
   const nextShot =
-    shots && currentShotIndex < shots.length - 1
+    shots && currentShotIndex >= 0 && currentShotIndex < shots.length - 1
       ? shots.find(
           (shot, index) =>
             shot.videoStatus === 'completed' &&
             shot.videoUrl &&
-            index > currentShotIndex,
-          currentShotIndex + 1
+            index > currentShotIndex
         )
       : undefined;
 
@@ -431,7 +425,10 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             />
           )}
           <VideoPlayer
-            key={playbackVideoUrl} // Force re-render when video changes
+            // Remount when the selected shot OR the displayed media changes.
+            // Image-tab stills use an empty src, so keying only on playbackVideoUrl
+            // reused the previous shot's poster after a shot switch (#1070).
+            key={`${currentShot.id}:${playbackVideoUrl || displayImage || ''}`}
             src={playbackVideoUrl}
             posterSrc={displayImage}
             aspectRatio={aspectRatio}
@@ -452,13 +449,15 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             progressMessage={progressMessage}
             retry={retry}
           />
+          {/* Status badges sit under the top-left frame-variants control so they
+              don't cover it or the bottom video play controls (#1070). */}
           {badgeMessage && (
-            <span className="absolute top-2 left-2 z-10 rounded bg-primary/80 px-2 py-1 text-xs font-medium text-primary-foreground backdrop-blur-sm">
+            <span className="absolute top-12 left-2 z-10 rounded bg-primary/80 px-2 py-1 text-xs font-medium text-primary-foreground backdrop-blur-sm">
               {badgeMessage}
             </span>
           )}
           {modelMismatchLabel && !badgeMessage && (
-            <span className="absolute top-2 left-2 z-10 rounded bg-amber-500/90 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
+            <span className="absolute top-12 left-2 z-10 rounded bg-amber-500/90 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
               {modelMismatchLabel}
             </span>
           )}

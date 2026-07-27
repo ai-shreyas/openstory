@@ -69,6 +69,12 @@ export const frameVariants = snakeCase.table(
     // Staleness of THIS version.
     promptHash: text(),
     inputHash: text(),
+    // Soft pointer to the `frame_prompt_versions` row that was selected when
+    // this still was generated (#1070). No FK (same cycle-avoidance pattern as
+    // `sourceVariantId` / frames' selection pointers). Selecting this image
+    // restores that prompt so the still and its text stay paired. Null on
+    // legacy rows or gens that had no prompt version yet.
+    promptVersionId: text(),
 
     // Soft-hide a version (undoable) — replaces the old divergent/discard split.
     discardedAt: integer({ mode: 'timestamp' }),

@@ -99,7 +99,7 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
         size="sm"
         onClick={() => setOpen(true)}
         className="absolute top-2 left-2 z-10 h-8 gap-1.5 bg-black/50 px-2 text-xs text-white hover:bg-black/70"
-        aria-label="Starting frame variants"
+        aria-label="Frame variants"
         aria-haspopup="dialog"
         aria-expanded={open}
       >
@@ -108,13 +108,13 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
         ) : (
           <Grid2x2 className="h-4 w-4" />
         )}
-        Variants
+        Frame variants
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Starting frame variants</DialogTitle>
+            <DialogTitle>Frame variants</DialogTitle>
             <DialogDescription>
               Pick an alternate for this shot&apos;s starting frame, or generate
               a new set.
@@ -155,8 +155,8 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
               {isGenerating
                 ? 'Generating…'
                 : shot.variantImageUrl
-                  ? 'Regenerate Variants'
-                  : 'Generate Variants'}
+                  ? 'Regenerate frame variants'
+                  : 'Generate frame variants'}
             </Button>
           </DialogFooter>
         </DialogContent>

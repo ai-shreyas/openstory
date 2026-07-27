@@ -7,6 +7,7 @@ const meta: Meta<typeof PromptHistorySheet> = {
   title: 'Prompts/PromptHistorySheet',
   component: PromptHistorySheet,
   parameters: { layout: 'fullscreen' },
+  // Sheet now covers prompt + image/video version history (#1070).
 };
 
 export default meta;

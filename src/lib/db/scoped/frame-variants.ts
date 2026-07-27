@@ -21,7 +21,7 @@
  */
 
 import type { Database } from '@/lib/db/client';
-import { frameVariants, frames } from '@/lib/db/schema';
+import { framePromptVersions, frameVariants, frames } from '@/lib/db/schema';
 import type { FrameVariant, NewFrameVariant } from '@/lib/db/schema';
 import type { FrameVariantKind } from '@/lib/db/schema/frame-variants';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
@@ -384,8 +384,13 @@ export function createFrameVariantsMethods(db: Database) {
      * `frames.selectedImageVersionId`, mirror the version's image fields onto
      * the frame, and append an `image.selected` activity event — all in one
      * `db.batch()` so the pointer move and its event are atomic. The event's
-     * `data` carries the previous pointer so the change is undoable. Returns
-     * the selected version.
+     * `data` carries the previous pointer so the change is undoable.
+     *
+     * When the version carries a `promptVersionId` (#1070), also repoint
+     * `frames.selectedImagePromptVersionId` and mirror that prompt's text/hash
+     * so the still and the prompt that produced it stay paired. Missing /
+     * cross-frame prompt rows are skipped (legacy gens have null). Returns the
+     * selected image version.
      */
     select: async (
       frameId: string,
@@ -428,6 +433,7 @@ export function createFrameVariantsMethods(db: Database) {
         .select({
           sequenceId: frames.sequenceId,
           prev: frames.selectedImageVersionId,
+          prevPromptVersionId: frames.selectedImagePromptVersionId,
         })
         .from(frames)
         .where(eq(frames.id, frameId));
@@ -435,22 +441,76 @@ export function createFrameVariantsMethods(db: Database) {
         throw new Error(`Frame ${frameId} not found`);
       }
 
-      await db.batch([
-        mirrorUpdate,
-        buildEventInsert(db, {
-          sequenceId: frame.sequenceId,
-          actorId: opts.actorId,
-          kind: 'image.selected',
-          targetType: 'frame',
-          targetId: frameId,
-          summary: `Selected ${version.model} image`,
-          data: {
-            versionId,
-            model: version.model,
-            prevVersionId: frame.prev ?? null,
-          },
-        }),
-      ]);
+      // Resolve the prompt that was live when this still was generated, if any.
+      // Soft pointer — the row may have been pruned or never recorded.
+      let linkedPrompt: {
+        id: string;
+        text: string;
+        inputHash: string | null;
+      } | null = null;
+      if (version.promptVersionId) {
+        const [promptRow] = await db
+          .select({
+            id: framePromptVersions.id,
+            text: framePromptVersions.text,
+            inputHash: framePromptVersions.inputHash,
+            frameId: framePromptVersions.frameId,
+          })
+          .from(framePromptVersions)
+          .where(eq(framePromptVersions.id, version.promptVersionId));
+        if (promptRow && promptRow.frameId === frameId) {
+          linkedPrompt = promptRow;
+        }
+      }
+
+      const imageSelectedEvent = buildEventInsert(db, {
+        sequenceId: frame.sequenceId,
+        actorId: opts.actorId,
+        kind: 'image.selected',
+        targetType: 'frame',
+        targetId: frameId,
+        summary: `Selected ${version.model} image`,
+        data: {
+          versionId,
+          model: version.model,
+          prevVersionId: frame.prev ?? null,
+          promptVersionId: linkedPrompt?.id ?? null,
+          prevPromptVersionId: frame.prevPromptVersionId ?? null,
+        },
+      });
+
+      if (linkedPrompt) {
+        // One atomic batch: still mirror + image event + prompt mirror + prompt
+        // event, so a history select never leaves the still and its text split.
+        await db.batch([
+          mirrorUpdate,
+          imageSelectedEvent,
+          db
+            .update(frames)
+            .set({
+              imagePrompt: linkedPrompt.text,
+              visualPromptInputHash: linkedPrompt.inputHash,
+              selectedImagePromptVersionId: linkedPrompt.id,
+              updatedAt: new Date(),
+            })
+            .where(eq(frames.id, frameId)),
+          buildEventInsert(db, {
+            sequenceId: frame.sequenceId,
+            actorId: opts.actorId,
+            kind: 'prompt.selected',
+            targetType: 'frame',
+            targetId: frameId,
+            summary: 'Restored image prompt with selected still',
+            data: {
+              versionId: linkedPrompt.id,
+              prevVersionId: frame.prevPromptVersionId ?? null,
+              fromImageVersionId: versionId,
+            },
+          }),
+        ]);
+      } else {
+        await db.batch([mirrorUpdate, imageSelectedEvent]);
+      }
       return version;
     },
 
