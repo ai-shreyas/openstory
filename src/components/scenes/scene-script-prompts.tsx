@@ -1313,18 +1313,11 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         </Select>
       </div>
 
-      {/* Desktop: Tab buttons — level-aware, distributed across the panel. */}
-      <TabsList className="hidden w-full md:flex">
+      {/* Desktop: content-sized list — avoid w-full, which stretches each
+          flex-1 trigger and spaces short labels too far apart. */}
+      <TabsList className="hidden md:inline-flex">
         {visibleTabs.map((t) => (
-          <TabsTrigger
-            key={t.value}
-            value={t.value}
-            className={
-              t.value === 'image-prompt' || t.value === 'motion-prompt'
-                ? 'gap-1.5'
-                : undefined
-            }
-          >
+          <TabsTrigger key={t.value} value={t.value}>
             {t.label}
             {t.value === 'image-prompt' &&
               staleness?.visualPrompt === 'stale' && (
