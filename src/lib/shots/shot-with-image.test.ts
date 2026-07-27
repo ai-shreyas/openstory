@@ -43,6 +43,7 @@ function makeFrame(shot: Shot, overrides: Partial<Frame> = {}): Frame {
     imagePrompt: 'a prompt',
     selectedImageVersionId: 'ver-1',
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: 'img-hash',
     visualPromptInputHash: 'vp-hash',
     createdAt: shot.createdAt,

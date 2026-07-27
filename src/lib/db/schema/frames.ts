@@ -97,6 +97,12 @@ export const frames = snakeCase.table(
     // app code). Reverting / switching model = repoint these.
     selectedImageVersionId: text(), // → frame_variants.id
     selectedImagePromptVersionId: text(), // → frame_prompt_versions.id
+    // Soft pointer to the in-flight `frame_variants` row that should become
+    // primary when it completes (#1070). Last primary kickoff wins (overwrite);
+    // explicit selection of a *different* completed version clears it; failure /
+    // discard of that version clears it. Completion promotes only when this
+    // still points at the finishing version.
+    pendingPromoteVersionId: text(), // → frame_variants.id
 
     // SHA-256 staleness mirrors of the selected image / prompt version.
     imageInputHash: text(),

@@ -335,6 +335,13 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             workflowRunId,
           });
           openedVideoVersionId = version.id;
+          // Primary motion claims auto-promote; last kickoff wins (#1070).
+          if (!input.variantOnly) {
+            await scopedDb.renderSegments.setPendingPromoteVersionId(
+              renderSegmentId,
+              version.id
+            );
+          }
         }
 
         try {

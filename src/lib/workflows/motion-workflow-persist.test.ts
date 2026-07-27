@@ -46,11 +46,21 @@ type CallName =
   | 'videoVariants.update'
   | 'videoVariants.select'
   | 'videoVariants.markFailedByWorkflowRun'
+  | 'videoVariants.getById'
+  | 'renderSegments.getById'
+  | 'renderSegments.clearPending'
   | 'sequenceEvents.record'
   | 'shots.getById'
   | 'shots.update';
 
-function buildScopedDbSpy(opts: { shotMissing?: boolean } = {}): {
+function buildScopedDbSpy(
+  opts: {
+    shotMissing?: boolean;
+    /** When set, completion promotes only if videoVersionId matches. */
+    pendingPromoteVersionId?: string | null;
+    segmentId?: string;
+  } = {}
+): {
   scopedDb: PersistMotionScopedDb;
   versionUpdates: Array<{ id: string; data: Partial<NewVideoVariant> }>;
   selects: Array<{ shotId: string; versionId: string; actorId: string | null }>;
@@ -58,6 +68,7 @@ function buildScopedDbSpy(opts: { shotMissing?: boolean } = {}): {
   events: RecordEventInput[];
   shotUpdates: Array<{ shotId: string; data: Partial<NewShot> }>;
   callOrder: CallName[];
+  pendingClears: string[];
 } {
   const versionUpdates: Array<{ id: string; data: Partial<NewVideoVariant> }> =
     [];
@@ -70,12 +81,19 @@ function buildScopedDbSpy(opts: { shotMissing?: boolean } = {}): {
   const events: RecordEventInput[] = [];
   const shotUpdates: Array<{ shotId: string; data: Partial<NewShot> }> = [];
   const callOrder: CallName[] = [];
+  const pendingClears: string[] = [];
+  const segmentId = opts.segmentId ?? 'seg-1';
+  // Default: claim matches completionArgs.videoVersionId so primary still promotes.
+  let pending =
+    opts.pendingPromoteVersionId === undefined
+      ? 'vv1'
+      : opts.pendingPromoteVersionId;
 
   const scopedDb: PersistMotionScopedDb = {
     shots: {
       getById: async (id) => {
         callOrder.push('shots.getById');
-        return opts.shotMissing ? null : { id };
+        return opts.shotMissing ? null : { id, renderSegmentId: segmentId };
       },
       update: async (shotId, data) => {
         callOrder.push('shots.update');
@@ -89,6 +107,10 @@ function buildScopedDbSpy(opts: { shotMissing?: boolean } = {}): {
         versionUpdates.push({ id: versionId, data });
         return { id: versionId };
       },
+      getById: async (versionId) => {
+        callOrder.push('videoVariants.getById');
+        return { id: versionId, workflowRunId: 'run-1' };
+      },
       select: async (shotId, versionId, selectOpts) => {
         callOrder.push('videoVariants.select');
         selects.push({ shotId, versionId, actorId: selectOpts.actorId });
@@ -97,6 +119,23 @@ function buildScopedDbSpy(opts: { shotMissing?: boolean } = {}): {
       markFailedByWorkflowRun: async (runId, error) => {
         callOrder.push('videoVariants.markFailedByWorkflowRun');
         markFailed.push({ runId, error });
+      },
+    },
+    renderSegments: {
+      getById: async (id) => {
+        callOrder.push('renderSegments.getById');
+        return {
+          id,
+          pendingPromoteVersionId: pending,
+        };
+      },
+      setPendingPromoteVersionId: async (_segmentId, versionId) => {
+        pending = versionId;
+      },
+      clearPendingPromoteVersionIdIf: async (_segmentId, versionId) => {
+        callOrder.push('renderSegments.clearPending');
+        pendingClears.push(versionId);
+        if (pending === versionId) pending = null;
       },
     },
     sequenceEvents: {
@@ -116,6 +155,7 @@ function buildScopedDbSpy(opts: { shotMissing?: boolean } = {}): {
     events,
     shotUpdates,
     callOrder,
+    pendingClears,
   };
 }
 
@@ -149,6 +189,7 @@ describe('persistMotionCompletion', () => {
       'videoVariants.update',
       'sequenceEvents.record',
       'shots.getById',
+      'renderSegments.getById',
       'videoVariants.select',
     ]);
 
@@ -235,6 +276,34 @@ describe('persistMotionCompletion', () => {
     expect(spy.selects).toEqual([]);
     expect(emits).toEqual([]);
   });
+
+  it('does not promote when pending claim moved to another version (#1070)', async () => {
+    const spy = buildScopedDbSpy({ pendingPromoteVersionId: 'vv-other' });
+    const emits: MotionVideoProgressPayload[] = [];
+
+    const outcome = await persistMotionCompletion({
+      scopedDb: spy.scopedDb,
+      ...completionArgs,
+      actorId: 'user1',
+      emit: async (_event, payload) => {
+        emits.push(payload);
+      },
+      now: () => NOW,
+    });
+
+    expect(outcome).toEqual({ status: 'completed', videoUrl: upload.url });
+    expect(spy.selects).toEqual([]);
+    expect(spy.pendingClears).toEqual(['vv1']);
+    expect(emits).toEqual([
+      {
+        shotId: 'f1',
+        status: 'completed',
+        videoUrl: upload.url,
+        model: 'veo3',
+        variantOnly: true,
+      },
+    ]);
+  });
 });
 
 describe('persistMotionFailure', () => {
@@ -256,6 +325,10 @@ describe('persistMotionFailure', () => {
 
     expect(spy.callOrder).toEqual([
       'shots.update',
+      'shots.getById',
+      'renderSegments.getById',
+      'videoVariants.getById',
+      // pending row's run id is 'run-1' in the spy, not 'run-9' — no clear
       'videoVariants.markFailedByWorkflowRun',
     ]);
     expect(spy.shotUpdates[0]?.data).toEqual({

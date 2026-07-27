@@ -434,12 +434,20 @@ export function createFrameVariantsMethods(db: Database) {
           sequenceId: frames.sequenceId,
           prev: frames.selectedImageVersionId,
           prevPromptVersionId: frames.selectedImagePromptVersionId,
+          pendingPromoteVersionId: frames.pendingPromoteVersionId,
         })
         .from(frames)
         .where(eq(frames.id, frameId));
       if (!frame) {
         throw new Error(`Frame ${frameId} not found`);
       }
+
+      // Cancel auto-promote only when the user picks a *different* version than
+      // the current primary (#1070). Re-selecting the current still leaves
+      // pending intact. Completing a gen that selects its pending version also
+      // hits prev !== versionId and clears pending (promote consumed).
+      const shouldClearPending =
+        frame.prev !== versionId && frame.pendingPromoteVersionId != null;
 
       // Resolve the prompt that was live when this still was generated, if any.
       // Soft pointer — the row may have been pruned or never recorded.
@@ -479,9 +487,35 @@ export function createFrameVariantsMethods(db: Database) {
         },
       });
 
-      if (linkedPrompt) {
-        // One atomic batch: still mirror + image event + prompt mirror + prompt
-        // event, so a history select never leaves the still and its text split.
+      if (linkedPrompt && shouldClearPending) {
+        await db.batch([
+          mirrorUpdate,
+          imageSelectedEvent,
+          db
+            .update(frames)
+            .set({
+              imagePrompt: linkedPrompt.text,
+              visualPromptInputHash: linkedPrompt.inputHash,
+              selectedImagePromptVersionId: linkedPrompt.id,
+              pendingPromoteVersionId: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(frames.id, frameId)),
+          buildEventInsert(db, {
+            sequenceId: frame.sequenceId,
+            actorId: opts.actorId,
+            kind: 'prompt.selected',
+            targetType: 'frame',
+            targetId: frameId,
+            summary: 'Restored image prompt with selected still',
+            data: {
+              versionId: linkedPrompt.id,
+              prevVersionId: frame.prevPromptVersionId ?? null,
+              fromImageVersionId: versionId,
+            },
+          }),
+        ]);
+      } else if (linkedPrompt) {
         await db.batch([
           mirrorUpdate,
           imageSelectedEvent,
@@ -508,6 +542,18 @@ export function createFrameVariantsMethods(db: Database) {
             },
           }),
         ]);
+      } else if (shouldClearPending) {
+        await db.batch([
+          mirrorUpdate,
+          imageSelectedEvent,
+          db
+            .update(frames)
+            .set({
+              pendingPromoteVersionId: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(frames.id, frameId)),
+        ]);
       } else {
         await db.batch([mirrorUpdate, imageSelectedEvent]);
       }
@@ -523,7 +569,10 @@ export function createFrameVariantsMethods(db: Database) {
       opts: { actorId: string | null }
     ): Promise<Date> => {
       const [version] = await db
-        .select({ sequenceId: frameVariants.sequenceId })
+        .select({
+          sequenceId: frameVariants.sequenceId,
+          frameId: frameVariants.frameId,
+        })
         .from(frameVariants)
         .where(eq(frameVariants.id, versionId));
       if (!version) {
@@ -535,6 +584,16 @@ export function createFrameVariantsMethods(db: Database) {
           .update(frameVariants)
           .set({ discardedAt, updatedAt: discardedAt })
           .where(eq(frameVariants.id, versionId)),
+        // Drop auto-promote claim if it pointed at this version (#1070).
+        db
+          .update(frames)
+          .set({ pendingPromoteVersionId: null, updatedAt: discardedAt })
+          .where(
+            and(
+              eq(frames.id, version.frameId),
+              eq(frames.pendingPromoteVersionId, versionId)
+            )
+          ),
         buildEventInsert(db, {
           sequenceId: version.sequenceId,
           actorId: opts.actorId,

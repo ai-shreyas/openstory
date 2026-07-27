@@ -35,7 +35,9 @@ export type MotionStorageResult = { url: string; path: string };
  */
 export type PersistMotionScopedDb = {
   shots: {
-    getById: (id: string) => Promise<{ id: string } | null>;
+    getById: (
+      id: string
+    ) => Promise<{ id: string; renderSegmentId: string | null } | null>;
     update: (
       id: string,
       data: Partial<NewShot>,
@@ -47,6 +49,9 @@ export type PersistMotionScopedDb = {
       versionId: string,
       data: Partial<NewVideoVariant>
     ) => Promise<{ id: string }>;
+    getById: (
+      versionId: string
+    ) => Promise<{ id: string; workflowRunId: string | null } | null>;
     select: (
       shotId: string,
       versionId: string,
@@ -55,6 +60,20 @@ export type PersistMotionScopedDb = {
     markFailedByWorkflowRun: (
       workflowRunId: string,
       error: string
+    ) => Promise<void>;
+  };
+  renderSegments: {
+    getById: (segmentId: string) => Promise<{
+      id: string;
+      pendingPromoteVersionId: string | null;
+    } | null>;
+    setPendingPromoteVersionId: (
+      segmentId: string,
+      versionId: string | null
+    ) => Promise<void>;
+    clearPendingPromoteVersionIdIf: (
+      segmentId: string,
+      versionId: string
     ) => Promise<void>;
   };
   sequenceEvents: {
@@ -194,19 +213,48 @@ export async function persistMotionCompletion(opts: {
     return { status: 'completed', videoUrl: upload.url };
   }
 
-  // A primary render: repoint the shot's selection. If the shot was deleted
-  // mid-flight, skip the repoint (the version stays addressable for recovery).
+  // A primary render: promote only if this version still holds the pending
+  // claim (#1070 last-kickoff + explicit select cancel).
   const shot = await scopedDb.shots.getById(shotId);
   if (!shot) return { status: 'shot-deleted' };
 
-  await scopedDb.videoVariants.select(shotId, videoVersionId, { actorId });
+  const segmentId = shot.renderSegmentId;
+  const segment = segmentId
+    ? await scopedDb.renderSegments.getById(segmentId)
+    : null;
+  const shouldPromote = segment?.pendingPromoteVersionId === videoVersionId;
 
-  await emit('generation.video:progress', {
-    shotId,
-    status: 'completed',
-    videoUrl: upload.url,
-    model,
-  });
+  if (shouldPromote) {
+    await scopedDb.videoVariants.select(shotId, videoVersionId, { actorId });
+    await emit('generation.video:progress', {
+      shotId,
+      status: 'completed',
+      videoUrl: upload.url,
+      model,
+    });
+  } else {
+    // History-only completion — leave the primary selection alone. Clear a
+    // stale self-claim if any (usually already cleared by a newer kickoff or
+    // user select).
+    if (segmentId) {
+      await scopedDb.renderSegments.clearPendingPromoteVersionIdIf(
+        segmentId,
+        videoVersionId
+      );
+    }
+    // Still emit completed so the variant list refreshes; primary video*
+    // columns stay as they are (cache updater must not overwrite when the
+    // client still has a different selected version — emit without
+    // forcing primary: videoUrl is present but selection is separate).
+    await emit('generation.video:progress', {
+      shotId,
+      status: 'completed',
+      videoUrl: upload.url,
+      model,
+      // Not selected as primary — treat like variant-only for cache primary.
+      variantOnly: true,
+    });
+  }
 
   return { status: 'completed', videoUrl: upload.url };
 }
@@ -238,6 +286,24 @@ export async function persistMotionFailure(opts: {
       { videoStatus: 'failed', videoError: error },
       { throwOnMissing: false }
     );
+    // Drop auto-promote if this run owned it (#1070).
+    const shot = await scopedDb.shots.getById(shotId);
+    if (shot?.renderSegmentId) {
+      const segment = await scopedDb.renderSegments.getById(
+        shot.renderSegmentId
+      );
+      if (segment?.pendingPromoteVersionId) {
+        const pending = await scopedDb.videoVariants.getById(
+          segment.pendingPromoteVersionId
+        );
+        if (pending?.workflowRunId === workflowRunId) {
+          await scopedDb.renderSegments.clearPendingPromoteVersionIdIf(
+            shot.renderSegmentId,
+            pending.id
+          );
+        }
+      }
+    }
   }
 
   await scopedDb.videoVariants.markFailedByWorkflowRun(workflowRunId, error);

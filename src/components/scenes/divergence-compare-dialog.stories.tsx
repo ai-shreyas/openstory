@@ -71,6 +71,7 @@ const baseShot: ShotWithImage = {
     imagePrompt: null,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: 'live-hash',
     visualPromptInputHash: null,
     createdAt: NOW,

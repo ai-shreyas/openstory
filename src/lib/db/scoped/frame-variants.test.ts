@@ -341,6 +341,48 @@ describe('frameVariants.select', () => {
     expect(restored).toBeDefined();
   });
 
+  it('clears pendingPromoteVersionId when selecting a different version (#1070)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const current = await m.appendVersion(
+      variantInput({ url: 'https://cdn/current.png' })
+    );
+    const other = await m.appendVersion(
+      variantInput({ url: 'https://cdn/other.png' })
+    );
+    await m.select(frameId, current.id, { actorId: null });
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: 'in-flight-ver' })
+      .where(eq(frames.id, frameId));
+
+    await m.select(frameId, other.id, { actorId: null });
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.pendingPromoteVersionId).toBeNull();
+    expect(frame?.selectedImageVersionId).toBe(other.id);
+  });
+
+  it('keeps pendingPromoteVersionId when re-selecting the current version', async () => {
+    const m = createFrameVariantsMethods(db);
+    const current = await m.appendVersion(variantInput());
+    await m.select(frameId, current.id, { actorId: null });
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: 'in-flight-ver' })
+      .where(eq(frames.id, frameId));
+
+    await m.select(frameId, current.id, { actorId: null });
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.pendingPromoteVersionId).toBe('in-flight-ver');
+  });
+
   it('selects without touching the prompt when promptVersionId is null (legacy)', async () => {
     const m = createFrameVariantsMethods(db);
     await db

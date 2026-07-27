@@ -367,28 +367,65 @@ export function createVideoVariantsMethods(db: Database) {
       }
 
       const [segment] = await db
-        .select({ prev: renderSegments.selectedVideoVersionId })
+        .select({
+          prev: renderSegments.selectedVideoVersionId,
+          pendingPromoteVersionId: renderSegments.pendingPromoteVersionId,
+        })
         .from(renderSegments)
         .where(eq(renderSegments.id, version.renderSegmentId));
 
-      await db.batch([
-        buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-        buildShotVideoMirror(db, shotId, completedVersion),
-        buildEventInsert(db, {
-          sequenceId: shot.sequenceId,
-          actorId: opts.actorId,
-          kind: 'video.selected',
-          targetType: 'shot',
-          targetId: shotId,
-          summary: `Selected ${version.model} video`,
-          data: {
-            versionId,
-            model: version.model,
-            renderSegmentId: version.renderSegmentId,
-            prevVersionId: segment?.prev ?? null,
-          },
-        }),
-      ]);
+      // Cancel auto-promote only when picking a *different* version than the
+      // current primary (#1070). Completing a gen that selects its pending
+      // version also clears pending (prev !== versionId).
+      const shouldClearPending =
+        segment?.prev !== versionId && segment?.pendingPromoteVersionId != null;
+
+      if (shouldClearPending) {
+        await db.batch([
+          buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
+          buildShotVideoMirror(db, shotId, completedVersion),
+          db
+            .update(renderSegments)
+            .set({
+              pendingPromoteVersionId: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(renderSegments.id, version.renderSegmentId)),
+          buildEventInsert(db, {
+            sequenceId: shot.sequenceId,
+            actorId: opts.actorId,
+            kind: 'video.selected',
+            targetType: 'shot',
+            targetId: shotId,
+            summary: `Selected ${version.model} video`,
+            data: {
+              versionId,
+              model: version.model,
+              renderSegmentId: version.renderSegmentId,
+              prevVersionId: segment?.prev ?? null,
+            },
+          }),
+        ]);
+      } else {
+        await db.batch([
+          buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
+          buildShotVideoMirror(db, shotId, completedVersion),
+          buildEventInsert(db, {
+            sequenceId: shot.sequenceId,
+            actorId: opts.actorId,
+            kind: 'video.selected',
+            targetType: 'shot',
+            targetId: shotId,
+            summary: `Selected ${version.model} video`,
+            data: {
+              versionId,
+              model: version.model,
+              renderSegmentId: version.renderSegmentId,
+              prevVersionId: segment?.prev ?? null,
+            },
+          }),
+        ]);
+      }
       return version;
     },
 
@@ -409,7 +446,10 @@ export function createVideoVariantsMethods(db: Database) {
       opts: { actorId: string | null }
     ): Promise<Date> => {
       const [version] = await db
-        .select({ sequenceId: videoVariants.sequenceId })
+        .select({
+          sequenceId: videoVariants.sequenceId,
+          renderSegmentId: videoVariants.renderSegmentId,
+        })
         .from(videoVariants)
         .where(eq(videoVariants.id, versionId));
       if (!version) {
@@ -421,6 +461,16 @@ export function createVideoVariantsMethods(db: Database) {
           .update(videoVariants)
           .set({ discardedAt, updatedAt: discardedAt })
           .where(eq(videoVariants.id, versionId)),
+        // Drop auto-promote claim if it pointed at this version (#1070).
+        db
+          .update(renderSegments)
+          .set({ pendingPromoteVersionId: null, updatedAt: discardedAt })
+          .where(
+            and(
+              eq(renderSegments.id, version.renderSegmentId),
+              eq(renderSegments.pendingPromoteVersionId, versionId)
+            )
+          ),
         buildEventInsert(db, {
           sequenceId: version.sequenceId,
           actorId: opts.actorId,

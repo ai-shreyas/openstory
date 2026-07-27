@@ -269,6 +269,40 @@ export function createFramesMethods(db: Database) {
       return frame;
     },
 
+    /**
+     * Claim auto-promote for a primary image gen (#1070). Last kickoff wins —
+     * overwrites any prior pending id. Pass `null` to cancel (explicit select /
+     * failure). Soft pointer; no FK.
+     */
+    setPendingPromoteVersionId: async (
+      frameId: string,
+      versionId: string | null
+    ): Promise<void> => {
+      await db
+        .update(frames)
+        .set({ pendingPromoteVersionId: versionId, updatedAt: new Date() })
+        .where(eq(frames.id, frameId));
+    },
+
+    /**
+     * Clear pending only when it still points at `versionId` — so a newer
+     * kickoff's claim is not wiped by an older job's failure/complete path.
+     */
+    clearPendingPromoteVersionIdIf: async (
+      frameId: string,
+      versionId: string
+    ): Promise<void> => {
+      await db
+        .update(frames)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(frames.id, frameId),
+            eq(frames.pendingPromoteVersionId, versionId)
+          )
+        );
+    },
+
     delete: async (frameId: string): Promise<boolean> => {
       const result = await db.delete(frames).where(eq(frames.id, frameId));
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime

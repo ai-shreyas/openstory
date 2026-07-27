@@ -117,6 +117,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     imagePrompt: base.imagePrompt,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
     imageInputHash: base.thumbnailInputHash,
     visualPromptInputHash: base.visualPromptInputHash,
     createdAt: base.createdAt,
