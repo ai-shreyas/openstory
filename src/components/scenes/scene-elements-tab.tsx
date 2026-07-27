@@ -10,6 +10,7 @@ import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import type { SequenceElement } from '@/lib/db/schema';
 import { Link } from '@tanstack/react-router';
 import { ImagePlus, Loader2 } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type SceneElementsTabProps = {
   sequenceId: string;
@@ -74,9 +75,11 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
             className="group relative block overflow-hidden rounded-lg bg-card"
           >
             <div className="relative aspect-square overflow-hidden bg-muted">
-              <img
+              <AppImage
                 src={el.imageUrl}
                 alt={el.token}
+                width={160}
+                height={160}
                 className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
               />
               <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 via-black/20 to-transparent p-3">

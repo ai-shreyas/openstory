@@ -46,6 +46,7 @@ import {
 import { toast } from 'sonner';
 
 import { getLogger } from '@/lib/observability/logger';
+import { AppImage } from '@/components/ui/app-image';
 
 const logger = getLogger(['openstory', 'ui', 'element', 'element-selector']);
 
@@ -532,9 +533,11 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
                       className="relative aspect-square overflow-hidden rounded-md group"
                     >
                       {/* biome-ignore lint/performance/noImgElement: preview uses object URL or R2 URL */}
-                      <img
+                      <AppImage
                         src={item.imageUrl}
                         alt={item.token ?? 'Element'}
+                        width={160}
+                        height={160}
                         className="size-full object-cover"
                       />
                       {(item.status === 'uploading' ||

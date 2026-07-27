@@ -33,6 +33,7 @@ import type {
   TalentSheetVariant,
 } from '@/lib/db/schema';
 import { Pencil, Plus, X } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type TalentWithRelations = Talent & {
   sheets: TalentSheet[];
@@ -248,9 +249,11 @@ export const EditTalentDialog: React.FC<EditTalentDialogProps> = ({
                           muted
                         />
                       ) : (
-                        <img
+                        <AppImage
                           src={media.url}
                           alt="Reference"
+                          width={160}
+                          height={160}
                           className="size-full object-cover"
                         />
                       )}

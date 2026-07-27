@@ -17,7 +17,7 @@ import {
   type MentionSection,
 } from '@/components/scenes/prompt-mention/mention-items';
 import { cn } from '@/lib/utils';
-import { Image } from '@unpic/react';
+import { AppImage } from '@/components/ui/app-image';
 import {
   forwardRef,
   useEffect,
@@ -124,7 +124,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
                 >
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded bg-muted">
                     {item.thumbnailUrl ? (
-                      <Image
+                      <AppImage
                         src={item.thumbnailUrl}
                         alt=""
                         width={32}

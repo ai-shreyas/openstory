@@ -1,6 +1,7 @@
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AppImage } from '@/components/ui/app-image';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -118,6 +119,19 @@ function formatTimestamp(d: Date): string {
 
 function imageModelDisplayName(model: string): string {
   return isValidTextToImageModel(model) ? IMAGE_MODELS[model].name : model;
+}
+
+/** True when a media URL is likely a still (not an mp4/webm). */
+function isLikelyImageUrl(url: string): boolean {
+  const path = url.split('?')[0]?.toLowerCase() ?? '';
+  return (
+    path.endsWith('.jpg') ||
+    path.endsWith('.jpeg') ||
+    path.endsWith('.png') ||
+    path.endsWith('.webp') ||
+    path.endsWith('.gif') ||
+    path.endsWith('.avif')
+  );
 }
 
 function asError(value: unknown): Error | null {
@@ -239,19 +253,34 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
               <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-md bg-muted">
                 {thumb && row.status === 'completed' ? (
                   kind === 'video' ? (
-                    // eslint-disable-next-line jsx-a11y/media-has-caption -- Generated asset preview; no caption track exists.
-                    <video
-                      src={thumb}
-                      muted
-                      playsInline
-                      preload="metadata"
-                      className="h-full w-full object-cover"
-                      aria-hidden
-                    />
+                    // Video files can't go through Cloudflare Image Transforms;
+                    // preload=metadata is enough for a first-frame strip thumb.
+                    // Prefer an image poster when the row carries one.
+                    isLikelyImageUrl(thumb) ? (
+                      <AppImage
+                        src={thumb}
+                        alt=""
+                        width={96}
+                        height={64}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      // eslint-disable-next-line jsx-a11y/media-has-caption -- Generated asset preview; no caption track exists.
+                      <video
+                        src={thumb}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        className="h-full w-full object-cover"
+                        aria-hidden
+                      />
+                    )
                   ) : (
-                    <img
+                    <AppImage
                       src={thumb}
                       alt=""
+                      width={96}
+                      height={64}
                       className="h-full w-full object-cover"
                     />
                   )
@@ -306,9 +335,11 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
                       aria-label={`${modelLabel} preview`}
                     />
                   ) : (
-                    <img
+                    <AppImage
                       src={row.url}
                       alt={`${modelLabel} preview`}
+                      width={640}
+                      height={360}
                       className="max-h-64 w-full rounded-md object-contain"
                     />
                   )

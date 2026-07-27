@@ -9,6 +9,7 @@ import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import type { Character } from '@/lib/db/schema';
 import { Link } from '@tanstack/react-router';
 import { Film, User } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type SceneCastTabProps = {
   sequenceId: string;
@@ -31,15 +32,12 @@ const CastCard: React.FC<CastCardProps> = ({ character, sequenceId }) => {
       {/* Character avatar - cropped from right side of sheet where large headshot lives */}
       <div className="aspect-square relative overflow-hidden bg-muted">
         {character.sheetImageUrl ? (
-          <img
+          <AppImage
             src={character.sheetImageUrl}
             alt={character.name}
+            width={160}
+            height={160}
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-            style={{
-              // The character sheet is 16:9 with a large headshot on the right side
-              // Crop to the right ~25% and lower ~60% where the headshot panel is
-              objectPosition: '95% 75%',
-            }}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center">

@@ -22,6 +22,7 @@ import { AddLocationDialog } from '@/components/location-library/add-location-di
 import { cn } from '@/lib/utils';
 import { Check, MapPin, Plus, Search, X } from 'lucide-react';
 import { useState } from 'react';
+import { AppImage } from '@/components/ui/app-image';
 
 type LocationSuggestionSelectorProps = {
   selectedLocationIds: string[];
@@ -53,10 +54,11 @@ const LocationPickerCard: React.FC<LocationPickerCardProps> = ({
     >
       <div className="aspect-video w-full overflow-hidden rounded-lg bg-muted">
         {imageUrl ? (
-          <img
+          <AppImage
             src={imageUrl}
             alt={location.name}
-            draggable={false}
+            width={160}
+            height={160}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
         ) : (
@@ -97,10 +99,11 @@ const LocationThumbnail: React.FC<LocationThumbnailProps> = ({
     <div className="group relative">
       <div className="h-10 w-14 overflow-hidden rounded border-2 border-primary bg-muted">
         {imageUrl ? (
-          <img
+          <AppImage
             src={imageUrl}
             alt={location.name}
-            draggable={false}
+            width={160}
+            height={160}
             className="h-full w-full object-cover"
           />
         ) : (

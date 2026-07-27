@@ -14,6 +14,7 @@ import {
 } from '@/hooks/use-sequence-locations';
 import { MapPin, Search } from 'lucide-react';
 import { useState } from 'react';
+import { AppImage } from '@/components/ui/app-image';
 
 type LocationPickerDialogProps = {
   open: boolean;
@@ -41,9 +42,11 @@ const LocationPickerCard: React.FC<LocationPickerCardProps> = ({
     >
       <div className="aspect-video w-full overflow-hidden rounded-lg bg-muted">
         {imageUrl ? (
-          <img
+          <AppImage
             src={imageUrl}
             alt={location.name}
+            width={160}
+            height={160}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
         ) : (
