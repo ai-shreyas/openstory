@@ -89,6 +89,10 @@ async function persistStreamedSceneAndShot(
   const sceneRow = await scopedDb.scenes.upsert(
     buildSceneInsert(sequenceId, scene, orderIndex)
   );
+  // Seed the split script version as soon as the scene lands so composed
+  // script / the Scenes script view have text mid-stream. Idempotent: the
+  // final persist-scenes step re-seeds without duplicating.
+  await scopedDb.sceneScriptVersions.seedSplitFromSceneRows([sceneRow]);
   return scopedDb.shots.upsert({
     sequenceId,
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard

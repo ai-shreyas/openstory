@@ -108,6 +108,7 @@ export function updateQueryCacheFromEvent(
       // Debounced invalidation - multiple rapid events = one refetch.
       // Stream-time scene-split now also writes a `scenes` row + sceneId
       // link for each shot (#1072), so the spine list must refetch too.
+      // Composed-script + the Script/Scenes tab pair also key off scenes.
       debouncedInvalidate(
         queryClient,
         shotKeys.list(sequenceId),
@@ -117,6 +118,11 @@ export function updateQueryCacheFromEvent(
         queryClient,
         sceneKeys.list(sequenceId),
         `scenes:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.composedScript(sequenceId),
+        `composed-script:${sequenceId}`
       );
       break;
 
@@ -555,7 +561,8 @@ export function updateQueryCacheFromEvent(
     case 'generation.scene:new':
       // Analysis now persists a scenes row as each scene completes (#1072).
       // Refetch so the spine grows scene groups live instead of only after
-      // the late bulk persist-scenes step.
+      // the late bulk persist-scenes step — and so the Script tab collapses
+      // once the first scene lands.
       debouncedInvalidate(
         queryClient,
         sceneKeys.list(sequenceId),
@@ -565,6 +572,11 @@ export function updateQueryCacheFromEvent(
         queryClient,
         shotKeys.list(sequenceId),
         `shots:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.composedScript(sequenceId),
+        `composed-script:${sequenceId}`
       );
       break;
 

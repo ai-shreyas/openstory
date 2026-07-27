@@ -1,5 +1,5 @@
 import { Link, useMatchRoute, useNavigate } from '@tanstack/react-router';
-import { useComposedScript } from '@/hooks/use-scenes';
+import { useScenesBySequence } from '@/hooks/use-scenes';
 import { cn } from '@/lib/utils';
 import {
   Select,
@@ -35,10 +35,16 @@ export function getDefaultSequenceTabPath(sequenceId: string): string {
  *
  * Before analysis the Script page IS the composer, and Scenes has nothing to
  * show — so that's when the pair is worth rendering.
+ *
+ * "Analysed" is `scenes` rows existing, not composed-script text: stream-time
+ * scene-split writes scenes as each shot lands (#1072), while
+ * `scene_script_versions` (what composed-script reads) only seed at the end of
+ * the step — using composed text left the Script+Scenes pair up for the whole
+ * analysis run and for any sequence that failed before seeding.
  */
 function useSequenceTabItems(sequenceId: string): TabItem[] {
-  const { data: composed } = useComposedScript(sequenceId);
-  const isAnalysed = (composed?.script.trim().length ?? 0) > 0;
+  const { data: sceneRows } = useScenesBySequence(sequenceId);
+  const isAnalysed = (sceneRows?.length ?? 0) > 0;
 
   const scenes: TabItem = {
     label: 'Scenes',
