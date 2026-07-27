@@ -11,6 +11,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
+import { sceneKeys } from '@/hooks/use-scenes';
 import { shotKeys } from '@/hooks/use-shots';
 import type { Frame, Shot } from '@/lib/db/schema';
 import {
@@ -321,6 +322,72 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(keys).not.toContainEqual(
         promptVariantKeys.shot('visual', 'shot-1')
       );
+    });
+  });
+
+  // Stream-time scene persistence (#1072): each analysis scene writes a
+  // `scenes` row + links the shot, so the spine must refetch scenes (and
+  // shots) as soon as those events land — not only after bulk persist-scenes.
+  describe('generation.scene / shot creation invalidates scenes list (#1072)', () => {
+    it('generation.shot:created refetches shots and scenes', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:created', {
+        shotId: 'shot-1',
+        sceneId: 'analysis-1',
+        orderIndex: 0,
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
+    });
+
+    it('generation.scene:new refetches scenes and shots', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.scene:new', {
+        sceneId: 'analysis-1',
+        sceneNumber: 1,
+        title: 'Opening',
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+    });
+
+    it('generation.scene:updated patches title and refetches scenes/shots', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+      qc.setQueryData(shotKeys.list(SEQ), [
+        makeShot({
+          metadata: {
+            sceneId: 'sc-1',
+            sceneNumber: 1,
+            metadata: {
+              title: 'Old',
+              durationSeconds: 3,
+              location: 'INT',
+              timeOfDay: 'day',
+              storyBeat: 'open',
+            },
+            originalScript: { extract: 'x', dialogue: [] },
+          },
+        }),
+      ]);
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.scene:updated', {
+        sceneId: 'sc-1',
+        title: 'New title',
+      });
+
+      expect(getCachedShot(qc)?.metadata?.metadata?.title).toBe('New title');
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
     });
   });
 });

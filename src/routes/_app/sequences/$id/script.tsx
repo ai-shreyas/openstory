@@ -1,5 +1,5 @@
 import { ScriptView } from '@/components/script/script-view';
-import { getComposedScriptFn } from '@/functions/scenes';
+import { getScenesFn } from '@/functions/scenes';
 import { sceneKeys } from '@/hooks/use-scenes';
 import { useSequence } from '@/hooks/use-sequences';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
@@ -14,15 +14,16 @@ export const Route = createFileRoute('/_app/sequences/$id/script')({
    * as the sole way to change it — a dead end. So an analysed sequence is sent
    * to the editable surface; the page stays for the pre-analysis composer.
    *
-   * `ensureQueryData` primes the same cache entry `useComposedScript` reads, so
-   * the check costs nothing extra on the not-yet-analysed path.
+   * Gate on `scenes` rows (not composed-script text): stream-time split writes
+   * scenes before script versions are seeded (#1072), so composed text lags
+   * and would leave this page up mid-analysis.
    */
   loader: async ({ params, context: { queryClient } }) => {
-    const composed = await queryClient.ensureQueryData({
-      queryKey: sceneKeys.composedScript(params.id),
-      queryFn: () => getComposedScriptFn({ data: { sequenceId: params.id } }),
+    const scenes = await queryClient.ensureQueryData({
+      queryKey: sceneKeys.list(params.id),
+      queryFn: () => getScenesFn({ data: { sequenceId: params.id } }),
     });
-    if (composed.script.trim().length > 0) {
+    if (scenes.length > 0) {
       throw redirect({
         to: '/sequences/$id/scenes',
         params: { id: params.id },

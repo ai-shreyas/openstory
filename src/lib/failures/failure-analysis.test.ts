@@ -291,6 +291,27 @@ describe('analyzeFailures', () => {
     expect(result.headline).toContain('music prompt generation failed');
   });
 
+  test('pipeline statusError with only missing prompts forces full retry (#1072)', () => {
+    // Scene-split crashed after streaming shots; motion/music phases never
+    // ran. Do not claim "music prompt generation failed" or offer smart-retry.
+    const shots = [makeShot({ motionPrompt: null, videoStatus: 'pending' })];
+    const sequence = makeSequence({
+      status: 'failed',
+      musicPrompt: null,
+      musicTags: null,
+      musicStatus: 'pending',
+      statusError:
+        'Child workflow scene-split failed: Failed query: delete from "scenes"',
+    });
+
+    const result = analyzeFailures(shots, sequence);
+
+    expect(result.requiresFullRetry).toBe(true);
+    expect(result.groups).toHaveLength(0);
+    expect(result.headline).toContain('full retry required');
+    expect(result.error).toContain('delete from "scenes"');
+  });
+
   test('completed sequence with no failures', () => {
     const shots = [makeShot()];
     const sequence = makeSequence({ status: 'completed' });

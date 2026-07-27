@@ -314,14 +314,11 @@ SUPER:  CORAL.  OUT NOW.
         )
         .toBe(true);
 
-      // 10. Trigger motion generation, then wait for the scene-list footer
-      //     button to leave the DOM. The footer renders a single dynamic-
-      //     label button (`Writing motion prompts…` / `Composing music…` /
-      //     `Generating…` / `Generate {N} / {M} shot(s)`), gated by
-      //     `showButton = notStartedShots > 0 || isMotionInProgress`
-      //     (src/components/scenes/scene-list.tsx). Once motion + music are
-      //     fully done it unmounts — that's the most truthful "pipeline
-      //     finished" UX signal.
+      // 10. Trigger motion generation, then wait on the DB for every shot's
+      //     video + the sequence music to complete. The scene-list footer
+      //     unmounts as soon as shots flip to `generating` (progress moves
+      //     to MotionProgressBanner), so "button gone" is not a completion
+      //     signal — only a start signal (#1072).
       const motionButton = page
         .getByRole('button', { name: /Generate \d+ ?\/ ?\d+ shots?/i })
         .first();
@@ -329,16 +326,27 @@ SUPER:  CORAL.  OUT NOW.
       await expect(motionButton).toBeEnabled({ timeout: t(120_000) });
       await motionButton.click();
 
-      await expect(
-        page.getByRole('button', {
-          name: /Writing motion prompts|Composing music|Generating|Generate \d+ ?\/ ?\d+ shots?/i,
-        })
-      ).toHaveCount(0, { timeout: t(600_000) });
+      await expect
+        .poll(
+          async () => {
+            const shots = await getTestSequenceShots(sequenceId);
+            if (shots.length === 0) return false;
+            const videosDone = shots.every(
+              (f) => f.videoStatus === 'completed' && !!f.videoUrl
+            );
+            if (!videosDone) return false;
+            const status = await getTestSequenceStatus(sequenceId);
+            return status?.musicStatus === 'completed' && !!status.musicUrl;
+          },
+          { timeout: t(600_000), intervals: [2_000, 5_000, 10_000] }
+        )
+        .toBe(true);
 
       // 11. Per-scene playback: click through every scene-list-item and
       //     assert the active <video> in the ScenePlayer is decodable.
       //     The list item carries `data-testid="scene-list-item"` so we can
-      //     enumerate without relying on title text.
+      //     enumerate without relying on title text. Shots are nested under
+      //     scene-group headers after stream-time scene persistence (#1072).
       //
       //     The player only shows the scene's <video> on a video tab; the
       //     default "Variants" tab (the multi-model scene-review UX, #545)
