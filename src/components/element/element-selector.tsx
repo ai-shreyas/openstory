@@ -2,11 +2,15 @@
  * Element selector for the sequence creation + edit forms.
  *
  * Two modes:
- *  - draft (default): files upload to a temp R2 path and emit DraftElementUpload
- *    entries via onDraftElementsChange. Used on new-sequence creation before
- *    the sequence exists.
+ *  - draft (default): files upload to a temp R2 path and land in the parent's
+ *    `draftElements` list via onDraftElementsChange. The parent list is the
+ *    canonical state (it's what localStorage draft persistence restores after
+ *    a reload — #1079); local entries here only track in-flight uploads and
+ *    errors. Used on new-sequence creation before the sequence exists.
  *  - persisted: when a sequenceId is provided, files upload directly into that
  *    sequence's elements (useSequenceElements) and can be deleted.
+ *
+ * Both modes let the user rename an element's token in place (#1079).
  *
  * Exposes an imperative ref so external drop targets (ScriptView) can inject
  * files.
@@ -19,8 +23,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import { ElementTokenButton } from '@/components/element/element-token-button';
 import {
   useDeleteSequenceElement,
+  useRenameSequenceElementToken,
   useSequenceElements,
   useUploadDraftElement,
   useUploadElementToSequence,
@@ -74,12 +80,19 @@ type DraftModeProps = BaseProps & {
   sequenceId?: undefined;
   draftElements: DraftElementUpload[];
   onDraftElementsChange: (next: DraftElementUpload[]) => void;
+  /**
+   * Fires after a draft element's token is renamed so the parent can rewrite
+   * references in the script text (the persisted path does the same
+   * server-side via cascadeRename).
+   */
+  onDraftTokenRename?: (oldToken: string, newToken: string) => void;
 };
 
 type PersistedModeProps = BaseProps & {
   sequenceId: string;
   draftElements?: undefined;
   onDraftElementsChange?: undefined;
+  onDraftTokenRename?: undefined;
 };
 
 type ElementSelectorProps = DraftModeProps | PersistedModeProps;
@@ -90,7 +103,6 @@ type LocalEntry = {
   file: File;
   previewUrl: string;
   status: 'uploading' | 'analyzing' | 'done' | 'error';
-  uploaded?: DraftElementUpload;
   errorMessage?: string;
 };
 
@@ -107,7 +119,9 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
     ref,
     disabled = false,
     sequenceId,
+    draftElements,
     onDraftElementsChange,
+    onDraftTokenRename,
     onElementBusyChange,
   } = props;
   const isPersisted = !!sequenceId;
@@ -121,16 +135,23 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
   const draftUpload = useUploadDraftElement();
   const sequenceUpload = useUploadElementToSequence();
   const deleteElement = useDeleteSequenceElement();
+  const renameToken = useRenameSequenceElementToken();
   const { data: persistedElements = [] } = useSequenceElements(
     isPersisted ? sequenceId : undefined
   );
 
-  const uploaded = useMemo(
-    () =>
-      Array.from(entries.values())
-        .map((e) => e.uploaded)
-        .filter((u): u is DraftElementUpload => !!u),
-    [entries]
+  // Mirror of the parent's canonical draft list, updated synchronously on our
+  // own emissions so two uploads completing in the same tick don't lose the
+  // first append (the prop only catches up on the parent's next render).
+  const draftElementsRef = useRef<DraftElementUpload[]>(draftElements ?? []);
+  draftElementsRef.current = draftElements ?? [];
+
+  const emitDraftElements = useCallback(
+    (next: DraftElementUpload[]) => {
+      draftElementsRef.current = next;
+      onDraftElementsChange?.(next);
+    },
+    [onDraftElementsChange]
   );
 
   const hasInflightLocalEntry = useMemo(
@@ -159,12 +180,10 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
 
+  // Persisted mode: once an upload's element row lands in the query data,
+  // drop the transient local entry (its tile is superseded by the real one).
   useEffect(() => {
-    if (!isPersisted) {
-      onDraftElementsChange?.(uploaded);
-      return;
-    }
-    if (persistedElements.length === 0) return;
+    if (!isPersisted || persistedElements.length === 0) return;
     const persistedFilenames = new Set(
       persistedElements.map((el) => el.uploadedFilename)
     );
@@ -183,7 +202,7 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
       }
       return changed ? next : prev;
     });
-  }, [isPersisted, uploaded, persistedElements, onDraftElementsChange]);
+  }, [isPersisted, persistedElements]);
 
   useEffect(() => {
     return () => {
@@ -195,7 +214,18 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
 
   const currentCount = isPersisted
     ? persistedElements.length + entries.size
-    : entries.size;
+    : (draftElements?.length ?? 0) + entries.size;
+
+  const removeLocalEntry = useCallback((key: string) => {
+    setEntries((prev) => {
+      const current = prev.get(key);
+      if (!current) return prev;
+      URL.revokeObjectURL(current.previewUrl);
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+  }, []);
 
   const processFiles = useCallback(
     async (newFiles: File[]) => {
@@ -212,7 +242,7 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
         const next = new Map(prev);
         const existingCount = isPersisted
           ? persistedElements.length + next.size
-          : next.size;
+          : draftElementsRef.current.length + next.size;
         let remaining = MAX_ELEMENTS - existingCount;
         for (const file of images) {
           if (remaining <= 0) break;
@@ -266,17 +296,13 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
                   });
                 },
               });
-              setEntries((prev) => {
-                const current = prev.get(key);
-                if (!current) return prev;
-                const next = new Map(prev);
-                next.set(key, {
-                  ...current,
-                  status: 'done',
-                  uploaded: result,
-                });
-                return next;
-              });
+              // Promote into the parent's canonical draft list and drop the
+              // transient local entry — unless the user removed it mid-upload,
+              // in which case the result is discarded.
+              if (entriesRef.current.has(key)) {
+                removeLocalEntry(key);
+                emitDraftElements([...draftElementsRef.current, result]);
+              }
             }
           } catch (err) {
             const message =
@@ -311,19 +337,10 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
       sequenceId,
       draftUpload,
       sequenceUpload,
+      removeLocalEntry,
+      emitDraftElements,
     ]
   );
-
-  const removeLocalEntry = useCallback((key: string) => {
-    setEntries((prev) => {
-      const current = prev.get(key);
-      if (!current) return prev;
-      URL.revokeObjectURL(current.previewUrl);
-      const next = new Map(prev);
-      next.delete(key);
-      return next;
-    });
-  }, []);
 
   const removePersistedElement = useCallback(
     (element: SequenceElement) => {
@@ -331,6 +348,68 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
       deleteElement.mutate({ elementId: element.id, sequenceId });
     },
     [deleteElement, isPersisted, sequenceId]
+  );
+
+  const removeDraftElement = useCallback(
+    (tempPath: string) => {
+      emitDraftElements(
+        draftElementsRef.current.filter((el) => el.tempPath !== tempPath)
+      );
+    },
+    [emitDraftElements]
+  );
+
+  // Rename a draft (pre-sequence) element in the parent's canonical list; the
+  // parent rewrites script references through onDraftTokenRename. Uniqueness
+  // is checked locally — promoteTempElements would silently suffix a
+  // collision, but a user-typed name should be rejected loudly instead
+  // (matching the persisted rename server fn).
+  const renameDraftElement = useCallback(
+    // oxlint-disable-next-line require-await -- ElementTokenButton takes an async commit; rejections surface inline
+    async (tempPath: string, nextToken: string) => {
+      const current = draftElementsRef.current;
+      const target = current.find((el) => el.tempPath === tempPath);
+      if (!target || nextToken === target.token) return;
+      const duplicate = current.some(
+        (el) => el.tempPath !== tempPath && el.token === nextToken
+      );
+      if (duplicate) {
+        throw new Error(
+          `Another element is already named "${nextToken}". Pick a different name.`
+        );
+      }
+      emitDraftElements(
+        current.map((el) =>
+          el.tempPath === tempPath ? { ...el, token: nextToken } : el
+        )
+      );
+      onDraftTokenRename?.(target.token, nextToken);
+    },
+    [emitDraftElements, onDraftTokenRename]
+  );
+
+  // Rename a persisted element — the server fn cascades the new token through
+  // the sequence script and every shot that references it.
+  const renamePersistedElement = useCallback(
+    async (element: SequenceElement, nextToken: string) => {
+      if (!isPersisted) return;
+      const result = await renameToken.mutateAsync({
+        sequenceId,
+        elementId: element.id,
+        token: nextToken,
+      });
+      const updates: string[] = [];
+      if (result.scriptUpdated) updates.push('script');
+      if (result.shotsUpdated > 0) {
+        updates.push(
+          `${result.shotsUpdated} shot${result.shotsUpdated === 1 ? '' : 's'}`
+        );
+      }
+      const suffix =
+        updates.length > 0 ? ` — updated ${updates.join(' + ')}` : '';
+      toast.success(`Renamed to ${nextToken}${suffix}`);
+    },
+    [isPersisted, renameToken, sequenceId]
   );
 
   useImperativeHandle(
@@ -384,11 +463,28 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
     [processFiles]
   );
 
-  // Build the display list
+  // Build the display list: canonical elements first (persisted rows or the
+  // parent's draft list), then transient local entries (in-flight / errored).
   const displayItems: Array<
     | { kind: 'persisted'; item: DisplayItem; source: SequenceElement }
+    | { kind: 'draft'; item: DisplayItem; source: DraftElementUpload }
     | { kind: 'local'; item: DisplayItem; key: string }
   > = [];
+
+  if (!isPersisted) {
+    for (const el of draftElements ?? []) {
+      displayItems.push({
+        kind: 'draft',
+        source: el,
+        item: {
+          key: `draft-${el.tempPath}`,
+          imageUrl: el.tempPublicUrl,
+          token: el.token,
+          status: 'done',
+        },
+      });
+    }
+  }
 
   if (isPersisted) {
     for (const el of persistedElements) {
@@ -419,14 +515,15 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
       item: {
         key: `local-${key}`,
         imageUrl: entry.previewUrl,
-        token: entry.uploaded?.token,
         status: entry.status,
         errorMessage: entry.errorMessage,
       },
     });
   }
 
-  const count = isPersisted ? persistedElements.length : uploaded.length;
+  const count = isPersisted
+    ? persistedElements.length
+    : (draftElements?.length ?? 0);
 
   return (
     <>
@@ -556,11 +653,21 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
                           {item.errorMessage ?? 'Failed'}
                         </div>
                       )}
-                      {item.status === 'done' && item.token && (
-                        <div className="absolute bottom-0 left-0 right-0 bg-background/90 px-1.5 py-0.5 text-[10px] font-mono truncate">
-                          {item.token}
-                        </div>
-                      )}
+                      {item.status === 'done' &&
+                        item.token &&
+                        entry.kind !== 'local' && (
+                          <ElementTokenButton
+                            token={item.token}
+                            onRename={(next) =>
+                              entry.kind === 'persisted'
+                                ? renamePersistedElement(entry.source, next)
+                                : renameDraftElement(
+                                    entry.source.tempPath,
+                                    next
+                                  )
+                            }
+                          />
+                        )}
                       <Button
                         type="button"
                         variant="destructive"
@@ -568,6 +675,8 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
                         onClick={() => {
                           if (entry.kind === 'persisted') {
                             removePersistedElement(entry.source);
+                          } else if (entry.kind === 'draft') {
+                            removeDraftElement(entry.source.tempPath);
                           } else {
                             removeLocalEntry(entry.key);
                           }

@@ -93,8 +93,9 @@ type MarkdownEditorProps = {
    * When provided, enables @-mention autocomplete. Tags found in the incoming
    * markdown (by canonical slug match against the items list) are rendered as
    * coloured pills via the Mention extension. Pass `undefined` (default) on
-   * surfaces where mentions don't apply (e.g. the pre-analysis script editor,
-   * where no canonical tags exist yet).
+   * surfaces where mentions don't apply. Enablement is captured at editor
+   * init — pass an (empty) array from the first render, not `undefined` that
+   * later becomes a list, or the extension never registers.
    */
   mentionItems?: MentionItem[];
 };

@@ -63,11 +63,11 @@ function buildVisionMessages(
 Your output MUST be strict JSON with three fields:
 - "description": 60-120 words. Describe shape, proportions, colors, text rendered on the element (verbatim), finish/material, any distinguishing marks, and how it is oriented. Do NOT describe background, lighting, camera angle, or the overall photograph — only the element itself.
 - "consistencyTag": A lowercase slug (3-6 words joined by hyphens) capturing the element's visual identity for reuse in prompts (e.g. "red-hex-brand-logo", "silver-metal-water-bottle").
-- "suggestedToken": A short UPPERCASE_SNAKE_CASE identifier (1-3 words, joined by underscores, max 30 characters) naming the element so a screenwriter can reference it. Prefer brand/product names visible in the image (e.g. "PEPSI_LOGO", "IPHONE", "STARBUCKS_CUP"); if no brand text is visible, name the object descriptively (e.g. "RED_BOTTLE", "OFFICE_CHAIR"). Letters and digits only; no spaces, dashes, or punctuation.
+- "suggestedToken": A short UPPERCASE_SNAKE_CASE identifier (1-3 words, joined by underscores, max 30 characters) naming the element so a screenwriter can reference it. If the uploaded filename looks deliberately named by a person, derive the token from it (e.g. "acme-logo.png" → "ACME_LOGO", "red water bottle.jpg" → "RED_WATER_BOTTLE"). Ignore auto-generated filenames (e.g. "IMG_1234.jpg", "Screenshot 2026-05-01.png", "image.png", "download.jpg", random hashes) — for those, prefer brand/product names visible in the image (e.g. "PEPSI_LOGO", "IPHONE", "STARBUCKS_CUP"); if no brand text is visible, name the object descriptively (e.g. "RED_BOTTLE", "OFFICE_CHAIR"). Letters and digits only; no spaces, dashes, or punctuation.
 
 Return ONLY the JSON object. No prose, no markdown fences.`;
 
-  const userText = `Uploaded filename (hint only — may be meaningless): ${filename}
+  const userText = `Uploaded filename: ${filename}
 
 Describe the element in the image below and suggest a token.`;
 
