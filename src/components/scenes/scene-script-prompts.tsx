@@ -1400,13 +1400,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         />
       )}
 
-      {/* Scene scope (#1077): same one-line pattern plus clickable stale-shot
-          thumbnails that navigate down to shot scope. */}
+      {/* Scene scope (#1077): same one-line pattern, ending in shot-number
+          chips that navigate down to shot scope. */}
       {!shot && sceneShots && onSelectShot && (
         <SceneStaleShots
           shots={sceneShots}
           staleness={sceneStaleness}
-          aspectRatio={aspectRatio}
           onSelectShot={onSelectShot}
         />
       )}
