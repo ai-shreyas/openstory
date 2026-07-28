@@ -22,10 +22,12 @@ import {
   frameVariants,
   frames,
   generatedAssets,
+  renderSegments,
   shots,
   shotVariants,
   sequenceElements,
   sequences,
+  videoVariants,
 } from '@/lib/db/schema';
 import { resolveRunState, STALE_THRESHOLD_MS } from '@/lib/workflow/reconcile';
 import { and, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
@@ -63,6 +65,10 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
     ['frames.image', () => reconcileFramesImagePass(db)],
     ['shots.video', () => reconcileShotsPass(db, 'video')],
     ['frame_variants.status', () => reconcileFrameVariantsPass(db)],
+    // Video versions live on video_variants now (#990) — without this pass a
+    // dead motion run leaves a permanent "generating" chip on the Video tab
+    // (#1076).
+    ['video_variants.status', () => reconcileVideoVariantsPass(db)],
     ['shots.audio', () => reconcileShotsPass(db, 'audio')],
     ['shot_variants.status', () => reconcileShotVariantsPass(db, 'primary')],
     [
@@ -193,6 +199,45 @@ async function reconcileFrameVariantsPass(db: Database): Promise<number> {
         .update(frames)
         .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
         .where(eq(frames.pendingPromoteVersionId, row.id));
+    }
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * Reconcile stuck `video_variants` versions (#990 / #1076) — the motion analog
+ * of {@link reconcileFrameVariantsPass}. Dead motion runs that never hit
+ * `onFailure` left permanent "generating" chips on the Video tab; heal them
+ * from the workflow instance status and drop a failed version's auto-promote
+ * claim on its render segment.
+ */
+async function reconcileVideoVariantsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const stuck = await db
+    .select({ id: videoVariants.id, runId: videoVariants.workflowRunId })
+    .from(videoVariants)
+    .where(
+      and(
+        eq(videoVariants.status, 'generating'),
+        lt(videoVariants.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  let updated = 0;
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    await db
+      .update(videoVariants)
+      .set({ status: next })
+      .where(eq(videoVariants.id, row.id));
+    // Drop auto-promote claim if this stuck version held it (#1070).
+    if (next === 'failed') {
+      await db
+        .update(renderSegments)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(eq(renderSegments.pendingPromoteVersionId, row.id));
     }
     updated++;
   }

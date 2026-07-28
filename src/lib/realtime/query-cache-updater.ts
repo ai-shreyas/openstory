@@ -1,6 +1,7 @@
 import { characterSheetVariantKeys } from '@/hooks/use-character-sheet-variants';
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { sceneKeys } from '@/hooks/use-scenes';
+import { segmentKeys } from '@/hooks/use-segments';
 import { shotKeys } from '@/hooks/use-shots';
 import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
@@ -306,6 +307,17 @@ export function updateQueryCacheFromEvent(
             `video-versions:${shotId}`
           );
         }
+        // Version chips on the Video tab read `segments`, not history and not
+        // the shots list. History was invalidated above (#1070) but segments
+        // were not — after primary completion we also flip `shots.videoStatus`
+        // off `generating`, which stops the 2s segment poll, so a chip can
+        // stay on the pre-complete "generating" snapshot forever while history
+        // already shows completed (#1076).
+        debouncedInvalidate(
+          queryClient,
+          segmentKeys.list(sequenceId),
+          `segments:${sequenceId}`
+        );
       }
       break;
     }
