@@ -27,7 +27,11 @@ export type StalenessEntityType =
   | 'talent'
   | 'sequence';
 
-export type StalenessIndicatorDensity = 'inline' | 'corner-dot';
+export type StalenessIndicatorDensity =
+  | 'inline'
+  | 'corner-dot'
+  | 'status-line'
+  | 'header-chip';
 
 type StalenessIndicatorBaseProps = {
   artifact: StalenessArtifact;
@@ -50,6 +54,27 @@ type StalenessIndicatorProps = StalenessIndicatorBaseProps &
         // tab body's inline banner instead.
         density: 'corner-dot';
         onRegenerate?: never;
+        onDismiss?: never;
+      }
+    | {
+        // Quiet one-line summary (#1077): amber dot + muted message + a text
+        // action. Staleness is a routine editing state, not a failure — no
+        // fill, no triangle. Omit `onRegenerate` for a purely informational
+        // line (e.g. the scene-scope summary, where the action is navigating
+        // to a shot).
+        density: 'status-line';
+        onRegenerate?: () => void;
+        /** Defaults to "Out of date since your last edit". */
+        message?: string;
+        /** Defaults to "Update all". */
+        actionLabel?: string;
+        onDismiss?: never;
+      }
+    | {
+        // Inline chip for an artifact's header row (#1077):
+        // `⏺ Outdated · Regenerate`.
+        density: 'header-chip';
+        onRegenerate: () => void;
         onDismiss?: never;
       }
   );
@@ -114,6 +139,89 @@ export const StalenessIndicator: React.FC<StalenessIndicatorProps> = (
             className="block h-2 w-2 rounded-full bg-amber-500 ring-2 ring-amber-500/30"
           />
         )}
+      </span>
+    );
+  }
+
+  if (props.density === 'status-line') {
+    const message = props.message ?? 'Out of date since your last edit';
+    const actionLabel = props.actionLabel ?? 'Update all';
+    return (
+      <div
+        data-slot="staleness-indicator"
+        data-density="status-line"
+        data-artifact={artifact}
+        data-entity-type={entityType}
+        className={cn(
+          'flex items-center gap-2 text-xs text-muted-foreground',
+          className
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
+        />
+        <span className="min-w-0 flex-1 truncate">{message}</span>
+        {props.onRegenerate && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-2 text-xs"
+            onClick={props.onRegenerate}
+            disabled={isRegenerating}
+            aria-busy={isRegenerating}
+            aria-label={`${actionLabel} — ${ariaLabel}`}
+          >
+            {isRegenerating && (
+              <Loader2
+                aria-hidden="true"
+                className="mr-1 h-3 w-3 animate-spin motion-reduce:animate-none"
+              />
+            )}
+            {isRegenerating ? 'Updating…' : actionLabel}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  if (props.density === 'header-chip') {
+    return (
+      <span
+        data-slot="staleness-indicator"
+        data-density="header-chip"
+        data-artifact={artifact}
+        data-entity-type={entityType}
+        className={cn(
+          'inline-flex items-center gap-1.5 text-xs text-muted-foreground',
+          className
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+        />
+        <span>Outdated</span>
+        <span aria-hidden="true">·</span>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs"
+          onClick={props.onRegenerate}
+          disabled={isRegenerating}
+          aria-busy={isRegenerating}
+          aria-label={`Regenerate — ${ariaLabel}`}
+        >
+          {isRegenerating && (
+            <Loader2
+              aria-hidden="true"
+              className="mr-1 h-3 w-3 animate-spin motion-reduce:animate-none"
+            />
+          )}
+          {isRegenerating ? 'Regenerating…' : 'Regenerate'}
+        </Button>
       </span>
     );
   }

@@ -37,7 +37,7 @@ const meta: Meta<typeof StalenessIndicator> = {
     },
     density: {
       control: 'radio',
-      options: ['inline', 'corner-dot'],
+      options: ['inline', 'corner-dot', 'status-line', 'header-chip'],
     },
   },
   args: {
@@ -125,6 +125,45 @@ export const StaleCornerDot: Story = {
         Scene card content
       </CardContent>
     </Card>
+  ),
+};
+
+/**
+ * Quiet one-line summary (#1077) — sits under the panel's scope header.
+ * Amber dot only; no fill, no triangle.
+ */
+export const StaleStatusLine: Story = {
+  args: {
+    density: 'status-line',
+    artifact: 'thumbnail',
+    entityType: 'shot',
+    onRegenerate: () => {},
+  },
+  decorators: [
+    (Story) => (
+      <div className="max-w-xl">
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+/** Header-row chip (#1077) — `⏺ Outdated · Regenerate` beside a field label. */
+export const StaleHeaderChip: Story = {
+  args: {
+    density: 'header-chip',
+    artifact: 'visual-prompt',
+    entityType: 'shot',
+    onRegenerate: () => {},
+  },
+  render: (args) => (
+    <div className="flex max-w-xl items-center justify-between">
+      <span className="flex items-center gap-2">
+        <span className="text-sm font-medium">Prompt</span>
+        <StalenessIndicator {...args} />
+      </span>
+      <span className="text-xs text-muted-foreground">1234 characters</span>
+    </div>
   ),
 };
 

@@ -8,8 +8,15 @@ import {
   computeMotionPromptInputHash,
   computeVisualPromptInputHash,
 } from '@/lib/ai/input-hash';
-import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
-import type { ShotVariant, NewShot } from '@/lib/db/schema';
+import {
+  loadNarrowShotPromptContext,
+  type ShotPromptContextSequence,
+} from '@/lib/ai/prompt-context';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import { dbSceneId } from '@/lib/db/schema';
+import type { Frame, Shot, ShotVariant, NewShot } from '@/lib/db/schema';
+import type { ScopedDb } from '@/lib/db/scoped';
 import {
   projectShotWithImage,
   projectShotMissingFrame,
@@ -30,6 +37,7 @@ import {
   enrichShotWithSceneScript,
   loadSelectedScriptsBySequence,
   projectShotForClient,
+  resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
@@ -50,6 +58,22 @@ const shotIdInputSchema = z.object({
   sequenceId: ulidSchema,
   shotId: ulidSchema,
 });
+
+type ArtifactStaleness = 'stale' | 'fresh' | 'untracked';
+
+type ShotStalenessResult = {
+  thumbnail: ArtifactStaleness;
+  visualPrompt: ArtifactStaleness;
+  motionPrompt: ArtifactStaleness;
+};
+
+type ShotStalenessRefs = {
+  characters: Awaited<ReturnType<ScopedDb['characters']['listWithSheets']>>;
+  locations: Awaited<
+    ReturnType<ScopedDb['sequenceLocations']['listWithReferences']>
+  >;
+  elements: Awaited<ReturnType<ScopedDb['sequenceElements']['list']>>;
+};
 
 export const getShotsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
@@ -583,10 +607,157 @@ export const reorderShotsFn = createServerFn({ method: 'POST' })
   });
 
 /**
+ * Per-shot staleness computation shared by the single-shot and scene-scoped
+ * reads. Each value is computed by re-deriving the current input hash from
+ * live scoped state and comparing it to the stored `*_input_hash`.
+ *
+ * `refs` lets the scene-scoped caller load the character / location / element
+ * lists once for the whole scene instead of once per shot; when absent they
+ * are loaded lazily (only the thumbnail branch needs them).
+ */
+async function computeShotStaleness(args: {
+  scopedDb: ScopedDb;
+  sequence: ShotPromptContextSequence & { aspectRatio: AspectRatio };
+  shot: Shot;
+  frame: Frame;
+  scene: Scene | null;
+  refs?: ShotStalenessRefs;
+}): Promise<ShotStalenessResult> {
+  const { scopedDb, sequence, shot, frame, scene, refs } = args;
+  const shotForHash = scene ? { ...shot, metadata: scene } : shot;
+
+  let thumbnail: ArtifactStaleness = 'untracked';
+  // The visual prompt lives solely on the anchor frame's `imagePrompt` mirror
+  // now (#989/#713): the visual-prompt workflow writes a `frame_prompt_versions`
+  // row that mirrors onto `frame.imagePrompt`, so AI-generated and regenerated
+  // shots both populate it — the old `metadata.prompts.visual` fallback is gone.
+  const effectivePrompt = frame.imagePrompt;
+  if (effectivePrompt) {
+    // Distinguish "stored hash absent" from "stored hash matches". A null
+    // stored hash means the image predates hash tracking (or was generated
+    // by a pre-fix `generateShotImageFn` that didn't pass a sceneSnapshot)
+    // — we genuinely have no opinion, so 'untracked' rather than lying with
+    // 'fresh'. Once the user regenerates the image once under the new code
+    // path, this column populates and the live-vs-stored comparison takes
+    // over.
+    if (frame.imageInputHash === null) {
+      thumbnail = 'untracked';
+    } else {
+      try {
+        const [characters, locations, elements] = refs
+          ? [refs.characters, refs.locations, refs.elements]
+          : await Promise.all([
+              scopedDb.characters.listWithSheets(sequence.id),
+              scopedDb.sequenceLocations.listWithReferences(sequence.id),
+              scopedDb.sequenceElements.list(sequence.id),
+            ]);
+
+        const snapshot = await buildRegenerateShotSnapshot({
+          shot: shotForHash,
+          imagePrompt: frame.imagePrompt,
+          characters,
+          locations,
+          elements,
+          imageModel: safeTextToImageModel(
+            frame.imageModel,
+            DEFAULT_IMAGE_MODEL
+          ),
+          aspectRatio: sequence.aspectRatio,
+        });
+
+        thumbnail =
+          snapshot.snapshotInputHash !== frame.imageInputHash
+            ? 'stale'
+            : 'fresh';
+      } catch (error) {
+        // Mirror the visual/motion branches: a thumbnail-hash failure (e.g.
+        // transient D1 read, malformed element/location row) must not throw
+        // out of the whole handler — that would null the entire staleness
+        // result and silently suppress the visual/motion banners too. Stay
+        // 'untracked' (fail-open as 'fresh' would lie about freshness).
+        logger.warn(`thumbnail staleness uncomputable for shot ${shot.id}:`, {
+          err: error,
+        });
+      }
+    }
+  }
+
+  let visualPrompt: ArtifactStaleness = 'untracked';
+  let motionPrompt: ArtifactStaleness = 'untracked';
+
+  // Reference hash resolution: prefer the cached column on `shots`, but
+  // fall back to the most recent variant with a non-null `inputHash` for
+  // shots whose cached column was nulled by a pre-fix user-edit. Without
+  // the fallback, those shots are stuck at `'untracked'` permanently.
+  if (scene) {
+    // Visual prompt history moved to `frame_prompt_versions` (#989); the
+    // cached hash mirror lives on the anchor frame.
+    let referenceHash = frame.visualPromptInputHash;
+    if (!referenceHash) {
+      const fallback =
+        await scopedDb.framePromptVersions.getLatestWithInputHash(frame.id);
+      referenceHash = fallback?.inputHash ?? null;
+    }
+    if (referenceHash) {
+      try {
+        const latest = await scopedDb.framePromptVersions.getLatest(frame.id);
+        const ctx = await loadNarrowShotPromptContext({
+          scopedDb,
+          sequence,
+          scene,
+          analysisModelOverride: latest?.analysisModel ?? null,
+        });
+        const liveHash = await computeVisualPromptInputHash(ctx);
+        visualPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
+      } catch (error) {
+        // Context unavailable (e.g., style deleted mid-flight). Stay
+        // 'untracked' — fail-open as 'fresh' would silently lie to the user.
+        logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
+          err: error,
+        });
+      }
+    }
+  }
+
+  if (scene) {
+    let referenceHash = shot.motionPromptInputHash;
+    if (!referenceHash) {
+      const fallback = await scopedDb.shotPromptVersions.getLatestWithInputHash(
+        shot.id,
+        'motion'
+      );
+      referenceHash = fallback?.inputHash ?? null;
+    }
+    if (referenceHash) {
+      try {
+        const latest = await scopedDb.shotPromptVersions.getLatest(
+          shot.id,
+          'motion'
+        );
+        const ctx = await loadNarrowShotPromptContext({
+          scopedDb,
+          sequence,
+          scene,
+          analysisModelOverride: latest?.analysisModel ?? null,
+          startingFrameImageUrl: frame.imageUrl,
+        });
+        const liveHash = await computeMotionPromptInputHash(ctx);
+        motionPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
+      } catch (error) {
+        logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
+          err: error,
+        });
+      }
+    }
+  }
+
+  return { thumbnail, visualPrompt, motionPrompt };
+}
+
+/**
  * Returns staleness state for a shot's artifacts. Covers the rendered
- * thumbnail plus the visual / motion prompts (stage 4). Each value is
- * computed by re-deriving the current input hash from live scoped state and
- * comparing it to the stored `*_input_hash` via the scoped helper.
+ * thumbnail plus the visual / motion prompts (stage 4). See
+ * `computeShotStaleness` for the comparison rules.
  *
  * Three states per artifact:
  *   - `'stale'`     — stored hash diverges from the freshly computed one.
@@ -601,133 +772,76 @@ export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .inputValidator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
     const { shot, frame, sequence, scopedDb, scene } = context;
-    const shotForHash = scene ? { ...shot, metadata: scene } : shot;
+    return computeShotStaleness({ scopedDb, sequence, shot, frame, scene });
+  });
 
-    let thumbnail: 'stale' | 'fresh' | 'untracked' = 'untracked';
-    // The visual prompt lives solely on the anchor frame's `imagePrompt` mirror
-    // now (#989/#713): the visual-prompt workflow writes a `frame_prompt_versions`
-    // row that mirrors onto `frame.imagePrompt`, so AI-generated and regenerated
-    // shots both populate it — the old `metadata.prompts.visual` fallback is gone.
-    const effectivePrompt = frame.imagePrompt;
-    if (effectivePrompt) {
-      // Distinguish "stored hash absent" from "stored hash matches". A null
-      // stored hash means the image predates hash tracking (or was generated
-      // by a pre-fix `generateShotImageFn` that didn't pass a sceneSnapshot)
-      // — we genuinely have no opinion, so 'untracked' rather than lying with
-      // 'fresh'. Once the user regenerates the image once under the new code
-      // path, this column populates and the live-vs-stored comparison takes
-      // over.
-      if (frame.imageInputHash === null) {
-        thumbnail = 'untracked';
-      } else {
-        try {
-          const [characters, locations, elements] = await Promise.all([
-            scopedDb.characters.listWithSheets(sequence.id),
-            scopedDb.sequenceLocations.listWithReferences(sequence.id),
-            scopedDb.sequenceElements.list(sequence.id),
-          ]);
-
-          const snapshot = await buildRegenerateShotSnapshot({
-            shot: shotForHash,
-            imagePrompt: frame.imagePrompt,
-            characters,
-            locations,
-            elements,
-            imageModel: safeTextToImageModel(
-              frame.imageModel,
-              DEFAULT_IMAGE_MODEL
-            ),
-            aspectRatio: sequence.aspectRatio,
-          });
-
-          thumbnail =
-            snapshot.snapshotInputHash !== frame.imageInputHash
-              ? 'stale'
-              : 'fresh';
-        } catch (error) {
-          // Mirror the visual/motion branches: a thumbnail-hash failure (e.g.
-          // transient D1 read, malformed element/location row) must not throw
-          // out of the whole handler — that would null the entire staleness
-          // result and silently suppress the visual/motion banners too. Stay
-          // 'untracked' (fail-open as 'fresh' would lie about freshness).
-          logger.warn(`thumbnail staleness uncomputable for shot ${shot.id}:`, {
-            err: error,
-          });
-        }
-      }
+/**
+ * Scene-scoped batch of `getShotStalenessFn` (#1077): staleness for every
+ * shot in one scene, keyed by shot id. Feeds the Scene assets panel's
+ * stale-shot summary and the left-rail dots, and lets the client prime the
+ * per-shot staleness cache entries in one round trip instead of N.
+ */
+export const getSceneShotStalenessFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .inputValidator(
+    zodValidator(z.object({ sequenceId: ulidSchema, sceneId: ulidSchema }))
+  )
+  .handler(async ({ data, context }) => {
+    const { scopedDb, sequence } = context;
+    const sceneShots = (
+      await scopedDb.shots.listBySequence(sequence.id)
+    ).filter((shot) => shot.sceneId === data.sceneId);
+    if (sceneShots.length === 0) {
+      return {} as Record<string, ShotStalenessResult>;
     }
 
-    let visualPrompt: 'stale' | 'fresh' | 'untracked' = 'untracked';
-    let motionPrompt: 'stale' | 'fresh' | 'untracked' = 'untracked';
+    await scopedDb.shots.ensureAnchorFrames(sceneShots);
+    const [anchorRows, selectedScript, characters, locations, elements] =
+      await Promise.all([
+        scopedDb.frames.listAnchorsBySequence(sequence.id),
+        scopedDb.sceneScriptVersions.getSelected(dbSceneId(data.sceneId)),
+        scopedDb.characters.listWithSheets(sequence.id),
+        scopedDb.sequenceLocations.listWithReferences(sequence.id),
+        scopedDb.sequenceElements.list(sequence.id),
+      ]);
+    const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+    const refs: ShotStalenessRefs = { characters, locations, elements };
+    const script = selectedScript?.content ?? null;
 
-    // Reference hash resolution: prefer the cached column on `shots`, but
-    // fall back to the most recent variant with a non-null `inputHash` for
-    // shots whose cached column was nulled by a pre-fix user-edit. Without
-    // the fallback, those shots are stuck at `'untracked'` permanently.
-    if (scene) {
-      // Visual prompt history moved to `frame_prompt_versions` (#989); the
-      // cached hash mirror lives on the anchor frame.
-      let referenceHash = frame.visualPromptInputHash;
-      if (!referenceHash) {
-        const fallback =
-          await scopedDb.framePromptVersions.getLatestWithInputHash(frame.id);
-        referenceHash = fallback?.inputHash ?? null;
-      }
-      if (referenceHash) {
-        try {
-          const latest = await scopedDb.framePromptVersions.getLatest(frame.id);
-          const ctx = await loadNarrowShotPromptContext({
+    const entries = await Promise.all(
+      sceneShots.map(async (shot): Promise<[string, ShotStalenessResult]> => {
+        const frame = anchorsByShot.get(shot.id);
+        if (!frame) {
+          // ensureAnchorFrames guarantees an anchor; if it's somehow absent we
+          // have no image surface to compare, so report the shot untracked
+          // rather than dropping it from the result.
+          logger.error(
+            `getSceneShotStalenessFn: shot ${shot.id} has no anchor frame`
+          );
+          return [
+            shot.id,
+            {
+              thumbnail: 'untracked',
+              visualPrompt: 'untracked',
+              motionPrompt: 'untracked',
+            },
+          ];
+        }
+        const { scene } = resolveSceneForShot(shot, script);
+        return [
+          shot.id,
+          await computeShotStaleness({
             scopedDb,
             sequence,
+            shot,
+            frame,
             scene,
-            analysisModelOverride: latest?.analysisModel ?? null,
-          });
-          const liveHash = await computeVisualPromptInputHash(ctx);
-          visualPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
-        } catch (error) {
-          // Context unavailable (e.g., style deleted mid-flight). Stay
-          // 'untracked' — fail-open as 'fresh' would silently lie to the user.
-          logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
-            err: error,
-          });
-        }
-      }
-    }
-
-    if (scene) {
-      let referenceHash = shot.motionPromptInputHash;
-      if (!referenceHash) {
-        const fallback =
-          await scopedDb.shotPromptVersions.getLatestWithInputHash(
-            shot.id,
-            'motion'
-          );
-        referenceHash = fallback?.inputHash ?? null;
-      }
-      if (referenceHash) {
-        try {
-          const latest = await scopedDb.shotPromptVersions.getLatest(
-            shot.id,
-            'motion'
-          );
-          const ctx = await loadNarrowShotPromptContext({
-            scopedDb,
-            sequence,
-            scene,
-            analysisModelOverride: latest?.analysisModel ?? null,
-            startingFrameImageUrl: frame.imageUrl,
-          });
-          const liveHash = await computeMotionPromptInputHash(ctx);
-          motionPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
-        } catch (error) {
-          logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
-            err: error,
-          });
-        }
-      }
-    }
-
-    return { thumbnail, visualPrompt, motionPrompt };
+            refs,
+          }),
+        ];
+      })
+    );
+    return typedFromEntries(entries);
   });
 
 /**

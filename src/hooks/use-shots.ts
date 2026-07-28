@@ -29,7 +29,7 @@ import {
 } from '@/functions/shot-image';
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { segmentKeys } from '@/hooks/use-segments';
-import { shotStalenessKey } from '@/hooks/use-shot-staleness';
+import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
 import type { GenerateVariantInput as SchemaGenerateVariantInput } from '@/lib/schemas/shot.schemas';
 
 type GenerateVariantInput = SchemaGenerateVariantInput & {
@@ -453,7 +453,7 @@ export function useSetImageFromVariant() {
         queryKey: promptVariantKeys.shot('visual', shotId),
       });
       await queryClient.invalidateQueries({
-        queryKey: shotStalenessKey(shotId),
+        queryKey: shotStalenessNamespace,
       });
     },
   });
@@ -673,7 +673,7 @@ export function useSelectFrameImageVersion() {
           queryKey: promptVariantKeys.shot('visual', shotId),
         }),
         queryClient.invalidateQueries({
-          queryKey: shotStalenessKey(shotId),
+          queryKey: shotStalenessNamespace,
         }),
       ]);
     },

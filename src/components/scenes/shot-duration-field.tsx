@@ -31,7 +31,7 @@ import {
 import { estimateSceneDurationFn } from '@/functions/ai';
 import { updateShotDurationFn } from '@/functions/shots';
 import { sequenceKeys } from '@/hooks/use-sequences';
-import { shotStalenessKey } from '@/hooks/use-shot-staleness';
+import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
 import { shotKeys } from '@/hooks/use-shots';
 import {
   IMAGE_TO_VIDEO_MODELS,
@@ -100,7 +100,7 @@ export const ShotDurationField: React.FC<ShotDurationFieldProps> = ({
         queryClient.invalidateQueries({ queryKey: shotKeys.list(sequenceId) }),
         // The render's input hash includes duration — staleness flips here.
         queryClient.invalidateQueries({
-          queryKey: shotStalenessKey(updated.id),
+          queryKey: shotStalenessNamespace,
         }),
         // The sequence's total runtime sums shot durations.
         queryClient.invalidateQueries({

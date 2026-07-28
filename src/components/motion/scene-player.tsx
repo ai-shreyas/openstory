@@ -58,6 +58,11 @@ type ScenePlayerProps = {
    * pinned model's output.
    */
   modelMismatchLabel?: string | null;
+  /**
+   * Quiet stale chip (#1077) — the displayed image was generated from
+   * earlier inputs. Info-level: amber dot on a muted chip, no warning fill.
+   */
+  staleLabel?: string | null;
   progressMessage?: string;
   /**
    * In-flight retry state for the selected shot (#882) — rendered as
@@ -85,6 +90,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   overrideVideoUrl,
   badgeMessage,
   modelMismatchLabel,
+  staleLabel,
   progressMessage,
   retry,
   posterUrl,
@@ -459,6 +465,15 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           {modelMismatchLabel && !badgeMessage && (
             <span className="absolute top-12 left-2 z-10 rounded bg-amber-500/90 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
               {modelMismatchLabel}
+            </span>
+          )}
+          {staleLabel && !badgeMessage && !modelMismatchLabel && (
+            <span className="absolute top-12 left-2 z-10 flex items-center gap-1.5 rounded bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 rounded-full bg-amber-500"
+              />
+              {staleLabel}
             </span>
           )}
           {isPreviewImage && !isVariantPreview && (
