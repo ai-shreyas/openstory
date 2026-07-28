@@ -222,6 +222,31 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       const invalidatedKeys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
       expect(invalidatedKeys).toContainEqual(['sequence-video-variants', SEQ]);
       expect(invalidatedKeys).toContainEqual(['sequence-video-models', SEQ]);
+      // Video tab version chips read segments — must refresh with history (#1076).
+      expect(invalidatedKeys).toContainEqual(['segments', 'list', SEQ]);
+    });
+
+    it('primary completion refreshes segments so version chips leave the spinning state (#1076)', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+      qc.setQueryData(shotKeys.list(SEQ), [
+        makeShot({ videoStatus: 'generating', videoError: null }),
+      ]);
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.video:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        videoUrl: NEW_URL,
+        model: 'veo3',
+      });
+
+      expect(getCachedShot(qc)?.videoStatus).toBe('completed');
+
+      vi.advanceTimersByTime(200);
+      const invalidatedKeys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(invalidatedKeys).toContainEqual(['segments', 'list', SEQ]);
+      expect(invalidatedKeys).toContainEqual([
+        ...shotKeys.videoVersions('shot-1'),
+      ]);
     });
 
     it('variant-only failure does not flip the primary video to failed', () => {

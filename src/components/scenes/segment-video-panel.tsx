@@ -16,6 +16,20 @@ type SegmentVideoPanelProps = {
 };
 
 /**
+ * Versions the Video tab chips surface: active model only, no failed rows
+ * (#1076 — failed re-rolls stay in history, not as permanent chips).
+ */
+function visibleSegmentVersions(
+  segment: SequenceSegment
+): SegmentVideoVersion[] {
+  return segment.versions.filter(
+    (v) =>
+      (segment.model === null || v.model === segment.model) &&
+      v.status !== 'failed'
+  );
+}
+
+/**
  * Whether the segment panel adds anything the plain (per-shot) Video tab
  * doesn't: a multi-shot span, a re-roll history to switch between, or a stale
  * render. In the all-ones / single-version / fresh case it stays hidden so
@@ -26,7 +40,9 @@ export function segmentPanelIsInformative(
 ): segment is SequenceSegment {
   if (!segment) return false;
   return (
-    segment.shotIds.length > 1 || segment.versions.length > 1 || segment.stale
+    segment.shotIds.length > 1 ||
+    visibleSegmentVersions(segment).length > 1 ||
+    segment.stale
   );
 }
 
@@ -55,9 +71,7 @@ export const SegmentVideoPanel: React.FC<SegmentVideoPanelProps> = ({
   const label = segment.model ? videoModelDisplayName(segment.model) : null;
   // Re-roll history for the segment's active model (a "variant" is per
   // (segment, model)); each is one render you can point the selection at.
-  const versions = segment.versions.filter(
-    (v) => segment.model === null || v.model === segment.model
-  );
+  const versions = visibleSegmentVersions(segment);
 
   return (
     <div className="space-y-2 rounded-md border bg-muted/40 p-3">

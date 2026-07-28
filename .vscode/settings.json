@@ -28,8 +28,8 @@
     }
   },
   "editor.formatOnSave": true,
-  "typescript.preferences.importModuleSpecifier": "non-relative",
-  "typescript.preferences.includePackageJsonAutoImports": "auto",
+  "js/ts.preferences.importModuleSpecifier": "non-relative",
+  "js/ts.preferences.includePackageJsonAutoImports": "auto",
   "editor.codeActionsOnSave": {
     "source.organizeImports": "explicit"
   },
@@ -66,10 +66,6 @@
   "editor.defaultFormatter": "oxc.oxc-vscode",
   "oxc.fixKind": "dangerous_fix_or_suggestion",
   "oxc.fmt.configPath": ".oxfmtrc.json",
-  "javascript.updateImportsOnFileMove.enabled": "always",
-  "typescript.updateImportsOnFileMove.enabled": "always",
+  "js/ts.updateImportsOnFileMove.enabled": "always",
   "workbench.editor.closeOnFileDelete": false,
-  "bun.test.filePattern": "src/**/*.{test,spec}.{ts,tsx,js,jsx}",
-  "bun.diagnosticsSocket.enabled": true,
-  "typescript.native-preview.goMemLimit": "4GiB",
 }
