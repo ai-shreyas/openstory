@@ -28,6 +28,7 @@ pre-commit:
         - public/mockServiceWorker.js
         - worker-configuration.d.ts
         - gen.types.ts
+        - .vscode/settings.json
       run: bun run --bun oxfmt --write {staged_files}
       stage_fixed: true
     typecheck:
