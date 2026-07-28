@@ -70,6 +70,7 @@ import {
   aspectRatioSchema,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
 import { cn } from '@/lib/utils';
 import {
   dataTransferHasImages,
@@ -80,7 +81,14 @@ import {
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { ImagePlus, Loader2, Sparkles, Square, Undo2 } from 'lucide-react';
-import React, { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from 'react';
 import { ScriptEditor } from './script-editor';
 
 const DURATION_PRESETS = [
@@ -315,9 +323,11 @@ export const ScriptView: FC<{
   const styleName = selectedStyle?.name ?? undefined;
 
   // Sequence cast/elements/locations drive @-mention pills in the script
-  // editor — same canonical tags the scene prompt editors use. Only an existing
-  // (analysed) sequence has these; on the create screen there are no canonical
-  // tags yet, so we pass `undefined` to keep mentions off there.
+  // editor — same canonical tags the scene prompt editors use. An existing
+  // (analysed) sequence has all three; on the create screen only the uploaded
+  // draft elements exist, so their tokens pill (and `@`-complete) from local
+  // state instead (#1079). Always defined — the editor's mention extension is
+  // registered at init and can't be enabled later.
   const mentionSequenceId = sequence?.id;
   const { data: mentionElements } = useSequenceElements(mentionSequenceId);
   const { data: mentionCharacters } = useSequenceCharacters(
@@ -334,8 +344,38 @@ export const ScriptView: FC<{
             elements: mentionElements ?? [],
             locations: mentionLocations ?? [],
           })
-        : undefined,
-    [mentionSequenceId, mentionCharacters, mentionElements, mentionLocations]
+        : buildMentionItems({
+            characters: [],
+            elements: draftElements.map((el) => ({
+              id: el.tempPath,
+              token: el.token,
+              description: el.description,
+              imageUrl: el.tempPublicUrl,
+              consistencyTag: el.consistencyTag,
+            })),
+            locations: [],
+          }),
+    [
+      mentionSequenceId,
+      mentionCharacters,
+      mentionElements,
+      mentionLocations,
+      draftElements,
+    ]
+  );
+
+  // Renaming a draft element rewrites its token references in the script so
+  // the tile name and what the analyser will see stay in sync (the persisted
+  // path does the same server-side via cascadeRename).
+  const handleDraftTokenRename = useCallback(
+    (oldToken: string, newToken: string) => {
+      setContentState((s) => {
+        if (!s.script) return s;
+        const rewritten = replaceTokenInText(s.script, oldToken, newToken);
+        return rewritten === s.script ? s : { ...s, script: rewritten };
+      });
+    },
+    []
   );
   const recommendedImageModel = selectedStyle?.recommendedImageModel ?? null;
   const recommendedVideoModel = selectedStyle?.recommendedVideoModel ?? null;
@@ -918,6 +958,7 @@ export const ScriptView: FC<{
                 ref={elementSelectorRef}
                 draftElements={draftElements}
                 onDraftElementsChange={setDraftElements}
+                onDraftTokenRename={handleDraftTokenRename}
                 disabled={loading}
                 onElementBusyChange={setIsElementBusy}
               />

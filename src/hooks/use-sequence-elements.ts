@@ -17,6 +17,7 @@ import type {
 } from '@/lib/realtime';
 import { useRealtime } from '@/lib/realtime/client';
 import { putToR2 } from '@/lib/utils/upload';
+import { sceneKeys } from '@/hooks/use-scenes';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
@@ -204,6 +205,11 @@ export function useRenameSequenceElementToken() {
     onSuccess: (result, variables) => {
       void queryClient.invalidateQueries({
         queryKey: sequenceElementKeys.bySequence(variables.sequenceId),
+      });
+      // cascadeRename rewrites the sequence script and selected scene-script
+      // versions — refresh the composed script so editors showing it update.
+      void queryClient.invalidateQueries({
+        queryKey: sceneKeys.composedScript(variables.sequenceId),
       });
       // Shots now contain the new token in metadata / prompts. Refresh
       // anything that renders shot text or counts.

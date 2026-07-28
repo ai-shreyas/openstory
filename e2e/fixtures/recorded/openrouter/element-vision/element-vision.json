@@ -2,7 +2,7 @@
   "fixtures": [
     {
       "match": {
-        "userMessage": "Uploaded filename (hint only — may be meaningless): broadcast-mic.jpg\n\nDescribe the element in the image below and suggest a token.",
+        "userMessage": "Uploaded filename: broadcast-mic.jpg\n\nDescribe the element in the image below and suggest a token.",
         "model": "anthropic/claude-sonnet-5",
         "turnIndex": 0,
         "hasToolResult": false
