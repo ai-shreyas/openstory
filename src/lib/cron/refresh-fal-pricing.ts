@@ -7,18 +7,19 @@
  * `FAL_PRICING` seed — current from three signals:
  *
  * 1. fal's pricing API — per-unit price + unit kind, verbatim.
- * 2. fal's historical estimate — typical units per call (absent for all six
- *    of our compute-seconds endpoints, the original #1069 bug).
- * 3. Our own transactions — median `unitsBilled` per endpoint from the
- *    `falUsageMetadata` fields every fal-backed deduction records. This is
- *    the preferred estimation signal: it reflects our resolutions and
- *    prompts, and self-corrects as usage accumulates.
+ * 2. fal's historical estimate — typical units per call (absent for every
+ *    compute-seconds endpoint we use, the original #1069 bug). A failed
+ *    fetch preserves the stored value rather than nulling it.
+ * 3. `model_usage_observations` — median units per image from our own
+ *    generations. The preferred estimation signal: it reflects our
+ *    resolutions and prompts, and self-corrects as usage accumulates.
  *
  * Also appends a `model_pricing_history` row whenever an endpoint's unit
  * price changes (and on first sight), building a time-series of model costs.
  *
- * Billing never reads any of this — actual charges multiply fal's reported
- * `unitsBilled` by `unitPrice` at generation time (`falCostFromUnits`).
+ * Both estimation AND billing read the resulting prices (`falCostFromUnits`
+ * goes through `getEffectiveFalPricing`), so a fal price move reaches real
+ * charges on the next refresh — hence the warn log on every change.
  */
 
 import { getDb } from '#db-client';
@@ -32,10 +33,10 @@ import { usdToMicros } from '@/lib/billing/money';
 import {
   modelPricing,
   modelPricingHistory,
-  transactions,
+  modelUsageObservations,
 } from '@/lib/db/schema';
 import { getLogger } from '@/lib/observability/logger';
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 
 const logger = getLogger(['openstory', 'cron', 'refresh-fal-pricing']);
 
@@ -50,17 +51,18 @@ export const FAL_PRICING_CRON = '17 3 * * *';
 const OBSERVATION_WINDOW_DAYS = 90;
 
 /**
- * Cap on scanned usage transactions per refresh. Newest-first, so under
- * heavy volume the median reflects the most recent generations.
+ * Samples per endpoint feeding the median, newest-first — so under heavy
+ * volume the median reflects the most recent generations, and a busy endpoint
+ * cannot crowd out a quiet one.
  */
-const OBSERVATION_SCAN_LIMIT = 5000;
+const OBSERVATIONS_PER_ENDPOINT = 200;
 
 /**
  * D1 caps a query at 100 bound params. Snapshot upserts bind 9 columns per
  * row and history inserts 6 (defaulted columns bind too) — chunk both.
  */
-const UPSERT_CHUNK = 10;
-const HISTORY_CHUNK = 15;
+export const UPSERT_CHUNK = 10;
+export const HISTORY_CHUNK = 15;
 
 /**
  * Abort the refresh if more than this share of endpoints failed their
@@ -75,6 +77,7 @@ export type FalPricingRefreshSummary = {
   priceChanges: number;
   observedEndpoints: number;
   observationSamples: number;
+  prunedObservations: number;
 };
 
 /** Median of an unsorted list (mean of the middle pair for even lengths). */
@@ -98,65 +101,60 @@ function pricingKey(row: { endpointId: string; unit: string }): string {
   return `${row.endpointId}\u0000${row.unit}`;
 }
 
+function observationCutoff(): Date {
+  return new Date(Date.now() - OBSERVATION_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+}
+
 /**
- * Median observed units **per image** per fal endpoint, from recent usage
- * transactions (the `falUsageMetadata` fields recorded at deduction time).
+ * Median observed units **per image** per fal endpoint, from the
+ * `model_usage_observations` samples every fal generation records.
  *
  * `unitsBilled` is reported per fal *call*, and one call can render up to 4
  * images (`numImages`). The estimator multiplies its unit count back up by
  * `numImages`, so samples are divided down here — otherwise a 4-image call
  * would contribute a 4× sample and a later 4-image estimate would multiply it
- * again. Endpoints that don't take `numImages` record nothing and divide by 1.
+ * again. Endpoints that don't take `numImages` record 1.
+ *
+ * The newest-first cap is applied **per endpoint** via a window function, not
+ * as one global row limit: a global cap lets a high-volume model crowd out
+ * every other one, starving exactly the rarely-used compute-seconds endpoints
+ * that most need an observed median (#1069).
  */
 async function computeObservedUnits(
   db: ReturnType<typeof getDb>
 ): Promise<{ observed: ObservedUnits; samples: number }> {
-  const cutoff = new Date(
-    Date.now() - OBSERVATION_WINDOW_DAYS * 24 * 60 * 60 * 1000
-  );
-  const rows = await db
-    .select({
-      endpointId: sql<
-        string | null
-      >`json_extract(${transactions.metadata}, '$.endpointId')`,
-      unitsBilled: sql<
-        number | null
-      >`json_extract(${transactions.metadata}, '$.unitsBilled')`,
-      numImages: sql<
-        number | null
-      >`json_extract(${transactions.metadata}, '$.numImages')`,
-    })
-    .from(transactions)
-    .where(
-      and(
-        eq(transactions.type, 'credit_usage'),
-        gt(transactions.createdAt, cutoff),
-        sql`json_extract(${transactions.metadata}, '$.unitsBilled') IS NOT NULL`
-      )
-    )
-    .orderBy(sql`${transactions.createdAt} DESC`)
-    .limit(OBSERVATION_SCAN_LIMIT);
+  const cutoff = observationCutoff();
+  const rows = await db.all<{
+    endpoint_id: string;
+    units_billed: number;
+    num_images: number;
+  }>(sql`
+    SELECT endpoint_id, units_billed, num_images FROM (
+      SELECT
+        ${modelUsageObservations.endpointId} AS endpoint_id,
+        ${modelUsageObservations.unitsBilled} AS units_billed,
+        ${modelUsageObservations.numImages} AS num_images,
+        ROW_NUMBER() OVER (
+          PARTITION BY ${modelUsageObservations.endpointId}
+          ORDER BY ${modelUsageObservations.createdAt} DESC
+        ) AS rn
+      FROM ${modelUsageObservations}
+      WHERE ${modelUsageObservations.provider} = 'fal'
+        AND ${modelUsageObservations.createdAt} > ${cutoff.getTime()}
+    ) WHERE rn <= ${OBSERVATIONS_PER_ENDPOINT}
+  `);
 
   const byEndpoint = new Map<string, number[]>();
   for (const row of rows) {
-    if (
-      row.endpointId == null ||
-      row.unitsBilled == null ||
-      !Number.isFinite(row.unitsBilled) ||
-      row.unitsBilled <= 0
-    ) {
-      continue;
-    }
+    if (!Number.isFinite(row.units_billed) || row.units_billed <= 0) continue;
     const images =
-      row.numImages != null &&
-      Number.isFinite(row.numImages) &&
-      row.numImages > 0
-        ? row.numImages
+      Number.isFinite(row.num_images) && row.num_images > 0
+        ? row.num_images
         : 1;
-    const perImage = row.unitsBilled / images;
-    const list = byEndpoint.get(row.endpointId);
+    const perImage = row.units_billed / images;
+    const list = byEndpoint.get(row.endpoint_id);
     if (list) list.push(perImage);
-    else byEndpoint.set(row.endpointId, [perImage]);
+    else byEndpoint.set(row.endpoint_id, [perImage]);
   }
 
   const observed: ObservedUnits = new Map();
@@ -257,6 +255,20 @@ export async function refreshFalPricing(): Promise<FalPricingRefreshSummary> {
     await db.insert(modelPricingHistory).values(rows);
   }
 
+  // Billing multiplies unitsBilled by these prices, so a move here changes what
+  // every team is charged from the next refresh onward. Say so loudly rather
+  // than only appending a history row nobody reads.
+  for (const row of historyRows) {
+    const previous = existingPriceByKey.get(pricingKey(row));
+    if (previous == null) continue; // first sight, not a change
+    logger.warn('fal unit price changed — charges move with it', {
+      endpointId: row.endpointId,
+      unit: row.unit,
+      fromMicros: previous,
+      toMicros: row.unitPriceMicros,
+    });
+  }
+
   for (const rows of chunk(snapshotRows, UPSERT_CHUNK)) {
     await db
       .insert(modelPricing)
@@ -295,7 +307,14 @@ export async function refreshFalPricing(): Promise<FalPricingRefreshSummary> {
       );
   }
 
+  // Samples past the window can never feed a median again.
+  const pruned = await db
+    .delete(modelUsageObservations)
+    .where(lt(modelUsageObservations.createdAt, observationCutoff()))
+    .returning({ id: modelUsageObservations.id });
+
   const summary: FalPricingRefreshSummary = {
+    prunedObservations: pruned.length,
     endpoints: snapshotRows.length,
     priceChanges: historyRows.length,
     observedEndpoints: observed.size,

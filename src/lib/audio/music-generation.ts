@@ -208,7 +208,10 @@ async function callFalAudio(
   }
 
   // Exact cost from fal's reported billed units.
-  const cost = falCostFromUnits(modelConfig.id, result.usage?.unitsBilled);
+  const cost = await falCostFromUnits(
+    modelConfig.id,
+    result.usage?.unitsBilled
+  );
 
   return {
     success: true,

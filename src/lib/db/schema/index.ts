@@ -83,7 +83,11 @@ import { appMetadata } from './app-metadata';
 import { generatedAssets } from './generated-assets';
 
 // Model Pricing (#1069 — live per-provider pricing snapshot + history)
-import { modelPricing, modelPricingHistory } from './model-pricing';
+import {
+  modelPricing,
+  modelPricingHistory,
+  modelUsageObservations,
+} from './model-pricing';
 
 // Better Auth tables
 export { account, apikey, passkey, session, user, verification };
@@ -331,7 +335,7 @@ export { GENERATED_ASSET_ACTIVITIES } from './generated-assets';
 
 // Model Pricing (#1069 — live per-provider pricing snapshot + price-change
 // history, refreshed daily by the Worker cron; fal rows today)
-export { modelPricing, modelPricingHistory };
+export { modelPricing, modelPricingHistory, modelUsageObservations };
 
 export type {
   GeneratedAsset,
@@ -429,4 +433,5 @@ export const schema = {
   // Model Pricing (#1069)
   modelPricing,
   modelPricingHistory,
+  modelUsageObservations,
 };

@@ -5,6 +5,9 @@
  * Warns and skips (rather than throwing) if credits are insufficient,
  * since the work has already been completed at this point.
  *
+ * Usage observations are recorded regardless of any of those skips — a
+ * generation tells us what a model bills whether or not it was charged.
+ *
  * All monetary values are in Microdollars.
  */
 
@@ -33,6 +36,13 @@ type WorkflowDeductionOpts = {
   metadata?: Record<string, unknown>;
   /** Workflow name for the logger.warn prefix (e.g., "VariantWorkflow") */
   workflowName?: string;
+  /**
+   * Provider usage for this generation, recorded as a pricing observation
+   * regardless of whether the team is charged (#1069). Pass it for every
+   * fal-backed call — BYOK and zero-cost generations tell us just as much
+   * about a model's unit count as billed ones.
+   */
+  falUsage?: FalUsage;
 };
 
 /**
@@ -42,11 +52,22 @@ type WorkflowDeductionOpts = {
  * - Skips if costMicros <= 0
  * - Skips if the team used their own API key (usedOwnKey = true)
  * - Warns and skips if the team has insufficient credits (work already done)
+ *
+ * `falUsage` is recorded as a pricing observation before any of those skips,
+ * so the observed-median signal sees every generation rather than only the
+ * billable ones.
  */
 export async function deductWorkflowCredits(
   opts: WorkflowDeductionOpts
 ): Promise<void> {
-  if (!opts.scopedDb || opts.usedOwnKey) return;
+  if (!opts.scopedDb) return;
+  const { scopedDb } = opts;
+
+  if (opts.falUsage) {
+    await recordFalUsage(scopedDb, opts.falUsage);
+  }
+
+  if (opts.usedOwnKey) return;
 
   if (opts.costMicros <= 0) {
     reportMissingBillingCost({
@@ -58,7 +79,6 @@ export async function deductWorkflowCredits(
     return;
   }
 
-  const { scopedDb } = opts;
   const canAfford = await scopedDb.billing.hasEnoughCredits(opts.costMicros);
   if (!canAfford) {
     const prefix = opts.workflowName ? `[${opts.workflowName}]` : '[Workflow]';
@@ -91,22 +111,58 @@ export function extractImageCost(metadata: {
 }
 
 /**
- * Transaction-metadata fields the daily pricing cron mines to derive observed
- * median units per fal endpoint (#1069). Spread into the `metadata` of every
- * fal-backed deduction so estimates self-correct from real usage.
- *
- * `numImages` matters because `unitsBilled` is per fal *call* while estimation
- * works per image: the cron divides by it to get a per-image median. Omit it
- * for endpoints that render one asset per call.
+ * What one fal call billed. `numImages` matters because `unitsBilled` is per
+ * *call* while estimation works per image — the median divides by it.
  */
-export function falUsageMetadata(metadata: {
+export type FalUsage = {
   endpointId: string;
   unitsBilled?: number;
   numImages?: number;
-}): { endpointId: string; unitsBilled?: number; numImages?: number } {
+};
+
+/**
+ * Narrow a generation result's metadata to the usage fields. Pass the result to
+ * `deductWorkflowCredits({ falUsage })`; it is also spread into transaction
+ * metadata at the call sites so a charge can be traced back to its units.
+ */
+export function falUsageMetadata(metadata: FalUsage): FalUsage {
   return {
     endpointId: metadata.endpointId,
     unitsBilled: metadata.unitsBilled,
     numImages: metadata.numImages,
   };
+}
+
+/**
+ * Persist one usage sample for the pricing cron's observed median (#1069).
+ *
+ * Best-effort: a failure here must never fail a generation that already
+ * succeeded and was already paid for, so it logs rather than throws. Samples
+ * with no `unitsBilled` carry no signal and are skipped.
+ */
+async function recordFalUsage(
+  scopedDb: ScopedDb,
+  usage: FalUsage
+): Promise<void> {
+  const { unitsBilled } = usage;
+  if (
+    unitsBilled == null ||
+    !Number.isFinite(unitsBilled) ||
+    unitsBilled <= 0
+  ) {
+    return;
+  }
+  try {
+    await scopedDb.modelUsage.record({
+      provider: 'fal',
+      endpointId: usage.endpointId,
+      unitsBilled,
+      numImages: usage.numImages,
+    });
+  } catch (err) {
+    logger.error('Failed to record fal usage observation', {
+      err,
+      endpointId: usage.endpointId,
+    });
+  }
 }

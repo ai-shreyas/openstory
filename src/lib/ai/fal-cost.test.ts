@@ -17,44 +17,59 @@ import { micros, usdToMicros, ZERO_MICROS } from '@/lib/billing/money';
 const usd = (n: number) => usdToMicros(n);
 
 describe('falCostFromUnits', () => {
-  test('per-image: unitsBilled * unitPrice (resolution premium is in the count)', () => {
+  test('per-image: unitsBilled * unitPrice (resolution premium is in the count)', async () => {
     // nano-banana-2 = $0.08/image. A 2K image fal bills as 1.5 units.
-    expect(falCostFromUnits('fal-ai/nano-banana-2', 1)).toBe(micros(80_000));
-    expect(falCostFromUnits('fal-ai/nano-banana-2', 1.5)).toBe(micros(120_000));
-  });
-
-  test('per-megapixel: fractional units', () => {
-    // flux-2-max = $0.07/megapixel.
-    expect(falCostFromUnits('fal-ai/flux-2-max', 1.05)).toBe(micros(73_500));
-  });
-
-  test('flat: hailuo bills 1 unit at $0.49', () => {
+    expect(await falCostFromUnits('fal-ai/nano-banana-2', 1, FAL_PRICING)).toBe(
+      micros(80_000)
+    );
     expect(
-      falCostFromUnits('fal-ai/minimax/hailuo-2.3/pro/image-to-video', 1)
+      await falCostFromUnits('fal-ai/nano-banana-2', 1.5, FAL_PRICING)
+    ).toBe(micros(120_000));
+  });
+
+  test('per-megapixel: fractional units', async () => {
+    // flux-2-max = $0.07/megapixel.
+    expect(await falCostFromUnits('fal-ai/flux-2-max', 1.05, FAL_PRICING)).toBe(
+      micros(73_500)
+    );
+  });
+
+  test('flat: hailuo bills 1 unit at $0.49', async () => {
+    expect(
+      await falCostFromUnits(
+        'fal-ai/minimax/hailuo-2.3/pro/image-to-video',
+        1,
+        FAL_PRICING
+      )
     ).toBe(usd(0.49));
   });
 
-  test('per-token: seedance bills 1000-token units at $0.014', () => {
+  test('per-token: seedance bills 1000-token units at $0.014', async () => {
     expect(
-      falCostFromUnits(
+      await falCostFromUnits(
         'bytedance/seedance-2.0/enterprise/v2/image-to-video',
-        108
+        108,
+        FAL_PRICING
       )
     ).toBe(micros(1_512_000));
   });
 
-  test('audio per-minute: elevenlabs bills 1 unit at $0.80', () => {
-    expect(falCostFromUnits('fal-ai/elevenlabs/music', 1)).toBe(usd(0.8));
+  test('audio per-minute: elevenlabs bills 1 unit at $0.80', async () => {
+    expect(
+      await falCostFromUnits('fal-ai/elevenlabs/music', 1, FAL_PRICING)
+    ).toBe(usd(0.8));
   });
 
-  test('missing unitsBilled charges nothing', () => {
-    expect(falCostFromUnits('fal-ai/nano-banana-2', undefined)).toBe(
+  test('missing unitsBilled charges nothing', async () => {
+    expect(
+      await falCostFromUnits('fal-ai/nano-banana-2', undefined, FAL_PRICING)
+    ).toBe(ZERO_MICROS);
+  });
+
+  test('unknown endpoint charges nothing', async () => {
+    expect(await falCostFromUnits('unknown/model', 5, FAL_PRICING)).toBe(
       ZERO_MICROS
     );
-  });
-
-  test('unknown endpoint charges nothing', () => {
-    expect(falCostFromUnits('unknown/model', 5)).toBe(ZERO_MICROS);
   });
 });
 

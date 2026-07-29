@@ -141,6 +141,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Talent sheet (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:sheet`,
+        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
           ...falUsageMetadata(imageResult.metadata),
           talentId: input.talentId,
@@ -343,6 +344,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: headshotResult.metadata.usedOwnKey,
         description: `Talent headshot (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:headshot`,
+        falUsage: falUsageMetadata(headshotResult.metadata),
         metadata: {
           ...falUsageMetadata(headshotResult.metadata),
           talentId: input.talentId,

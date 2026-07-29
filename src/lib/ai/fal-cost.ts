@@ -76,15 +76,33 @@ const TOKEN_RESOLUTION_DIMENSIONS: Record<
 /**
  * Exact fal cost for a completed generation: `unitsBilled * unitPrice`.
  *
+ * Prices from the live `model_pricing` table, falling back to the baked-in
+ * seed for endpoints with no row yet. The cron detects fal price moves daily,
+ * so charging from the seed alone under-billed every increase until someone
+ * remembered to re-run `bun scripts/update-fal-pricing.ts`.
+ *
  * Returns `ZERO_MICROS` and logs an error when pricing is missing or fal did
  * not report `unitsBilled` — we charge nothing rather than guess, so a usage
  * regression surfaces loudly instead of silently mis-billing.
  */
-export function falCostFromUnits(
+export async function falCostFromUnits(
   endpointId: string,
-  unitsBilled: number | undefined
-): Microdollars {
-  const pricing = FAL_PRICING[endpointId];
+  unitsBilled: number | undefined,
+  pricingMap?: Record<string, EffectiveFalPricing>
+): Promise<Microdollars> {
+  // Resolved lazily so pure callers (and tests) can pass a map and skip D1,
+  // mirroring `estimateFalCost`'s optional-map shape. The dynamic import also
+  // keeps the fal-cost → fal-pricing-live edge out of the module graph, which
+  // would otherwise be a cycle (fal-pricing-live imports this module's types).
+  let resolved: Record<string, EffectiveFalPricing>;
+  if (pricingMap) {
+    resolved = pricingMap;
+  } else {
+    const { getEffectiveFalPricing } =
+      await import('@/lib/ai/fal-pricing-live');
+    resolved = await getEffectiveFalPricing();
+  }
+  const pricing = resolved[endpointId];
   if (!pricing) {
     logger.error(`No fal pricing data for endpoint: ${endpointId}`);
     return ZERO_MICROS;

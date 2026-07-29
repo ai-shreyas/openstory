@@ -187,7 +187,7 @@ async function generateImageInternal(
 
   // Exact cost from fal's reported billed units (resolution/style premiums are
   // already baked into the count by fal).
-  const cost = falCostFromUnits(endpoint, result.usage?.unitsBilled);
+  const cost = await falCostFromUnits(endpoint, result.usage?.unitsBilled);
 
   return {
     imageUrls,

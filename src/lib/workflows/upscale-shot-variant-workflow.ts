@@ -262,6 +262,7 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         usedOwnKey: upscaleResult.usedOwnKey,
         description: `Variant upscale (${upscaleModel})`,
         idempotencyKey: `${event.instanceId}:upscale`,
+        falUsage: falUsageMetadata(upscaleResult),
         metadata: {
           ...falUsageMetadata(upscaleResult),
           shotId,

@@ -659,7 +659,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       model,
       (input.referenceImages?.length ?? 0) > 0
     );
-    const actualCost = falCostFromUnits(billedEndpointId, billedUnits);
+    const actualCost = await falCostFromUnits(billedEndpointId, billedUnits);
 
     await step.do('record-motion-observation', async () => {
       recordMotionObservation({
@@ -685,6 +685,10 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           usedOwnKey: job.usedOwnKey,
           description: `Motion generation (${model})`,
           idempotencyKey: `${event.instanceId}:motion`,
+          falUsage: falUsageMetadata({
+            endpointId: billedEndpointId,
+            unitsBilled: billedUnits,
+          }),
           metadata: {
             ...falUsageMetadata({
               endpointId: billedEndpointId,

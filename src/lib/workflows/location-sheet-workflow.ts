@@ -146,6 +146,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
+        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
           ...falUsageMetadata(imageResult.metadata),
           model: generationParams.model,

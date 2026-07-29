@@ -20,6 +20,15 @@ const TRANSACTION_TYPES = [
 ] as const;
 export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 
+/**
+ * Team credit balance, in microdollars. Decremented in place on every
+ * deduction (see `deductCredits`), not derived from the ledger.
+ *
+ * The CHECK is the backstop under the application-level gates
+ * (`requireCredits` before the work, `hasEnoughCredits` after it): if either
+ * ever lets through a charge that would overdraw a team, the UPDATE fails
+ * loudly instead of quietly going negative.
+ */
 export const credits = snakeCase.table(
   'credits',
   {

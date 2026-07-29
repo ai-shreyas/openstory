@@ -237,6 +237,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Character sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
+        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
           ...falUsageMetadata(imageResult.metadata),
           model: generationParams.model,

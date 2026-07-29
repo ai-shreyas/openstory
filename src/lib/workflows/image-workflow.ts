@@ -283,6 +283,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           usedOwnKey: imageResult.metadata.usedOwnKey,
           description: `Image generation (${prep.params.model})`,
           idempotencyKey: `${event.instanceId}:image`,
+          falUsage: falUsageMetadata(imageResult.metadata),
           metadata: {
             ...falUsageMetadata(imageResult.metadata),
             model: prep.params.model,

@@ -177,6 +177,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
             usedOwnKey: posterResult.metadata.usedOwnKey,
             description: `Sequence poster (${PREVIEW_IMAGE_MODEL})`,
             idempotencyKey: `${event.instanceId}:poster`,
+            falUsage: falUsageMetadata(posterResult.metadata),
             metadata: {
               ...falUsageMetadata(posterResult.metadata),
               model: PREVIEW_IMAGE_MODEL,

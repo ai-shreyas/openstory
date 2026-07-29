@@ -14,9 +14,10 @@
  * for pre-flight estimation — `observedMedianUnits` (median `unitsBilled`
  * from our own generations, the preferred signal) and `typicalUnitsPerCall`
  * (fal's historical estimate, the fallback). Estimation merges these rows
- * over the baked-in `FAL_PRICING` seed; billing never reads this table (it
- * multiplies the provider-reported `unitsBilled` / actual cost at generation
- * time).
+ * over the baked-in `FAL_PRICING` seed. Billing reads the same merged prices
+ * (`falCostFromUnits`), multiplying them by the provider-reported
+ * `unitsBilled` — so a provider price move reaches charges without waiting on
+ * a seed regeneration.
  *
  * `model_pricing_history` appends a row whenever a model's unit price
  * changes (and on first sight), giving a time-series of model costs.
@@ -64,6 +65,42 @@ export const modelPricing = snakeCase.table(
   },
   (table) => [
     primaryKey({ columns: [table.provider, table.endpointId, table.unit] }),
+  ]
+);
+
+/**
+ * Raw per-generation usage samples — the input the observed median is computed
+ * from. Written for **every** fal generation, including BYOK, zero-cost and
+ * insufficient-credit ones: those write no transaction row, so mining the
+ * ledger only ever learned from teams in good standing without their own key.
+ *
+ * Deliberately carries no `teamId`: it is anonymous model-behaviour telemetry,
+ * not team data, so it needs no FK (and cannot participate in the D1
+ * table-rebuild cascade trap). Pruned to the observation window by the cron.
+ */
+export const modelUsageObservations = snakeCase.table(
+  'model_usage_observations',
+  {
+    id: text()
+      .$defaultFn(() => generateId())
+      .primaryKey()
+      .notNull(),
+    provider: text({ length: 50 }).$type<ModelPricingProvider>().notNull(),
+    endpointId: text({ length: 200 }).notNull(),
+    /** Units the provider billed for this one call. */
+    unitsBilled: real().notNull(),
+    /** Assets this one call rendered; the median divides by it (#1069). */
+    numImages: integer().default(1).notNull(),
+    createdAt: integer({ mode: 'timestamp' })
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index('idx_model_usage_obs_endpoint_created').on(
+      table.provider,
+      table.endpointId,
+      table.createdAt
+    ),
   ]
 );
 

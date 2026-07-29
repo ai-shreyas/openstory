@@ -157,6 +157,7 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Variant grid generation (${prep.params.model})`,
         idempotencyKey: `${event.instanceId}:variant-image`,
+        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
           ...falUsageMetadata(imageResult.metadata),
           model: prep.params.model,

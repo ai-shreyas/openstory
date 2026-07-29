@@ -180,6 +180,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
             usedOwnKey: imageResult.metadata.usedOwnKey,
             description: `Element reference (${generationParams.model})`,
             idempotencyKey: `${event.instanceId}:element-ref-${index}`,
+            falUsage: falUsageMetadata(imageResult.metadata),
             metadata: {
               ...falUsageMetadata(imageResult.metadata),
               model: generationParams.model,

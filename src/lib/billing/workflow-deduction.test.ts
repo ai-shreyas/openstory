@@ -21,12 +21,20 @@ function makeScopedDb({ canAfford = true } = {}) {
   });
   const hasEnoughCredits = vi.fn().mockResolvedValue(canAfford);
   const checkAutoTopUp = vi.fn().mockResolvedValue(undefined);
+  const recordUsage = vi.fn().mockResolvedValue(undefined);
   const scopedDbStub = {
     billing: { deductCredits, hasEnoughCredits, checkAutoTopUp },
+    modelUsage: { record: recordUsage },
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only the billing methods under test
   const scopedDb = scopedDbStub as unknown as ScopedDb;
-  return { scopedDb, deductCredits, hasEnoughCredits, checkAutoTopUp };
+  return {
+    scopedDb,
+    deductCredits,
+    hasEnoughCredits,
+    checkAutoTopUp,
+    recordUsage,
+  };
 }
 
 const { deductWorkflowCredits: deductWorkflowCreditsImpl } =
@@ -119,5 +127,30 @@ describe('deductWorkflowCredits', () => {
 
     expect(deductCredits).not.toHaveBeenCalled();
     expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a fal usage observation even when the team is BYOK', async () => {
+    // BYOK generations are never charged, but they say just as much about a
+    // model's unit count — mining only billed rows biased the median (#1069).
+    const { scopedDb, deductCredits, recordUsage } = makeScopedDb({
+      canAfford: true,
+    });
+
+    await deductWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(2_000_000),
+      usedOwnKey: true,
+      description: 'Image generation (test-model)',
+      idempotencyKey: 'env_image_abc123:image',
+      falUsage: { endpointId: 'fal-ai/nano-banana-2', unitsBilled: 1.5 },
+    });
+
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(recordUsage).toHaveBeenCalledTimes(1);
+    expect(recordUsage.mock.calls[0]?.[0]).toMatchObject({
+      provider: 'fal',
+      endpointId: 'fal-ai/nano-banana-2',
+      unitsBilled: 1.5,
+    });
   });
 });

@@ -110,6 +110,7 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
           usedOwnKey: audioResult.metadata.usedOwnKey,
           description: `Music generation (${model})`,
           idempotencyKey: `${event.instanceId}:music`,
+          falUsage: falUsageMetadata(audioResult.metadata),
           metadata: {
             ...falUsageMetadata(audioResult.metadata),
             model,

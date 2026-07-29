@@ -5,8 +5,9 @@
  * live unit prices, fal's historical units, and our observed median
  * `unitsBilled`) over the baked-in `FAL_PRICING` seed. Endpoints with no row
  * yet (fresh deploy, brand-new model) estimate from the seed until the next
- * refresh. Billing never reads this — it uses fal's reported `unitsBilled`
- * at generation time.
+ * refresh. Billing reads this too (`falCostFromUnits`), so a fal price move
+ * reaches the charge on the next refresh rather than waiting for someone to
+ * re-run the generator.
  *
  * Cached per isolate for a few minutes: the gate runs on every generation
  * request and pricing moves at most daily.
@@ -17,9 +18,20 @@ import type { EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import { micros } from '@/lib/billing/money';
 import { modelPricing } from '@/lib/db/schema';
+import { getLogger } from '@/lib/observability/logger';
 import { eq } from 'drizzle-orm';
 
+const logger = getLogger(['openstory', 'ai', 'fal-pricing-live']);
+
 const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * How stale the snapshot may get before we complain. The cron runs daily, so
+ * anything past two missed runs means it is failing silently — and because a
+ * stale table and a fresh one produce identical estimates, this log is the
+ * only thing that can tell them apart (#1069).
+ */
+const STALE_AFTER_MS = 48 * 60 * 60 * 1000;
 
 let cache: {
   at: number;
@@ -60,6 +72,26 @@ export async function getEffectiveFalPricing(): Promise<
     };
   }
 
+  warnIfStale(rows);
   cache = { at: Date.now(), map };
   return map;
+}
+
+/**
+ * Complain once per cache fill when the snapshot has gone stale. Rows exist but
+ * nothing refreshed them — the cron is broken, or nothing ever ran it.
+ */
+function warnIfStale(rows: { fetchedAt: Date }[]): void {
+  if (rows.length === 0) return;
+  const newest = Math.max(...rows.map((row) => row.fetchedAt.getTime()));
+  const ageMs = Date.now() - newest;
+  if (ageMs <= STALE_AFTER_MS) return;
+  logger.error(
+    'model_pricing is stale — the daily refresh cron has not run successfully',
+    {
+      ageHours: Math.round(ageMs / 3_600_000),
+      newestFetchedAt: new Date(newest).toISOString(),
+      rows: rows.length,
+    }
+  );
 }
