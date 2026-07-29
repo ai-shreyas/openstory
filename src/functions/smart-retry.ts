@@ -211,7 +211,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       gateEstimate(
         estimateImageCost(imageModelFor(shot), sequence.aspectRatio, 1, {
           pricing,
-        })
+        }),
+        { model: imageModelFor(shot), operation: 'smart-retry:image' }
       )
     );
   }
@@ -223,7 +224,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       totalCost = addMicros(
         totalCost,
         gateEstimate(
-          estimateVideoCost(model, snapDuration(undefined, model), { pricing })
+          estimateVideoCost(model, snapDuration(undefined, model), { pricing }),
+          { model, operation: 'smart-retry:motion' }
         )
       );
     }

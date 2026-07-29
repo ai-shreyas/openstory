@@ -1,7 +1,7 @@
 /**
  * Fal pricing API client, shared by `scripts/update-fal-pricing.ts` (bakes the
  * static fallback file) and the daily Worker cron (`refresh-fal-pricing`)
- * that keeps the `fal_model_pricing` D1 table live (#1069).
+ * that keeps the `model_pricing` D1 table live (#1069).
  *
  * Two endpoints:
  * 1. GET /v1/models/pricing — unit_price + unit (billing denominator)
@@ -38,6 +38,19 @@ const UNITS_KIND: Record<string, FalUnit> = {
   'bytedance/seedance-2.0/enterprise/v2/reference-to-video': 'tokens',
 };
 
+/**
+ * Resolve fal's unit string to our billing denominator. **Throws** rather than
+ * guessing: `unit` selects the entire estimation branch, so a wrong one is off
+ * by orders of magnitude — defaulting an unrecognised unit to 'flat' would
+ * estimate Grok Imagine at `unitPrice × 1` ≈ $0.00017 instead of ~$0.05, which
+ * is #1069 restored (#1069 follow-up).
+ *
+ * This runs in an unattended nightly cron as well as the regen script, so a
+ * `logger.warn` has no reader. Failing aborts the refresh and preserves
+ * yesterday's correct snapshot, which beats writing a guess; in the script it
+ * forces the `UNITS_KIND` entry to be added, which is the required action
+ * either way.
+ */
 function normalizeUnit(apiUnit: string, endpointId: string): FalUnit {
   const u = apiUnit.toLowerCase();
   // The bare "units" is ambiguous (flat / per-image / per-1000-token all report
@@ -46,10 +59,11 @@ function normalizeUnit(apiUnit: string, endpointId: string): FalUnit {
   if (u === 'units') {
     const kind = UNITS_KIND[endpointId];
     if (!kind) {
-      logger.warn(
-        `${endpointId}: unit "units" with no kind override — defaulting to 'flat' (estimation only)`
+      throw new Error(
+        `fal pricing: ${endpointId} reports the ambiguous unit "units" with no ` +
+          'UNITS_KIND entry. Add one in src/lib/ai/fal-pricing-fetch.ts — the ' +
+          'billing denominator cannot be guessed.'
       );
-      return 'flat';
     }
     return kind;
   }
@@ -58,10 +72,10 @@ function normalizeUnit(apiUnit: string, endpointId: string): FalUnit {
   if (u.includes('second')) return 'seconds';
   if (u.includes('minute')) return 'minutes';
   if (u.includes('image')) return 'images';
-  logger.warn(
-    `${endpointId}: unknown unit "${apiUnit}" — defaulting to 'flat' (estimation only)`
+  throw new Error(
+    `fal pricing: ${endpointId} reports unrecognised unit "${apiUnit}". Add a ` +
+      'mapping in normalizeUnit (src/lib/ai/fal-pricing-fetch.ts).'
   );
-  return 'flat';
 }
 
 // ============================================================================
@@ -133,33 +147,52 @@ type EstimateResponse = {
 const ESTIMATE_CONCURRENCY = 5;
 const ESTIMATE_CHUNK_DELAY_MS = 150;
 
+/**
+ * "fal has no history for this endpoint" and "we failed to ask fal" look
+ * identical downstream but must be handled oppositely: the first is a real
+ * absence to record, the second must preserve whatever we already stored.
+ * Collapsing them let one transient 429 null out good data permanently.
+ */
+type HistoricalCost =
+  | { status: 'ok'; costUsd: number }
+  | { status: 'no-history' }
+  | { status: 'failed' };
+
 async function fetchHistoricalCostUsd(
   apiKey: string,
   endpointId: string
-): Promise<number | null> {
-  const resp = await fetch('https://api.fal.ai/v1/models/pricing/estimate', {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      estimate_type: 'historical_api_price',
-      endpoints: { [endpointId]: { call_quantity: 1 } },
-    }),
-  });
+): Promise<HistoricalCost> {
+  let resp: Response;
+  try {
+    resp = await fetch('https://api.fal.ai/v1/models/pricing/estimate', {
+      method: 'POST',
+      headers: {
+        Authorization: `Key ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        estimate_type: 'historical_api_price',
+        endpoints: { [endpointId]: { call_quantity: 1 } },
+      }),
+    });
+  } catch (error) {
+    logger.warn(`${endpointId}: historical estimate request failed`, {
+      err: error,
+    });
+    return { status: 'failed' };
+  }
   if (!resp.ok) {
     logger.warn(
-      `${endpointId}: historical estimate HTTP ${resp.status} — skipping typicalUnitsPerCall`
+      `${endpointId}: historical estimate HTTP ${resp.status} — preserving stored typicalUnitsPerCall`
     );
-    return null;
+    return { status: 'failed' };
   }
   const body: EstimateResponse = await resp.json();
   if (!Number.isFinite(body.total_cost) || body.total_cost <= 0) {
-    // No usage history (or free) — caller leaves typicalUnitsPerCall unset.
-    return null;
+    // fal answered and genuinely has no usage history (or the model is free).
+    return { status: 'no-history' };
   }
-  return body.total_cost;
+  return { status: 'ok', costUsd: body.total_cost };
 }
 
 /** Stable precision for typical units (avoids float noise in diffs). */
@@ -167,17 +200,30 @@ function roundTypicalUnits(n: number): number {
   return Math.round(n * 1_000_000) / 1_000_000;
 }
 
+export type FalTypicalUnits = {
+  /** Endpoints fal returned a usable historical cost for. */
+  typicalUnits: Map<string, number>;
+  /**
+   * Endpoints we could not reach. Distinct from "absent from `typicalUnits`",
+   * which also covers endpoints fal answered about but has no history for —
+   * callers must preserve stored values for these rather than null them.
+   */
+  failedEndpoints: Set<string>;
+};
+
 /**
  * Fetch fal's historical per-call cost for each endpoint and convert it to a
- * typical unit count (cost / unit price). Endpoints with no usage history
- * (fal reports total_cost 0 — true for all six of our compute-seconds
- * endpoints, see #1069) are absent from the returned map.
+ * typical unit count (cost / unit price). Endpoints fal has no usage history
+ * for (total_cost 0 — true for every compute-seconds endpoint we use, six at
+ * the time of writing, see #1069) are absent from `typicalUnits` and absent
+ * from `failedEndpoints`.
  */
 export async function fetchFalTypicalUnits(
   apiKey: string,
   unitPrices: FalUnitPrice[]
-): Promise<Map<string, number>> {
+): Promise<FalTypicalUnits> {
   const typicalUnits = new Map<string, number>();
+  const failedEndpoints = new Set<string>();
   for (let i = 0; i < unitPrices.length; i += ESTIMATE_CONCURRENCY) {
     const chunk = unitPrices.slice(i, i + ESTIMATE_CONCURRENCY);
     const costs = await Promise.all(
@@ -185,16 +231,21 @@ export async function fetchFalTypicalUnits(
     );
     for (let j = 0; j < chunk.length; j++) {
       const price = chunk[j];
-      const costUsd = costs[j];
-      if (price == null || costUsd == null || price.unitPriceUsd <= 0) continue;
+      const cost = costs[j];
+      if (price == null || cost == null) continue;
+      if (cost.status === 'failed') {
+        failedEndpoints.add(price.endpointId);
+        continue;
+      }
+      if (cost.status === 'no-history' || price.unitPriceUsd <= 0) continue;
       typicalUnits.set(
         price.endpointId,
-        roundTypicalUnits(costUsd / price.unitPriceUsd)
+        roundTypicalUnits(cost.costUsd / price.unitPriceUsd)
       );
     }
     if (i + ESTIMATE_CONCURRENCY < unitPrices.length) {
       await new Promise((r) => setTimeout(r, ESTIMATE_CHUNK_DELAY_MS));
     }
   }
-  return typicalUnits;
+  return { typicalUnits, failedEndpoints };
 }

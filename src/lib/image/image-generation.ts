@@ -51,6 +51,9 @@ export type ImageGenerationResult = {
     /** Fal-reported billed unit count — persisted into transaction metadata
      * so the pricing cron can derive observed median units (#1069). */
     unitsBilled?: number;
+    /** Images this one call rendered. `unitsBilled` covers all of them, so the
+     * cron divides by it to get a per-image median (#1069). */
+    numImages?: number;
     dimensions: { width: number; height: number }[];
     file_sizes: number[];
     seed?: number;
@@ -197,6 +200,7 @@ async function generateImageInternal(
       model: params.model,
       endpointId: endpoint,
       unitsBilled: result.usage?.unitsBilled,
+      numImages: params.numImages,
       dimensions: imageUrls.map(() => ({ width: 0, height: 0 })),
       file_sizes: imageUrls.map(() => 0),
       seed: params.seed,

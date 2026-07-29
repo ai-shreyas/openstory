@@ -481,7 +481,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         gateEstimate(
           estimateAudioCost(model, totalDuration, {
             pricing: await getEffectiveFalPricing(),
-          })
+          }),
+          { model, operation: 'add-audio-model' }
         ),
         { errorMessage: 'Insufficient credits to add this audio model' }
       );
@@ -577,7 +578,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           gateEstimate(
             estimateVideoCost(model, 5, {
               pricing: await getEffectiveFalPricing(),
-            })
+            }),
+            { model, operation: 'add-video-model' }
           ),
           eligible.length
         ),
@@ -725,7 +727,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         gateEstimate(
           estimateImageCost(model, sequence.aspectRatio, 1, {
             pricing: await getEffectiveFalPricing(),
-          })
+          }),
+          { model, operation: 'add-image-model' }
         ),
         inputs.length
       ),

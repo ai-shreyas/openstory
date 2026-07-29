@@ -5,7 +5,7 @@
  *
  * The output is a flat map of `endpointId -> { unitPrice, unit, typicalUnitsPerCall? }`
  * taken from fal's pricing APIs (see src/lib/ai/fal-pricing-fetch.ts, shared
- * with the daily Worker cron that keeps the `fal_model_pricing` D1 table
+ * with the daily Worker cron that keeps the `model_pricing` D1 table
  * live — the baked file is the fallback seed for endpoints with no row yet).
  *
  * Actual credit deduction multiplies fal's reported `unitsBilled` by `unitPrice`
@@ -49,7 +49,17 @@ const apiKey = requireFalPricingKey();
 const endpoints = getFalEndpointIds();
 
 const unitPrices = await fetchFalUnitPrices(apiKey, endpoints);
-const typicalUnits = await fetchFalTypicalUnits(apiKey, unitPrices);
+const { typicalUnits, failedEndpoints } = await fetchFalTypicalUnits(
+  apiKey,
+  unitPrices
+);
+if (failedEndpoints.size > 0) {
+  // Baking a seed while some endpoints were unreachable would silently drop
+  // their typicalUnitsPerCall into the checked-in file (#1069).
+  console.error(
+    `\n${failedEndpoints.size} endpoint(s) failed their historical estimate fetch:\n  ${[...failedEndpoints].join('\n  ')}\nRe-run before committing — the seed would omit their typicalUnitsPerCall.`
+  );
+}
 
 // ============================================================================
 // Read existing file for a price-change diff
@@ -176,7 +186,7 @@ import { type Microdollars, micros } from '@/lib/billing/money';
 // so models like openai/gpt-image-2 (unit_price=$1, ~0.22 units/call) are not
 // estimated at $1/image.
 //
-// This file is the STATIC FALLBACK SEED. At runtime the \`fal_model_pricing\`
+// This file is the STATIC FALLBACK SEED. At runtime the \`model_pricing\`
 // D1 table (refreshed daily by the Worker cron, #1069) overrides these values
 // and adds observed median units from our own generations.
 // ============================================================================

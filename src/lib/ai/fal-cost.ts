@@ -14,9 +14,10 @@ const logger = getLogger(['openstory', 'ai', 'fal-cost']);
  * yet) for the pre-flight credit gate. For image/flat/compute-seconds models
  * it needs a units-per-call count, preferred in this order (#1069):
  *
- * 1. `observedMedianUnits` — median `unitsBilled` across our own recent
+ * 1. `observed.medianUnits` — median `unitsBilled` across our own recent
  *    generations, from the `model_pricing` D1 table (refreshed daily by the
- *    Worker cron; see `getEffectiveFalPricing`).
+ *    Worker cron; see `getEffectiveFalPricing`). Used only once
+ *    `MIN_OBSERVED_SAMPLES` generations back it.
  * 2. `typicalUnitsPerCall` — fal's historical estimate (baked into
  *    fal-pricing-data.ts by `bun scripts/update-fal-pricing.ts`, refreshed
  *    live by the same cron).
@@ -37,9 +38,26 @@ import {
 
 /** `FalPricing` plus the observed-units signal from the `model_pricing` table. */
 export type EffectiveFalPricing = FalPricing & {
-  /** Median unitsBilled across our own recent generations, when we have any. */
-  observedMedianUnits?: number;
+  /**
+   * Our own recent generations, when we have enough of them. Median and
+   * sample count travel together so a median can never be read without the
+   * confidence behind it — an n=1 median is an anecdote, not a statistic.
+   *
+   * `medianUnits` is per **image** (per call for non-image endpoints): the
+   * refresh cron divides each sample's `unitsBilled` by that call's
+   * `numImages`, matching how the estimator multiplies it back up below.
+   */
+  observed?: { medianUnits: number; sampleCount: number };
 };
+
+/**
+ * Observations needed before our own median outranks fal's historical
+ * estimate. Below this we prefer fal's figure, or report unknown and let the
+ * caller gate on the conservative floor — a single unrepresentative sample
+ * (an aborted-but-billed generation) would otherwise under-gate by orders of
+ * magnitude, which is #1069 wearing a better hat.
+ */
+export const MIN_OBSERVED_SAMPLES = 5;
 
 /** Assumed 16:9 output dimensions per resolution tier for token-priced models */
 const TOKEN_RESOLUTION_DIMENSIONS: Record<
@@ -94,20 +112,26 @@ export type FalCostEstimateParams = {
   resolution?: string;
 };
 
+const isUsableCount = (n: number | undefined | null): n is number =>
+  n != null && Number.isFinite(n) && n > 0;
+
 /**
- * Predicted unitsBilled for one generation call: our observed median first,
- * then fal's historical estimate. Undefined when neither signal exists.
+ * Predicted unitsBilled for one generation call: our observed median first
+ * (once it has `MIN_OBSERVED_SAMPLES` behind it), then fal's historical
+ * estimate. Undefined when neither signal qualifies.
  */
 function knownUnitsPerCall(pricing: EffectiveFalPricing): number | undefined {
-  for (const candidate of [
-    pricing.observedMedianUnits,
-    pricing.typicalUnitsPerCall,
-  ]) {
-    if (candidate != null && Number.isFinite(candidate) && candidate > 0) {
-      return candidate;
-    }
+  const { observed } = pricing;
+  if (
+    observed &&
+    observed.sampleCount >= MIN_OBSERVED_SAMPLES &&
+    isUsableCount(observed.medianUnits)
+  ) {
+    return observed.medianUnits;
   }
-  return undefined;
+  return isUsableCount(pricing.typicalUnitsPerCall)
+    ? pricing.typicalUnitsPerCall
+    : undefined;
 }
 
 /**

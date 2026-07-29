@@ -40,11 +40,23 @@ export async function getEffectiveFalPricing(): Promise<
 
   const map: Record<string, EffectiveFalPricing> = { ...FAL_PRICING };
   for (const row of rows) {
+    // Field-wise over the seed, NOT a wholesale replace. A null column means
+    // "the cron has nothing for this field", which must not erase a good
+    // seeded value — one transient fal 429 would otherwise drop
+    // gpt-image-2's typicalUnitsPerCall and gate it at $1.00/image instead
+    // of $0.22 until the next successful refresh (#1069/#1062).
+    const seed = FAL_PRICING[row.endpointId];
     map[row.endpointId] = {
+      ...seed,
       unitPrice: micros(row.unitPriceMicros),
       unit: row.unit,
-      typicalUnitsPerCall: row.typicalUnitsPerCall ?? undefined,
-      observedMedianUnits: row.observedMedianUnits ?? undefined,
+      typicalUnitsPerCall: row.typicalUnitsPerCall ?? seed?.typicalUnitsPerCall,
+      ...(row.observedMedianUnits != null && {
+        observed: {
+          medianUnits: row.observedMedianUnits,
+          sampleCount: row.observedSampleCount,
+        },
+      }),
     };
   }
 

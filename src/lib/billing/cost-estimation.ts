@@ -21,7 +21,10 @@ import {
 } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { aspectRatioToDimensions } from '@/lib/constants/aspect-ratios';
+import { getLogger } from '@/lib/observability/logger';
 import { type Microdollars, addMicros, micros, multiplyMicros } from './money';
+
+const logger = getLogger(['openstory', 'billing', 'cost-estimation']);
 
 type FalPricingMap = Record<string, EffectiveFalPricing>;
 
@@ -35,16 +38,50 @@ type FalPricingMap = Record<string, EffectiveFalPricing>;
  */
 const UNKNOWN_ESTIMATE_FLOOR = micros(100_000); // $0.10 per call
 
+/** Which model and operation a gate is standing in for, so the floor is debuggable. */
+export type GateContext = { model: string; operation: string };
+
+/**
+ * Models already reported as unpriced in this isolate. Gates run inside
+ * per-shot loops (`estimateBatchMotionCost`, `estimateStoryboardCost`), so
+ * without this one unpriced model emits an identical error per shot — 50 log
+ * lines that say what one says. Isolates recycle often enough that recurrence
+ * still shows up in the data.
+ */
+const reportedUnpriced = new Set<string>();
+
 /**
  * Resolve an estimate for the credit gate: the honest number when one
  * exists, otherwise the conservative floor per call. Display paths should
  * NOT use this — show nothing for null instead of a made-up figure.
+ *
+ * Every substitution is logged. Without that, the system cannot answer "how
+ * often is the gate running on a made-up number, and for which models?" —
+ * which is the question #1069 existed to answer, and the floor is only
+ * defensible as a temporary state we can see the end of.
  */
 export function gateEstimate(
   estimate: Microdollars | null,
+  context: GateContext,
   numCalls: number = 1
 ): Microdollars {
-  return estimate ?? multiplyMicros(UNKNOWN_ESTIMATE_FLOOR, numCalls);
+  if (estimate !== null) return estimate;
+
+  const floored = multiplyMicros(UNKNOWN_ESTIMATE_FLOOR, numCalls);
+  const key = `${context.model}:${context.operation}`;
+  if (!reportedUnpriced.has(key)) {
+    reportedUnpriced.add(key);
+    logger.error(
+      `No pricing signal for ${context.model} — gating ${context.operation} on the unknown-estimate floor`,
+      {
+        model: context.model,
+        operation: context.operation,
+        numCalls,
+        floorMicros: Number(floored),
+      }
+    );
+  }
+  return floored;
 }
 
 /**
@@ -165,12 +202,14 @@ export function estimateStoryboardCost(opts: {
   // Character sheets (~3 characters on average, landscape_16_9)
   const characterSheetCost = gateEstimate(
     estimateImageCost(opts.imageModel, '16:9', 3, { pricing }),
+    { model: opts.imageModel, operation: 'storyboard:character-sheets' },
     3
   );
 
   // Location sheets (~3 locations on average, landscape_16_9)
   const locationSheetCost = gateEstimate(
     estimateImageCost(opts.imageModel, '16:9', 3, { pricing }),
+    { model: opts.imageModel, operation: 'storyboard:location-sheets' },
     3
   );
 
@@ -180,6 +219,7 @@ export function estimateStoryboardCost(opts: {
       estimateImageCost(opts.imageModel, opts.aspectRatio, sceneCount, {
         pricing,
       }),
+      { model: opts.imageModel, operation: 'storyboard:shot-images' },
       sceneCount
     ),
     imageModelCount
@@ -198,7 +238,8 @@ export function estimateStoryboardCost(opts: {
     const duration = opts.videoDurationSeconds ?? 5;
     for (const model of opts.videoModels) {
       const perShotMotion = gateEstimate(
-        estimateVideoCost(model, duration, { pricing })
+        estimateVideoCost(model, duration, { pricing }),
+        { model, operation: 'storyboard:motion' }
       );
       totalCost = addMicros(
         totalCost,
@@ -216,7 +257,10 @@ export function estimateStoryboardCost(opts: {
     for (const model of opts.audioModels) {
       totalCost = addMicros(
         totalCost,
-        gateEstimate(estimateAudioCost(model, audioDuration, { pricing }))
+        gateEstimate(estimateAudioCost(model, audioDuration, { pricing }), {
+          model,
+          operation: 'storyboard:music',
+        })
       );
     }
   }

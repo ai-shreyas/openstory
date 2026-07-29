@@ -232,7 +232,8 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
       gateEstimate(
         estimateImageCost(model, sequence.aspectRatio, 1, {
           pricing: await getEffectiveFalPricing(),
-        })
+        }),
+        { model, operation: 'shot-image' }
       ),
       { errorMessage: 'Insufficient credits for image generation' }
     );
@@ -340,6 +341,10 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
           numImages,
           { pricing: await getEffectiveFalPricing() }
         ),
+        {
+          model: data.model ?? DEFAULT_IMAGE_MODEL,
+          operation: 'shot-variants',
+        },
         numImages
       ),
       { errorMessage: 'Insufficient credits for variant generation' }
@@ -462,7 +467,11 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
           sequence.aspectRatio,
           1,
           { pricing: await getEffectiveFalPricing() }
-        )
+        ),
+        {
+          model: resolveUpscaleModel(sheet.model),
+          operation: 'variant-upscale',
+        }
       ),
       { errorMessage: 'Insufficient credits for variant upscale' }
     );

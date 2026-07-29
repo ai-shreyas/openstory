@@ -94,13 +94,19 @@ export function extractImageCost(metadata: {
  * Transaction-metadata fields the daily pricing cron mines to derive observed
  * median units per fal endpoint (#1069). Spread into the `metadata` of every
  * fal-backed deduction so estimates self-correct from real usage.
+ *
+ * `numImages` matters because `unitsBilled` is per fal *call* while estimation
+ * works per image: the cron divides by it to get a per-image median. Omit it
+ * for endpoints that render one asset per call.
  */
 export function falUsageMetadata(metadata: {
   endpointId: string;
   unitsBilled?: number;
-}): { endpointId: string; unitsBilled?: number } {
+  numImages?: number;
+}): { endpointId: string; unitsBilled?: number; numImages?: number } {
   return {
     endpointId: metadata.endpointId,
     unitsBilled: metadata.unitsBilled,
+    numImages: metadata.numImages,
   };
 }

@@ -498,9 +498,15 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     const expectedCost = addMicros(
       addMicros(
         ZERO_MICROS,
-        gateEstimate(estimateImageCost('gpt_image_2', '16:9', 1))
+        gateEstimate(estimateImageCost('gpt_image_2', '16:9', 1), {
+          model: 'gpt_image_2',
+          operation: 'test',
+        })
       ),
-      gateEstimate(estimateImageCost('flux_2_max', '16:9', 1))
+      gateEstimate(estimateImageCost('flux_2_max', '16:9', 1), {
+        model: 'flux_2_max',
+        operation: 'test',
+      })
     );
     expect(requireCreditsMock).toHaveBeenCalledTimes(1);
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
@@ -572,7 +578,10 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
       addMicros(
         ZERO_MICROS,
-        gateEstimate(estimateImageCost('flux_2_max', '16:9', 1))
+        gateEstimate(estimateImageCost('flux_2_max', '16:9', 1), {
+          model: 'flux_2_max',
+          operation: 'test',
+        })
       )
     );
   });

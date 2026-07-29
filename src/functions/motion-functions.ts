@@ -132,7 +132,8 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       gateEstimate(
         estimateVideoCost(model, duration, {
           pricing: await getEffectiveFalPricing(),
-        })
+        }),
+        { model, operation: 'motion' }
       ),
       { errorMessage: 'Insufficient credits for motion generation' }
     );

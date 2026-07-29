@@ -187,7 +187,10 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         await getEffectiveFalPricing()
       );
       // No honest estimate → gate on the conservative floor (#1069).
-      const cost = gateEstimate(estimatedCost);
+      const cost = gateEstimate(estimatedCost, {
+        model,
+        operation: 'motion-workflow',
+      });
 
       const falKeyInfo = await scopedDb.apiKeys.resolveKey('fal');
       const usedOwnKey = falKeyInfo.source === 'team';

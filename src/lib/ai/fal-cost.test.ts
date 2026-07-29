@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { estimateFalCost, falCostFromUnits } from './fal-cost';
+import {
+  estimateFalCost,
+  falCostFromUnits,
+  MIN_OBSERVED_SAMPLES,
+} from './fal-cost';
 import { FAL_PRICING } from './fal-pricing-data';
 import {
   AUDIO_MODELS,
@@ -106,7 +110,7 @@ describe('estimateFalCost', () => {
       'xai/grok-imagine-image/quality/text-to-image': {
         unitPrice: micros(170),
         unit: 'compute_seconds' as const,
-        observedMedianUnits: 294,
+        observed: { medianUnits: 294, sampleCount: MIN_OBSERVED_SAMPLES },
       },
     };
     expect(
@@ -124,12 +128,48 @@ describe('estimateFalCost', () => {
         unitPrice: micros(80_000),
         unit: 'images' as const,
         typicalUnitsPerCall: 1.5,
-        observedMedianUnits: 1,
+        observed: { medianUnits: 1, sampleCount: MIN_OBSERVED_SAMPLES },
       },
     };
     expect(
       estimateFalCost('fal-ai/nano-banana-2', { numImages: 2 }, live)
     ).toBe(micros(160_000));
+  });
+
+  test('an under-sampled observed median does not outrank fal historical', () => {
+    // One anomalous generation must not become the platform-wide gate: a
+    // single aborted-but-billed run would otherwise under-gate ~100× (#1069).
+    const live = {
+      'fal-ai/nano-banana-2': {
+        unitPrice: micros(80_000),
+        unit: 'images' as const,
+        typicalUnitsPerCall: 1.5,
+        observed: { medianUnits: 0.01, sampleCount: 1 },
+      },
+    };
+    // Falls back to typicalUnitsPerCall 1.5 → $0.12 each, $0.24 for 2.
+    expect(
+      estimateFalCost('fal-ai/nano-banana-2', { numImages: 2 }, live)
+    ).toBe(micros(240_000));
+  });
+
+  test('an under-sampled median on a compute-seconds model stays unknown', () => {
+    // No historical to fall back to → null, so the caller gates on the floor
+    // rather than trusting n=1.
+    const live = {
+      'xai/grok-imagine-image/quality/text-to-image': {
+        unitPrice: micros(170),
+        unit: 'compute_seconds' as const,
+        observed: { medianUnits: 294, sampleCount: MIN_OBSERVED_SAMPLES - 1 },
+      },
+    };
+    expect(
+      estimateFalCost(
+        'xai/grok-imagine-image/quality/text-to-image',
+        { numImages: 1 },
+        live
+      )
+    ).toBeNull();
   });
 
   test('tokens estimate from resolution (parametric, not historical)', () => {

@@ -87,14 +87,16 @@ describe('estimateBatchMotionCost', () => {
           estimateVideoCost(
             'seedance_v2',
             snapDuration(undefined, 'seedance_v2')
-          )
+          ),
+          { model: 'seedance_v2', operation: 'test' }
         )
       ),
       gateEstimate(
         estimateVideoCost(
           'kling_v3_pro',
           snapDuration(undefined, 'kling_v3_pro')
-        )
+        ),
+        { model: 'kling_v3_pro', operation: 'test' }
       )
     );
     expect(estimateBatchMotionCost(shots, shotModels, sequence)).toEqual(
@@ -105,7 +107,8 @@ describe('estimateBatchMotionCost', () => {
   it('prices every shot with the explicit batch model when given', () => {
     const shots = [{ id: 'shot-a' }, { id: 'shot-b' }];
     const perShot = gateEstimate(
-      estimateVideoCost('kling_v3_pro', snapDuration(5, 'kling_v3_pro'))
+      estimateVideoCost('kling_v3_pro', snapDuration(5, 'kling_v3_pro')),
+      { model: 'kling_v3_pro', operation: 'test' }
     );
     const expected = addMicros(addMicros(ZERO_MICROS, perShot), perShot);
     expect(

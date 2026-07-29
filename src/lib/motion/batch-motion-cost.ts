@@ -76,7 +76,8 @@ export function estimateBatchMotionCost(
       gateEstimate(
         estimateVideoCost(model, snapDuration(opts.duration, model), {
           pricing: opts.pricing,
-        })
+        }),
+        { model, operation: 'batch-motion' }
       )
     );
   }, ZERO_MICROS);
