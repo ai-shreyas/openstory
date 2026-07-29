@@ -19,7 +19,7 @@ import { describe, expect, test, vi } from 'vitest';
 import type { Frame, Sequence } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
-import { estimateImageCost } from '@/lib/billing/cost-estimation';
+import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 
 const assertNoActiveStoryboardMock = vi.fn();
@@ -42,6 +42,13 @@ const requireCreditsMock = vi.fn();
 vi.doMock('@/lib/billing/preflight', () => ({
   requireCredits: requireCreditsMock,
 }));
+
+// The live pricing loader reads D1 (unavailable under node tests) — estimates
+// here should come from the static seed, i.e. an empty live overlay.
+vi.doMock('@/lib/ai/fal-pricing-live', async () => {
+  const { FAL_PRICING } = await import('@/lib/ai/fal-pricing-data');
+  return { getEffectiveFalPricing: async () => FAL_PRICING };
+});
 
 // Dynamic imports so the mocks above apply (vi.doMock is not hoisted).
 const { executeSmartRetry } = await import('../smart-retry');
@@ -489,8 +496,11 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     // a regression to single-model `multiply(cost, count)` pricing would diverge
     // whenever the shots were rendered by differently-priced models.
     const expectedCost = addMicros(
-      addMicros(ZERO_MICROS, estimateImageCost('gpt_image_2', '16:9', 1)),
-      estimateImageCost('flux_2_max', '16:9', 1)
+      addMicros(
+        ZERO_MICROS,
+        gateEstimate(estimateImageCost('gpt_image_2', '16:9', 1))
+      ),
+      gateEstimate(estimateImageCost('flux_2_max', '16:9', 1))
     );
     expect(requireCreditsMock).toHaveBeenCalledTimes(1);
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
@@ -560,7 +570,10 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     );
     // …and it is priced as flux_2_max, so the estimate matches the charge.
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
-      addMicros(ZERO_MICROS, estimateImageCost('flux_2_max', '16:9', 1))
+      addMicros(
+        ZERO_MICROS,
+        gateEstimate(estimateImageCost('flux_2_max', '16:9', 1))
+      )
     );
   });
 

@@ -3,7 +3,7 @@
  * Usage: bun scripts/check-fal-pricing.ts
  * (Bun autoloads .env.local; use --env-file= to override)
  */
-import { getFalEndpointIds } from './fal-endpoints';
+import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';
 import { requireFalPricingKey } from './env-file';
 
 const endpoints = getFalEndpointIds();

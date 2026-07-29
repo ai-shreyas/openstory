@@ -51,7 +51,7 @@ import {
   type ImageToVideoModel,
   type TextToImageModel,
 } from '@/lib/ai/models';
-import { microsToUsd } from '@/lib/billing/money';
+import { microsToUsd, ZERO_MICROS } from '@/lib/billing/money';
 import {
   aspectRatioSchema,
   type AspectRatio,
@@ -433,7 +433,7 @@ function estimateCost(jobs: RenderJob[]): number {
       aspectRatio: job.aspectRatio,
       generateAudio: false,
     });
-    usd += microsToUsd(cost) * job.plannedScenes;
+    usd += microsToUsd(cost ?? ZERO_MICROS) * job.plannedScenes;
   }
   return usd;
 }

@@ -89,3 +89,18 @@ export function extractImageCost(metadata: {
 }): Microdollars {
   return metadata.cost ?? ZERO_MICROS;
 }
+
+/**
+ * Transaction-metadata fields the daily pricing cron mines to derive observed
+ * median units per fal endpoint (#1069). Spread into the `metadata` of every
+ * fal-backed deduction so estimates self-correct from real usage.
+ */
+export function falUsageMetadata(metadata: {
+  endpointId: string;
+  unitsBilled?: number;
+}): { endpointId: string; unitsBilled?: number } {
+  return {
+    endpointId: metadata.endpointId,
+    unitsBilled: metadata.unitsBilled,
+  };
+}

@@ -18,7 +18,9 @@ import {
   estimateImageCost,
   estimateStoryboardCost,
   estimateVideoCost,
+  gateEstimate,
 } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
@@ -130,6 +132,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         imageModel,
         aspectRatio: sequence.aspectRatio,
         videoModels: [videoModel],
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -201,10 +204,15 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     sequence.musicStatus === 'failed' && sequence.musicPrompt;
 
   // Calculate total cost — sum per shot since scenes may use different models.
+  const pricing = await getEffectiveFalPricing();
   for (const shot of failedImageShots) {
     totalCost = addMicros(
       totalCost,
-      estimateImageCost(imageModelFor(shot), sequence.aspectRatio, 1)
+      gateEstimate(
+        estimateImageCost(imageModelFor(shot), sequence.aspectRatio, 1, {
+          pricing,
+        })
+      )
     );
   }
 
@@ -214,7 +222,9 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       const model = videoModelFor(shot);
       totalCost = addMicros(
         totalCost,
-        estimateVideoCost(model, snapDuration(undefined, model))
+        gateEstimate(
+          estimateVideoCost(model, snapDuration(undefined, model), { pricing })
+        )
       );
     }
   }

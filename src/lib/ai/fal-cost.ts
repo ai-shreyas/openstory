@@ -11,21 +11,35 @@ const logger = getLogger(['openstory', 'ai', 'fal-cost']);
  * duration, etc. in the unit count, so no per-model multipliers are needed.
  *
  * `estimateFalCost` predicts a cost BEFORE a generation runs (no `unitsBilled`
- * yet) for the pre-flight credit gate. For image/flat models it prefers
- * `typicalUnitsPerCall` from fal's historical estimate (baked into
- * fal-pricing-data.ts by `bun scripts/update-fal-pricing.ts`). Duration-based
- * models still use parametric math from request params.
+ * yet) for the pre-flight credit gate. For image/flat/compute-seconds models
+ * it needs a units-per-call count, preferred in this order (#1069):
+ *
+ * 1. `observedMedianUnits` — median `unitsBilled` across our own recent
+ *    generations, from the `model_pricing` D1 table (refreshed daily by the
+ *    Worker cron; see `getEffectiveFalPricing`).
+ * 2. `typicalUnitsPerCall` — fal's historical estimate (baked into
+ *    fal-pricing-data.ts by `bun scripts/update-fal-pricing.ts`, refreshed
+ *    live by the same cron).
+ * 3. For compute_seconds models with neither signal: **null** ("unknown").
+ *    No fabricated default — the old `DEFAULT_COMPUTE_SECONDS = 3` made
+ *    Grok Imagine read ~98× cheap (it really bills ~294 compute-seconds
+ *    per image). Callers gate conservatively / display nothing instead.
+ *
+ * Duration-based models still use parametric math from request params.
  */
 
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+import { FAL_PRICING, type FalPricing } from '@/lib/ai/fal-pricing-data';
 import {
   type Microdollars,
   ZERO_MICROS,
   multiplyMicros,
 } from '@/lib/billing/money';
 
-/** Default compute time estimate for compute_seconds-priced models */
-const DEFAULT_COMPUTE_SECONDS = 3;
+/** `FalPricing` plus the observed-units signal from the `model_pricing` table. */
+export type EffectiveFalPricing = FalPricing & {
+  /** Median unitsBilled across our own recent generations, when we have any. */
+  observedMedianUnits?: number;
+};
 
 /** Assumed 16:9 output dimensions per resolution tier for token-priced models */
 const TOKEN_RESOLUTION_DIMENSIONS: Record<
@@ -81,20 +95,19 @@ export type FalCostEstimateParams = {
 };
 
 /**
- * Predicted unitsBilled for one generation call of an image/flat model.
- * Prefers fal historical average; falls back to 1 unit per call.
+ * Predicted unitsBilled for one generation call: our observed median first,
+ * then fal's historical estimate. Undefined when neither signal exists.
  */
-function typicalImageUnitsPerCall(
-  typicalUnitsPerCall: number | undefined
-): number {
-  if (
-    typicalUnitsPerCall != null &&
-    Number.isFinite(typicalUnitsPerCall) &&
-    typicalUnitsPerCall > 0
-  ) {
-    return typicalUnitsPerCall;
+function knownUnitsPerCall(pricing: EffectiveFalPricing): number | undefined {
+  for (const candidate of [
+    pricing.observedMedianUnits,
+    pricing.typicalUnitsPerCall,
+  ]) {
+    if (candidate != null && Number.isFinite(candidate) && candidate > 0) {
+      return candidate;
+    }
   }
-  return 1;
+  return undefined;
 }
 
 /**
@@ -103,22 +116,30 @@ function typicalImageUnitsPerCall(
  * by `unitPrice`. The exact charge comes from `falCostFromUnits` once fal
  * reports `unitsBilled`.
  *
- * Image / flat models: use `typicalUnitsPerCall` from fal historical estimates
- * (not unitPrice alone — openai/gpt-image-2 has unit_price=$1 with ~0.22
- * units per high-quality image, so assuming 1 unit would over-gate ~5×).
+ * Returns **null when no honest estimate exists** — the endpoint has no
+ * pricing data, or a compute_seconds model has no unit-count signal. Callers
+ * gate conservatively / display nothing; never fabricate a number (#1069).
+ *
+ * Image / flat models: use observed/historical units per call (not unitPrice
+ * alone — openai/gpt-image-2 has unit_price=$1 with ~0.22 units per
+ * high-quality image, so assuming 1 unit would over-gate ~5×).
  *
  * Duration models (seconds / minutes / tokens): parametric from request
  * params — historical averages encode a random past duration and would be
  * wrong for the requested length.
+ *
+ * Pass `pricingMap` from `getEffectiveFalPricing()` to estimate against the
+ * live `model_pricing` table; the default is the baked-in static seed.
  */
 export function estimateFalCost(
   endpointId: string,
-  params: FalCostEstimateParams
-): Microdollars {
-  const pricing = FAL_PRICING[endpointId];
+  params: FalCostEstimateParams,
+  pricingMap: Record<string, EffectiveFalPricing> = FAL_PRICING
+): Microdollars | null {
+  const pricing = pricingMap[endpointId];
   if (!pricing) {
     logger.error(`No fal pricing data for endpoint: ${endpointId}`);
-    return ZERO_MICROS;
+    return null;
   }
 
   const numImages = params.numImages ?? 1;
@@ -126,19 +147,17 @@ export function estimateFalCost(
 
   switch (pricing.unit) {
     case 'images': {
-      // One billable generation per image. Historical units capture quality /
-      // resolution premiums (e.g. nano-banana 1.5× at 2K, gpt-image-2 ≈ 0.22).
-      const unitsPerImage = typicalImageUnitsPerCall(
-        pricing.typicalUnitsPerCall
-      );
+      // One billable generation per image. Observed/historical units capture
+      // quality / resolution premiums (nano-banana 1.5× at 2K, gpt-image-2
+      // ≈ 0.22); with neither signal, 1 unit per image is the honest read of
+      // an images-denominated price.
+      const unitsPerImage = knownUnitsPerCall(pricing) ?? 1;
       return multiplyMicros(pricing.unitPrice, unitsPerImage * numImages);
     }
 
     case 'flat': {
       // Flat-rate video: one unit set per generation, not per "image".
-      const unitsPerCall = typicalImageUnitsPerCall(
-        pricing.typicalUnitsPerCall
-      );
+      const unitsPerCall = knownUnitsPerCall(pricing) ?? 1;
       return multiplyMicros(pricing.unitPrice, unitsPerCall);
     }
 
@@ -150,12 +169,18 @@ export function estimateFalCost(
     }
 
     case 'compute_seconds': {
-      // Prefer historical compute time when fal has usage data; otherwise a
-      // fixed default (several compute-second models report $0 historical).
-      const secondsPerImage =
-        pricing.typicalUnitsPerCall != null && pricing.typicalUnitsPerCall > 0
-          ? pricing.typicalUnitsPerCall
-          : DEFAULT_COMPUTE_SECONDS;
+      // Compute time is unknowable from request params — models span ~10 to
+      // ~294 seconds per image (FLUX.2 vs Grok Imagine), so a fixed default
+      // is off by orders of magnitude in one direction or the other. With no
+      // observed or historical count, say so.
+      const secondsPerImage = knownUnitsPerCall(pricing);
+      if (secondsPerImage == null) {
+        logger.error(
+          `No unit-count signal for compute_seconds endpoint ${endpointId} — ` +
+            'estimate unknown (returns once a generation records unitsBilled)'
+        );
+        return null;
+      }
       return multiplyMicros(pricing.unitPrice, secondsPerImage * numImages);
     }
 

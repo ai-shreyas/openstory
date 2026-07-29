@@ -26,6 +26,7 @@ import type { ElementBibleEntry } from '@/lib/ai/scene-analysis.schema';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -180,6 +181,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
             description: `Element reference (${generationParams.model})`,
             idempotencyKey: `${event.instanceId}:element-ref-${index}`,
             metadata: {
+              ...falUsageMetadata(imageResult.metadata),
               model: generationParams.model,
               token: entry.token,
               sequenceId,

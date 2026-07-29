@@ -76,6 +76,8 @@
         "**/functions/middleware.ts",
         "**/workflow/base-workflow.ts",
         "**/cron/reconcile-all.ts",
+        "**/cron/refresh-fal-pricing.ts",
+        "**/ai/fal-pricing-live.ts",
         "**/openrouter/callback.ts",
         "**/lib/test/seed.ts"
       ],

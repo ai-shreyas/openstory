@@ -16,7 +16,10 @@ import { DEFAULT_MUSIC_MODEL } from '@/lib/ai/models';
 import { uploadAudioToStorage } from '@/lib/audio/audio-storage';
 import { generateMusic } from '@/lib/audio/music-generation';
 import { ZERO_MICROS } from '@/lib/billing/money';
-import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
+import {
+  deductWorkflowCredits,
+  falUsageMetadata,
+} from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -108,6 +111,7 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
           description: `Music generation (${model})`,
           idempotencyKey: `${event.instanceId}:music`,
           metadata: {
+            ...falUsageMetadata(audioResult.metadata),
             model,
             sequenceId,
             // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard

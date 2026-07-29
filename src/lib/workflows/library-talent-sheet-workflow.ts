@@ -19,6 +19,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -140,7 +141,11 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Talent sheet (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:sheet`,
-        metadata: { talentId: input.talentId, type: 'sheet' },
+        metadata: {
+          ...falUsageMetadata(imageResult.metadata),
+          talentId: input.talentId,
+          type: 'sheet',
+        },
         workflowName: 'LibraryTalentSheetWorkflow',
       });
     });
@@ -338,7 +343,11 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: headshotResult.metadata.usedOwnKey,
         description: `Talent headshot (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:headshot`,
-        metadata: { talentId: input.talentId, type: 'headshot' },
+        metadata: {
+          ...falUsageMetadata(headshotResult.metadata),
+          talentId: input.talentId,
+          type: 'headshot',
+        },
         workflowName: 'LibraryTalentSheetWorkflow',
       });
     });

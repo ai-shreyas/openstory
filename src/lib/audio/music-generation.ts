@@ -45,6 +45,11 @@ export type MusicResult = {
   metadata: {
     model: string;
     provider: string;
+    /** Fal endpoint submitted to (billing denominator). */
+    endpointId: string;
+    /** Fal-reported billed unit count — persisted into transaction metadata
+     * so the pricing cron can derive observed median units (#1069). */
+    unitsBilled?: number;
     duration: number;
     cost: Microdollars;
     generatedAt: string;
@@ -212,6 +217,8 @@ async function callFalAudio(
     metadata: {
       model: modelConfig.id,
       provider: modelConfig.provider,
+      endpointId: modelConfig.id,
+      unitsBilled: result.usage?.unitsBilled,
       duration: billedDuration,
       cost,
       generatedAt: new Date().toISOString(),

@@ -18,6 +18,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { generateId } from '@/lib/db/id';
@@ -146,6 +147,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
         description: `Location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
         metadata: {
+          ...falUsageMetadata(imageResult.metadata),
           model: generationParams.model,
           locationName: input.locationName,
           locationDbId: input.locationDbId,

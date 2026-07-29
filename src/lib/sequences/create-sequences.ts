@@ -24,6 +24,7 @@ import {
 import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { estimateStoryboardCost } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -152,6 +153,7 @@ export const createSequences = createServerOnlyFn(
         // inside motion-batch), so don't charge for music tracks that won't run.
         autoGenerateMusic: autoGenerateMotion && autoGenerateMusic,
         audioModels,
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],

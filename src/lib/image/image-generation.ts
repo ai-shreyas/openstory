@@ -46,6 +46,11 @@ export type ImageGenerationResult = {
   metadata: {
     prompt: string;
     model: string;
+    /** Fal endpoint actually submitted to (billing denominator). */
+    endpointId: string;
+    /** Fal-reported billed unit count — persisted into transaction metadata
+     * so the pricing cron can derive observed median units (#1069). */
+    unitsBilled?: number;
     dimensions: { width: number; height: number }[];
     file_sizes: number[];
     seed?: number;
@@ -190,6 +195,8 @@ async function generateImageInternal(
     metadata: {
       prompt: params.prompt,
       model: params.model,
+      endpointId: endpoint,
+      unitsBilled: result.usage?.unitsBilled,
       dimensions: imageUrls.map(() => ({ width: 0, height: 0 })),
       file_sizes: imageUrls.map(() => 0),
       seed: params.seed,

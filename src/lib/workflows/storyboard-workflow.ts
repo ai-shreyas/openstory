@@ -35,6 +35,7 @@ import {
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -177,6 +178,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
             description: `Sequence poster (${PREVIEW_IMAGE_MODEL})`,
             idempotencyKey: `${event.instanceId}:poster`,
             metadata: {
+              ...falUsageMetadata(posterResult.metadata),
               model: PREVIEW_IMAGE_MODEL,
               sequenceId,
             },

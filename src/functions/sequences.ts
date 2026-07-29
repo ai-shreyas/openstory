@@ -12,7 +12,9 @@ import {
   estimateImageCost,
   estimateStoryboardCost,
   estimateVideoCost,
+  gateEstimate,
 } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
@@ -174,6 +176,7 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
           videoModels: [
             safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
           ],
+          pricing: await getEffectiveFalPricing(),
         }),
         {
           providers: ['fal', 'openrouter'],
@@ -264,6 +267,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -472,9 +476,15 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       const allShots = await scopedDb.shots.listBySequence(sequence.id);
       const totalDuration = sumShotDurationsSeconds(allShots) || 30;
 
-      await requireCredits(scopedDb, estimateAudioCost(model, totalDuration), {
-        errorMessage: 'Insufficient credits to add this audio model',
-      });
+      await requireCredits(
+        scopedDb,
+        gateEstimate(
+          estimateAudioCost(model, totalDuration, {
+            pricing: await getEffectiveFalPricing(),
+          })
+        ),
+        { errorMessage: 'Insufficient credits to add this audio model' }
+      );
 
       await scopedDb.sequenceVariants.upsertMusicPrimary({
         sequenceId: sequence.id,
@@ -563,7 +573,14 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
 
       await requireCredits(
         scopedDb,
-        multiplyMicros(estimateVideoCost(model, 5), eligible.length),
+        multiplyMicros(
+          gateEstimate(
+            estimateVideoCost(model, 5, {
+              pricing: await getEffectiveFalPricing(),
+            })
+          ),
+          eligible.length
+        ),
         { errorMessage: 'Insufficient credits to add this video model' }
       );
 
@@ -705,7 +722,11 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     await requireCredits(
       scopedDb,
       multiplyMicros(
-        estimateImageCost(model, sequence.aspectRatio, 1),
+        gateEstimate(
+          estimateImageCost(model, sequence.aspectRatio, 1, {
+            pricing: await getEffectiveFalPricing(),
+          })
+        ),
         inputs.length
       ),
       { errorMessage: 'Insufficient credits to add this image model' }

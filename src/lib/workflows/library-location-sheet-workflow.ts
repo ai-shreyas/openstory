@@ -15,6 +15,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -105,6 +106,7 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         description: `Library location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
         metadata: {
+          ...falUsageMetadata(imageResult.metadata),
           model: generationParams.model,
           locationName: input.locationName,
           locationDbId: input.locationDbId,
@@ -199,7 +201,11 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         usedOwnKey: previewResult.metadata.usedOwnKey,
         description: `Location preview (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:preview`,
-        metadata: { locationDbId: input.locationDbId, type: 'preview' },
+        metadata: {
+          ...falUsageMetadata(previewResult.metadata),
+          locationDbId: input.locationDbId,
+          type: 'preview',
+        },
         workflowName: 'LibraryLocationSheetWorkflow',
       });
     });

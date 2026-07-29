@@ -181,12 +181,16 @@ function calculateImageCostForVariation(
   variation: ImageVariation
 ): number {
   const dims = IMAGE_DIMS[variation];
-  return estimateFalCost(endpointId, {
-    numImages: 1,
-    widthPx: dims.width,
-    heightPx: dims.height,
-    resolution: getImageCostResolution(modelKey, variation),
-  });
+  // Unknown estimates (no unit-count signal, #1069) record as 0 in this dev
+  // report — the estimate-vs-actual diff then shows the full actual cost.
+  return (
+    estimateFalCost(endpointId, {
+      numImages: 1,
+      widthPx: dims.width,
+      heightPx: dims.height,
+      resolution: getImageCostResolution(modelKey, variation),
+    }) ?? 0
+  );
 }
 
 function buildImageTasks(): Task[] {
@@ -260,10 +264,11 @@ function buildVideoTasks(imageUrl: string): Task[] {
         variation: label,
         tier,
         input: input as Record<string, unknown>,
-        estimatedCost: estimateFalCost(config.id, {
-          durationSeconds: duration,
-          resolution,
-        }),
+        estimatedCost:
+          estimateFalCost(config.id, {
+            durationSeconds: duration,
+            resolution,
+          }) ?? 0,
       });
     }
   }
@@ -332,9 +337,10 @@ function buildAudioTasks(): Task[] {
         variation: label,
         tier,
         input: buildAudioInput(modelKey, config, duration),
-        estimatedCost: estimateFalCost(config.id, {
-          durationSeconds: duration,
-        }),
+        estimatedCost:
+          estimateFalCost(config.id, {
+            durationSeconds: duration,
+          }) ?? 0,
       });
     }
   }

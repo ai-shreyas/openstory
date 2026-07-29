@@ -24,6 +24,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -237,6 +238,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         description: `Character sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
         metadata: {
+          ...falUsageMetadata(imageResult.metadata),
           model: generationParams.model,
           characterName: input.characterName,
           characterDbId: input.characterDbId,

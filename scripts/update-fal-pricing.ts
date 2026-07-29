@@ -4,21 +4,25 @@
  *   bun scripts/update-fal-pricing.ts
  *
  * The output is a flat map of `endpointId -> { unitPrice, unit, typicalUnitsPerCall? }`
- * taken from fal's pricing APIs:
- *
- * 1. GET /v1/models/pricing — unit_price + unit (billing denominator)
- * 2. POST /v1/models/pricing/estimate (historical_api_price) — typical cost
- *    per generation call, converted to typicalUnitsPerCall = cost / unit_price
+ * taken from fal's pricing APIs (see src/lib/ai/fal-pricing-fetch.ts, shared
+ * with the daily Worker cron that keeps the `fal_model_pricing` D1 table
+ * live — the baked file is the fallback seed for endpoints with no row yet).
  *
  * Actual credit deduction multiplies fal's reported `unitsBilled` by `unitPrice`
  * (see `falCostFromUnits` in `src/lib/ai/fal-cost.ts`). Pre-flight estimation
- * uses `typicalUnitsPerCall` for image/flat models so endpoints that report
+ * uses observed median units from our own generations first, then
+ * `typicalUnitsPerCall` (fal's historical estimate), so endpoints that report
  * ambiguous unit `"units"` with unit_price=$1 (e.g. openai/gpt-image-2) are
  * not treated as $1/image. Duration-based models still use parametric
  * estimates from request params.
  */
 import { writeFile } from 'node:fs/promises';
-import { getFalEndpointIds } from './fal-endpoints';
+import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';
+import {
+  fetchFalTypicalUnits,
+  fetchFalUnitPrices,
+  type FalUnitPrice,
+} from '@/lib/ai/fal-pricing-fetch';
 import { requireFalPricingKey } from './env-file';
 
 /**
@@ -33,18 +37,9 @@ class MicrosValue {
 const m = (usd: number): MicrosValue =>
   new MicrosValue(Math.round(usd * 1_000_000));
 
-type FalUnit =
-  | 'images'
-  | 'megapixels'
-  | 'compute_seconds'
-  | 'seconds'
-  | 'minutes'
-  | 'tokens'
-  | 'flat';
-
 type BuilderFalPricing = {
   unitPrice: MicrosValue;
-  unit: FalUnit;
+  unit: FalUnitPrice['unit'];
   /** From fal historical estimate; omitted when fal has no usable history. */
   typicalUnitsPerCall?: number;
 };
@@ -53,149 +48,8 @@ const apiKey = requireFalPricingKey();
 
 const endpoints = getFalEndpointIds();
 
-// ============================================================================
-// "units" disambiguation
-//
-// The pricing API reports the ambiguous unit `"units"` for several distinct
-// billing kinds (e.g. flat-per-video, per-1000-token, per-image, and per-second
-// all show up as "units"). Tag the known ones so pre-flight ESTIMATION can
-// predict a unit count when historical data is missing. This never affects an
-// actual charge — billing always multiplies fal's reported `unitsBilled` by
-// `unitPrice` regardless of `unit`.
-// ============================================================================
-
-const UNITS_KIND: Record<string, FalUnit> = {
-  // Image models with unit "units": unit_price is the billable-unit size, not
-  // a flat per-image dollar price. typicalUnitsPerCall (from historical) is
-  // what makes preflight honest for these (e.g. gpt-image-2 ≈ 0.22 units).
-  'openai/gpt-image-2': 'images',
-  'openai/gpt-image-2/edit': 'images',
-  'fal-ai/phota': 'images',
-  'fal-ai/phota/edit': 'images',
-  'fal-ai/ace-step-1.5': 'seconds',
-  'fal-ai/minimax/hailuo-2.3/pro/image-to-video': 'flat',
-  'bytedance/seedance-2.0/enterprise/v2/image-to-video': 'tokens',
-  'bytedance/seedance-2.0/enterprise/v2/reference-to-video': 'tokens',
-};
-
-function normalizeUnit(apiUnit: string, endpointId: string): FalUnit {
-  const u = apiUnit.toLowerCase();
-  // The bare "units" is ambiguous (flat / per-image / per-1000-token all report
-  // it), so it must be tagged in UNITS_KIND. Everything else is recognised by
-  // substring so variants like "processed megapixels" still resolve.
-  if (u === 'units') {
-    const kind = UNITS_KIND[endpointId];
-    if (!kind) {
-      console.warn(
-        `  ? ${endpointId}: unit "units" with no kind override — defaulting to 'flat' (estimation only)`
-      );
-      return 'flat';
-    }
-    return kind;
-  }
-  if (u.includes('megapixel')) return 'megapixels';
-  if (u.includes('compute second')) return 'compute_seconds';
-  if (u.includes('second')) return 'seconds';
-  if (u.includes('minute')) return 'minutes';
-  if (u.includes('image')) return 'images';
-  console.warn(
-    `  ? ${endpointId}: unknown unit "${apiUnit}" — defaulting to 'flat' (estimation only)`
-  );
-  return 'flat';
-}
-
-// ============================================================================
-// Fetch unit pricing from API
-// ============================================================================
-
-const url = new URL('https://api.fal.ai/v1/models/pricing');
-url.searchParams.set('endpoint_id', endpoints.join(','));
-
-const response = await fetch(url.toString(), {
-  headers: { Authorization: `Key ${apiKey}` },
-});
-
-if (!response.ok) {
-  console.error(`HTTP ${response.status}: ${await response.text()}`);
-  process.exit(1);
-}
-
-type PriceEntry = {
-  endpoint_id: string;
-  unit_price: number;
-  unit: string;
-  currency: string;
-};
-
-const data: { prices: PriceEntry[] } = await response.json();
-
-// Check for missing endpoints
-const found = new Set(data.prices.map((p) => p.endpoint_id));
-const missing = endpoints.filter((e) => !found.has(e));
-if (missing.length > 0) {
-  console.error('\nERROR: Missing endpoints from fal pricing API:');
-  for (const ep of missing) console.error(`  - ${ep}`);
-  process.exit(1);
-}
-
-// ============================================================================
-// Fetch historical per-call cost → typicalUnitsPerCall
-//
-// fal's estimate API only returns a single total_cost, so we request one
-// endpoint at a time. Concurrency is kept low to avoid rate limits.
-// ============================================================================
-
-type EstimateResponse = {
-  estimate_type: string;
-  total_cost: number;
-  currency: string;
-};
-
-const ESTIMATE_CONCURRENCY = 5;
-const ESTIMATE_CHUNK_DELAY_MS = 150;
-
-async function fetchHistoricalCostUsd(
-  endpointId: string
-): Promise<number | null> {
-  const resp = await fetch('https://api.fal.ai/v1/models/pricing/estimate', {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      estimate_type: 'historical_api_price',
-      endpoints: { [endpointId]: { call_quantity: 1 } },
-    }),
-  });
-  if (!resp.ok) {
-    console.warn(
-      `  ? ${endpointId}: historical estimate HTTP ${resp.status} — skipping typicalUnitsPerCall`
-    );
-    return null;
-  }
-  const body: EstimateResponse = await resp.json();
-  if (!Number.isFinite(body.total_cost) || body.total_cost <= 0) {
-    // No usage history (or free) — leave typicalUnitsPerCall unset so
-    // estimateFalCost falls back to parametric unit math.
-    return null;
-  }
-  return body.total_cost;
-}
-
-const historicalByEndpoint = new Map<string, number>();
-for (let i = 0; i < endpoints.length; i += ESTIMATE_CONCURRENCY) {
-  const chunk = endpoints.slice(i, i + ESTIMATE_CONCURRENCY);
-  const costs = await Promise.all(chunk.map(fetchHistoricalCostUsd));
-  for (let j = 0; j < chunk.length; j++) {
-    const id = chunk[j];
-    const cost = costs[j];
-    if (id != null && cost != null) historicalByEndpoint.set(id, cost);
-  }
-  if (i + ESTIMATE_CONCURRENCY < endpoints.length) {
-    await new Promise((r) => setTimeout(r, ESTIMATE_CHUNK_DELAY_MS));
-  }
-}
+const unitPrices = await fetchFalUnitPrices(apiKey, endpoints);
+const typicalUnits = await fetchFalTypicalUnits(apiKey, unitPrices);
 
 // ============================================================================
 // Read existing file for a price-change diff
@@ -219,30 +73,21 @@ try {
 // Build the flat pricing map (prices wrapped in MicrosValue for serialization)
 // ============================================================================
 
-/** Stable serialization precision for typical units (avoids float noise). */
-function roundTypicalUnits(n: number): number {
-  return Math.round(n * 1_000_000) / 1_000_000;
-}
-
 const pricing: Record<string, BuilderFalPricing> = {};
-for (const p of data.prices.sort((a, b) =>
-  a.endpoint_id.localeCompare(b.endpoint_id)
+for (const p of unitPrices.sort((a, b) =>
+  a.endpointId.localeCompare(b.endpointId)
 )) {
   const entry: BuilderFalPricing = {
-    unitPrice: m(p.unit_price),
-    unit: normalizeUnit(p.unit, p.endpoint_id),
+    unitPrice: m(p.unitPriceUsd),
+    unit: p.unit,
   };
 
-  const historicalUsd = historicalByEndpoint.get(p.endpoint_id);
-  if (
-    historicalUsd != null &&
-    Number.isFinite(p.unit_price) &&
-    p.unit_price > 0
-  ) {
-    entry.typicalUnitsPerCall = roundTypicalUnits(historicalUsd / p.unit_price);
+  const typical = typicalUnits.get(p.endpointId);
+  if (typical != null) {
+    entry.typicalUnitsPerCall = typical;
   }
 
-  pricing[p.endpoint_id] = entry;
+  pricing[p.endpointId] = entry;
 }
 
 // ============================================================================
@@ -316,7 +161,7 @@ const entries = Object.entries(pricing)
 
 const now = new Date().toISOString();
 const output = `// AUTO-GENERATED — do not edit manually. Run: bun scripts/update-fal-pricing.ts
-// The "units" disambiguation map is maintained in scripts/update-fal-pricing.ts
+// The "units" disambiguation map is maintained in src/lib/ai/fal-pricing-fetch.ts
 
 import { type Microdollars, micros } from '@/lib/billing/money';
 
@@ -330,6 +175,10 @@ import { type Microdollars, micros } from '@/lib/billing/money';
 // converted to units (cost / unit_price) — preferred for image/flat preflight
 // so models like openai/gpt-image-2 (unit_price=$1, ~0.22 units/call) are not
 // estimated at $1/image.
+//
+// This file is the STATIC FALLBACK SEED. At runtime the \`fal_model_pricing\`
+// D1 table (refreshed daily by the Worker cron, #1069) overrides these values
+// and adds observed median units from our own generations.
 // ============================================================================
 
 export type FalUnit =
@@ -365,5 +214,5 @@ console.log(
   `\nWrote ${Object.keys(pricing).length} endpoints to fal-pricing-data.ts (${changes} changes)`
 );
 console.log(
-  `Historical estimates: ${historicalByEndpoint.size}/${endpoints.length} endpoints`
+  `Historical estimates: ${typicalUnits.size}/${endpoints.length} endpoints`
 );

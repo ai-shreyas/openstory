@@ -89,14 +89,47 @@ describe('estimateFalCost', () => {
     ).toBe(usd(1.6));
   });
 
-  test('compute-seconds uses a fixed estimate when historical is absent', () => {
-    // grok-imagine-image = $0.00017/compute-second, 3s default * 2 images.
-    // fal historical is $0 for this endpoint, so typicalUnitsPerCall is omitted.
+  test('compute-seconds with no unit-count signal is unknown, not a fabricated default', () => {
+    // fal historical is $0 for this endpoint, so typicalUnitsPerCall is
+    // omitted. The old DEFAULT_COMPUTE_SECONDS=3 made this read ~$0.001 when
+    // Grok really bills ~294 compute-seconds (~$0.05) per image (#1069).
     expect(
       estimateFalCost('xai/grok-imagine-image/quality/text-to-image', {
         numImages: 2,
       })
-    ).toBe(micros(1_020));
+    ).toBeNull();
+  });
+
+  test('compute-seconds uses observed median units when the live table has them', () => {
+    // ~294 compute-seconds/image at $0.00017 ≈ $0.05 — Grok's real price.
+    const live = {
+      'xai/grok-imagine-image/quality/text-to-image': {
+        unitPrice: micros(170),
+        unit: 'compute_seconds' as const,
+        observedMedianUnits: 294,
+      },
+    };
+    expect(
+      estimateFalCost(
+        'xai/grok-imagine-image/quality/text-to-image',
+        { numImages: 2 },
+        live
+      )
+    ).toBe(micros(99_960));
+  });
+
+  test('observed median units beat fal historical when both exist', () => {
+    const live = {
+      'fal-ai/nano-banana-2': {
+        unitPrice: micros(80_000),
+        unit: 'images' as const,
+        typicalUnitsPerCall: 1.5,
+        observedMedianUnits: 1,
+      },
+    };
+    expect(
+      estimateFalCost('fal-ai/nano-banana-2', { numImages: 2 }, live)
+    ).toBe(micros(160_000));
   });
 
   test('tokens estimate from resolution (parametric, not historical)', () => {
@@ -108,10 +141,8 @@ describe('estimateFalCost', () => {
     ).toBe(micros(1_587_600));
   });
 
-  test('unknown endpoint estimates nothing', () => {
-    expect(estimateFalCost('unknown/model', { numImages: 1 })).toBe(
-      ZERO_MICROS
-    );
+  test('unknown endpoint has no estimate', () => {
+    expect(estimateFalCost('unknown/model', { numImages: 1 })).toBeNull();
   });
 });
 describe('FAL_PRICING coverage', () => {

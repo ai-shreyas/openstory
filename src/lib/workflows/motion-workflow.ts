@@ -29,7 +29,10 @@ import {
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
 import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
 import { microsToUsd, type Microdollars } from '@/lib/billing/money';
-import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
+import {
+  deductWorkflowCredits,
+  falUsageMetadata,
+} from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
 import {
@@ -37,6 +40,8 @@ import {
   pollMotionJob,
   submitMotionJob,
 } from '@/lib/motion/motion-generation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { gateEstimate } from '@/lib/billing/cost-estimation';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
@@ -168,16 +173,21 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     // gates affordability — the exact charge is computed from fal's billed
     // units after the clip completes (see actualCost below).
     const { duration } = await step.do('check-credits', async () => {
-      const { cost, duration } = calculateMotionMetadata({
-        imageUrl: input.imageUrl,
-        prompt: input.prompt,
-        model,
-        duration: input.duration,
-        fps: input.fps,
-        motionBucket: input.motionBucket,
-        aspectRatio: input.aspectRatio,
-        generateAudio: input.generateAudio,
-      });
+      const { cost: estimatedCost, duration } = calculateMotionMetadata(
+        {
+          imageUrl: input.imageUrl,
+          prompt: input.prompt,
+          model,
+          duration: input.duration,
+          fps: input.fps,
+          motionBucket: input.motionBucket,
+          aspectRatio: input.aspectRatio,
+          generateAudio: input.generateAudio,
+        },
+        await getEffectiveFalPricing()
+      );
+      // No honest estimate → gate on the conservative floor (#1069).
+      const cost = gateEstimate(estimatedCost);
 
       const falKeyInfo = await scopedDb.apiKeys.resolveKey('fal');
       const usedOwnKey = falKeyInfo.source === 'team';
@@ -673,11 +683,14 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           description: `Motion generation (${model})`,
           idempotencyKey: `${event.instanceId}:motion`,
           metadata: {
+            ...falUsageMetadata({
+              endpointId: billedEndpointId,
+              unitsBilled: billedUnits,
+            }),
             model,
             shotId: input.shotId,
             sequenceId: input.sequenceId,
             duration: duration,
-            unitsBilled: billedUnits,
           },
           workflowName: 'MotionWorkflow:cf',
         });

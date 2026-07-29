@@ -8,7 +8,7 @@
  *   bun scripts/check-fal-estimate.ts              # Total estimate
  *   bun scripts/check-fal-estimate.ts --individual  # Per-model breakdown
  */
-import { getFalEndpointIds } from './fal-endpoints';
+import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';
 import { requireFalPricingKey } from './env-file';
 
 const allIds = getFalEndpointIds();

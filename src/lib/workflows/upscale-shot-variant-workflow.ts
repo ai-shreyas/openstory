@@ -12,7 +12,10 @@
 import { IMAGE_MODELS } from '@/lib/ai/models';
 import { resolveUpscaleModel } from '@/lib/ai/resolve-asset-models';
 import { ZERO_MICROS } from '@/lib/billing/money';
-import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
+import {
+  deductWorkflowCredits,
+  falUsageMetadata,
+} from '@/lib/billing/workflow-deduction';
 import {
   aspectRatioToImageSize,
   DEFAULT_IMAGE_SIZE,
@@ -242,6 +245,8 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         imageUrl: result.imageUrls[0],
         cost: result.metadata.cost ?? ZERO_MICROS,
         usedOwnKey: result.metadata.usedOwnKey,
+        endpointId: result.metadata.endpointId,
+        unitsBilled: result.metadata.unitsBilled,
         versionId: version.id,
       };
     });
@@ -257,7 +262,12 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         usedOwnKey: upscaleResult.usedOwnKey,
         description: `Variant upscale (${upscaleModel})`,
         idempotencyKey: `${event.instanceId}:upscale`,
-        metadata: { shotId, sequenceId, model: upscaleModel },
+        metadata: {
+          ...falUsageMetadata(upscaleResult),
+          shotId,
+          sequenceId,
+          model: upscaleModel,
+        },
         workflowName: 'UpscaleShotVariantWorkflow',
       });
     });

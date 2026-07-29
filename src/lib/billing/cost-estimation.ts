@@ -1,10 +1,16 @@
 /**
  * Cost Estimation Utilities
  * Estimate generation costs before triggering workflows.
- * All functions return Microdollars for exact arithmetic.
+ * All functions return Microdollars for exact arithmetic — or null when no
+ * honest estimate exists for the model (#1069; see `estimateFalCost`).
+ *
+ * Pass `pricing` from `getEffectiveFalPricing()` to estimate against the
+ * live `model_pricing` table (observed median units, current prices); the
+ * default is the baked-in static seed. Estimators stay synchronous so pure
+ * callers and tests need no DB.
  */
 
-import { estimateFalCost } from '@/lib/ai/fal-cost';
+import { estimateFalCost, type EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import {
   AUDIO_MODELS,
   IMAGE_MODELS,
@@ -17,6 +23,30 @@ import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { aspectRatioToDimensions } from '@/lib/constants/aspect-ratios';
 import { type Microdollars, addMicros, micros, multiplyMicros } from './money';
 
+type FalPricingMap = Record<string, EffectiveFalPricing>;
+
+/**
+ * Conservative per-call floor the credit gate assumes when a model has no
+ * honest estimate (null). Over-gating slightly beats under-gating — the
+ * unknown compute-seconds models really cost ~$0.02–0.07/image, and the old
+ * fabricated default gated Grok Imagine ~98× low (#1069). The floor stops
+ * applying once the model's first observed `unitsBilled` lands in
+ * `model_pricing`.
+ */
+const UNKNOWN_ESTIMATE_FLOOR = micros(100_000); // $0.10 per call
+
+/**
+ * Resolve an estimate for the credit gate: the honest number when one
+ * exists, otherwise the conservative floor per call. Display paths should
+ * NOT use this — show nothing for null instead of a made-up figure.
+ */
+export function gateEstimate(
+  estimate: Microdollars | null,
+  numCalls: number = 1
+): Microdollars {
+  return estimate ?? multiplyMicros(UNKNOWN_ESTIMATE_FLOOR, numCalls);
+}
+
 /**
  * Estimate provider cost of generating images. Rough pre-flight
  * gate only — the exact charge comes from fal's reported units post-generation.
@@ -25,16 +55,20 @@ export function estimateImageCost(
   model: TextToImageModel,
   aspectRatio: AspectRatio,
   numImages: number,
-  opts?: { resolution?: string }
-): Microdollars {
+  opts?: { resolution?: string; pricing?: FalPricingMap }
+): Microdollars | null {
   const { width, height } = aspectRatioToDimensions(aspectRatio);
 
-  return estimateFalCost(IMAGE_MODELS[model].id, {
-    numImages,
-    widthPx: width,
-    heightPx: height,
-    resolution: opts?.resolution,
-  });
+  return estimateFalCost(
+    IMAGE_MODELS[model].id,
+    {
+      numImages,
+      widthPx: width,
+      heightPx: height,
+      resolution: opts?.resolution,
+    },
+    opts?.pricing
+  );
 }
 
 /**
@@ -43,12 +77,16 @@ export function estimateImageCost(
 export function estimateVideoCost(
   model: ImageToVideoModel,
   durationSeconds: number,
-  opts?: { resolution?: string }
-): Microdollars {
-  return estimateFalCost(IMAGE_TO_VIDEO_MODELS[model].id, {
-    durationSeconds,
-    resolution: opts?.resolution,
-  });
+  opts?: { resolution?: string; pricing?: FalPricingMap }
+): Microdollars | null {
+  return estimateFalCost(
+    IMAGE_TO_VIDEO_MODELS[model].id,
+    {
+      durationSeconds,
+      resolution: opts?.resolution,
+    },
+    opts?.pricing
+  );
 }
 
 /**
@@ -56,9 +94,14 @@ export function estimateVideoCost(
  */
 export function estimateAudioCost(
   model: AudioModel,
-  durationSeconds: number
-): Microdollars {
-  return estimateFalCost(AUDIO_MODELS[model].id, { durationSeconds });
+  durationSeconds: number,
+  opts?: { pricing?: FalPricingMap }
+): Microdollars | null {
+  return estimateFalCost(
+    AUDIO_MODELS[model].id,
+    { durationSeconds },
+    opts?.pricing
+  );
 }
 
 /**
@@ -79,6 +122,9 @@ const DEFAULT_ESTIMATED_SCENE_COUNT = 8;
  * Estimate the total cost of a storyboard workflow.
  * Includes: LLM analysis, character/location sheet images, per-shot images,
  * and optionally per-shot motion generation.
+ *
+ * Gate-only: components with no honest estimate contribute the conservative
+ * `UNKNOWN_ESTIMATE_FLOOR` per call rather than making the total null.
  */
 export function estimateStoryboardCost(opts: {
   imageModel: TextToImageModel;
@@ -106,22 +152,36 @@ export function estimateStoryboardCost(opts: {
   audioModels?: AudioModel[];
   /** Total sequence duration in seconds (one music track spans the sequence) */
   audioDurationSeconds?: number;
+  /** Live pricing map from `getEffectiveFalPricing()`; static seed if omitted */
+  pricing?: FalPricingMap;
 }): Microdollars {
   const sceneCount = opts.estimatedSceneCount ?? DEFAULT_ESTIMATED_SCENE_COUNT;
   const imageModelCount = opts.imageModelCount ?? 1;
+  const { pricing } = opts;
 
   // LLM calls: script analysis + character bible + location bible (~3 calls)
   const llmCost = estimateLLMCost(3);
 
   // Character sheets (~3 characters on average, landscape_16_9)
-  const characterSheetCost = estimateImageCost(opts.imageModel, '16:9', 3);
+  const characterSheetCost = gateEstimate(
+    estimateImageCost(opts.imageModel, '16:9', 3, { pricing }),
+    3
+  );
 
   // Location sheets (~3 locations on average, landscape_16_9)
-  const locationSheetCost = estimateImageCost(opts.imageModel, '16:9', 3);
+  const locationSheetCost = gateEstimate(
+    estimateImageCost(opts.imageModel, '16:9', 3, { pricing }),
+    3
+  );
 
   // Per-shot images (multiplied by number of selected image models)
   const shotCost = multiplyMicros(
-    estimateImageCost(opts.imageModel, opts.aspectRatio, sceneCount),
+    gateEstimate(
+      estimateImageCost(opts.imageModel, opts.aspectRatio, sceneCount, {
+        pricing,
+      }),
+      sceneCount
+    ),
     imageModelCount
   );
 
@@ -137,7 +197,9 @@ export function estimateStoryboardCost(opts: {
   if (opts.autoGenerateMotion && opts.videoModels?.length) {
     const duration = opts.videoDurationSeconds ?? 5;
     for (const model of opts.videoModels) {
-      const perShotMotion = estimateVideoCost(model, duration);
+      const perShotMotion = gateEstimate(
+        estimateVideoCost(model, duration, { pricing })
+      );
       totalCost = addMicros(
         totalCost,
         multiplyMicros(perShotMotion, sceneCount)
@@ -152,7 +214,10 @@ export function estimateStoryboardCost(opts: {
   if (opts.autoGenerateMusic && opts.audioModels?.length) {
     const audioDuration = opts.audioDurationSeconds ?? sceneCount * 5;
     for (const model of opts.audioModels) {
-      totalCost = addMicros(totalCost, estimateAudioCost(model, audioDuration));
+      totalCost = addMicros(
+        totalCost,
+        gateEstimate(estimateAudioCost(model, audioDuration, { pricing }))
+      );
     }
   }
 

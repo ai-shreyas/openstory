@@ -15,6 +15,10 @@ import {
   withHtmlAccept,
 } from '@/lib/agent/discovery';
 import { reconcileAllStuckJobs } from '@/lib/cron/reconcile-all';
+import {
+  FAL_PRICING_CRON,
+  refreshFalPricing,
+} from '@/lib/cron/refresh-fal-pricing';
 import { ensureSystemTemplatesSeeded } from '@/lib/db/seed-system-templates';
 
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
@@ -130,7 +134,16 @@ const exportedHandler: ExportedHandler<WorkerEnv> = {
     // RFC 8288 Link headers on document responses for agent discovery.
     return withDiscoveryLinkHeader(response, pathname);
   },
-  scheduled(_controller, _env, ctx) {
+  scheduled(controller, _env, ctx) {
+    // Daily fal pricing refresh into the model_pricing table (#1069).
+    if (controller.cron === FAL_PRICING_CRON) {
+      ctx.waitUntil(
+        refreshFalPricing().catch((error) => {
+          logger.error('refreshFalPricing failed:', { err: error });
+        })
+      );
+      return;
+    }
     // Best-effort sweep for stuck generating-status rows across every table.
     // See src/lib/cron/reconcile-all.ts; cron schedule is in wrangler.jsonc.
     ctx.waitUntil(

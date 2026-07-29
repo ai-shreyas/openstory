@@ -12,6 +12,7 @@ import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  falUsageMetadata,
 } from '@/lib/billing/workflow-deduction';
 import {
   DEFAULT_IMAGE_SIZE,
@@ -157,6 +158,7 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
         description: `Variant grid generation (${prep.params.model})`,
         idempotencyKey: `${event.instanceId}:variant-image`,
         metadata: {
+          ...falUsageMetadata(imageResult.metadata),
           model: prep.params.model,
           shotId: input.shotId,
           sequenceId: input.sequenceId,

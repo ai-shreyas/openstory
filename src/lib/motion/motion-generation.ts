@@ -1,5 +1,5 @@
 import { getEnv } from '#env';
-import { estimateFalCost } from '@/lib/ai/fal-cost';
+import { estimateFalCost, type EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import {
   DEFAULT_VIDEO_MODEL,
   IMAGE_TO_VIDEO_MODELS,
@@ -197,11 +197,16 @@ export async function pollMotionJob(
 
 /**
  * Pre-flight motion cost estimate + metadata, computed before the job runs.
- * `cost` is a rough estimate used for the credit-availability gate — the exact
- * charge comes from `falCostFromUnits` once fal reports `unitsBilled`.
+ * `cost` is a rough estimate used for the credit-availability gate (null =
+ * no honest estimate; gate with `gateEstimate`) — the exact charge comes
+ * from `falCostFromUnits` once fal reports `unitsBilled`. Pass `pricing`
+ * from `getEffectiveFalPricing()` to estimate against the live table.
  */
-export function calculateMotionMetadata(options: GenerateMotionOptions): {
-  cost: Microdollars;
+export function calculateMotionMetadata(
+  options: GenerateMotionOptions,
+  pricing?: Record<string, EffectiveFalPricing>
+): {
+  cost: Microdollars | null;
   duration: number;
   model: string;
   provider: string;
@@ -212,14 +217,18 @@ export function calculateMotionMetadata(options: GenerateMotionOptions): {
   const validatedDuration = snapDuration(options.duration, modelKey);
 
   const providerInput = buildModelInput(options, modelConfig, modelKey);
-  const cost = estimateFalCost(modelConfig.id, {
-    durationSeconds: validatedDuration,
-    resolution:
-      'resolution' in providerInput &&
-      typeof providerInput.resolution === 'string'
-        ? providerInput.resolution
-        : undefined,
-  });
+  const cost = estimateFalCost(
+    modelConfig.id,
+    {
+      durationSeconds: validatedDuration,
+      resolution:
+        'resolution' in providerInput &&
+        typeof providerInput.resolution === 'string'
+          ? providerInput.resolution
+          : undefined,
+    },
+    pricing
+  );
 
   return {
     cost,
