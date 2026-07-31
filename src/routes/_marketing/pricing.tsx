@@ -11,7 +11,7 @@ import {
   formatProcessingFeePercent,
   PROCESSING_FEE_PERCENT,
 } from '@/lib/billing/constants';
-import { buildPricingCatalog } from '@/lib/billing/pricing-catalog';
+import { getPricingCatalogFn } from '@/functions/pricing';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
 import { ArrowRight, KeyRound, Wallet, Zap } from 'lucide-react';
 
@@ -21,6 +21,7 @@ const description =
 
 export const Route = createFileRoute('/_marketing/pricing')({
   component: PricingPage,
+  loader: () => getPricingCatalogFn(),
   head: () => ({
     meta: [
       { title },
@@ -35,7 +36,7 @@ export const Route = createFileRoute('/_marketing/pricing')({
 });
 
 function PricingPage() {
-  const { sections, lastUpdated } = buildPricingCatalog();
+  const { sections, lastUpdated } = Route.useLoaderData();
   const feePercent = formatProcessingFeePercent();
 
   return (

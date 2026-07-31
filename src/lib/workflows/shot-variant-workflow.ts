@@ -12,6 +12,7 @@ import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import {
   DEFAULT_IMAGE_SIZE,
@@ -149,6 +150,13 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
       return generateImageWithProvider(prep.params, { scopedDb });
     });
 
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const falUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata
+    );
+
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
         scopedDb,
@@ -157,6 +165,7 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
         description: `Variant grid generation (${prep.params.model})`,
         idempotencyKey: `${event.instanceId}:variant-image`,
         metadata: {
+          ...falUsage,
           model: prep.params.model,
           shotId: input.shotId,
           sequenceId: input.sequenceId,

@@ -1,31 +1,41 @@
-import { getLogger } from '@/lib/observability/logger';
-
-const logger = getLogger(['openstory', 'ai', 'fal-cost']);
 /**
  * Fal.ai cost calculation.
  *
- * Billing is exact: fal reports the quantity it billed for a generation as
- * `unitsBilled` (via the `x-fal-billable-units` header, surfaced by the TanStack
- * AI adapter), denominated in the endpoint's priced unit. The cost is simply
- * `unitsBilled * unitPrice` — fal already accounts for resolution, audio,
- * duration, etc. in the unit count, so no per-model multipliers are needed.
+ * Billing is exact: fal reports `unitsBilled` for each generation (the
+ * `x-fal-billable-units` header) and the cost is `unitsBilled × unitPrice`
+ * from the live `model_pricing` table — fal already accounts for resolution,
+ * audio, duration, etc. in the unit count.
  *
- * `estimateFalCost` predicts a cost BEFORE a generation runs (no `unitsBilled`
- * yet) for the pre-flight credit gate. For image/flat models it prefers
- * `typicalUnitsPerCall` from fal's historical estimate (baked into
- * fal-pricing-data.ts by `bun scripts/update-fal-pricing.ts`). Duration-based
- * models still use parametric math from request params.
+ * `estimateFalCost` predicts a cost BEFORE a generation runs, for the
+ * pre-flight credit gate. Preference order for the unit count (#1069):
+ * our observed median (`MIN_OBSERVED_SAMPLES`+ generations), then fal's
+ * historical estimate, then **null** ("unknown") — never a fabricated
+ * default; a fixed one made Grok Imagine read ~98× cheap. Callers gate
+ * conservatively / display nothing for null.
  */
 
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+import {
+  type EffectiveFalPricing,
+  getEffectiveFalPricing,
+} from '@/lib/ai/fal-pricing-live';
+import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
 import {
   type Microdollars,
   ZERO_MICROS,
   multiplyMicros,
 } from '@/lib/billing/money';
+import { getLogger } from '@/lib/observability/logger';
 
-/** Default compute time estimate for compute_seconds-priced models */
-const DEFAULT_COMPUTE_SECONDS = 3;
+const logger = getLogger(['openstory', 'ai', 'fal-cost']);
+
+export type { EffectiveFalPricing };
+
+/**
+ * Observations needed before our own median outranks fal's historical
+ * estimate — a single unrepresentative sample would under-gate by orders of
+ * magnitude.
+ */
+export const MIN_OBSERVED_SAMPLES = 5;
 
 /** Assumed 16:9 output dimensions per resolution tier for token-priced models */
 const TOKEN_RESOLUTION_DIMENSIONS: Record<
@@ -38,33 +48,54 @@ const TOKEN_RESOLUTION_DIMENSIONS: Record<
 };
 
 // ============================================================================
-// Actual cost (billing) — unitsBilled * unitPrice
+// Actual cost (billing) — unitsBilled × unitPrice
 // ============================================================================
 
 /**
- * Exact fal cost for a completed generation: `unitsBilled * unitPrice`.
+ * Exact fal cost for a completed generation. Returns `ZERO_MICROS` (reported
+ * via `reportMissingBillingCost`) when pricing is missing, unreadable, or fal
+ * did not report `unitsBilled` — we charge nothing rather than guess.
  *
- * Returns `ZERO_MICROS` and logs an error when pricing is missing or fal did
- * not report `unitsBilled` — we charge nothing rather than guess, so a usage
- * regression surfaces loudly instead of silently mis-billing.
+ * Never throws: it runs inside retried workflow steps after fal has billed,
+ * and a rejection there discards a finished asset and pays fal again on the
+ * retry. Tests pass `pricingMap` to skip D1.
  */
-export function falCostFromUnits(
+export async function falCostFromUnits(
   endpointId: string,
-  unitsBilled: number | undefined
-): Microdollars {
-  const pricing = FAL_PRICING[endpointId];
+  unitsBilled: number | undefined,
+  pricingMap?: Record<string, EffectiveFalPricing>
+): Promise<Microdollars> {
+  let pricing: EffectiveFalPricing | undefined;
+  try {
+    pricing = (pricingMap ?? (await getEffectiveFalPricing()))[endpointId];
+  } catch (err) {
+    logger.error(`Failed to read live pricing for ${endpointId}`, {
+      err,
+      endpointId,
+      unitsBilled,
+    });
+  }
   if (!pricing) {
-    logger.error(`No fal pricing data for endpoint: ${endpointId}`);
-    return ZERO_MICROS;
+    return reportZeroCharge(endpointId, 'no pricing for endpoint', unitsBilled);
   }
   if (unitsBilled == null || !Number.isFinite(unitsBilled)) {
-    logger.error(
-      `No unitsBilled reported for ${endpointId} — charging nothing`,
-      { unitsBilled }
-    );
-    return ZERO_MICROS;
+    return reportZeroCharge(endpointId, 'no unitsBilled reported', unitsBilled);
   }
   return multiplyMicros(pricing.unitPrice, unitsBilled);
+}
+
+function reportZeroCharge(
+  endpointId: string,
+  reason: string,
+  unitsBilled: number | undefined
+): Microdollars {
+  reportMissingBillingCost({
+    source: 'fal-cost',
+    modelId: endpointId,
+    description: reason,
+    metadata: { unitsBilled },
+  });
+  return ZERO_MICROS;
 }
 
 // ============================================================================
@@ -81,65 +112,105 @@ export type FalCostEstimateParams = {
 };
 
 /**
- * Predicted unitsBilled for one generation call of an image/flat model.
- * Prefers fal historical average; falls back to 1 unit per call.
+ * How estimation predicts a unit count for an endpoint. Parametric strategies
+ * compute from request params; `per_call` uses the observed/historical units
+ * per call. Billing never reads this — it only multiplies `unitsBilled`.
  */
-function typicalImageUnitsPerCall(
-  typicalUnitsPerCall: number | undefined
-): number {
+type EstimateStrategy =
+  | 'per_call'
+  | 'megapixels'
+  | 'seconds'
+  | 'minutes'
+  | 'tokens';
+
+/**
+ * Endpoints whose raw unit ("units") doesn't identify the estimation shape.
+ */
+const ENDPOINT_STRATEGY: Record<string, EstimateStrategy> = {
+  'fal-ai/ace-step-1.5': 'seconds',
+  'bytedance/seedance-2.0/enterprise/v2/image-to-video': 'tokens',
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video': 'tokens',
+};
+
+/**
+ * Exact matches for the duration units, deliberately: fal's catalog also
+ * reports "compute seconds", "5 seconds", "input seconds" — none of which are
+ * the requested duration, and a wrong branch is off by orders of magnitude
+ * (#1069). Everything unrecognised estimates per call, which reports unknown
+ * until a signal exists.
+ */
+export function estimateStrategy(
+  endpointId: string,
+  rawUnit: string
+): EstimateStrategy {
+  const override = ENDPOINT_STRATEGY[endpointId];
+  if (override) return override;
+  const unit = rawUnit.trim().toLowerCase();
+  if (unit.includes('megapixel')) return 'megapixels';
+  if (unit === 'seconds' || unit === 'second') return 'seconds';
+  if (unit === 'minutes' || unit === 'minute') return 'minutes';
+  if (unit === '1000 tokens') return 'tokens';
+  return 'per_call';
+}
+
+const isUsableCount = (n: number | undefined | null): n is number =>
+  n != null && Number.isFinite(n) && n > 0;
+
+/**
+ * Predicted unitsBilled for one call: our observed median first (once it has
+ * `MIN_OBSERVED_SAMPLES` behind it), then fal's historical estimate.
+ */
+export function knownUnitsPerCall(
+  pricing: EffectiveFalPricing
+): number | undefined {
+  const { observed } = pricing;
   if (
-    typicalUnitsPerCall != null &&
-    Number.isFinite(typicalUnitsPerCall) &&
-    typicalUnitsPerCall > 0
+    observed &&
+    observed.sampleCount >= MIN_OBSERVED_SAMPLES &&
+    isUsableCount(observed.medianUnits)
   ) {
-    return typicalUnitsPerCall;
+    return observed.medianUnits;
   }
-  return 1;
+  return isUsableCount(pricing.typicalUnitsPerCall)
+    ? pricing.typicalUnitsPerCall
+    : undefined;
 }
 
 /**
- * Rough pre-flight cost estimate, used only for the credit-availability gate
- * before a generation runs. Predicts the billed unit count, then multiplies
- * by `unitPrice`. The exact charge comes from `falCostFromUnits` once fal
- * reports `unitsBilled`.
- *
- * Image / flat models: use `typicalUnitsPerCall` from fal historical estimates
- * (not unitPrice alone — openai/gpt-image-2 has unit_price=$1 with ~0.22
- * units per high-quality image, so assuming 1 unit would over-gate ~5×).
- *
- * Duration models (seconds / minutes / tokens): parametric from request
- * params — historical averages encode a random past duration and would be
- * wrong for the requested length.
+ * Rough pre-flight cost estimate for the credit gate. Returns **null when no
+ * honest estimate exists** — unknown endpoint, or a per-call endpoint with no
+ * unit-count signal yet. `pricingMap` is required so a call site cannot
+ * silently estimate on stale data: pass `getEffectiveFalPricing()` on server
+ * paths, or an explicit fixture in tests.
  */
 export function estimateFalCost(
   endpointId: string,
-  params: FalCostEstimateParams
-): Microdollars {
-  const pricing = FAL_PRICING[endpointId];
+  params: FalCostEstimateParams,
+  pricingMap: Record<string, EffectiveFalPricing>
+): Microdollars | null {
+  const pricing = pricingMap[endpointId];
   if (!pricing) {
     logger.error(`No fal pricing data for endpoint: ${endpointId}`);
-    return ZERO_MICROS;
+    return null;
   }
 
   const numImages = params.numImages ?? 1;
   const duration = params.durationSeconds ?? 0;
 
-  switch (pricing.unit) {
-    case 'images': {
-      // One billable generation per image. Historical units capture quality /
-      // resolution premiums (e.g. nano-banana 1.5× at 2K, gpt-image-2 ≈ 0.22).
-      const unitsPerImage = typicalImageUnitsPerCall(
-        pricing.typicalUnitsPerCall
-      );
-      return multiplyMicros(pricing.unitPrice, unitsPerImage * numImages);
-    }
-
-    case 'flat': {
-      // Flat-rate video: one unit set per generation, not per "image".
-      const unitsPerCall = typicalImageUnitsPerCall(
-        pricing.typicalUnitsPerCall
-      );
-      return multiplyMicros(pricing.unitPrice, unitsPerCall);
+  switch (estimateStrategy(endpointId, pricing.unit)) {
+    case 'per_call': {
+      // Covers flat rates, per-image "units" prices (gpt-image-2 bills ~0.22
+      // units per image on a $1 unit), and compute-seconds models (~10 to
+      // ~294 s/image across models — unknowable from request params).
+      const unitsPerCall = knownUnitsPerCall(pricing);
+      if (unitsPerCall == null) {
+        logger.error(
+          `No unit-count signal for ${endpointId} (unit "${pricing.unit}") — ` +
+            'estimate unknown (returns once a generation records unitsBilled)'
+        );
+        return null;
+      }
+      return multiplyMicros(pricing.unitPrice, unitsPerCall * numImages);
     }
 
     case 'megapixels': {
@@ -147,16 +218,6 @@ export function estimateFalCost(
       const h = params.heightPx ?? 1024;
       const megapixels = (w * h) / 1_000_000;
       return multiplyMicros(pricing.unitPrice, megapixels * numImages);
-    }
-
-    case 'compute_seconds': {
-      // Prefer historical compute time when fal has usage data; otherwise a
-      // fixed default (several compute-second models report $0 historical).
-      const secondsPerImage =
-        pricing.typicalUnitsPerCall != null && pricing.typicalUnitsPerCall > 0
-          ? pricing.typicalUnitsPerCall
-          : DEFAULT_COMPUTE_SECONDS;
-      return multiplyMicros(pricing.unitPrice, secondsPerImage * numImages);
     }
 
     case 'seconds':
@@ -176,12 +237,6 @@ export function estimateFalCost(
       // 1000-token unit; ~5% overhead on nominal shots.
       const units = ((w * h * fps * duration) / 1024 / 1000) * 1.05;
       return multiplyMicros(pricing.unitPrice, units);
-    }
-
-    default: {
-      // Exhaustiveness guard: a new FalUnit without a case fails to compile.
-      const _exhaustive: never = pricing.unit;
-      return _exhaustive;
     }
   }
 }

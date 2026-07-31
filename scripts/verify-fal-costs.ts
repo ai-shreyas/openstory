@@ -19,6 +19,8 @@
  */
 
 import { estimateFalCost } from '@/lib/ai/fal-cost';
+// Verifies the local `model_pricing` snapshot against fal's actual usage.
+import { loadLocalFalPricing } from './load-local-fal-pricing';
 import {
   AUDIO_MODELS,
   IMAGE_MODELS,
@@ -26,12 +28,15 @@ import {
   type AudioModel,
   type TextToImageModel,
 } from '@/lib/ai/models';
+import { microsToUsd, type Microdollars } from '@/lib/billing/money';
 import { buildModelInput } from '@/lib/motion/build-model-input';
 import { snapDuration } from '@/lib/motion/motion-generation';
 import { typedEntries } from '@/lib/utils/typed-object';
 import { createFalClient } from '@fal-ai/client';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+
+const FAL_PRICING = await loadLocalFalPricing();
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -87,7 +92,8 @@ type Task = {
   variation: string;
   tier: Tier;
   input: Record<string, unknown>;
-  estimatedCost: number;
+  /** USD, or null when the model has no honest estimate (#1069). */
+  estimatedCostUsd: number | null;
 };
 
 type Result = {
@@ -96,11 +102,58 @@ type Result = {
   endpointId: string;
   variation: string;
   tier: Tier;
-  estimatedCostUsd: number;
+  /** USD, or null when the model has no honest estimate (#1069). */
+  estimatedCostUsd: number | null;
   requestId: string;
   status: 'completed' | 'error';
   error: string;
 };
+
+/** CSV cell for an unknown estimate — never 0, which reads as "free". */
+const UNKNOWN_CELL = 'unknown';
+
+/**
+ * Estimator output → the USD this report deals in. `estimateFalCost` returns
+ * microdollars; null ("no honest estimate") stays null all the way to the CSV
+ * so an unpriced model can never masquerade as a $0.00 one.
+ */
+function estimateUsd(estimate: Microdollars | null): number | null {
+  return estimate == null ? null : microsToUsd(estimate);
+}
+
+function formatUsd(value: number | null): string {
+  return value == null ? UNKNOWN_CELL : value.toFixed(6);
+}
+
+/** Sum of the known estimates, plus how many tasks had none. */
+function totalKnownUsd(items: { estimatedCostUsd: number | null }[]): {
+  total: number;
+  unknown: number;
+} {
+  let total = 0;
+  let unknown = 0;
+  for (const item of items) {
+    if (item.estimatedCostUsd == null) unknown++;
+    else total += item.estimatedCostUsd;
+  }
+  return { total, unknown };
+}
+
+/** CSV cell → estimate. `unknown` (and any unparseable cell) stays null. */
+function parseEstimateCell(cell: string | undefined): number | null {
+  if (cell == null || cell === UNKNOWN_CELL) return null;
+  const parsed = Number.parseFloat(cell);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Report a total that excludes unknowns as the lower bound it actually is. */
+function logEstimatedTotal(label: string, total: number, unknown: number) {
+  const caveat =
+    unknown > 0
+      ? ` (LOWER BOUND — ${unknown} task(s) have no estimate and are excluded)`
+      : '';
+  console.error(`${label} $${total.toFixed(4)}${caveat}`);
+}
 
 // ============================================================================
 // Image tasks — two 16:9 resolutions: standard (1344×768) and high (1920×1080)
@@ -179,14 +232,20 @@ function calculateImageCostForVariation(
   endpointId: string,
   modelKey: TextToImageModel,
   variation: ImageVariation
-): number {
+): number | null {
   const dims = IMAGE_DIMS[variation];
-  return estimateFalCost(endpointId, {
-    numImages: 1,
-    widthPx: dims.width,
-    heightPx: dims.height,
-    resolution: getImageCostResolution(modelKey, variation),
-  });
+  return estimateUsd(
+    estimateFalCost(
+      endpointId,
+      {
+        numImages: 1,
+        widthPx: dims.width,
+        heightPx: dims.height,
+        resolution: getImageCostResolution(modelKey, variation),
+      },
+      FAL_PRICING
+    )
+  );
 }
 
 function buildImageTasks(): Task[] {
@@ -202,7 +261,7 @@ function buildImageTasks(): Task[] {
         variation,
         tier: variation === 'standard' ? 'low' : 'high',
         input: buildImageInput(modelKey, variation),
-        estimatedCost: calculateImageCostForVariation(
+        estimatedCostUsd: calculateImageCostForVariation(
           model.id,
           modelKey,
           variation
@@ -260,10 +319,16 @@ function buildVideoTasks(imageUrl: string): Task[] {
         variation: label,
         tier,
         input: input as Record<string, unknown>,
-        estimatedCost: estimateFalCost(config.id, {
-          durationSeconds: duration,
-          resolution,
-        }),
+        estimatedCostUsd: estimateUsd(
+          estimateFalCost(
+            config.id,
+            {
+              durationSeconds: duration,
+              resolution,
+            },
+            FAL_PRICING
+          )
+        ),
       });
     }
   }
@@ -332,9 +397,15 @@ function buildAudioTasks(): Task[] {
         variation: label,
         tier,
         input: buildAudioInput(modelKey, config, duration),
-        estimatedCost: estimateFalCost(config.id, {
-          durationSeconds: duration,
-        }),
+        estimatedCostUsd: estimateUsd(
+          estimateFalCost(
+            config.id,
+            {
+              durationSeconds: duration,
+            },
+            FAL_PRICING
+          )
+        ),
       });
     }
   }
@@ -389,7 +460,7 @@ async function runTask(task: Task, semaphore: Semaphore): Promise<Result> {
         endpointId: task.endpointId,
         variation: task.variation,
         tier: task.tier,
-        estimatedCostUsd: task.estimatedCost,
+        estimatedCostUsd: task.estimatedCostUsd,
         requestId: 'dry-run',
         status: 'completed',
         error: '',
@@ -409,7 +480,7 @@ async function runTask(task: Task, semaphore: Semaphore): Promise<Result> {
       endpointId: task.endpointId,
       variation: task.variation,
       tier: task.tier,
-      estimatedCostUsd: task.estimatedCost,
+      estimatedCostUsd: task.estimatedCostUsd,
       requestId: result.requestId,
       status: 'completed',
       error: '',
@@ -422,7 +493,7 @@ async function runTask(task: Task, semaphore: Semaphore): Promise<Result> {
       endpointId: task.endpointId,
       variation: task.variation,
       tier: task.tier,
-      estimatedCostUsd: task.estimatedCost,
+      estimatedCostUsd: task.estimatedCostUsd,
       requestId: '',
       status: 'error',
       error: message,
@@ -494,7 +565,7 @@ function resultsToCsv(results: Result[]): string {
       r.endpointId,
       r.variation,
       r.tier,
-      r.estimatedCostUsd.toFixed(6),
+      formatUsd(r.estimatedCostUsd),
       r.requestId,
       r.status,
       r.error ? `"${r.error.replace(/"/g, '""')}"` : '',
@@ -555,11 +626,16 @@ function comparisonToCsv(results: Result[], usage: UsageResponse): string {
     const key = `${r.endpointId}|${r.tier}`;
     const actual = actualByKey.get(key);
     const actualCost = actual?.cost ?? 0;
-    const diff = actualCost - r.estimatedCostUsd;
+    // No estimate → no diff. Reporting `actual - 0` here would read as a
+    // 100%-under estimate rather than a missing one (#1069).
+    const estimated = r.estimatedCostUsd;
+    const diff = estimated == null ? null : actualCost - estimated;
     const diffPct =
-      r.estimatedCostUsd > 0
-        ? ((diff / r.estimatedCostUsd) * 100).toFixed(2)
-        : 'N/A';
+      estimated != null && diff != null && estimated > 0
+        ? ((diff / estimated) * 100).toFixed(2)
+        : estimated == null
+          ? UNKNOWN_CELL
+          : 'N/A';
 
     rows.push(
       [
@@ -571,9 +647,9 @@ function comparisonToCsv(results: Result[], usage: UsageResponse): string {
         actual?.authMethod ?? '',
         actual?.unitPrice.toFixed(6) ?? '',
         actual?.quantity.toFixed(4) ?? '',
-        r.estimatedCostUsd.toFixed(6),
+        formatUsd(estimated),
         actualCost.toFixed(6),
-        diff.toFixed(6),
+        formatUsd(diff),
         diffPct,
       ].join(',')
     );
@@ -621,7 +697,7 @@ async function main() {
         endpointId: cols[2] ?? '',
         variation: cols[3] ?? '',
         tier: cols[4] === 'high' ? 'high' : 'low',
-        estimatedCostUsd: parseFloat(cols[5] ?? '0'),
+        estimatedCostUsd: parseEstimateCell(cols[5]),
         requestId: cols[6] ?? '',
         status: cols[7] === 'completed' ? 'completed' : 'error',
         error: cols.slice(8).join(',').replace(/^"|"$/g, ''),
@@ -635,14 +711,18 @@ async function main() {
       ...buildVideoTasks('https://placeholder'),
       ...buildAudioTasks(),
     ];
-    const freshEstimates = new Map<string, number>();
+    const freshEstimates = new Map<string, number | null>();
     for (const t of freshTasks) {
-      freshEstimates.set(`${t.modelKey}|${t.variation}`, t.estimatedCost);
+      freshEstimates.set(`${t.modelKey}|${t.variation}`, t.estimatedCostUsd);
     }
     let recalculated = 0;
     for (const r of results) {
-      const fresh = freshEstimates.get(`${r.modelKey}|${r.variation}`);
-      if (fresh !== undefined && fresh !== r.estimatedCostUsd) {
+      const key = `${r.modelKey}|${r.variation}`;
+      // `has`, not a null check on `get` — a model that has *become* unknown
+      // must overwrite its stale number, not keep it.
+      if (!freshEstimates.has(key)) continue;
+      const fresh = freshEstimates.get(key) ?? null;
+      if (fresh !== r.estimatedCostUsd) {
         recalculated++;
         r.estimatedCostUsd = fresh;
       }
@@ -699,21 +779,26 @@ async function main() {
       (sum, e) => sum + e.cost,
       0
     );
-    const totalEstimated = successfulResults.reduce(
-      (sum, r) => sum + r.estimatedCostUsd,
-      0
-    );
+    const { total: totalEstimated, unknown } = totalKnownUsd(successfulResults);
     console.error('\n--- Cost Comparison ---');
-    console.error(`Total estimated: $${totalEstimated.toFixed(4)}`);
+    logEstimatedTotal('Total estimated:', totalEstimated, unknown);
     console.error(`Total actual:    $${totalActual.toFixed(4)}`);
-    const totalDiff = totalActual - totalEstimated;
-    const totalDiffPct =
-      totalEstimated > 0
-        ? ((totalDiff / totalEstimated) * 100).toFixed(2)
-        : 'N/A';
-    console.error(
-      `Difference:      $${totalDiff.toFixed(4)} (${totalDiffPct}%)`
-    );
+    // Actual covers every model; estimated omits the unknowns — the diff is
+    // only meaningful once every model has an estimate.
+    if (unknown === 0) {
+      const totalDiff = totalActual - totalEstimated;
+      const totalDiffPct =
+        totalEstimated > 0
+          ? ((totalDiff / totalEstimated) * 100).toFixed(2)
+          : 'N/A';
+      console.error(
+        `Difference:      $${totalDiff.toFixed(4)} (${totalDiffPct}%)`
+      );
+    } else {
+      console.error(
+        'Difference:      not comparable — totals cover different model sets'
+      );
+    }
     return;
   }
 
@@ -775,9 +860,22 @@ async function main() {
     process.exit(0);
   }
 
-  // Print estimated total cost before submitting
-  const totalEstimated = allTasks.reduce((sum, t) => sum + t.estimatedCost, 0);
-  console.error(`Estimated total cost: $${totalEstimated.toFixed(4)}\n`);
+  // Print estimated total cost before submitting. This runs real, paid
+  // generations, so an unestimated model must be named rather than folded in
+  // as $0 — that understatement is the #1069 bug this script exists to catch.
+  const { total: totalEstimated, unknown } = totalKnownUsd(allTasks);
+  logEstimatedTotal('Estimated total cost:', totalEstimated, unknown);
+  if (unknown > 0) {
+    const unnamed = [
+      ...new Set(
+        allTasks
+          .filter((t) => t.estimatedCostUsd == null)
+          .map((t) => `${t.modelKey} (${t.variation})`)
+      ),
+    ];
+    console.error(`No estimate for: ${unnamed.join(', ')}`);
+  }
+  console.error('');
 
   // Record start time for usage API window
   const startTime = new Date().toISOString();
@@ -847,16 +945,22 @@ async function main() {
           (sum, e) => sum + e.cost,
           0
         );
-        console.error(`Total estimated: $${totalEstimated.toFixed(4)}`);
+        logEstimatedTotal('Total estimated:', totalEstimated, unknown);
         console.error(`Total actual:    $${totalActual.toFixed(4)}`);
-        const totalDiff = totalActual - totalEstimated;
-        const totalDiffPct =
-          totalEstimated > 0
-            ? ((totalDiff / totalEstimated) * 100).toFixed(2)
-            : 'N/A';
-        console.error(
-          `Difference:      $${totalDiff.toFixed(4)} (${totalDiffPct}%)`
-        );
+        if (unknown === 0) {
+          const totalDiff = totalActual - totalEstimated;
+          const totalDiffPct =
+            totalEstimated > 0
+              ? ((totalDiff / totalEstimated) * 100).toFixed(2)
+              : 'N/A';
+          console.error(
+            `Difference:      $${totalDiff.toFixed(4)} (${totalDiffPct}%)`
+          );
+        } else {
+          console.error(
+            'Difference:      not comparable — totals cover different model sets'
+          );
+        }
       } catch (err) {
         console.error(
           `Failed to fetch usage data: ${err instanceof Error ? err.message : 'Unknown error'}`
@@ -875,7 +979,7 @@ async function main() {
   ).length;
   const errors = results.filter((r) => r.status === 'error').length;
   console.error(`\nSummary: ${completedResults} completed, ${errors} errors`);
-  console.error(`Estimated total cost: $${totalEstimated.toFixed(4)}`);
+  logEstimatedTotal('Estimated total cost:', totalEstimated, unknown);
 }
 
 function resolveDefaultImageUrl(): string | undefined {

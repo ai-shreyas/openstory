@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
 import {
   estimateBatchMotionCost,
   resolveBatchShotVideoModel,
 } from './batch-motion-cost';
-import { estimateVideoCost } from '@/lib/billing/cost-estimation';
+import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { snapDuration } from '@/lib/motion/motion-generation';
 
@@ -83,24 +84,43 @@ describe('estimateBatchMotionCost', () => {
     const expected = addMicros(
       addMicros(
         ZERO_MICROS,
-        estimateVideoCost('seedance_v2', snapDuration(undefined, 'seedance_v2'))
+        gateEstimate(
+          estimateVideoCost(
+            'seedance_v2',
+            snapDuration(undefined, 'seedance_v2'),
+            { pricing: FAL_PRICING }
+          ),
+          { model: 'seedance_v2', operation: 'batch-motion' }
+        )
       ),
-      estimateVideoCost('kling_v3_pro', snapDuration(undefined, 'kling_v3_pro'))
+      gateEstimate(
+        estimateVideoCost(
+          'kling_v3_pro',
+          snapDuration(undefined, 'kling_v3_pro'),
+          { pricing: FAL_PRICING }
+        ),
+        { model: 'kling_v3_pro', operation: 'batch-motion' }
+      )
     );
-    expect(estimateBatchMotionCost(shots, shotModels, sequence)).toEqual(
-      expected
-    );
+    expect(
+      estimateBatchMotionCost(shots, shotModels, sequence, {
+        pricing: FAL_PRICING,
+      })
+    ).toEqual(expected);
   });
 
   it('prices every shot with the explicit batch model when given', () => {
     const shots = [{ id: 'shot-a' }, { id: 'shot-b' }];
-    const perShot = estimateVideoCost(
-      'kling_v3_pro',
-      snapDuration(5, 'kling_v3_pro')
+    const perShot = gateEstimate(
+      estimateVideoCost('kling_v3_pro', snapDuration(5, 'kling_v3_pro'), {
+        pricing: FAL_PRICING,
+      }),
+      { model: 'kling_v3_pro', operation: 'batch-motion' }
     );
     const expected = addMicros(addMicros(ZERO_MICROS, perShot), perShot);
     expect(
       estimateBatchMotionCost(shots, shotModels, sequence, {
+        pricing: FAL_PRICING,
         explicitModel: 'kling_v3_pro',
         duration: 5,
       })
@@ -108,8 +128,10 @@ describe('estimateBatchMotionCost', () => {
   });
 
   it('is ZERO for an empty shot list', () => {
-    expect(estimateBatchMotionCost([], shotModels, sequence)).toEqual(
-      ZERO_MICROS
-    );
+    expect(
+      estimateBatchMotionCost([], shotModels, sequence, {
+        pricing: FAL_PRICING,
+      })
+    ).toEqual(ZERO_MICROS);
   });
 });

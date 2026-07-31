@@ -35,6 +35,7 @@ import {
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -169,6 +170,14 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
           );
         });
 
+        // Before the deduction guard — see recordFalUsageStep (#1069).
+        const posterUsage = await recordFalUsageStep(
+          step,
+          scopedDb,
+          posterResult.metadata,
+          'record-fal-usage-poster'
+        );
+
         await step.do('deduct-poster-credits', async () => {
           await deductWorkflowCredits({
             scopedDb,
@@ -177,6 +186,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
             description: `Sequence poster (${PREVIEW_IMAGE_MODEL})`,
             idempotencyKey: `${event.instanceId}:poster`,
             metadata: {
+              ...posterUsage,
               model: PREVIEW_IMAGE_MODEL,
               sequenceId,
             },

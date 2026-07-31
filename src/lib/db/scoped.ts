@@ -34,6 +34,7 @@ import {
   createPublicLocationsReadMethods,
 } from '@/lib/db/scoped/location-library';
 import { createLocationSheetVariantsMethods } from '@/lib/db/scoped/location-sheet-variants';
+import { createModelUsageMethods } from '@/lib/db/scoped/model-usage';
 import { createSequenceElementsMethods } from '@/lib/db/scoped/sequence-elements';
 import { createSequenceExportsMethods } from '@/lib/db/scoped/sequence-exports';
 import { createSequenceLocationsMethods } from '@/lib/db/scoped/sequence-locations';
@@ -323,6 +324,9 @@ export function createScopedDb(teamId: string, userId: string) {
     // Direct model access (#458) — flat team-scoped runs of arbitrary fal
     // endpoints, decoupled from the sequence graph.
     generatedAssets: createGeneratedAssetsMethods(db, teamId, userId),
+
+    // Platform-global pricing telemetry (#1069) — not team-scoped.
+    modelUsage: createModelUsageMethods(db),
 
     billing: createBillingMethods(db, teamId, userId),
     apiKeys: createApiKeysMethods(db, teamId, userId),

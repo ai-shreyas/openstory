@@ -18,10 +18,10 @@
  * platform key fallback), applied to the `fal` singleton via `fal.config` —
  * the same singleton the base class routes through the e2e proxy. No credit
  * deduction happens here YET: the raw queue API doesn't surface
- * `unitsBilled` and `FAL_PRICING` has no data for arbitrary endpoints, so we
- * charge nothing rather than guess (`costMicros` stays null) — real charging
- * is a follow-up PR; the create fn's `requireCredits` gate is the only
- * billing control today.
+ * `unitsBilled`, so we charge nothing rather than guess (`costMicros` stays
+ * null). `model_pricing` now covers every catalog endpoint (#1069), so real
+ * charging is unblocked once unitsBilled is plumbed through — a follow-up PR;
+ * the create fn's `requireCredits` gate is the only billing control today.
  */
 
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';

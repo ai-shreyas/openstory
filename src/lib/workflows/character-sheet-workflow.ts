@@ -24,6 +24,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -228,6 +229,13 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
       );
     }
 
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const falUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata
+    );
+
     // Deduct credits for image generation (skip if team used own fal key)
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
@@ -237,6 +245,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         description: `Character sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
         metadata: {
+          ...falUsage,
           model: generationParams.model,
           characterName: input.characterName,
           characterDbId: input.characterDbId,

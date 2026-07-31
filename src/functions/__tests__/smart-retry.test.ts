@@ -16,10 +16,11 @@
  */
 
 import { describe, expect, test, vi } from 'vitest';
+import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
 import type { Frame, Sequence } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
-import { estimateImageCost } from '@/lib/billing/cost-estimation';
+import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 
 const assertNoActiveStoryboardMock = vi.fn();
@@ -41,6 +42,11 @@ vi.doMock('@/lib/workflow/client', () => ({
 const requireCreditsMock = vi.fn();
 vi.doMock('@/lib/billing/preflight', () => ({
   requireCredits: requireCreditsMock,
+}));
+
+// The live pricing loader reads D1 (unavailable under node tests).
+vi.doMock('@/lib/ai/fal-pricing-live', () => ({
+  getEffectiveFalPricing: async () => FAL_PRICING,
 }));
 
 // Dynamic imports so the mocks above apply (vi.doMock is not hoisted).
@@ -489,8 +495,23 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     // a regression to single-model `multiply(cost, count)` pricing would diverge
     // whenever the shots were rendered by differently-priced models.
     const expectedCost = addMicros(
-      addMicros(ZERO_MICROS, estimateImageCost('gpt_image_2', '16:9', 1)),
-      estimateImageCost('flux_2_max', '16:9', 1)
+      addMicros(
+        ZERO_MICROS,
+        gateEstimate(
+          estimateImageCost('gpt_image_2', '16:9', 1, { pricing: FAL_PRICING }),
+          {
+            model: 'gpt_image_2',
+            operation: 'smart-retry:image',
+          }
+        )
+      ),
+      gateEstimate(
+        estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+        {
+          model: 'flux_2_max',
+          operation: 'smart-retry:image',
+        }
+      )
     );
     expect(requireCreditsMock).toHaveBeenCalledTimes(1);
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
@@ -560,7 +581,16 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     );
     // …and it is priced as flux_2_max, so the estimate matches the charge.
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
-      addMicros(ZERO_MICROS, estimateImageCost('flux_2_max', '16:9', 1))
+      addMicros(
+        ZERO_MICROS,
+        gateEstimate(
+          estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+          {
+            model: 'flux_2_max',
+            operation: 'smart-retry:image',
+          }
+        )
+      )
     );
   });
 

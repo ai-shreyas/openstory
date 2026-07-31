@@ -19,6 +19,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -132,6 +133,14 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       return await generateImageWithProvider(generationParams, { scopedDb });
     });
 
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const sheetUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata,
+      'record-fal-usage-sheet'
+    );
+
     // Deduct credits for sheet generation (skip if team used own fal key)
     await step.do('deduct-credits-sheet', async () => {
       await deductWorkflowCredits({
@@ -140,7 +149,11 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Talent sheet (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:sheet`,
-        metadata: { talentId: input.talentId, type: 'sheet' },
+        metadata: {
+          ...sheetUsage,
+          talentId: input.talentId,
+          type: 'sheet',
+        },
         workflowName: 'LibraryTalentSheetWorkflow',
       });
     });
@@ -330,6 +343,14 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       }
     );
 
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const headshotUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      headshotResult.metadata,
+      'record-fal-usage-headshot'
+    );
+
     // Deduct credits for headshot generation (skip if team used own fal key)
     await step.do('deduct-credits-headshot', async () => {
       await deductWorkflowCredits({
@@ -338,7 +359,11 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: headshotResult.metadata.usedOwnKey,
         description: `Talent headshot (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:headshot`,
-        metadata: { talentId: input.talentId, type: 'headshot' },
+        metadata: {
+          ...headshotUsage,
+          talentId: input.talentId,
+          type: 'headshot',
+        },
         workflowName: 'LibraryTalentSheetWorkflow',
       });
     });

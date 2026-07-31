@@ -16,7 +16,10 @@ import { DEFAULT_MUSIC_MODEL } from '@/lib/ai/models';
 import { uploadAudioToStorage } from '@/lib/audio/audio-storage';
 import { generateMusic } from '@/lib/audio/music-generation';
 import { ZERO_MICROS } from '@/lib/billing/money';
-import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
+import {
+  deductWorkflowCredits,
+  recordFalUsageStep,
+} from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -99,6 +102,16 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
     // Deduct credits (skip if team used own fal key)
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
     const musicCostMicros = audioResult.metadata?.cost ?? ZERO_MICROS;
+    // Before the deduction guard — see recordFalUsageStep (#1069). Guarded
+    // like the `?.` reads above: those encode a belief that `metadata` can be
+    // absent at runtime despite the type, and an unguarded deref here would
+    // throw a TypeError *after* fal generated and billed the track, failing
+    // the workflow over a piece of telemetry.
+    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
+    const falUsage = audioResult.metadata
+      ? await recordFalUsageStep(step, scopedDb, audioResult.metadata)
+      : undefined;
+
     if (musicCostMicros > 0 && !audioResult.metadata.usedOwnKey) {
       await step.do('deduct-credits', async () => {
         await deductWorkflowCredits({
@@ -108,6 +121,7 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
           description: `Music generation (${model})`,
           idempotencyKey: `${event.instanceId}:music`,
           metadata: {
+            ...falUsage,
             model,
             sequenceId,
             // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard

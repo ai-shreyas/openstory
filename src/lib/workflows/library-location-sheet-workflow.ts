@@ -15,6 +15,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -96,6 +97,14 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       return generateImageWithProvider(generationParams, { scopedDb });
     });
 
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const sheetUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata,
+      'record-fal-usage-sheet'
+    );
+
     // Deduct credits for image generation (skip if team used own fal key)
     await step.do('deduct-credits-sheet', async () => {
       await deductWorkflowCredits({
@@ -105,6 +114,7 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         description: `Library location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
         metadata: {
+          ...sheetUsage,
           model: generationParams.model,
           locationName: input.locationName,
           locationDbId: input.locationDbId,
@@ -191,6 +201,14 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       return generateImageWithProvider(previewParams, { scopedDb });
     });
 
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const previewUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      previewResult.metadata,
+      'record-fal-usage-preview'
+    );
+
     // Deduct credits for preview generation
     await step.do('deduct-credits-preview', async () => {
       await deductWorkflowCredits({
@@ -199,7 +217,11 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         usedOwnKey: previewResult.metadata.usedOwnKey,
         description: `Location preview (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:preview`,
-        metadata: { locationDbId: input.locationDbId, type: 'preview' },
+        metadata: {
+          ...previewUsage,
+          locationDbId: input.locationDbId,
+          type: 'preview',
+        },
         workflowName: 'LibraryLocationSheetWorkflow',
       });
     });

@@ -13,7 +13,8 @@
 
 import type { ImageToVideoModel } from '@/lib/ai/models';
 import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
-import { estimateVideoCost } from '@/lib/billing/cost-estimation';
+import type { EffectiveFalPricing } from '@/lib/ai/fal-cost';
+import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
 import { snapDuration } from '@/lib/motion/motion-generation';
 
@@ -56,7 +57,12 @@ export function estimateBatchMotionCost(
   shots: BatchShot[],
   models: BatchShotModels,
   sequence: SequenceModelFields,
-  opts: { explicitModel?: ImageToVideoModel | null; duration?: number } = {}
+  opts: {
+    /** Live map from `getEffectiveFalPricing()` (or the seed, explicitly). */
+    pricing: Record<string, EffectiveFalPricing>;
+    explicitModel?: ImageToVideoModel | null;
+    duration?: number;
+  }
 ): Microdollars {
   return shots.reduce((sum, shot) => {
     const model = resolveBatchShotVideoModel(
@@ -67,7 +73,12 @@ export function estimateBatchMotionCost(
     );
     return addMicros(
       sum,
-      estimateVideoCost(model, snapDuration(opts.duration, model))
+      gateEstimate(
+        estimateVideoCost(model, snapDuration(opts.duration, model), {
+          pricing: opts.pricing,
+        }),
+        { model, operation: 'batch-motion' }
+      )
     );
   }, ZERO_MICROS);
 }

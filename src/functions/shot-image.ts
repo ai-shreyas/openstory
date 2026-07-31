@@ -11,7 +11,9 @@ import {
 import {
   estimateImageCost,
   estimateStoryboardCost,
+  gateEstimate,
 } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { requireCredits } from '@/lib/billing/preflight';
 import {
   aspectRatioToImageSize,
@@ -92,6 +94,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -226,7 +229,12 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
 
     await requireCredits(
       context.scopedDb,
-      estimateImageCost(model, sequence.aspectRatio, 1),
+      gateEstimate(
+        estimateImageCost(model, sequence.aspectRatio, 1, {
+          pricing: await getEffectiveFalPricing(),
+        }),
+        { model, operation: 'shot-image' }
+      ),
       { errorMessage: 'Insufficient credits for image generation' }
     );
 
@@ -326,9 +334,17 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
     const numImages = data.numImages ?? 1;
     await requireCredits(
       context.scopedDb,
-      estimateImageCost(
-        data.model ?? DEFAULT_IMAGE_MODEL,
-        sequence.aspectRatio,
+      gateEstimate(
+        estimateImageCost(
+          data.model ?? DEFAULT_IMAGE_MODEL,
+          sequence.aspectRatio,
+          numImages,
+          { pricing: await getEffectiveFalPricing() }
+        ),
+        {
+          model: data.model ?? DEFAULT_IMAGE_MODEL,
+          operation: 'shot-variants',
+        },
         numImages
       ),
       { errorMessage: 'Insufficient credits for variant generation' }
@@ -445,10 +461,17 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
     // charge.
     await requireCredits(
       context.scopedDb,
-      estimateImageCost(
-        resolveUpscaleModel(sheet.model),
-        sequence.aspectRatio,
-        1
+      gateEstimate(
+        estimateImageCost(
+          resolveUpscaleModel(sheet.model),
+          sequence.aspectRatio,
+          1,
+          { pricing: await getEffectiveFalPricing() }
+        ),
+        {
+          model: resolveUpscaleModel(sheet.model),
+          operation: 'variant-upscale',
+        }
       ),
       { errorMessage: 'Insufficient credits for variant upscale' }
     );

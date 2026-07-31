@@ -9,7 +9,8 @@ import { z } from 'zod';
 
 import { AUDIO_MODELS } from '@/lib/ai/models';
 import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
-import { estimateVideoCost } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import {
   estimateBatchMotionCost,
   resolveBatchShotVideoModel,
@@ -126,9 +127,16 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       model,
     });
 
-    await requireCredits(context.scopedDb, estimateVideoCost(model, duration), {
-      errorMessage: 'Insufficient credits for motion generation',
-    });
+    await requireCredits(
+      context.scopedDb,
+      gateEstimate(
+        estimateVideoCost(model, duration, {
+          pricing: await getEffectiveFalPricing(),
+        }),
+        { model, operation: 'motion' }
+      ),
+      { errorMessage: 'Insufficient credits for motion generation' }
+    );
 
     const workflowInput: BatchMotionMusicWorkflowInput = {
       userId: context.user.id,
@@ -239,7 +247,11 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       eligibleShots,
       shotModels,
       sequence,
-      { explicitModel: data.model, duration: data.duration }
+      {
+        explicitModel: data.model,
+        duration: data.duration,
+        pricing: await getEffectiveFalPricing(),
+      }
     );
 
     await requireCredits(context.scopedDb, estimatedCost, {
