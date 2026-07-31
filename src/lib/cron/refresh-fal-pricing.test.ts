@@ -239,6 +239,13 @@ describe('refreshFalPricing', () => {
     modelsCatalog?: string[];
     /** Endpoints whose price fetch errored. */
     priceFailures?: string[];
+    /** Usage-API billed rates (the overlay source). */
+    billed?: {
+      endpointId: string;
+      unit: string;
+      unitPriceUsd: number;
+      costUsd: number;
+    }[];
   }) {
     vi.resetModules();
     typicalCalledWith = undefined;
@@ -263,6 +270,7 @@ describe('refreshFalPricing', () => {
           failedEndpoints: opts.priceFailures ?? [],
         });
       },
+      fetchFalBilledRates: () => Promise.resolve(opts.billed ?? []),
       fetchFalTypicalUnits: (
         _key: string,
         prices: { endpointId: string }[]
@@ -528,6 +536,88 @@ describe('refreshFalPricing', () => {
       'bytedance/seedance-2.0/enterprise/text-to-video'
     );
     expect(pricesRequested).toContain('fal-ai/flux-2');
+  });
+
+  test('billed usage rates override the pricing API', async () => {
+    // The Grok incident: pricing API reported "compute seconds" × $0.00017
+    // while fal billed "units" × $0.01 — a ~59× under-charge. The bill wins.
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'xai/grok-imagine',
+          unitPriceUsd: 0.00017,
+          unit: 'compute seconds',
+        },
+      ],
+      billed: [
+        {
+          endpointId: 'xai/grok-imagine',
+          unit: 'units',
+          unitPriceUsd: 0.01,
+          costUsd: 0.4,
+        },
+      ],
+    });
+
+    await refreshFalPricing({ billingKey: 'admin-key' });
+
+    const [row] = await db.select().from(modelPricing);
+    expect(row?.unit).toBe('units');
+    expect(row?.unitPriceMicros).toBe(10_000);
+  });
+
+  test('an endpoint only present in billed usage still gets a row', async () => {
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'fal-ai/flux-2',
+          unitPriceUsd: 0.012,
+          unit: 'megapixels',
+        },
+      ],
+      used: ['fal-ai/flux-2'],
+      billed: [
+        {
+          endpointId: 'some/unpriced-but-billed',
+          unit: 'units',
+          unitPriceUsd: 0.02,
+          costUsd: 1,
+        },
+      ],
+    });
+
+    await refreshFalPricing({ billingKey: 'admin-key' });
+
+    const rows = await db.select().from(modelPricing);
+    expect(rows.map((r) => r.endpointId).sort()).toEqual([
+      'fal-ai/flux-2',
+      'some/unpriced-but-billed',
+    ]);
+  });
+
+  test('without a billing key the pricing API stands, unverified', async () => {
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'xai/grok-imagine',
+          unitPriceUsd: 0.00017,
+          unit: 'compute seconds',
+        },
+      ],
+      billed: [
+        {
+          endpointId: 'xai/grok-imagine',
+          unit: 'units',
+          unitPriceUsd: 0.01,
+          costUsd: 0.4,
+        },
+      ],
+    });
+
+    await refreshFalPricing(); // no billingKey
+
+    const [row] = await db.select().from(modelPricing);
+    expect(row?.unit).toBe('compute seconds');
   });
 
   test('does not sweep an endpoint whose price fetch merely errored', async () => {

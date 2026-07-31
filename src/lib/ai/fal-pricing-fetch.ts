@@ -200,6 +200,80 @@ export async function fetchFalUnitPrices(
 }
 
 // ============================================================================
+// Billed rates — GET /v1/models/usage (needs an admin-scoped key)
+// ============================================================================
+
+export type FalBilledRate = {
+  endpointId: string;
+  /** The unit fal ACTUALLY billed in (can disagree with the pricing API). */
+  unit: string;
+  unitPriceUsd: number;
+  /** Total billed on this endpoint in the window, for conflict resolution. */
+  costUsd: number;
+};
+
+type UsageEntry = {
+  endpoint_id: string;
+  unit: string;
+  unit_price: number;
+  cost: number;
+};
+
+/**
+ * The unit + unit_price fal actually billed per endpoint over the last
+ * `days`, from the usage API — the bill itself, so it cannot disagree with
+ * reality. The pricing API can: it reported Grok Imagine at
+ * "compute seconds" × $0.00017 while fal billed "units" × $0.01 (~59× more),
+ * which made `unitsBilled × unitPrice` charge ~nothing. The refresh overlays
+ * these rates over the pricing API's answers.
+ *
+ * Only covers endpoints with usage in the window — exactly the ones we bill.
+ * If one endpoint shows two units (fal re-denominated mid-window), the
+ * higher-spend entry wins.
+ */
+export async function fetchFalBilledRates(
+  billingKey: string,
+  days = 30
+): Promise<FalBilledRate[]> {
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  const url = new URL('https://api.fal.ai/v1/models/usage');
+  url.searchParams.set('start', start.toISOString());
+  url.searchParams.set('end', end.toISOString());
+  url.searchParams.set('expand', 'summary');
+
+  const resp = await fetch(url, {
+    headers: { Authorization: `Key ${billingKey}` },
+  });
+  if (!resp.ok) {
+    throw new Error(`fal usage API HTTP ${resp.status}: ${await resp.text()}`);
+  }
+  const data: { summary?: UsageEntry[] } = await resp.json();
+
+  const byEndpoint = new Map<string, FalBilledRate>();
+  for (const entry of data.summary ?? []) {
+    if (!Number.isFinite(entry.unit_price) || entry.unit_price <= 0) continue;
+    const rate: FalBilledRate = {
+      endpointId: entry.endpoint_id,
+      unit: entry.unit,
+      unitPriceUsd: entry.unit_price,
+      costUsd: Number.isFinite(entry.cost) ? entry.cost : 0,
+    };
+    const existing = byEndpoint.get(entry.endpoint_id);
+    if (!existing) {
+      byEndpoint.set(entry.endpoint_id, rate);
+    } else if (rate.costUsd > existing.costUsd) {
+      logger.warn(
+        'fal usage reports two billed units for one endpoint — keeping the higher-spend one',
+        { endpointId: entry.endpoint_id, units: [existing.unit, rate.unit] }
+      );
+      byEndpoint.set(entry.endpoint_id, rate);
+    }
+  }
+  return [...byEndpoint.values()];
+}
+
+// ============================================================================
 // Historical per-call cost → typicalUnitsPerCall
 // ============================================================================
 

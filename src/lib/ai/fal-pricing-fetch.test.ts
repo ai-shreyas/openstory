@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  fetchFalBilledRates,
   fetchFalCatalogIds,
   fetchFalTypicalUnits,
   fetchFalUnitPrices,
@@ -155,6 +156,59 @@ describe('fetchFalUnitPrices', () => {
 
     const { prices } = await fetchFalUnitPrices('key', ['m/free', 'm/ok']);
     expect(prices.map((p) => p.endpointId)).toEqual(['m/ok']);
+  });
+});
+
+describe('fetchFalBilledRates', () => {
+  const USAGE_URL = 'https://api.fal.ai/v1/models/usage';
+
+  it('returns the billed unit and price per endpoint', async () => {
+    // The whole point: the pricing API said Grok bills "compute seconds" ×
+    // $0.00017; the bill says "units" × $0.01. The bill wins.
+    stubFetch((url) =>
+      url.startsWith(USAGE_URL)
+        ? json({
+            summary: [
+              {
+                endpoint_id: 'xai/grok-imagine-image/quality/text-to-image',
+                unit: 'units',
+                unit_price: 0.01,
+                cost: 0.4,
+              },
+            ],
+          })
+        : json({})
+    );
+
+    const rates = await fetchFalBilledRates('admin-key');
+    expect(rates).toEqual([
+      {
+        endpointId: 'xai/grok-imagine-image/quality/text-to-image',
+        unit: 'units',
+        unitPriceUsd: 0.01,
+        costUsd: 0.4,
+      },
+    ]);
+  });
+
+  it('keeps the higher-spend entry when one endpoint shows two units', async () => {
+    stubFetch(() =>
+      json({
+        summary: [
+          { endpoint_id: 'a/b', unit: 'seconds', unit_price: 0.1, cost: 0.2 },
+          { endpoint_id: 'a/b', unit: 'units', unit_price: 0.01, cost: 5 },
+        ],
+      })
+    );
+
+    const rates = await fetchFalBilledRates('admin-key');
+    expect(rates).toHaveLength(1);
+    expect(rates[0]?.unit).toBe('units');
+  });
+
+  it('throws on an API failure', async () => {
+    stubFetch(() => json({ error: 'nope' }, 403));
+    await expect(fetchFalBilledRates('admin-key')).rejects.toThrow(/HTTP 403/);
   });
 });
 

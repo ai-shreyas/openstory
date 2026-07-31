@@ -27,6 +27,7 @@ import {
 import { listCatalogEndpointIds } from '@/lib/models/catalog';
 import {
   type FalUnitPrice,
+  fetchFalBilledRates,
   fetchFalCatalogIds,
   fetchFalTypicalUnits,
   fetchFalUnitPrices,
@@ -233,12 +234,22 @@ async function discardObservationsForRedenominatedEndpoints(
  * `getDb()` throws by design and `#env` has no Worker bindings.
  */
 export async function refreshFalPricing(
-  deps: { db?: PricingRefreshDb; apiKey?: string } = {}
+  deps: {
+    db?: PricingRefreshDb;
+    apiKey?: string;
+    billingKey?: string;
+  } = {}
 ): Promise<FalPricingRefreshSummary> {
   const apiKey = deps.apiKey ?? getEnv().FAL_KEY;
   if (!apiKey) {
     throw new Error('refreshFalPricing: FAL_KEY is not configured');
   }
+  // Admin-scoped key for the usage API. Optional and not in the generated
+  // worker env types — same narrowing as MODELSCHEMAS_API_KEY.
+  const billingKey =
+    deps.billingKey ??
+    (getEnv() as ReturnType<typeof getEnv> & { FAL_BILLING_KEY?: string })
+      .FAL_BILLING_KEY;
 
   const db = deps.db ?? getDb();
   const catalogIds = await fetchFalCatalogIds(apiKey);
@@ -274,6 +285,55 @@ export async function refreshFalPricing(
     throw new Error(
       `refreshFalPricing: fal returned no prices for ${requestedIds.length} requested ` +
         'endpoints — aborting before the stale sweep would empty model_pricing'
+    );
+  }
+
+  // Overlay the usage API's billed rates: the pricing API can disagree with
+  // what fal actually bills (Grok Imagine: "compute seconds" × $0.00017
+  // reported vs "units" × $0.01 billed — a ~59× under-charge), and the bill
+  // is the only source that cannot. Runs BEFORE the typical-units fetch so
+  // its cost→units conversion divides by the real price.
+  if (billingKey) {
+    const billedRates = await fetchFalBilledRates(billingKey);
+    const priceByEndpoint = new Map(prices.map((p) => [p.endpointId, p]));
+    for (const rate of billedRates) {
+      const fetched = priceByEndpoint.get(rate.endpointId);
+      if (
+        fetched &&
+        fetched.unit === rate.unit &&
+        fetched.unitPriceUsd === rate.unitPriceUsd
+      ) {
+        continue;
+      }
+      if (fetched) {
+        logger.warn(
+          'fal pricing API disagrees with billed usage — using the bill',
+          {
+            endpointId: rate.endpointId,
+            reported: {
+              unit: fetched.unit,
+              unitPriceUsd: fetched.unitPriceUsd,
+            },
+            billed: { unit: rate.unit, unitPriceUsd: rate.unitPriceUsd },
+          }
+        );
+        fetched.unit = rate.unit;
+        fetched.unitPriceUsd = rate.unitPriceUsd;
+      } else {
+        // Billed but unpriced (aliases, delisted models) — the bill proves it
+        // exists and what it costs.
+        prices.push({
+          endpointId: rate.endpointId,
+          unit: rate.unit,
+          unitPriceUsd: rate.unitPriceUsd,
+        });
+      }
+    }
+  } else {
+    // Without the bill to check against, a pricing-API mispricing goes
+    // straight into charges — say so every night until the secret exists.
+    logger.error(
+      'FAL_BILLING_KEY is not configured — cannot verify prices against billed usage'
     );
   }
 

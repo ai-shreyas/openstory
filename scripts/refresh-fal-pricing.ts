@@ -21,6 +21,10 @@ if (!apiKey) {
   process.exit(1);
 }
 
+// Admin-scoped key for the usage-API overlay (billed-rate verification).
+const billingKey =
+  process.env.FAL_BILLING_KEY ?? process.env.FAL_BILLING_KEY_DEV;
+
 const environment = process.argv.includes('--test') ? 'test' : undefined;
 console.log(`🗄️  Wrangler local D1 (${environment ?? 'default'} env)\n`);
 
@@ -38,6 +42,7 @@ try {
   const summary = await refreshFalPricing({
     db: drizzle(binding, { relations }),
     apiKey,
+    billingKey,
   });
 
   console.log('✅ model_pricing refreshed\n');
