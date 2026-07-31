@@ -46,6 +46,20 @@ export type ShotPromptContextSequence = {
   analysisModel: string;
 };
 
+/**
+ * The sequence-scoped rows this loader would otherwise read per call. Callers
+ * that build contexts for many shots of one sequence load them once and pass
+ * them in, turning an O(shots) read pattern into O(1).
+ */
+export type ShotPromptContextRefs = {
+  characters: Awaited<ReturnType<ScopedDb['characters']['listWithSheets']>>;
+  locations: Awaited<
+    ReturnType<ScopedDb['sequenceLocations']['listWithReferences']>
+  >;
+  elements: Awaited<ReturnType<ScopedDb['sequenceElements']['list']>>;
+  style: Awaited<ReturnType<ScopedDb['styles']['getById']>>;
+};
+
 export async function loadShotPromptContext(args: {
   scopedDb: Pick<
     ScopedDb,
@@ -60,6 +74,8 @@ export async function loadShotPromptContext(args: {
    * motion-prompt hash (#929). Callers pass `shot.thumbnailUrl`.
    */
   startingFrameImageUrl?: string | null;
+  /** Pre-loaded sequence rows; when absent they are read here. */
+  refs?: ShotPromptContextRefs;
 }): Promise<ShotPromptContext> {
   const {
     scopedDb,
@@ -67,6 +83,7 @@ export async function loadShotPromptContext(args: {
     scene,
     analysisModelOverride,
     startingFrameImageUrl,
+    refs,
   } = args;
 
   if (!sequence.styleId) {
@@ -75,12 +92,14 @@ export async function loadShotPromptContext(args: {
     );
   }
 
-  const [characters, locations, elements, style] = await Promise.all([
-    scopedDb.characters.listWithSheets(sequence.id),
-    scopedDb.sequenceLocations.listWithReferences(sequence.id),
-    scopedDb.sequenceElements.list(sequence.id),
-    scopedDb.styles.getById(sequence.styleId),
-  ]);
+  const [characters, locations, elements, style] = refs
+    ? [refs.characters, refs.locations, refs.elements, refs.style]
+    : await Promise.all([
+        scopedDb.characters.listWithSheets(sequence.id),
+        scopedDb.sequenceLocations.listWithReferences(sequence.id),
+        scopedDb.sequenceElements.list(sequence.id),
+        scopedDb.styles.getById(sequence.styleId),
+      ]);
 
   if (!style) {
     throw new Error(`Style ${sequence.styleId} not found`);
@@ -123,6 +142,7 @@ export async function loadNarrowShotPromptContext(args: {
   scene: Scene;
   analysisModelOverride?: string | null;
   startingFrameImageUrl?: string | null;
+  refs?: ShotPromptContextRefs;
 }): Promise<ShotPromptContext> {
   const full = await loadShotPromptContext(args);
   return narrowShotPromptContext(full);

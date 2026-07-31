@@ -31,7 +31,7 @@ import {
   useSceneShotStaleness,
   useSequenceShotStaleness,
 } from '@/hooks/use-shot-staleness';
-import { isInsufficientCreditsError } from '@/lib/errors';
+import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
 import { sequenceKeys, useSequence } from '@/hooks/use-sequences';
 import {
   shotKeys,
@@ -481,8 +481,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           {
             onError: (error) => {
               toast.error('Failed to restore alternate', {
-                description:
-                  error instanceof Error ? error.message : 'Unknown error',
+                description: errorMessage(error),
               });
             },
           }
@@ -501,8 +500,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           },
           onError: (error) => {
             toast.error('Failed to discard alternate', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -534,8 +532,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           },
           onError: (error) => {
             toast.error('Failed to promote alternate', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -1119,7 +1116,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         });
       } else {
         toast.error('Failed to retry', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
     } finally {
@@ -1368,7 +1365,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   effectiveTab === 'image-prompt' &&
                   curSelectedShotId &&
                   !regeneratingImages.has(curSelectedShotId) &&
-                  sceneStaleness?.[curSelectedShotId]?.thumbnail === 'stale'
+                  scopeStaleness?.[curSelectedShotId]?.thumbnail === 'stale'
                     ? 'Out of date'
                     : null
                 }

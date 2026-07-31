@@ -2,7 +2,7 @@ import { IMAGE_MODELS, isValidTextToImageModel } from '@/lib/ai/models';
 import type { ShotVariant, NewShot } from '@/lib/db/schema';
 import {
   computeShotStaleness,
-  UNTRACKED_STALENESS,
+  UNKNOWN_STALENESS,
   type ShotStalenessRefs,
   type ShotStalenessResult,
 } from '@/lib/shots/shot-staleness';
@@ -582,7 +582,7 @@ export const reorderShotsFn = createServerFn({ method: 'POST' })
  * Returns staleness state for a shot's artifacts. Covers the rendered
  * thumbnail plus the visual / motion prompts (stage 4). See
  * `computeShotStaleness` (lib/shots/shot-staleness.ts) for the comparison
- * rules and the three per-artifact states.
+ * rules and the per-artifact states.
  */
 export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
@@ -617,41 +617,63 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
     }
 
     await scopedDb.shots.ensureAnchorFrames(targetShots);
-    const [anchorRows, scriptBySceneId, characters, locations, elements] =
-      await Promise.all([
-        scopedDb.frames.listAnchorsBySequence(sequence.id),
-        loadSelectedScriptsBySequence(scopedDb, sequence.id),
-        scopedDb.characters.listWithSheets(sequence.id),
-        scopedDb.sequenceLocations.listWithReferences(sequence.id),
-        scopedDb.sequenceElements.list(sequence.id),
-      ]);
+    // Loaded once here and threaded into every shot's comparison as `refs`;
+    // without that each shot would re-read all four for both prompt branches.
+    const [
+      anchorRows,
+      scriptBySceneId,
+      characters,
+      locations,
+      elements,
+      style,
+    ] = await Promise.all([
+      scopedDb.frames.listAnchorsBySequence(sequence.id),
+      loadSelectedScriptsBySequence(scopedDb, sequence.id),
+      scopedDb.characters.listWithSheets(sequence.id),
+      scopedDb.sequenceLocations.listWithReferences(sequence.id),
+      scopedDb.sequenceElements.list(sequence.id),
+      sequence.styleId
+        ? scopedDb.styles.getById(sequence.styleId)
+        : Promise.resolve(null),
+    ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-    const refs: ShotStalenessRefs = { characters, locations, elements };
+    const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
     const entries = await Promise.all(
       targetShots.map(async (shot): Promise<[string, ShotStalenessResult]> => {
         const frame = anchorsByShot.get(shot.id);
         if (!frame) {
           // ensureAnchorFrames guarantees an anchor; if it's somehow absent we
-          // have no image surface to compare, so report the shot untracked
-          // rather than dropping it from the result.
+          // can't compare anything, so report the shot unknown rather than
+          // dropping it from the result or claiming it's up to date.
           logger.error(
             `getShotStalenessBatchFn: shot ${shot.id} has no anchor frame`
           );
-          return [shot.id, UNTRACKED_STALENESS];
+          return [shot.id, { ...UNKNOWN_STALENESS }];
         }
         const { scene } = resolveSceneForShot(shot, scriptBySceneId);
-        return [
-          shot.id,
-          await computeShotStaleness({
-            scopedDb,
-            sequence,
-            shot,
-            frame,
-            scene,
-            refs,
-          }),
-        ];
+        try {
+          return [
+            shot.id,
+            await computeShotStaleness({
+              scopedDb,
+              sequence,
+              shot,
+              frame,
+              scene,
+              refs,
+            }),
+          ];
+        } catch (error) {
+          // Per-shot boundary: computeShotStaleness catches its own artifact
+          // branches, but anything escaping it would otherwise reject the whole
+          // batch and blank the scene.
+          logger.error(
+            `getShotStalenessBatchFn: shot ${shot.id} staleness failed`,
+            { err: error }
+          );
+          return [shot.id, { ...UNKNOWN_STALENESS }];
+        }
       })
     );
     return typedFromEntries(entries);

@@ -427,11 +427,14 @@ export function updateQueryCacheFromEvent(
             `shots:${sequenceId}`
           );
           // Namespace-wide: also refreshes the scene-scoped entry that feeds
-          // the scene summary and left-rail dots (#1077).
+          // the scene summary and left-rail dots (#1077). Debounced per
+          // sequence, not per shot — the payload is sequence-wide, so a
+          // per-shot key would fan a burst of shot events into N identical
+          // namespace invalidations, each refetching every shot's hashes.
           debouncedInvalidate(
             queryClient,
             [...shotStalenessNamespace],
-            `shot-staleness:${entityId}`
+            `shot-staleness:${sequenceId}`
           );
           break;
 

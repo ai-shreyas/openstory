@@ -27,14 +27,19 @@ export type StalenessEntityType =
   | 'talent'
   | 'sequence';
 
-export type StalenessIndicatorDensity =
+type StalenessIndicatorDensity =
   | 'inline'
   | 'corner-dot'
   | 'status-line'
   | 'header-chip';
 
+/** The subset the divergent/sheet banners branch on; they render no others. */
+export type BannerDensity = Extract<
+  StalenessIndicatorDensity,
+  'inline' | 'corner-dot'
+>;
+
 type StalenessIndicatorBaseProps = {
-  artifact: StalenessArtifact;
   entityType: StalenessEntityType;
   /** Workflow currently in flight — disables the regenerate trigger and shows a spinner so rapid clicks don't enqueue duplicate runs. */
   isRegenerating?: boolean;
@@ -45,35 +50,44 @@ type StalenessIndicatorProps = StalenessIndicatorBaseProps &
   (
     | {
         density?: 'inline';
+        artifact: StalenessArtifact;
         onRegenerate: () => void;
         onDismiss?: () => void;
       }
     | {
         // Non-interactive: safe to nest inside other interactive parents
         // (e.g. TabsTrigger). No regenerate handler — drive that from the
-        // tab body's inline banner instead.
+        // artifact's own control in the tab body.
         density: 'corner-dot';
+        artifact: StalenessArtifact;
         onRegenerate?: never;
         onDismiss?: never;
       }
     | {
-        // Quiet one-line summary (#1077): amber dot + muted message + an
-        // optional text action. Staleness is a routine editing state, not a
-        // failure — no fill, no triangle. Omit `onRegenerate` for a purely
-        // informational line: the shot-scope summary does this, because each
-        // artifact carries its own Regenerate control on its tab.
+        // Quiet one-line summary (#1077): dot + muted message + an optional
+        // text action. Staleness is a routine editing state, not a failure —
+        // no fill, no triangle. Omit `onRegenerate` for a purely informational
+        // line: the shot-scope summary does this, because each artifact
+        // carries its own Regenerate control on its tab. Covers any mix of
+        // artifacts, so it takes no `artifact`.
         density: 'status-line';
+        artifact?: never;
         onRegenerate?: () => void;
         /** Defaults to "Out of date since your last edit". */
         message?: string;
         /** Defaults to "Update all". */
         actionLabel?: string;
+        /** `'unknown'` — the check itself failed; muted dot, not amber. */
+        tone?: 'stale' | 'unknown';
+        /** Trailing content on the same line, e.g. shot-number chips. */
+        children?: React.ReactNode;
         onDismiss?: never;
       }
     | {
         // Inline chip for an artifact's header row (#1077):
         // `⏺ Outdated · Regenerate`.
         density: 'header-chip';
+        artifact: StalenessArtifact;
         onRegenerate: () => void;
         onDismiss?: never;
       }
@@ -93,23 +107,67 @@ const ARTIFACT_LABEL: Record<StalenessArtifact, string> = {
 export const StalenessIndicator: React.FC<StalenessIndicatorProps> = (
   props
 ) => {
-  const {
-    artifact,
-    entityType,
-    density = 'inline',
-    isRegenerating = false,
-    className,
-  } = props;
+  const { entityType, isRegenerating = false, className } = props;
   const [dismissed, setDismissed] = useState(false);
 
   if (dismissed) return null;
 
+  if (props.density === 'status-line') {
+    const message = props.message ?? 'Out of date since your last edit';
+    const actionLabel = props.actionLabel ?? 'Update all';
+    const unknown = props.tone === 'unknown';
+    return (
+      <div
+        data-slot="staleness-indicator"
+        data-density="status-line"
+        data-tone={props.tone ?? 'stale'}
+        data-entity-type={entityType}
+        aria-live="polite"
+        className={cn(
+          'flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground',
+          className
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className={cn(
+            'h-2 w-2 shrink-0 rounded-full',
+            unknown ? 'bg-muted-foreground/50' : 'bg-amber-500'
+          )}
+        />
+        <span className="min-w-0 truncate">{message}</span>
+        {props.children}
+        {props.onRegenerate && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-2 text-xs"
+            onClick={props.onRegenerate}
+            disabled={isRegenerating}
+            aria-busy={isRegenerating}
+            aria-label={`${actionLabel} — this ${entityType} is out of date`}
+          >
+            {isRegenerating && (
+              <Loader2
+                aria-hidden="true"
+                className="mr-1 h-3 w-3 animate-spin motion-reduce:animate-none"
+              />
+            )}
+            {isRegenerating ? 'Updating…' : actionLabel}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  const { artifact, density = 'inline' } = props;
   const ariaLabel = `Stale ${ARTIFACT_LABEL[artifact]} on this ${entityType} — inputs changed since it was generated`;
 
   if (density === 'corner-dot') {
     // Non-interactive: corner-dot is a presentational signal that nests inside
     // tab triggers and other interactive parents. Regeneration always happens
-    // from the tab body's inline banner where there's room for proper UX.
+    // from the artifact's own control in the tab body.
     const dotLabel = isRegenerating
       ? `Regenerating ${ARTIFACT_LABEL[artifact]}…`
       : ariaLabel;
@@ -143,49 +201,6 @@ export const StalenessIndicator: React.FC<StalenessIndicatorProps> = (
     );
   }
 
-  if (props.density === 'status-line') {
-    const message = props.message ?? 'Out of date since your last edit';
-    const actionLabel = props.actionLabel ?? 'Update all';
-    return (
-      <div
-        data-slot="staleness-indicator"
-        data-density="status-line"
-        data-artifact={artifact}
-        data-entity-type={entityType}
-        className={cn(
-          'flex items-center gap-2 text-xs text-muted-foreground',
-          className
-        )}
-      >
-        <span
-          aria-hidden="true"
-          className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
-        />
-        <span className="min-w-0 flex-1 truncate">{message}</span>
-        {props.onRegenerate && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-6 shrink-0 px-2 text-xs"
-            onClick={props.onRegenerate}
-            disabled={isRegenerating}
-            aria-busy={isRegenerating}
-            aria-label={`${actionLabel} — ${ariaLabel}`}
-          >
-            {isRegenerating && (
-              <Loader2
-                aria-hidden="true"
-                className="mr-1 h-3 w-3 animate-spin motion-reduce:animate-none"
-              />
-            )}
-            {isRegenerating ? 'Updating…' : actionLabel}
-          </Button>
-        )}
-      </div>
-    );
-  }
-
   if (props.density === 'header-chip') {
     return (
       <span
@@ -208,7 +223,7 @@ export const StalenessIndicator: React.FC<StalenessIndicatorProps> = (
           type="button"
           variant="link"
           size="sm"
-          className="h-auto p-0 text-xs"
+          className="h-6 p-0 text-xs"
           onClick={props.onRegenerate}
           disabled={isRegenerating}
           aria-busy={isRegenerating}

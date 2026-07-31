@@ -1,25 +1,22 @@
 import { getShotStalenessBatchFn, getShotStalenessFn } from '@/functions/shots';
-import type { ArtifactStaleness } from '@/lib/shots/shot-staleness';
+import {
+  SHOT_ARTIFACTS,
+  type ShotArtifact,
+  type ShotStalenessResult,
+} from '@/lib/shots/shot-staleness';
 import {
   type QueryClient,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
 
+export type { ShotArtifact };
+
 /**
- * Per-artifact staleness state — see `computeShotStaleness` for the state
- * semantics. `ArtifactStaleness` is imported rather than redeclared so the
- * client and server can't drift on the vocabulary. Only `'stale'` drives UI:
- * `'untracked'` (no hash on file) and `'unknown'` (the comparison failed)
- * both mean "no opinion to surface", so neither shows a regenerate prompt.
+ * The server's result shape, re-exported rather than redeclared so the two
+ * can't drift on either the state vocabulary or the artifact keys.
  */
-
-/** The tracked artifacts, and the source of truth for `ShotStaleness`'s keys. */
-const SHOT_ARTIFACTS = ['thumbnail', 'visualPrompt', 'motionPrompt'] as const;
-
-export type ShotArtifact = (typeof SHOT_ARTIFACTS)[number];
-
-export type ShotStaleness = Record<ShotArtifact, ArtifactStaleness>;
+export type ShotStaleness = ShotStalenessResult;
 
 /** Which of the shot's artifacts are out of date, if any. */
 const staleArtifacts = (staleness: ShotStaleness | undefined): ShotArtifact[] =>
@@ -28,6 +25,15 @@ const staleArtifacts = (staleness: ShotStaleness | undefined): ShotArtifact[] =>
 /** Any artifact on the shot out of date? */
 export const shotIsStale = (staleness: ShotStaleness | undefined): boolean =>
   staleArtifacts(staleness).length > 0;
+
+/**
+ * Any artifact whose comparison failed. Surfaced separately from `shotIsStale`
+ * so a broken check reads as "couldn't check" rather than as "up to date".
+ */
+export const shotStalenessUnknown = (
+  staleness: ShotStaleness | undefined
+): boolean =>
+  SHOT_ARTIFACTS.some((artifact) => staleness?.[artifact] === 'unknown');
 
 /**
  * Invalidation target for anything that moves a shot's staleness (prompt
@@ -39,7 +45,7 @@ export const shotIsStale = (staleness: ShotStaleness | undefined): boolean =>
  */
 export const shotStalenessNamespace = ['shot-staleness'] as const;
 
-export const shotStalenessKey = (shotId: string | undefined) =>
+const shotStalenessKey = (shotId: string | undefined) =>
   [...shotStalenessNamespace, shotId] as const;
 
 /**
@@ -53,9 +59,55 @@ const sceneShotStalenessKey = (sceneId: string | undefined) =>
 const sequenceShotStalenessKey = (sequenceId: string) =>
   [...shotStalenessNamespace, 'sequence', sequenceId] as const;
 
+const isBatchedKey = (key: readonly unknown[]) =>
+  key[1] === 'scene' || key[1] === 'sequence';
+
 /**
- * Shared query for shot staleness — consumers must use this hook rather
- * than an inline `useQuery` so cache invalidation hits one entry.
+ * Optimistically mark one artifact fresh everywhere it is cached — the shot's
+ * own entry plus the batched entries the left-rail dots and scope summary read
+ * from, which would otherwise keep showing the shot stale. Returns a rollback
+ * for the mutation's `onError`.
+ */
+export function markArtifactFresh(
+  queryClient: QueryClient,
+  shotId: string,
+  artifact: ShotArtifact
+): () => void {
+  const rollbacks: Array<() => void> = [];
+
+  const perShotKey = shotStalenessKey(shotId);
+  const perShot = queryClient.getQueryData<ShotStaleness>(perShotKey);
+  if (perShot) {
+    queryClient.setQueryData<ShotStaleness>(perShotKey, {
+      ...perShot,
+      [artifact]: 'fresh',
+    });
+    rollbacks.push(() => queryClient.setQueryData(perShotKey, perShot));
+  }
+
+  const batched = queryClient.getQueriesData<Record<string, ShotStaleness>>({
+    queryKey: shotStalenessNamespace,
+    predicate: (query) => isBatchedKey(query.queryKey),
+  });
+  for (const [key, byShot] of batched) {
+    const entry = byShot?.[shotId];
+    if (!byShot || !entry) continue;
+    queryClient.setQueryData(key, {
+      ...byShot,
+      [shotId]: { ...entry, [artifact]: 'fresh' },
+    });
+    rollbacks.push(() => queryClient.setQueryData(key, byShot));
+  }
+
+  return () => {
+    for (const rollback of rollbacks) rollback();
+  };
+}
+
+/**
+ * Shared query for shot staleness — consumers must use this hook rather than
+ * an inline `useQuery`, and invalidate via `shotStalenessNamespace` so the
+ * batched entries move with it.
  */
 export function useShotStaleness(args: {
   sequenceId: string;

@@ -32,7 +32,7 @@ import {
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
 import type { Database } from '@/lib/db/client';
-import { createShotsMethods, type ShotArtifact } from './shots';
+import { createShotsMethods, type ShotHashArtifact } from './shots';
 import { createShotVariantsMethods } from './shot-variants';
 
 let client: Client;
@@ -265,7 +265,7 @@ describe('talent_sheets.input_hash', () => {
 
 describe('shots.isStale', () => {
   const ARTIFACTS: Array<{
-    artifact: ShotArtifact;
+    artifact: ShotHashArtifact;
     column: 'videoInputHash' | 'audioInputHash';
   }> = [
     { artifact: 'video', column: 'videoInputHash' },

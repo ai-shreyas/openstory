@@ -3,7 +3,10 @@ import {
   ConfigurationError,
   ConnectionError,
   DatabaseError,
+  errorMessage,
   handleApiError,
+  InsufficientCreditsError,
+  isInsufficientCreditsError,
   StorageError,
   ValidationError,
   OpenStoryError,
@@ -159,5 +162,30 @@ describe('handleApiError', () => {
     expect(result.message).toBe('An unknown error occurred');
     expect(result.code).toBe('UNKNOWN_ERROR');
     expect(result.details).toEqual({ originalError: 'string' });
+  });
+});
+
+describe('isInsufficientCreditsError', () => {
+  it('matches our error across the server-fn boundary but not a provider’s', () => {
+    const ours = new InsufficientCreditsError('Insufficient credits for image');
+    // Only the message survives the boundary, so re-throw as a plain Error.
+    expect(isInsufficientCreditsError(new Error(ours.message))).toBe(true);
+
+    // OpenRouter's own balance — pinned in llm-client.test.ts. Routing this to
+    // our billing dialog sends the user to top up an account that is fine.
+    expect(
+      isInsufficientCreditsError(
+        new Error(
+          'Insufficient credits. Add more using https://openrouter.ai/settings/credits'
+        )
+      )
+    ).toBe(false);
+  });
+
+  it('keeps the wire marker out of displayed text', () => {
+    const ours = new InsufficientCreditsError('Insufficient credits for image');
+    expect(errorMessage(new Error(ours.message))).toBe(
+      'Insufficient credits for image'
+    );
   });
 });

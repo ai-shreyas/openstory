@@ -1,5 +1,10 @@
+import { StalenessIndicator } from '@/components/staleness/staleness-indicator';
 import { Button } from '@/components/ui/button';
-import { type ShotStaleness, shotIsStale } from '@/hooks/use-shot-staleness';
+import {
+  type ShotStaleness,
+  shotIsStale,
+  shotStalenessUnknown,
+} from '@/hooks/use-shot-staleness';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
 type SceneStaleShotsProps = {
@@ -8,7 +13,7 @@ type SceneStaleShotsProps = {
   /** Batched staleness for those shots, keyed by shot id (#1077). */
   staleness: Record<string, ShotStaleness> | undefined;
   /**
-   * The staleness check failed. Without this, an errored request is
+   * The staleness request failed. Without this, an errored request is
    * indistinguishable from a clean scene — both render nothing.
    */
   stalenessFailed?: boolean;
@@ -29,19 +34,20 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   stalenessFailed = false,
   onSelectShot,
 }) => {
-  if (stalenessFailed) {
+  // A shot whose comparison failed is reported the same way a failed request
+  // is: we don't know, and saying nothing would read as "up to date".
+  const uncheckable =
+    stalenessFailed ||
+    shots.some((shot) => shotStalenessUnknown(staleness?.[shot.id]));
+
+  if (uncheckable) {
     return (
-      <div
-        data-testid="scene-stale-shots-error"
-        aria-live="polite"
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-      >
-        <span
-          aria-hidden="true"
-          className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/50"
-        />
-        <span>Couldn’t check whether these shots are up to date</span>
-      </div>
+      <StalenessIndicator
+        entityType="sequence"
+        density="status-line"
+        tone="unknown"
+        message="Couldn’t check whether these shots are up to date"
+      />
     );
   }
 
@@ -49,16 +55,11 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   if (staleShots.length === 0) return null;
 
   return (
-    <div
-      data-testid="scene-stale-shots"
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+    <StalenessIndicator
+      entityType="sequence"
+      density="status-line"
+      message="Out of date since your edit"
     >
-      <span
-        aria-hidden="true"
-        className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
-      />
-      <span>Out of date since your edit</span>
-      <span aria-hidden="true">·</span>
       {staleShots.map((shot) => {
         const number = shot.shotNumber ?? shot.orderIndex + 1;
         return (
@@ -67,7 +68,7 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
             type="button"
             variant="outline"
             size="sm"
-            className="h-5 rounded-full px-2 text-xs font-normal"
+            className="h-6 rounded-full px-2 text-xs font-normal"
             onClick={() => onSelectShot(shot.id)}
             aria-label={`Open shot ${number} — out of date`}
           >
@@ -75,6 +76,6 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
           </Button>
         );
       })}
-    </div>
+    </StalenessIndicator>
   );
 };

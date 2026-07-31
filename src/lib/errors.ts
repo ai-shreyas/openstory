@@ -79,28 +79,45 @@ export class NotFoundError extends OpenStoryError {
   }
 }
 
+/**
+ * Stamped into the message because only the message survives the server-fn
+ * boundary — `code` does not. The prose alone can't carry this: providers
+ * throw "Insufficient credits…" about THEIR balance (OpenRouter's is pinned in
+ * `llm-client.test.ts`), and routing that to our billing dialog sends the user
+ * to top up an account that is already fine.
+ */
+const INSUFFICIENT_CREDITS_MARKER = '[INSUFFICIENT_CREDITS]';
+
 export class InsufficientCreditsError extends OpenStoryError {
   constructor(
     message: string = 'Insufficient credits',
     details?: Record<string, unknown>
   ) {
-    super(message, 'INSUFFICIENT_CREDITS', 402, details);
+    super(
+      `${INSUFFICIENT_CREDITS_MARKER} ${message}`,
+      'INSUFFICIENT_CREDITS',
+      402,
+      details
+    );
   }
 }
 
-/**
- * Is this an insufficient-credits failure? Callers gate the billing dialog on
- * it. Server-side the real class survives, so check that first; the message
- * match is the client fallback, where the error crosses the server-fn
- * boundary as a plain `Error` and only the message is left.
- */
+/** Is this OUR insufficient-credits failure? Callers gate the billing dialog on it. */
 export function isInsufficientCreditsError(error: unknown): boolean {
   if (error instanceof InsufficientCreditsError) return true;
   return (
     error instanceof Error &&
-    (error.message.includes('INSUFFICIENT_CREDITS') ||
-      error.message.includes('Insufficient credits'))
+    error.message.includes(INSUFFICIENT_CREDITS_MARKER)
   );
+}
+
+/** Display text for an arbitrary thrown value, minus any internal wire marker. */
+export function errorMessage(
+  error: unknown,
+  fallback = 'Unknown error'
+): string {
+  if (!(error instanceof Error)) return fallback;
+  return error.message.replace(INSUFFICIENT_CREDITS_MARKER, '').trim();
 }
 
 /**

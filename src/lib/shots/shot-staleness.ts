@@ -11,6 +11,7 @@ import {
 } from '@/lib/ai/input-hash';
 import {
   loadNarrowShotPromptContext,
+  type ShotPromptContextRefs,
   type ShotPromptContextSequence,
 } from '@/lib/ai/prompt-context';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
@@ -22,32 +23,28 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'shots', 'staleness']);
 
-/**
- * Per-artifact staleness. Shared vocabulary — the client re-exports this type
- * rather than redeclaring it, so the two can't drift.
- */
-export type ArtifactStaleness = 'stale' | 'fresh' | 'untracked' | 'unknown';
+/** Per-artifact staleness; see `computeShotStaleness` for the state semantics. */
+type ArtifactStaleness = 'stale' | 'fresh' | 'untracked' | 'unknown';
 
-export type ShotStalenessResult = {
-  thumbnail: ArtifactStaleness;
-  visualPrompt: ArtifactStaleness;
-  motionPrompt: ArtifactStaleness;
+/** The tracked artifacts, and the source of truth for the result's keys. */
+export const SHOT_ARTIFACTS = [
+  'thumbnail',
+  'visualPrompt',
+  'motionPrompt',
+] as const;
+
+export type ShotArtifact = (typeof SHOT_ARTIFACTS)[number];
+
+export type ShotStalenessResult = Record<ShotArtifact, ArtifactStaleness>;
+
+/** Nothing could be compared — the batch handler's per-shot failure cases. */
+export const UNKNOWN_STALENESS: ShotStalenessResult = {
+  thumbnail: 'unknown',
+  visualPrompt: 'unknown',
+  motionPrompt: 'unknown',
 };
 
-/** Every artifact unopinionated — the missing-anchor and no-scene cases. */
-export const UNTRACKED_STALENESS: ShotStalenessResult = {
-  thumbnail: 'untracked',
-  visualPrompt: 'untracked',
-  motionPrompt: 'untracked',
-};
-
-export type ShotStalenessRefs = {
-  characters: Awaited<ReturnType<ScopedDb['characters']['listWithSheets']>>;
-  locations: Awaited<
-    ReturnType<ScopedDb['sequenceLocations']['listWithReferences']>
-  >;
-  elements: Awaited<ReturnType<ScopedDb['sequenceElements']['list']>>;
-};
+export type ShotStalenessRefs = ShotPromptContextRefs;
 
 /**
  * Four states per artifact:
@@ -59,15 +56,12 @@ export type ShotStalenessRefs = {
  *                     freshness.
  *   - `'unknown'`   — the comparison itself failed (style deleted mid-flight,
  *                     transient D1 read, malformed row). Distinct from
- *                     `'untracked'`: read paths render both as "no opinion",
- *                     but a WRITE path must not treat "we couldn't tell" as
- *                     "nothing to do" — `computePlan` reports these as skipped
- *                     rather than silently dropping a possibly-stale artifact
- *                     and then claiming the run succeeded.
+ *                     `'untracked'`: the UI renders it as "couldn't check"
+ *                     rather than as silence, so a broken comparison never
+ *                     reads as "up to date".
  *
- * `refs` lets batched callers load the character / location / element lists
- * once for the whole scene/sequence instead of once per shot; when absent
- * they are loaded lazily (only the thumbnail branch needs them).
+ * `refs` lets batched callers load the sequence-scoped rows once for the whole
+ * scene/sequence instead of once per shot; when absent they are loaded lazily.
  */
 export async function computeShotStaleness(args: {
   scopedDb: ScopedDb;
@@ -145,47 +139,52 @@ export async function computeShotStaleness(args: {
   // shots whose cached column was nulled by a pre-fix user-edit. Without
   // the fallback, those shots are stuck at `'untracked'` permanently.
   if (scene) {
-    // Visual prompt history moved to `frame_prompt_versions` (#989); the
-    // cached hash mirror lives on the anchor frame.
-    let referenceHash = frame.visualPromptInputHash;
-    if (!referenceHash) {
-      const fallback =
-        await scopedDb.framePromptVersions.getLatestWithInputHash(frame.id);
-      referenceHash = fallback?.inputHash ?? null;
-    }
-    if (referenceHash) {
-      try {
+    // The fallback read is inside the try: it is exactly the transient-D1 case
+    // the catch exists for, and outside it one bad read rejects the caller's
+    // whole batch.
+    try {
+      // Visual prompt history moved to `frame_prompt_versions` (#989); the
+      // cached hash mirror lives on the anchor frame.
+      let referenceHash = frame.visualPromptInputHash;
+      if (!referenceHash) {
+        const fallback =
+          await scopedDb.framePromptVersions.getLatestWithInputHash(frame.id);
+        referenceHash = fallback?.inputHash ?? null;
+      }
+      if (referenceHash) {
         const latest = await scopedDb.framePromptVersions.getLatest(frame.id);
         const ctx = await loadNarrowShotPromptContext({
           scopedDb,
           sequence,
           scene,
           analysisModelOverride: latest?.analysisModel ?? null,
+          refs,
         });
         const liveHash = await computeVisualPromptInputHash(ctx);
         visualPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
-      } catch (error) {
-        // Context unavailable (e.g., style deleted mid-flight). Report
-        // 'unknown' — fail-open as 'fresh' would silently lie to the user.
-        visualPrompt = 'unknown';
-        logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
-          err: error,
-        });
       }
+    } catch (error) {
+      // Context unavailable (e.g., style deleted mid-flight). Report
+      // 'unknown' — fail-open as 'fresh' would silently lie to the user.
+      visualPrompt = 'unknown';
+      logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
+        err: error,
+      });
     }
   }
 
   if (scene) {
-    let referenceHash = shot.motionPromptInputHash;
-    if (!referenceHash) {
-      const fallback = await scopedDb.shotPromptVersions.getLatestWithInputHash(
-        shot.id,
-        'motion'
-      );
-      referenceHash = fallback?.inputHash ?? null;
-    }
-    if (referenceHash) {
-      try {
+    try {
+      let referenceHash = shot.motionPromptInputHash;
+      if (!referenceHash) {
+        const fallback =
+          await scopedDb.shotPromptVersions.getLatestWithInputHash(
+            shot.id,
+            'motion'
+          );
+        referenceHash = fallback?.inputHash ?? null;
+      }
+      if (referenceHash) {
         const latest = await scopedDb.shotPromptVersions.getLatest(
           shot.id,
           'motion'
@@ -196,15 +195,16 @@ export async function computeShotStaleness(args: {
           scene,
           analysisModelOverride: latest?.analysisModel ?? null,
           startingFrameImageUrl: frame.imageUrl,
+          refs,
         });
         const liveHash = await computeMotionPromptInputHash(ctx);
         motionPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
-      } catch (error) {
-        motionPrompt = 'unknown';
-        logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
-          err: error,
-        });
       }
+    } catch (error) {
+      motionPrompt = 'unknown';
+      logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
+        err: error,
+      });
     }
   }
 

@@ -135,9 +135,25 @@ export const StaleCornerDot: Story = {
 export const StaleStatusLine: Story = {
   args: {
     density: 'status-line',
-    artifact: 'thumbnail',
     entityType: 'shot',
     onRegenerate: () => {},
+  },
+  decorators: [
+    (Story) => (
+      <div className="max-w-xl">
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+/** The comparison itself failed — muted dot, no amber, no action. */
+export const StalenessUnknown: Story = {
+  args: {
+    density: 'status-line',
+    entityType: 'shot',
+    tone: 'unknown',
+    message: 'Couldn’t check whether this shot is up to date',
   },
   decorators: [
     (Story) => (

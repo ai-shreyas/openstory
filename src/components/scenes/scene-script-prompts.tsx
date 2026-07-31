@@ -38,9 +38,10 @@ import {
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import {
   type ShotStaleness,
+  markArtifactFresh,
   shotIsStale,
-  shotStalenessKey,
   shotStalenessNamespace,
+  shotStalenessUnknown,
   useShotStaleness,
 } from '@/hooks/use-shot-staleness';
 import { useSaveSceneScript } from '@/hooks/use-scenes';
@@ -91,7 +92,7 @@ import {
   type SceneFacet,
   type SelectionScope,
 } from '@/lib/scenes/scene-selection';
-import { isInsufficientCreditsError } from '@/lib/errors';
+import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
 import { SceneCastTab } from './scene-cast-tab';
 import { SceneStaleShots } from './scene-stale-shots';
 import { SceneElementsTab } from './scene-elements-tab';
@@ -443,8 +444,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         {
           onError: (error) => {
             toast.error('Failed to switch video version', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -459,7 +459,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     stripeEnabled,
   } = useFalBillingGate();
 
-  const { data: staleness } = useShotStaleness({
+  const { data: staleness, isError: isStalenessError } = useShotStaleness({
     sequenceId,
     shotId: shot?.id,
   });
@@ -501,21 +501,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       // completion swap below should win.
       if (vars.promptType === 'visual') dirtyImageRef.current = false;
       else dirtyMotionRef.current = false;
-      if (!shot?.id) return { previous: undefined };
-      const key = shotStalenessKey(shot.id);
-      await queryClient.cancelQueries({ queryKey: key });
-      const previous = queryClient.getQueryData<ShotStaleness>(key);
-      if (previous) {
-        const promptKey =
-          vars.promptType === 'visual' ? 'visualPrompt' : 'motionPrompt';
-        queryClient.setQueryData<ShotStaleness>(key, {
-          ...previous,
-          [promptKey]: 'fresh',
-        });
-      }
-      return { previous };
+      if (!shot?.id) return { rollback: undefined };
+      await queryClient.cancelQueries({ queryKey: shotStalenessNamespace });
+      const rollback = markArtifactFresh(
+        queryClient,
+        shot.id,
+        vars.promptType === 'visual' ? 'visualPrompt' : 'motionPrompt'
+      );
+      return { rollback };
     },
-    onSuccess: async (result, vars) => {
+    onSuccess: (result, vars) => {
       if (result.alreadyUpToDate) {
         toast.info('Prompt is already up to date');
       } else {
@@ -529,18 +524,14 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             : 'Regenerating motion prompt…'
         );
       }
-      if (shot?.id) {
-        await queryClient.invalidateQueries({
-          queryKey: shotStalenessNamespace,
-        });
-      }
+      // Deliberately no staleness invalidation here: the workflow has only been
+      // enqueued, so a refetch now would answer 'stale' and undo the optimistic
+      // write. The completion event invalidates the namespace instead.
     },
     onError: (error, _vars, context) => {
-      if (context?.previous && shot?.id) {
-        queryClient.setQueryData(shotStalenessKey(shot.id), context.previous);
-      }
+      context?.rollback?.();
       toast.error('Prompt regenerate failed', {
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage(error),
       });
     },
   });
@@ -670,8 +661,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         },
         onError: (error) => {
           toast.error('Failed to save scene', {
-            description:
-              error instanceof Error ? error.message : 'Unknown error',
+            description: errorMessage(error),
           });
         },
       }
@@ -700,7 +690,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         setTimeout(() => setCopiedTab(null), 2000);
       } catch (error) {
         toast.error('Failed to copy', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
     },
@@ -763,7 +753,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       });
     } catch (error) {
       toast.error('Failed to set image', {
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage(error),
       });
     }
   }, [shot, effectiveImageModel, setImageFromVariant]);
@@ -797,7 +787,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       });
     } catch (error) {
       toast.error('Failed to set video', {
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage(error),
       });
     }
   }, [shot, effectiveMotionModel, setVideoFromVariant]);
@@ -898,7 +888,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         });
       } else {
         toast.error('Image generation failed', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
 
@@ -979,7 +969,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         });
       } else {
         toast.error('Motion generation failed', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
 
@@ -1279,7 +1269,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // Anything on this shot out of date? Drives the status line (#1077). The
   // per-prompt optimistic 'fresh' writes clear the relevant term the moment a
   // regenerate is clicked, so the line retracts as the update progresses.
-  const shotHasStale = !!shot && shotIsStale(staleness);
+  // Suppressed while a regenerate is in flight — the busy controls already say
+  // so, and "out of date" over a regenerating still just reads as stuck.
+  const shotBusy = isGenerating || isGeneratingMotion;
+  const shotHasStale = !!shot && !shotBusy && shotIsStale(staleness);
+  // The comparison failed rather than came back clean — say so instead of
+  // rendering the confident silence of an up-to-date shot.
+  const shotStaleUnknown =
+    !!shot &&
+    !shotBusy &&
+    (isStalenessError || shotStalenessUnknown(staleness));
 
   return (
     <Tabs
@@ -1295,11 +1294,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           header instead of the old filled banners. Purely informational: each
           artifact carries its own Regenerate control on its tab, so the
           summary states the condition and the tabs own the action. */}
-      {shot && shotHasStale && (
+      {shotHasStale && (
+        <StalenessIndicator entityType="shot" density="status-line" />
+      )}
+      {shotStaleUnknown && !shotHasStale && (
         <StalenessIndicator
-          artifact="thumbnail"
           entityType="shot"
           density="status-line"
+          tone="unknown"
+          message="Couldn’t check whether this shot is up to date"
         />
       )}
 
