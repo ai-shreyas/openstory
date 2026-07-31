@@ -114,7 +114,7 @@ export function AuthForm({
           otp: DEV_OTP_CODE,
         });
         if (!signIn.error) {
-          posthog.capture('user_signed_in', { method: 'email_otp_dev' });
+          // user_signed_in is captured server-side on session create (#1088).
           await navigate({ to: redirectTo });
           return;
         }
