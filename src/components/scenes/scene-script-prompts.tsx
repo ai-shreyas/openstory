@@ -93,6 +93,7 @@ import {
   type SelectionScope,
 } from '@/lib/scenes/scene-selection';
 import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
+import { useUpdateStaleShots } from '@/hooks/use-update-stale-shots';
 import { SceneCastTab } from './scene-cast-tab';
 import { SceneStaleShots } from './scene-stale-shots';
 import { SceneElementsTab } from './scene-elements-tab';
@@ -463,6 +464,38 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     sequenceId,
     shotId: shot?.id,
   });
+
+  // "Update all" (#1077) — enqueues the durable UpdateStaleShotsWorkflow,
+  // which recomputes staleness server-side and regenerates whatever reads
+  // stale then. This component only picks the scope; the hook polls the run
+  // and reports what it did.
+  const updateStaleShots = useUpdateStaleShots({ sequenceId });
+  const handleUpdateAll = useCallback(() => {
+    if (!shot?.id) return;
+    if (falNeedsBillingSetup) {
+      showFalGate();
+      return;
+    }
+    updateStaleShots.run({ shotId: shot.id });
+  }, [shot?.id, falNeedsBillingSetup, showFalGate, updateStaleShots]);
+  const handleScopeUpdateAll = useCallback(() => {
+    if (!scopeShots || !scopeStaleness) return;
+    if (falNeedsBillingSetup) {
+      showFalGate();
+      return;
+    }
+    updateStaleShots.run({
+      // Undefined at sequence scope → the workflow covers the whole sequence.
+      sceneId: scriptSceneId,
+    });
+  }, [
+    scopeShots,
+    scopeStaleness,
+    scriptSceneId,
+    falNeedsBillingSetup,
+    showFalGate,
+    updateStaleShots,
+  ]);
 
   const {
     items: mentionItems,
@@ -1279,6 +1312,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     !!shot &&
     !shotBusy &&
     (isStalenessError || shotStalenessUnknown(staleness));
+  const isUpdatingAll = updateStaleShots.isRunning;
 
   return (
     <Tabs
@@ -1291,11 +1325,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       className="w-full"
     >
       {/* Staleness status line (#1077) — one quiet summary under the scope
-          header instead of the old filled banners. Purely informational: each
-          artifact carries its own Regenerate control on its tab, so the
-          summary states the condition and the tabs own the action. */}
+          header instead of the old filled banners. "Update all" regenerates
+          only what is stale now — it doesn't cascade into artifacts the
+          regeneration outdates. Video stays a manual pick on its tab. */}
       {shotHasStale && (
-        <StalenessIndicator entityType="shot" density="status-line" />
+        <StalenessIndicator
+          entityType="shot"
+          density="status-line"
+          isRegenerating={isUpdatingAll}
+          onRegenerate={handleUpdateAll}
+        />
       )}
       {shotStaleUnknown && !shotHasStale && (
         <StalenessIndicator
@@ -1307,13 +1346,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       )}
 
       {/* Scene/sequence scope (#1077): same one-line pattern, ending in
-          shot-number chips that navigate down to shot scope. */}
+          shot-number chips that navigate down to shot scope, plus a
+          multi-shot Update all. */}
       {!shot && scopeShots && onSelectShot && (
         <SceneStaleShots
           shots={scopeShots}
           staleness={scopeStaleness}
           stalenessFailed={scopeStalenessFailed}
           onSelectShot={onSelectShot}
+          onUpdateAll={handleScopeUpdateAll}
+          isUpdating={updateStaleShots.isRunning}
         />
       )}
 

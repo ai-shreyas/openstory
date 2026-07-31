@@ -6,6 +6,7 @@ import {
   shotStalenessUnknown,
 } from '@/hooks/use-shot-staleness';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { Loader2 } from 'lucide-react';
 
 type SceneStaleShotsProps = {
   /** The in-scope shots (a scene's, or the whole sequence's), in order. */
@@ -19,6 +20,9 @@ type SceneStaleShotsProps = {
   stalenessFailed?: boolean;
   /** Same handler the left rail uses — lands at shot scope. */
   onSelectShot: (shotId: string) => void;
+  /** Regenerate every artifact that is stale right now across these shots. */
+  onUpdateAll?: () => void;
+  isUpdating?: boolean;
 };
 
 /**
@@ -33,6 +37,8 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   staleness,
   stalenessFailed = false,
   onSelectShot,
+  onUpdateAll,
+  isUpdating = false,
 }) => {
   // A shot whose comparison failed is reported the same way a failed request
   // is: we don't know, and saying nothing would read as "up to date".
@@ -59,6 +65,8 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
       entityType="sequence"
       density="status-line"
       message="Out of date since your edit"
+      isRegenerating={isUpdating}
+      onRegenerate={onUpdateAll}
     >
       {staleShots.map((shot) => {
         const number = shot.shotNumber ?? shot.orderIndex + 1;
@@ -76,6 +84,12 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
           </Button>
         );
       })}
+      {isUpdating && (
+        <Loader2
+          aria-hidden="true"
+          className="h-3 w-3 animate-spin motion-reduce:animate-none"
+        />
+      )}
     </StalenessIndicator>
   );
 };

@@ -67,6 +67,7 @@ declare namespace Cloudflare {
 		MOTION_PROMPT_BATCH_WORKFLOW: Workflow<Parameters<import("./src/server").MotionPromptBatchWorkflow['run']>[0]['payload']>;
 		MOTION_MUSIC_PROMPTS_WORKFLOW: Workflow<Parameters<import("./src/server").MotionMusicPromptsWorkflow['run']>[0]['payload']>;
 		REGENERATE_SHOTS_WORKFLOW: Workflow<Parameters<import("./src/server").RegenerateShotsWorkflow['run']>[0]['payload']>;
+		UPDATE_STALE_SHOTS_WORKFLOW: Workflow<Parameters<import("./src/server").UpdateStaleShotsWorkflow['run']>[0]['payload']>;
 		RECAST_LOCATION_WORKFLOW: Workflow<Parameters<import("./src/server").RecastLocationWorkflow['run']>[0]['payload']>;
 		REPLACE_ELEMENT_WORKFLOW: Workflow<Parameters<import("./src/server").ReplaceElementWorkflow['run']>[0]['payload']>;
 		SCENE_SPLIT_WORKFLOW: Workflow<Parameters<import("./src/server").SceneSplitWorkflow['run']>[0]['payload']>;
@@ -136,6 +137,7 @@ declare namespace Cloudflare {
 		MOTION_PROMPT_BATCH_WORKFLOW: Workflow<Parameters<import("./src/server").MotionPromptBatchWorkflow['run']>[0]['payload']>;
 		MOTION_MUSIC_PROMPTS_WORKFLOW: Workflow<Parameters<import("./src/server").MotionMusicPromptsWorkflow['run']>[0]['payload']>;
 		REGENERATE_SHOTS_WORKFLOW: Workflow<Parameters<import("./src/server").RegenerateShotsWorkflow['run']>[0]['payload']>;
+		UPDATE_STALE_SHOTS_WORKFLOW: Workflow<Parameters<import("./src/server").UpdateStaleShotsWorkflow['run']>[0]['payload']>;
 		RECAST_LOCATION_WORKFLOW: Workflow<Parameters<import("./src/server").RecastLocationWorkflow['run']>[0]['payload']>;
 		REPLACE_ELEMENT_WORKFLOW: Workflow<Parameters<import("./src/server").ReplaceElementWorkflow['run']>[0]['payload']>;
 		SCENE_SPLIT_WORKFLOW: Workflow<Parameters<import("./src/server").SceneSplitWorkflow['run']>[0]['payload']>;
@@ -205,6 +207,7 @@ declare namespace Cloudflare {
 		MOTION_PROMPT_BATCH_WORKFLOW: Workflow<Parameters<import("./src/server").MotionPromptBatchWorkflow['run']>[0]['payload']>;
 		MOTION_MUSIC_PROMPTS_WORKFLOW: Workflow<Parameters<import("./src/server").MotionMusicPromptsWorkflow['run']>[0]['payload']>;
 		REGENERATE_SHOTS_WORKFLOW: Workflow<Parameters<import("./src/server").RegenerateShotsWorkflow['run']>[0]['payload']>;
+		UPDATE_STALE_SHOTS_WORKFLOW: Workflow<Parameters<import("./src/server").UpdateStaleShotsWorkflow['run']>[0]['payload']>;
 		RECAST_LOCATION_WORKFLOW: Workflow<Parameters<import("./src/server").RecastLocationWorkflow['run']>[0]['payload']>;
 		REPLACE_ELEMENT_WORKFLOW: Workflow<Parameters<import("./src/server").ReplaceElementWorkflow['run']>[0]['payload']>;
 		SCENE_SPLIT_WORKFLOW: Workflow<Parameters<import("./src/server").SceneSplitWorkflow['run']>[0]['payload']>;
