@@ -48,8 +48,10 @@ export type ImageGenerationResult = {
     model: string;
     /** Fal endpoint actually submitted to (billing denominator). */
     endpointId: string;
-    /** Fal-reported billed unit count — persisted into transaction metadata
-     * so the pricing cron can derive observed median units (#1069). */
+    /** Fal-reported billed unit count. Recorded as a `model_usage_observations`
+     * sample (the pricing cron's median reads that table, not the credit
+     * ledger) and also spread into the transaction metadata as a billing
+     * trail — see `recordFalUsageStep` (#1069). */
     unitsBilled?: number;
     /** Images this one call rendered. `unitsBilled` covers all of them, so the
      * cron divides by it to get a per-image median (#1069). */
@@ -200,7 +202,11 @@ async function generateImageInternal(
       model: params.model,
       endpointId: endpoint,
       unitsBilled: result.usage?.unitsBilled,
-      numImages: params.numImages,
+      // What the call actually returned, not what it was asked for: the median
+      // divides `unitsBilled` by this, so a partial return (3 of 4 images)
+      // recorded as 4 biases the per-image figure LOW — the direction that
+      // under-gates, which is #1069's failure mode (#1069).
+      numImages: imageUrls.length || params.numImages,
       dimensions: imageUrls.map(() => ({ width: 0, height: 0 })),
       file_sizes: imageUrls.map(() => 0),
       seed: params.seed,

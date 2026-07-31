@@ -22,8 +22,7 @@ import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
 import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
-  falUsageMetadata,
-  recordFalUsage,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { DEFAULT_IMAGE_SIZE } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -276,14 +275,12 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
 
     const imageCostMicros = imageResult.metadata.cost ?? ZERO_MICROS;
     const { teamId, shotId, sequenceId } = input;
-    const falUsage = falUsageMetadata(imageResult.metadata);
-
-    // Outside the deduction guard below: a BYOK or unpriced generation bills
-    // the same units as a charged one, and is the only route off the
-    // unknown-estimate floor for a model we can't price yet (#1069).
-    await step.do('record-fal-usage', async () => {
-      await recordFalUsage(scopedDb, falUsage);
-    });
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const falUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata
+    );
 
     if (imageCostMicros > 0 && teamId && !imageResult.metadata.usedOwnKey) {
       await step.do('deduct-credits', async () => {

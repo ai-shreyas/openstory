@@ -19,8 +19,7 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
-  falUsageMetadata,
-  recordFalUsage,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -134,13 +133,13 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       return await generateImageWithProvider(generationParams, { scopedDb });
     });
 
-    const sheetUsage = falUsageMetadata(imageResult.metadata);
-
-    // Recorded outside the deduction: BYOK generations bill the same units as
-    // charged ones, and deductWorkflowCredits returns early on them (#1069).
-    await step.do('record-fal-usage-sheet', async () => {
-      await recordFalUsage(scopedDb, sheetUsage);
-    });
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const sheetUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata,
+      'record-fal-usage-sheet'
+    );
 
     // Deduct credits for sheet generation (skip if team used own fal key)
     await step.do('deduct-credits-sheet', async () => {
@@ -344,11 +343,13 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       }
     );
 
-    const headshotUsage = falUsageMetadata(headshotResult.metadata);
-
-    await step.do('record-fal-usage-headshot', async () => {
-      await recordFalUsage(scopedDb, headshotUsage);
-    });
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const headshotUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      headshotResult.metadata,
+      'record-fal-usage-headshot'
+    );
 
     // Deduct credits for headshot generation (skip if team used own fal key)
     await step.do('deduct-credits-headshot', async () => {

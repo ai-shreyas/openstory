@@ -35,7 +35,7 @@ const logger = getLogger(['openstory', 'ai', 'fal-cost']);
  * parametric from request params and never need a unit-count signal.
  */
 
-import type { FalPricing } from '@/lib/ai/fal-pricing-data';
+import { FAL_PRICING, type FalPricing } from '@/lib/ai/fal-pricing-data';
 // Type-only: erased at compile, so this adds no runtime edge to the DB schema
 // module and this file stays importable by pure, DB-free callers.
 import type { ObservedUnits } from '@/lib/db/schema/model-pricing';
@@ -95,14 +95,20 @@ const TOKEN_RESOLUTION_DIMENSIONS: Record<
  * so charging from the seed alone under-billed every increase until someone
  * remembered to re-run `bun scripts/update-fal-pricing.ts`.
  *
- * Returns `ZERO_MICROS` and logs an error when pricing is missing or fal did
- * not report `unitsBilled` — we charge nothing rather than guess, so a usage
- * regression surfaces loudly instead of silently mis-billing.
+ * Returns `ZERO_MICROS` when pricing is missing or fal did not report
+ * `unitsBilled` — we charge nothing rather than guess. Both branches go
+ * through `reportMissingBillingCost`, because every caller guards its
+ * deduction behind `cost > 0`, so `deductWorkflowCredits` (the only other
+ * thing that reports a zero charge) is never reached from here.
  *
  * Every caller runs this AFTER fal has generated and billed, inside a retried
  * workflow step, so it must never throw: a rejected promise there discards a
  * finished image and pays fal a second time on the retry. A failed pricing
- * read therefore takes the same deliberate under-charge as missing pricing.
+ * read therefore bills from the static seed rather than charging zero — an
+ * empty `model_pricing` table already resolves to exactly that seed, so this
+ * makes the failure path agree with the cold-start path instead of inventing
+ * a third behaviour. Charging zero here would hand out free generations
+ * platform-wide for as long as the read kept failing.
  */
 export async function falCostFromUnits(
   endpointId: string,
@@ -122,25 +128,41 @@ export async function falCostFromUnits(
       resolved = await getEffectiveFalPricing();
     } catch (err) {
       logger.error(
-        `Failed to read live pricing for ${endpointId} — charging nothing rather than failing a completed generation`,
+        `Failed to read live pricing for ${endpointId} — billing from the static seed`,
         { err, endpointId, unitsBilled }
       );
-      return ZERO_MICROS;
+      resolved = FAL_PRICING;
     }
   }
   const pricing = resolved[endpointId];
   if (!pricing) {
-    logger.error(`No fal pricing data for endpoint: ${endpointId}`);
+    await reportZeroCharge(endpointId, 'no pricing for endpoint', unitsBilled);
     return ZERO_MICROS;
   }
   if (unitsBilled == null || !Number.isFinite(unitsBilled)) {
-    logger.error(
-      `No unitsBilled reported for ${endpointId} — charging nothing`,
-      { unitsBilled }
-    );
+    await reportZeroCharge(endpointId, 'no unitsBilled reported', unitsBilled);
     return ZERO_MICROS;
   }
   return multiplyMicros(pricing.unitPrice, unitsBilled);
+}
+
+/**
+ * Surface a $0 charge on a completed generation. Dynamically imported so this
+ * module stays free of the PostHog/DB edge for callers that only estimate.
+ */
+async function reportZeroCharge(
+  endpointId: string,
+  reason: string,
+  unitsBilled: number | undefined
+): Promise<void> {
+  const { reportMissingBillingCost } =
+    await import('@/lib/billing/billing-observability');
+  reportMissingBillingCost({
+    source: 'fal-cost',
+    modelId: endpointId,
+    description: reason,
+    metadata: { unitsBilled },
+  });
 }
 
 // ============================================================================

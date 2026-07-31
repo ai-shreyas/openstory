@@ -26,8 +26,7 @@ import type { ElementBibleEntry } from '@/lib/ai/scene-analysis.schema';
 import {
   deductWorkflowCredits,
   extractImageCost,
-  falUsageMetadata,
-  recordFalUsage,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -174,13 +173,13 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
           }
         );
 
-        const falUsage = falUsageMetadata(imageResult.metadata);
-
-        // Recorded outside the deduction: BYOK generations bill the same units
-        // as charged ones, and deductWorkflowCredits returns early on them.
-        await step.do(`record-fal-usage-${index}`, async () => {
-          await recordFalUsage(scopedDb, falUsage);
-        });
+        // Before the deduction guard — see recordFalUsageStep (#1069).
+        const falUsage = await recordFalUsageStep(
+          step,
+          scopedDb,
+          imageResult.metadata,
+          `record-fal-usage-${index}`
+        );
 
         await step.do(`deduct-credits-${index}`, async () => {
           await deductWorkflowCredits({

@@ -124,11 +124,22 @@ export async function fetchFalUnitPrices(
     throw new Error(`fal pricing API missing endpoints: ${missing.join(', ')}`);
   }
 
-  return data.prices.map((p) => ({
-    endpointId: p.endpoint_id,
-    unitPriceUsd: p.unit_price,
-    unit: normalizeUnit(p.unit, p.endpoint_id),
-  }));
+  return data.prices.map((p) => {
+    // `unit_price` is untyped JSON. A null or 0 flows through `usdToMicros`
+    // into `unitPriceMicros` as NaN or 0, and `falCostFromUnits` then charges
+    // `NaN`/`0` for every generation on that endpoint with no log of its own —
+    // a silent free-generation switch. Refuse the snapshot instead.
+    if (!Number.isFinite(p.unit_price) || p.unit_price <= 0) {
+      throw new Error(
+        `fal pricing API returned a non-positive unit_price for ${p.endpoint_id}: ${p.unit_price}`
+      );
+    }
+    return {
+      endpointId: p.endpoint_id,
+      unitPriceUsd: p.unit_price,
+      unit: normalizeUnit(p.unit, p.endpoint_id),
+    };
+  });
 }
 
 // ============================================================================
@@ -144,8 +155,31 @@ type EstimateResponse = {
   currency: string;
 };
 
-const ESTIMATE_CONCURRENCY = 5;
-const ESTIMATE_CHUNK_DELAY_MS = 150;
+/**
+ * Pacing for `/pricing/estimate`, which fal rate-limits far harder than
+ * `/pricing`: measured against the live API, even strictly sequential requests
+ * 800ms apart start returning 429 after the third. At the original 5-way
+ * concurrency with a 150ms gap, ~28 of our 33 endpoints came back 429 on every
+ * run — permanently over `MAX_TYPICAL_FETCH_FAILURE_RATIO`, so the refresh
+ * could never record a single `typicalUnitsPerCall`.
+ *
+ * One at a time, ~1s apart, with backoff on 429. That is ~40s of wall clock
+ * for the full endpoint list — irrelevant inside a nightly cron (which is
+ * bounded by wall time, not CPU, and spends this waiting on fetch).
+ */
+const ESTIMATE_CONCURRENCY = 1;
+const ESTIMATE_CHUNK_DELAY_MS = 1_000;
+const ESTIMATE_MAX_ATTEMPTS = 4;
+const ESTIMATE_BACKOFF_MS = 2_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Honour fal's `Retry-After` (seconds) when it sends one. */
+function retryAfterMs(resp: Response, attempt: number): number {
+  const header = Number(resp.headers.get('retry-after'));
+  if (Number.isFinite(header) && header > 0) return header * 1000;
+  return ESTIMATE_BACKOFF_MS * 2 ** (attempt - 1);
+}
 
 /**
  * "fal has no history for this endpoint" and "we failed to ask fal" look
@@ -162,37 +196,56 @@ async function fetchHistoricalCostUsd(
   apiKey: string,
   endpointId: string
 ): Promise<HistoricalCost> {
-  let resp: Response;
-  try {
-    resp = await fetch('https://api.fal.ai/v1/models/pricing/estimate', {
-      method: 'POST',
-      headers: {
-        Authorization: `Key ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        estimate_type: 'historical_api_price',
-        endpoints: { [endpointId]: { call_quantity: 1 } },
-      }),
-    });
-  } catch (error) {
-    logger.warn(`${endpointId}: historical estimate request failed`, {
-      err: error,
-    });
-    return { status: 'failed' };
+  for (let attempt = 1; attempt <= ESTIMATE_MAX_ATTEMPTS; attempt++) {
+    let body: EstimateResponse;
+    try {
+      const resp = await fetch(
+        'https://api.fal.ai/v1/models/pricing/estimate',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Key ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            estimate_type: 'historical_api_price',
+            endpoints: { [endpointId]: { call_quantity: 1 } },
+          }),
+        }
+      );
+      // 429 is the expected steady state here, not an anomaly — retry it.
+      // Any other error status is a real failure worth preserving stored data.
+      if (resp.status === 429 && attempt < ESTIMATE_MAX_ATTEMPTS) {
+        await sleep(retryAfterMs(resp, attempt));
+        continue;
+      }
+      if (!resp.ok) {
+        logger.warn(
+          `${endpointId}: historical estimate HTTP ${resp.status} — preserving stored typicalUnitsPerCall`
+        );
+        return { status: 'failed' };
+      }
+      // Inside the try: a 200 carrying HTML (a CDN error page, a proxy
+      // interstitial) rejects here, and outside it that rejection escapes the
+      // caller's loop and takes down every remaining endpoint — defeating both
+      // this union and the caller's failure-ratio guard.
+      body = await resp.json();
+    } catch (error) {
+      logger.warn(`${endpointId}: historical estimate request failed`, {
+        err: error,
+      });
+      return { status: 'failed' };
+    }
+    if (!Number.isFinite(body.total_cost) || body.total_cost <= 0) {
+      // fal answered and genuinely has no usage history (or the model is free).
+      return { status: 'no-history' };
+    }
+    return { status: 'ok', costUsd: body.total_cost };
   }
-  if (!resp.ok) {
-    logger.warn(
-      `${endpointId}: historical estimate HTTP ${resp.status} — preserving stored typicalUnitsPerCall`
-    );
-    return { status: 'failed' };
-  }
-  const body: EstimateResponse = await resp.json();
-  if (!Number.isFinite(body.total_cost) || body.total_cost <= 0) {
-    // fal answered and genuinely has no usage history (or the model is free).
-    return { status: 'no-history' };
-  }
-  return { status: 'ok', costUsd: body.total_cost };
+  logger.warn(
+    `${endpointId}: historical estimate still rate-limited after ${ESTIMATE_MAX_ATTEMPTS} attempts — preserving stored typicalUnitsPerCall`
+  );
+  return { status: 'failed' };
 }
 
 /** Stable precision for typical units (avoids float noise in diffs). */
@@ -237,7 +290,9 @@ export async function fetchFalTypicalUnits(
         failedEndpoints.add(price.endpointId);
         continue;
       }
-      if (cost.status === 'no-history' || price.unitPriceUsd <= 0) continue;
+      // `fetchFalUnitPrices` guarantees a positive unitPriceUsd, so the only
+      // remaining non-ok status is a genuine absence of history.
+      if (cost.status === 'no-history') continue;
       typicalUnits.set(
         price.endpointId,
         roundTypicalUnits(cost.costUsd / price.unitPriceUsd)

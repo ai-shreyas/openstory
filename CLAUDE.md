@@ -224,6 +224,10 @@ More reliable than HTML docs; essential for `src/lib/ai/models.ts`. **For new mo
 
 Motion status checking: `checkMotionStatus(statusUrl)`, `getMotionResult(responseUrl)`, `cancelMotionGeneration(cancelUrl)` from `@/lib/services/motion.service`, or `bun scripts/check-motion-status.ts <url>`.
 
+**Pricing is DB-backed (#1069).** `model_pricing` in D1 is the runtime source for estimation and billing; `src/lib/ai/fal-pricing-data.ts` is a **generated** seed the table layers over field-wise, so an empty table means "no overrides", not "no pricing". Never hand-edit the seed — `bun scripts/update-fal-pricing.ts` (needs `FAL_PRICING_KEY`). `bun dev` never fires `scheduled()`, so fill the table locally with `bun scripts/refresh-fal-pricing.ts` (needs `FAL_KEY`).
+
+**Cron jobs need wiring in three places** (like Workflows): `wrangler.jsonc` `triggers.crons` in the **default** block, the same in **`[env.production]`** (non-inheritable), and the constant `scheduled()` string-matches on (e.g. `FAL_PRICING_CRON`). Drift is silent — an unmatched expression falls through to the 5-minute reconcile sweep, which _succeeds_, so the job just never runs. `src/lib/cron/refresh-fal-pricing.test.ts` enforces it.
+
 ---
 
 ## Server-side export (API)

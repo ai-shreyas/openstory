@@ -45,10 +45,11 @@ type WorkflowDeductionOpts = {
 /**
  * Deduct credits for a completed workflow generation.
  *
- * - Skips if scopedDb is undefined (no team context)
- * - Skips if costMicros <= 0
- * - Skips if the team used their own API key (usedOwnKey = true)
- * - Warns and skips if the team has insufficient credits (work already done)
+ * The two branches that aren't a plain skip, in the order the body checks them:
+ * - `costMicros <= 0` reports through `reportMissingBillingCost` — a completed
+ *   generation with nothing to bill is a pricing bug, not a free call.
+ * - insufficient credits warns and skips rather than throwing (the work is
+ *   already done and paid for at fal), and fires an auto-top-up attempt.
  */
 export async function deductWorkflowCredits(
   opts: WorkflowDeductionOpts
@@ -110,12 +111,11 @@ export type FalUsage = {
 };
 
 /**
- * Narrow a generation result's metadata to the usage fields, for spreading into
- * a credit transaction's metadata so a charge can be traced back to its units.
- * Recording an observation takes the result metadata directly — this is only
- * for the billing trail.
+ * Narrow a generation result's metadata to the usage fields. The result feeds
+ * both the observation write (`recordFalUsage`) and the credit transaction's
+ * metadata, so a charge can be traced back to the units behind it.
  */
-export function falUsageMetadata(metadata: FalUsage): FalUsage {
+function falUsageMetadata(metadata: FalUsage): FalUsage {
   return {
     endpointId: metadata.endpointId,
     unitsBilled: metadata.unitsBilled,
@@ -132,9 +132,12 @@ export function falUsageMetadata(metadata: FalUsage): FalUsage {
  * model has no other route off the `UNKNOWN_ESTIMATE_FLOOR`. Its own step also
  * makes the insert replay-safe: outside one, a workflow replay re-records.
  *
- * Best-effort: a failure here must never fail a generation that already
- * succeeded and was already paid for, so it logs rather than throws. Samples
- * with no `unitsBilled` carry no signal and are skipped.
+ * Errors propagate. The caller's `step.do` isolates them from the generation —
+ * a retry re-runs only this insert, never the fal call — so swallowing them
+ * here would make the step always succeed and throw away the free retry the
+ * step exists for. Samples are the only route off `UNKNOWN_ESTIMATE_FLOOR`,
+ * and the endpoints that need them most are the low-volume ones where losing
+ * one of five delays the median by days.
  */
 export async function recordFalUsage(
   scopedDb: ScopedDb | undefined,
@@ -149,19 +152,45 @@ export async function recordFalUsage(
     !Number.isFinite(unitsBilled) ||
     unitsBilled <= 0
   ) {
-    return;
-  }
-  try {
-    await scopedDb.modelUsage.record({
-      provider: 'fal',
+    // Named, because an endpoint that never reports unitsBilled never earns a
+    // median and sits on the estimate floor forever, while the refresh cron
+    // reports a healthy `observedEndpoints` count. Silence here makes "cold"
+    // and "broken" identical.
+    logger.warn('fal generation reported no usable unitsBilled — no sample', {
       endpointId: usage.endpointId,
       unitsBilled,
-      numImages: usage.numImages,
     });
-  } catch (err) {
-    logger.error('Failed to record fal usage observation', {
-      err,
-      endpointId: usage.endpointId,
-    });
+    return;
   }
+  await scopedDb.modelUsage.record({
+    provider: 'fal',
+    endpointId: usage.endpointId,
+    unitsBilled,
+    numImages: usage.numImages,
+  });
+}
+
+/**
+ * Record one fal usage sample in its own workflow step.
+ *
+ * The step must sit BEFORE the `cost > 0 && !usedOwnKey` deduction guard: BYOK
+ * and unpriced generations bill the same units as charged ones, and an
+ * unpriced model has no other route off `UNKNOWN_ESTIMATE_FLOOR` (#1069). The
+ * separate step also makes the insert replay-safe — outside one, a workflow
+ * replay re-records the same sample and skews the median.
+ *
+ * Returns the narrowed usage so the caller can spread it into the deduction's
+ * transaction metadata without re-deriving it.
+ */
+export async function recordFalUsageStep(
+  step: { do: (name: string, fn: () => Promise<void>) => Promise<void> },
+  scopedDb: ScopedDb | undefined,
+  metadata: FalUsage,
+  stepName = 'record-fal-usage'
+): Promise<FalUsage> {
+  const usage = falUsageMetadata(metadata);
+  await step.do(stepName, async () => {
+    await recordFalUsage(scopedDb, usage);
+  });
+  return usage;
 }

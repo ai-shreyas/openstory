@@ -35,8 +35,7 @@ import {
 import {
   deductWorkflowCredits,
   extractImageCost,
-  falUsageMetadata,
-  recordFalUsage,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -171,13 +170,13 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
           );
         });
 
-        const posterUsage = falUsageMetadata(posterResult.metadata);
-
-        // Recorded outside the deduction: BYOK generations bill the same units
-        // as charged ones, and deductWorkflowCredits returns early on them.
-        await step.do('record-fal-usage-poster', async () => {
-          await recordFalUsage(scopedDb, posterUsage);
-        });
+        // Before the deduction guard — see recordFalUsageStep (#1069).
+        const posterUsage = await recordFalUsageStep(
+          step,
+          scopedDb,
+          posterResult.metadata,
+          'record-fal-usage-poster'
+        );
 
         await step.do('deduct-poster-credits', async () => {
           await deductWorkflowCredits({

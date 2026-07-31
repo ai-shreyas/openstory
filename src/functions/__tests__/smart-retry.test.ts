@@ -44,8 +44,10 @@ vi.doMock('@/lib/billing/preflight', () => ({
   requireCredits: requireCreditsMock,
 }));
 
-// The live pricing loader reads D1 (unavailable under node tests) — estimates
-// here should come from the static seed, i.e. an empty live overlay.
+// The live pricing loader reads D1 (unavailable under node tests). Returning
+// the seed verbatim is what an EMPTY `model_pricing` table produces in
+// production too — `getEffectiveFalPricing` starts from `{ ...FAL_PRICING }`
+// and layers rows over it — so these estimates match a fresh deploy's.
 vi.doMock('@/lib/ai/fal-pricing-live', async () => {
   const { FAL_PRICING } = await import('@/lib/ai/fal-pricing-data');
   return { getEffectiveFalPricing: async () => FAL_PRICING };
@@ -503,7 +505,7 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
           estimateImageCost('gpt_image_2', '16:9', 1, { pricing: FAL_PRICING }),
           {
             model: 'gpt_image_2',
-            operation: 'smart-retry:motion',
+            operation: 'smart-retry:image',
           }
         )
       ),
@@ -511,7 +513,7 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
         estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
         {
           model: 'flux_2_max',
-          operation: 'smart-retry:motion',
+          operation: 'smart-retry:image',
         }
       )
     );
@@ -589,7 +591,7 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
           estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
           {
             model: 'flux_2_max',
-            operation: 'smart-retry:motion',
+            operation: 'smart-retry:image',
           }
         )
       )

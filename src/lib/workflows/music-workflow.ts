@@ -18,8 +18,7 @@ import { generateMusic } from '@/lib/audio/music-generation';
 import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
-  falUsageMetadata,
-  recordFalUsage,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -103,14 +102,15 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
     // Deduct credits (skip if team used own fal key)
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
     const musicCostMicros = audioResult.metadata?.cost ?? ZERO_MICROS;
-    const falUsage = falUsageMetadata(audioResult.metadata);
-
-    // Outside the deduction guard below: a BYOK or unpriced generation bills
-    // the same units as a charged one, and is the only route off the
-    // unknown-estimate floor for a model we can't price yet (#1069).
-    await step.do('record-fal-usage', async () => {
-      await recordFalUsage(scopedDb, falUsage);
-    });
+    // Before the deduction guard — see recordFalUsageStep (#1069). Guarded
+    // like the `?.` reads above: those encode a belief that `metadata` can be
+    // absent at runtime despite the type, and an unguarded deref here would
+    // throw a TypeError *after* fal generated and billed the track, failing
+    // the workflow over a piece of telemetry.
+    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
+    const falUsage = audioResult.metadata
+      ? await recordFalUsageStep(step, scopedDb, audioResult.metadata)
+      : undefined;
 
     if (musicCostMicros > 0 && !audioResult.metadata.usedOwnKey) {
       await step.do('deduct-credits', async () => {

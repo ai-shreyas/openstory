@@ -6,6 +6,7 @@ import {
   type TextToImageModel,
 } from '@/lib/ai/models';
 import {
+  estimateAudioCost,
   estimateImageCost,
   estimateLLMCost,
   estimateStoryboardCost,
@@ -39,15 +40,20 @@ const motionContribution = (model: ImageToVideoModel) =>
   Number(estimateVideoCost(model, DURATION, { pricing: FAL_PRICING })) *
   SCENE_COUNT;
 
-/** Per-sequence music cost a single audio model adds to the storyboard. */
+/**
+ * Per-sequence music cost a single audio model adds to the storyboard.
+ *
+ * Computed INDEPENDENTLY of `estimateStoryboardCost`, like
+ * `motionContribution` above. Defining it as a difference of the function
+ * under test made every assertion below `X - Y === X - Y`: tripling the
+ * per-model music cost left the whole suite green, so the magnitude was
+ * untested and only the bookkeeping was checked.
+ *
+ * The duration mirrors the default the estimator derives when
+ * `audioDurationSeconds` is omitted.
+ */
 const audioContribution = (model: AudioModel) =>
-  Number(
-    estimateStoryboardCost({
-      ...base,
-      autoGenerateMusic: true,
-      audioModels: [model],
-    })
-  ) - Number(estimateStoryboardCost({ ...base, autoGenerateMusic: false }));
+  Number(estimateAudioCost(model, SCENE_COUNT * 5, { pricing: FAL_PRICING }));
 
 describe('estimateStoryboardCost', () => {
   it('adds exactly one extra per-shot image pass per image model', () => {

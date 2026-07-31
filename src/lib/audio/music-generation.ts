@@ -47,8 +47,10 @@ export type MusicResult = {
     provider: string;
     /** Fal endpoint submitted to (billing denominator). */
     endpointId: string;
-    /** Fal-reported billed unit count — persisted into transaction metadata
-     * so the pricing cron can derive observed median units (#1069). */
+    /** Fal-reported billed unit count. Recorded as a `model_usage_observations`
+     * sample (the pricing cron's median reads that table, not the credit
+     * ledger) and also spread into the transaction metadata as a billing
+     * trail — see `recordFalUsageStep` (#1069). */
     unitsBilled?: number;
     duration: number;
     cost: Microdollars;

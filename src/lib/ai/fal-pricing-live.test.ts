@@ -56,7 +56,11 @@ describe('getEffectiveFalPricing', () => {
     vi.resetModules();
   });
 
-  it('keeps the seeded typicalUnitsPerCall when the column is null', async () => {
+  it('honours a null typicalUnitsPerCall on a present row as "fal has no history"', async () => {
+    // The cron preserves the stored figure whenever a fetch merely FAILED, so
+    // a null that survives to the table is fal's actual answer. Reading the
+    // seed here would resurrect a figure the cron deliberately cleared, and no
+    // model fal stops reporting on could ever shed it.
     const seeded = FAL_PRICING['openai/gpt-image-2']?.typicalUnitsPerCall;
     expect(seeded).toBeGreaterThan(0); // guard the fixture, not the code
 
@@ -65,7 +69,28 @@ describe('getEffectiveFalPricing', () => {
     ]);
 
     const merged = (await getEffectiveFalPricing())['openai/gpt-image-2'];
-    expect(merged?.typicalUnitsPerCall).toBe(seeded);
+    expect(merged?.typicalUnitsPerCall).toBeUndefined();
+    // The rest of the seed still merges field-wise (#1062).
+    expect(merged?.unit).toBe('images');
+  });
+
+  it('drops an endpoint with two rows rather than billing an arbitrary rate', async () => {
+    // Legitimate mid-re-denomination state. The map is keyed by endpointId
+    // alone, so picking the last row would multiply unitsBilled by whichever
+    // rate happened to sort last — a wrong charge, not a wrong estimate. Gone
+    // from the map, it gates on the floor and reports a $0 charge; both are
+    // visible, an arbitrary winner is not.
+    const { getEffectiveFalPricing } = await loadWithRows([
+      row({ endpointId: 'openai/gpt-image-2', unit: 'images' }),
+      row({
+        endpointId: 'openai/gpt-image-2',
+        unit: 'compute_seconds',
+        unitPriceMicros: 170,
+      }),
+    ]);
+
+    const map = await getEffectiveFalPricing();
+    expect(map['openai/gpt-image-2']).toBeUndefined();
   });
 
   it('takes the live unit price over the seed', async () => {

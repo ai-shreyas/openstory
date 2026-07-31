@@ -180,7 +180,11 @@ describe('recordFalUsage', () => {
     expect(recordUsage).not.toHaveBeenCalled();
   });
 
-  it('swallows a write failure — telemetry must never fail a paid generation', async () => {
+  it('propagates a write failure so the caller’s step.do can retry it', async () => {
+    // Swallowing this made the enclosing `step.do` always succeed, throwing
+    // away the free retry it exists for. The step isolates the failure from
+    // the generation — a retry re-runs only this insert, never the fal call —
+    // and samples are the only route off UNKNOWN_ESTIMATE_FLOOR (#1069).
     const { scopedDb, recordUsage } = makeScopedDb();
     recordUsage.mockRejectedValue(new Error('D1 unavailable'));
 
@@ -189,6 +193,6 @@ describe('recordFalUsage', () => {
         endpointId: 'fal-ai/nano-banana-2',
         unitsBilled: 1.5,
       })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow('D1 unavailable');
   });
 });

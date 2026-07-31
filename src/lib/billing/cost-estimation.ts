@@ -24,6 +24,7 @@ import {
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { aspectRatioToDimensions } from '@/lib/constants/aspect-ratios';
 import { getLogger } from '@/lib/observability/logger';
+import { reportFlooredEstimate } from './billing-observability';
 import { type Microdollars, addMicros, micros, multiplyMicros } from './money';
 
 const logger = getLogger(['openstory', 'billing', 'cost-estimation']);
@@ -92,11 +93,12 @@ const reportedUnpriced = new Set<string>();
  * exists, otherwise the conservative floor per call. Display paths should
  * NOT use this — show nothing for null instead of a made-up figure.
  *
- * The first substitution per model+operation in each isolate is logged (see
- * `reportedUnpriced`). That names WHICH models are running on a made-up
- * number; it deliberately does not count HOW OFTEN, since a per-shot loop
- * would emit one identical line per shot. If the rate ever matters, count it
- * as an event rather than un-deduping this log.
+ * Two signals, deliberately different: the log names WHICH models run on a
+ * made-up number and dedupes per model+operation per isolate, because a
+ * per-shot loop would otherwise emit one identical line per shot; the PostHog
+ * event counts HOW OFTEN and fires every time. Without the second, "this model
+ * has been on the floor for six weeks" is unanswerable — which is the state
+ * #1069 lived in.
  */
 export function gateEstimate(
   estimate: Microdollars | null,
@@ -106,6 +108,12 @@ export function gateEstimate(
   if (estimate !== null) return estimate;
 
   const floored = multiplyMicros(UNKNOWN_ESTIMATE_FLOOR, numCalls);
+  reportFlooredEstimate({
+    model: context.model,
+    operation: context.operation,
+    numCalls,
+    floorMicros: Number(floored),
+  });
   const key = `${context.model}:${context.operation}`;
   if (!reportedUnpriced.has(key)) {
     reportedUnpriced.add(key);

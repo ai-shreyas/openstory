@@ -31,8 +31,7 @@ import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
 import { microsToUsd, type Microdollars } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
-  falUsageMetadata,
-  recordFalUsage,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
@@ -660,7 +659,13 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       model,
       (input.referenceImages?.length ?? 0) > 0
     );
-    const actualCost = await falCostFromUnits(billedEndpointId, billedUnits);
+    // In its own step: this reads live pricing from D1, and every fal
+    // interaction above is already memoized in completed steps, so a failed
+    // read replays just this lookup instead of falling through to a $0 charge
+    // that the `actualCost > 0` guard below would silently skip (#1069).
+    const actualCost = await step.do('price-motion-generation', async () =>
+      falCostFromUnits(billedEndpointId, billedUnits)
+    );
 
     await step.do('record-motion-observation', async () => {
       recordMotionObservation({
@@ -674,16 +679,10 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       });
     });
 
-    const falUsage = falUsageMetadata({
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const falUsage = await recordFalUsageStep(step, scopedDb, {
       endpointId: billedEndpointId,
       unitsBilled: billedUnits,
-    });
-
-    // Outside the deduction guard below: a BYOK or unpriced generation bills
-    // the same units as a charged one, and is the only route off the
-    // unknown-estimate floor for a model we can't price yet (#1069).
-    await step.do('record-fal-usage', async () => {
-      await recordFalUsage(scopedDb, falUsage);
     });
 
     // Deduct credits (skip if team used own fal key). Routed through
