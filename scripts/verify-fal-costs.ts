@@ -19,11 +19,8 @@
  */
 
 import { estimateFalCost } from '@/lib/ai/fal-cost';
-// This CLI runs outside the Worker, so it cannot read the live `model_pricing`
-// table — it verifies the checked-in seed against fal's actual usage, which is
-// what `bun scripts/update-fal-pricing.ts` writes. Passed explicitly because
-// estimators no longer default to it.
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+// Verifies the local `model_pricing` snapshot against fal's actual usage.
+import { loadLocalFalPricing } from './load-local-fal-pricing';
 import {
   AUDIO_MODELS,
   IMAGE_MODELS,
@@ -38,6 +35,8 @@ import { typedEntries } from '@/lib/utils/typed-object';
 import { createFalClient } from '@fal-ai/client';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+
+const FAL_PRICING = await loadLocalFalPricing();
 // ============================================================================
 // Configuration
 // ============================================================================

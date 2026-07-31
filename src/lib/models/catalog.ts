@@ -334,6 +334,16 @@ async function fetchCatalogModels(params: {
 }
 
 /**
+ * Every runnable (non-deprecated, catalog-activity) fal endpoint id the
+ * Models feature can browse. Used by the pricing refresh cron so every
+ * user-runnable model has a `model_pricing` row.
+ */
+export async function listCatalogEndpointIds(): Promise<string[]> {
+  const models = await fetchCatalogModels({});
+  return models.map((model) => model.endpointId);
+}
+
+/**
  * List fal model families from the live catalog: the full filtered list is
  * fetched (and TTL-cached), grouped by family (see model-families.ts), and
  * paginated locally over families (see module docs re upstream pagination).

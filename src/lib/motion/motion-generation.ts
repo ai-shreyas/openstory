@@ -197,11 +197,10 @@ export async function pollMotionJob(
 
 /**
  * Pre-flight motion cost estimate + metadata, computed before the job runs.
- * `cost` is a rough estimate used for the credit-availability gate (null =
- * no honest estimate; gate with `gateEstimate`) — the exact charge comes
- * from `falCostFromUnits` once fal reports `unitsBilled`. `pricing` is
- * required — pass `getEffectiveFalPricing()` on server paths, or `FAL_PRICING`
- * to estimate against the seed deliberately.
+ * `cost` is a rough estimate for the credit gate (null = no honest estimate;
+ * gate with `gateEstimate`) — the exact charge comes from `falCostFromUnits`
+ * once fal reports `unitsBilled`. Pass `getEffectiveFalPricing()` as
+ * `pricing` on server paths.
  */
 export function calculateMotionMetadata(
   options: GenerateMotionOptions,

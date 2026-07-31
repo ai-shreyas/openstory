@@ -52,8 +52,7 @@ import {
   type TextToImageModel,
 } from '@/lib/ai/models';
 import { microsToUsd } from '@/lib/billing/money';
-// CLI: no Worker, so no live model_pricing — estimate against the seed.
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+import { loadLocalFalPricing } from './load-local-fal-pricing';
 import {
   aspectRatioSchema,
   type AspectRatio,
@@ -79,6 +78,8 @@ import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { concatClips, downloadTo } from './sample-media';
+
+const FAL_PRICING = await loadLocalFalPricing();
 
 const OUTPUT_DIR = path.join(process.cwd(), 'sample-videos');
 

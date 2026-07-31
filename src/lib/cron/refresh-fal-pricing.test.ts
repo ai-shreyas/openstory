@@ -7,8 +7,8 @@
  *    `FAL_PRICING_CRON` and returns early. If `wrangler.jsonc` drifts, the
  *    refresh never runs AND the drifted expression falls through to the
  *    stuck-job reconcile sweep — which succeeds, so nothing fails. Pricing
- *    just quietly freezes at the seed. (Same three-places problem the
- *    workflow wiring test exists for.)
+ *    just quietly freezes. (Same three-places problem the workflow wiring
+ *    test exists for.)
  *
  * 2. D1's 100-bound-param ceiling. Unit tests run on libsql, which has no
  *    such cap, so an over-wide chunk passes CI and throws only in production
@@ -221,25 +221,58 @@ describe('refreshFalPricing', () => {
   const client = createClient({ url: ':memory:' });
   const db = drizzle({ client });
 
-  /** Load the module with fal's two fetchers stubbed and D1 pointed at libsql. */
+  /** Args the stubbed typical-units fetch was called with, per load(). */
+  let typicalCalledWith: { endpointId: string }[] | undefined;
+  /** Ids the stubbed price fetch was asked about, per load(). */
+  let pricesRequested: string[] | undefined;
+
+  /** Load the module with fal's fetchers stubbed and D1 pointed at libsql. */
   async function load(opts: {
     prices: { endpointId: string; unitPriceUsd: number; unit: string }[];
     typical?: Record<string, number>;
     failed?: string[];
+    /** Endpoints our model configs use; defaults to every priced endpoint. */
+    used?: string[];
+    /** The full catalog listing; defaults to every priced endpoint. */
+    catalog?: string[];
+    /** modelschemas catalog ids (the Models feature's universe). */
+    modelsCatalog?: string[];
+    /** Endpoints whose price fetch errored. */
+    priceFailures?: string[];
   }) {
     vi.resetModules();
+    typicalCalledWith = undefined;
+    pricesRequested = undefined;
     vi.doMock('#db-client', () => ({ getDb: () => db }));
     vi.doMock('#env', () => ({ getEnv: () => ({ FAL_KEY: 'test-key' }) }));
-    vi.doMock('@/lib/ai/fal-endpoints', () => ({
-      getFalEndpointIds: () => opts.prices.map((p) => p.endpointId),
+    vi.doMock('@/lib/models/catalog', () => ({
+      listCatalogEndpointIds: () => Promise.resolve(opts.modelsCatalog ?? []),
+    }));
+    vi.doMock('@/lib/ai/fal-endpoints', async () => ({
+      ...(await vi.importActual('@/lib/ai/fal-endpoints')),
+      getFalEndpointIds: () =>
+        opts.used ?? opts.prices.map((p) => p.endpointId),
     }));
     vi.doMock('@/lib/ai/fal-pricing-fetch', () => ({
-      fetchFalUnitPrices: () => Promise.resolve(opts.prices),
-      fetchFalTypicalUnits: () =>
-        Promise.resolve({
+      fetchFalCatalogIds: () =>
+        Promise.resolve(opts.catalog ?? opts.prices.map((p) => p.endpointId)),
+      fetchFalUnitPrices: (_key: string, ids: string[]) => {
+        pricesRequested = ids;
+        return Promise.resolve({
+          prices: opts.prices,
+          failedEndpoints: opts.priceFailures ?? [],
+        });
+      },
+      fetchFalTypicalUnits: (
+        _key: string,
+        prices: { endpointId: string }[]
+      ) => {
+        typicalCalledWith = prices;
+        return Promise.resolve({
           typicalUnits: new Map(Object.entries(opts.typical ?? {})),
           failedEndpoints: new Set(opts.failed ?? []),
-        }),
+        });
+      },
     }));
     return await import('@/lib/cron/refresh-fal-pricing');
   }
@@ -425,5 +458,100 @@ describe('refreshFalPricing', () => {
     expect(await db.select().from(modelUsageObservations)).toHaveLength(0);
     const [row] = await db.select().from(modelPricing);
     expect(row?.observedMedianUnits).toBeNull();
+  });
+
+  test('aborts when a used endpoint has no price, keeping yesterday’s row', async () => {
+    // Continuing would sweep the used endpoint's row and bill it $0.
+    await db.insert(modelPricing).values(seedRow());
+    const { refreshFalPricing } = await load({
+      prices: [
+        { endpointId: 'fal-ai/other', unitPriceUsd: 0.02, unit: 'images' },
+      ],
+      used: ['fal-ai/flux-2'],
+    });
+
+    await expect(refreshFalPricing()).rejects.toThrow(
+      /no price for used endpoint/
+    );
+    expect(await db.select().from(modelPricing)).toHaveLength(1);
+  });
+
+  test('stores the whole catalog but fetches typical units only for used endpoints', async () => {
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'fal-ai/flux-2',
+          unitPriceUsd: 0.00167,
+          unit: 'compute seconds',
+        },
+        { endpointId: 'some/unused-model', unitPriceUsd: 0.3, unit: 'videos' },
+      ],
+      used: ['fal-ai/flux-2'],
+      catalog: ['fal-ai/flux-2', 'some/unused-model'],
+    });
+
+    const summary = await refreshFalPricing();
+
+    expect(summary.endpoints).toBe(2);
+    const rows = await db.select().from(modelPricing);
+    expect(rows.map((r) => r.endpointId).sort()).toEqual([
+      'fal-ai/flux-2',
+      'some/unused-model',
+    ]);
+    // The estimate API allows ~1 req/s — the full catalog would take ~25 min.
+    expect(typicalCalledWith?.map((p) => p.endpointId)).toEqual([
+      'fal-ai/flux-2',
+    ]);
+  });
+
+  test('asks about the union of fal catalog, modelschemas, unlisted, and used ids', async () => {
+    // The Models feature runs anything modelschemas lists, and the seedance
+    // enterprise endpoints appear in NO listing — all must still get a price.
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'fal-ai/flux-2',
+          unitPriceUsd: 0.00167,
+          unit: 'compute seconds',
+        },
+      ],
+      used: ['fal-ai/flux-2'],
+      catalog: ['fal-ai/flux-2', 'fal-ai/only-on-fal'],
+      modelsCatalog: ['fal-ai/only-on-modelschemas'],
+    });
+
+    await refreshFalPricing();
+
+    expect(pricesRequested).toContain('fal-ai/only-on-fal');
+    expect(pricesRequested).toContain('fal-ai/only-on-modelschemas');
+    expect(pricesRequested).toContain(
+      'bytedance/seedance-2.0/enterprise/text-to-video'
+    );
+    expect(pricesRequested).toContain('fal-ai/flux-2');
+  });
+
+  test('does not sweep an endpoint whose price fetch merely errored', async () => {
+    await db
+      .insert(modelPricing)
+      .values([seedRow(), seedRow({ endpointId: 'fal-ai/erroring' })]);
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'fal-ai/flux-2',
+          unitPriceUsd: 0.00167,
+          unit: 'compute_seconds',
+        },
+      ],
+      used: ['fal-ai/flux-2'],
+      priceFailures: ['fal-ai/erroring'],
+    });
+
+    await refreshFalPricing();
+
+    const rows = await db.select().from(modelPricing);
+    expect(rows.map((r) => r.endpointId).sort()).toEqual([
+      'fal-ai/erroring',
+      'fal-ai/flux-2',
+    ]);
   });
 });

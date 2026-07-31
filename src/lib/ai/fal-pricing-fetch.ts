@@ -1,81 +1,54 @@
 /**
- * Fal pricing API client, shared by `scripts/update-fal-pricing.ts` (bakes the
- * static fallback file) and the daily Worker cron (`refresh-fal-pricing`)
- * that keeps the `model_pricing` D1 table live (#1069).
+ * Fal pricing API client, shared by the daily Worker cron
+ * (`refresh-fal-pricing`) and `bun scripts/refresh-fal-pricing.ts`.
  *
- * Two endpoints:
- * 1. GET /v1/models/pricing — unit_price + unit (billing denominator)
- * 2. POST /v1/models/pricing/estimate (historical_api_price) — fal's typical
- *    cost per generation call, converted to units (cost / unit_price)
+ * 1. GET /v1/models — enumerate the full active catalog (paginated).
+ * 2. GET /v1/models/pricing — unit_price + raw unit, batches of ≤50 ids.
+ * 3. POST /v1/models/pricing/estimate — typical units per call, heavily
+ *    rate-limited (~1 req/s), so only fetched for endpoints we actually use.
+ *
+ * `unit` is stored verbatim — the catalog reports ~30 distinct strings
+ * ("images", "compute seconds", "videos", "5 seconds", even ""). Billing never
+ * needs it (cost = unitsBilled × unitPrice); estimation maps it to a strategy
+ * at read time in `fal-cost.ts`.
  */
-import type { FalUnit } from '@/lib/ai/fal-pricing-data';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'ai', 'fal-pricing-fetch']);
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 // ============================================================================
-// "units" disambiguation
-//
-// The pricing API reports the ambiguous unit `"units"` for several distinct
-// billing kinds (e.g. flat-per-video, per-1000-token, per-image, and per-second
-// all show up as "units"). Tag the known ones so pre-flight ESTIMATION can
-// predict a unit count when historical data is missing. This never affects an
-// actual charge — billing always multiplies fal's reported `unitsBilled` by
-// `unitPrice` regardless of `unit`.
+// Catalog enumeration
 // ============================================================================
 
-const UNITS_KIND: Record<string, FalUnit> = {
-  // Image models with unit "units": unit_price is the billable-unit size, not
-  // a flat per-image dollar price. typicalUnitsPerCall (from historical) is
-  // what makes preflight honest for these (e.g. gpt-image-2 ≈ 0.22 units).
-  'openai/gpt-image-2': 'images',
-  'openai/gpt-image-2/edit': 'images',
-  'fal-ai/phota': 'images',
-  'fal-ai/phota/edit': 'images',
-  'fal-ai/ace-step-1.5': 'seconds',
-  'fal-ai/minimax/hailuo-2.3/pro/image-to-video': 'flat',
-  'bytedance/seedance-2.0/enterprise/v2/image-to-video': 'tokens',
-  'bytedance/seedance-2.0/enterprise/v2/reference-to-video': 'tokens',
+type ModelsPage = {
+  models: { endpoint_id: string }[];
+  has_more: boolean;
+  next_cursor: string | null;
 };
 
-/**
- * Resolve fal's unit string to our billing denominator. **Throws** rather than
- * guessing: `unit` selects the entire estimation branch, so a wrong one is off
- * by orders of magnitude — defaulting an unrecognised unit to 'flat' would
- * estimate Grok Imagine at `unitPrice × 1` ≈ $0.00017 instead of ~$0.05, which
- * is #1069 restored (#1069 follow-up).
- *
- * This runs in an unattended nightly cron as well as the regen script, so a
- * `logger.warn` has no reader. Failing aborts the refresh and preserves
- * yesterday's correct snapshot, which beats writing a guess; in the script it
- * forces the `UNITS_KIND` entry to be added, which is the required action
- * either way.
- */
-function normalizeUnit(apiUnit: string, endpointId: string): FalUnit {
-  const u = apiUnit.toLowerCase();
-  // The bare "units" is ambiguous (flat / per-image / per-1000-token all report
-  // it), so it must be tagged in UNITS_KIND. Everything else is recognised by
-  // substring so variants like "processed megapixels" still resolve.
-  if (u === 'units') {
-    const kind = UNITS_KIND[endpointId];
-    if (!kind) {
+/** All active endpoint ids in fal's catalog (~1,400 as of 2026-07). */
+export async function fetchFalCatalogIds(apiKey: string): Promise<string[]> {
+  const ids: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const url = new URL('https://api.fal.ai/v1/models');
+    url.searchParams.set('status', 'active');
+    if (cursor) url.searchParams.set('cursor', cursor);
+    const resp = await fetch(url, {
+      headers: { Authorization: `Key ${apiKey}` },
+    });
+    if (!resp.ok) {
       throw new Error(
-        `fal pricing: ${endpointId} reports the ambiguous unit "units" with no ` +
-          'UNITS_KIND entry. Add one in src/lib/ai/fal-pricing-fetch.ts — the ' +
-          'billing denominator cannot be guessed.'
+        `fal models API HTTP ${resp.status}: ${await resp.text()}`
       );
     }
-    return kind;
-  }
-  if (u.includes('megapixel')) return 'megapixels';
-  if (u.includes('compute second')) return 'compute_seconds';
-  if (u.includes('second')) return 'seconds';
-  if (u.includes('minute')) return 'minutes';
-  if (u.includes('image')) return 'images';
-  throw new Error(
-    `fal pricing: ${endpointId} reports unrecognised unit "${apiUnit}". Add a ` +
-      'mapping in normalizeUnit (src/lib/ai/fal-pricing-fetch.ts).'
-  );
+    const page: ModelsPage = await resp.json();
+    ids.push(...page.models.map((m) => m.endpoint_id));
+    cursor = page.has_more ? page.next_cursor : null;
+  } while (cursor);
+  return [...new Set(ids)];
 }
 
 // ============================================================================
@@ -86,7 +59,8 @@ export type FalUnitPrice = {
   endpointId: string;
   /** Per-unit price in USD, verbatim from the pricing API. */
   unitPriceUsd: number;
-  unit: FalUnit;
+  /** Raw unit string, verbatim (e.g. "images", "compute seconds", "units"). */
+  unit: string;
 };
 
 type PriceEntry = {
@@ -96,57 +70,137 @@ type PriceEntry = {
   currency: string;
 };
 
+/** The pricing API rejects requests above ~50 endpoint ids. */
+const PRICE_BATCH_SIZE = 50;
+const PRICE_BATCH_DELAY_MS = 200;
+const PRICE_MAX_ATTEMPTS = 3;
+const PRICE_BACKOFF_MS = 2_000;
+
+type PriceBatchResult =
+  | { status: 'ok'; entries: PriceEntry[] }
+  | { status: 'rejected' } // hard 4xx — some id in the batch is refused
+  | { status: 'failed' }; // rate limit / outage, even after retries
+
+async function fetchPriceBatch(
+  apiKey: string,
+  endpoints: string[]
+): Promise<PriceBatchResult> {
+  for (let attempt = 1; attempt <= PRICE_MAX_ATTEMPTS; attempt++) {
+    let entries: PriceEntry[];
+    try {
+      const url = new URL('https://api.fal.ai/v1/models/pricing');
+      url.searchParams.set('endpoint_id', endpoints.join(','));
+      const resp = await fetch(url, {
+        headers: { Authorization: `Key ${apiKey}` },
+      });
+      // Retry throttling/outages with backoff; bisecting on a 429 would only
+      // add requests to an already-throttled endpoint.
+      if (resp.status === 429 || resp.status >= 500) {
+        if (attempt < PRICE_MAX_ATTEMPTS) {
+          await sleep(retryAfterMs(resp, attempt, PRICE_BACKOFF_MS));
+          continue;
+        }
+        return { status: 'failed' };
+      }
+      if (!resp.ok) return { status: 'rejected' };
+      const data: { prices: PriceEntry[] } = await resp.json();
+      entries = data.prices;
+    } catch {
+      if (attempt < PRICE_MAX_ATTEMPTS) {
+        await sleep(PRICE_BACKOFF_MS * attempt);
+        continue;
+      }
+      return { status: 'failed' };
+    }
+    return { status: 'ok', entries };
+  }
+  return { status: 'failed' };
+}
+
 /**
- * Fetch per-unit prices for the given endpoints. Throws when the API fails or
- * omits any requested endpoint — a silently missing price would make billing
- * for that model charge nothing.
+ * Fetch a batch, bisecting on a hard rejection so one id the API refuses
+ * cannot lose the other 49 prices in its batch. Transient failures are not
+ * bisected — the whole batch is reported failed.
+ */
+async function fetchPriceBatchBisecting(
+  apiKey: string,
+  endpoints: string[],
+  failed: string[]
+): Promise<PriceEntry[]> {
+  const result = await fetchPriceBatch(apiKey, endpoints);
+  if (result.status === 'ok') return result.entries;
+  if (result.status === 'failed' || endpoints.length === 1) {
+    failed.push(...endpoints);
+    return [];
+  }
+  const mid = Math.ceil(endpoints.length / 2);
+  return [
+    ...(await fetchPriceBatchBisecting(
+      apiKey,
+      endpoints.slice(0, mid),
+      failed
+    )),
+    ...(await fetchPriceBatchBisecting(apiKey, endpoints.slice(mid), failed)),
+  ];
+}
+
+export type FalUnitPrices = {
+  prices: FalUnitPrice[];
+  /** Requested ids the pricing API errored on (distinct from "no price"). */
+  failedEndpoints: string[];
+};
+
+/**
+ * Fetch per-unit prices for the given endpoints. Ids the API has no price for
+ * are simply absent from the result (~50 of the catalog today); ids it errors
+ * on land in `failedEndpoints`. Non-positive prices are dropped with a log —
+ * a 0 or null price would bill every generation on that endpoint as free.
  */
 export async function fetchFalUnitPrices(
   apiKey: string,
   endpoints: string[]
-): Promise<FalUnitPrice[]> {
-  const url = new URL('https://api.fal.ai/v1/models/pricing');
-  url.searchParams.set('endpoint_id', endpoints.join(','));
-
-  const response = await fetch(url.toString(), {
-    headers: { Authorization: `Key ${apiKey}` },
-  });
-  if (!response.ok) {
-    throw new Error(
-      `fal pricing API HTTP ${response.status}: ${await response.text()}`
+): Promise<FalUnitPrices> {
+  const failedEndpoints: string[] = [];
+  const prices: FalUnitPrice[] = [];
+  for (let i = 0; i < endpoints.length; i += PRICE_BATCH_SIZE) {
+    const batch = endpoints.slice(i, i + PRICE_BATCH_SIZE);
+    const entries = await fetchPriceBatchBisecting(
+      apiKey,
+      batch,
+      failedEndpoints
     );
-  }
-
-  const data: { prices: PriceEntry[] } = await response.json();
-  const found = new Set(data.prices.map((p) => p.endpoint_id));
-  const missing = endpoints.filter((e) => !found.has(e));
-  if (missing.length > 0) {
-    throw new Error(`fal pricing API missing endpoints: ${missing.join(', ')}`);
-  }
-
-  return data.prices.map((p) => {
-    // `unit_price` is untyped JSON. A null or 0 flows through `usdToMicros`
-    // into `unitPriceMicros` as NaN or 0, and `falCostFromUnits` then charges
-    // `NaN`/`0` for every generation on that endpoint with no log of its own —
-    // a silent free-generation switch. Refuse the snapshot instead.
-    if (!Number.isFinite(p.unit_price) || p.unit_price <= 0) {
-      throw new Error(
-        `fal pricing API returned a non-positive unit_price for ${p.endpoint_id}: ${p.unit_price}`
-      );
+    for (const p of entries) {
+      if (!Number.isFinite(p.unit_price) || p.unit_price <= 0) {
+        logger.warn(
+          'fal pricing returned a non-positive unit_price — skipped',
+          {
+            endpointId: p.endpoint_id,
+            unitPrice: p.unit_price,
+          }
+        );
+        continue;
+      }
+      prices.push({
+        endpointId: p.endpoint_id,
+        unitPriceUsd: p.unit_price,
+        unit: p.unit,
+      });
     }
-    return {
-      endpointId: p.endpoint_id,
-      unitPriceUsd: p.unit_price,
-      unit: normalizeUnit(p.unit, p.endpoint_id),
-    };
-  });
+    if (i + PRICE_BATCH_SIZE < endpoints.length) {
+      await sleep(PRICE_BATCH_DELAY_MS);
+    }
+  }
+  if (failedEndpoints.length > 0) {
+    logger.warn('fal pricing API errored on some endpoints', {
+      count: failedEndpoints.length,
+      endpoints: failedEndpoints.slice(0, 10),
+    });
+  }
+  return { prices, failedEndpoints };
 }
 
 // ============================================================================
 // Historical per-call cost → typicalUnitsPerCall
-//
-// fal's estimate API only returns a single total_cost, so we request one
-// endpoint at a time. Concurrency is kept low to avoid rate limits.
 // ============================================================================
 
 type EstimateResponse = {
@@ -157,35 +211,27 @@ type EstimateResponse = {
 
 /**
  * Pacing for `/pricing/estimate`, which fal rate-limits far harder than
- * `/pricing`: measured against the live API, even strictly sequential requests
- * 800ms apart start returning 429 after the third. At the original 5-way
- * concurrency with a 150ms gap, ~28 of our 33 endpoints came back 429 on every
- * run — permanently over `MAX_TYPICAL_FETCH_FAILURE_RATIO`, so the refresh
- * could never record a single `typicalUnitsPerCall`.
- *
- * One at a time, ~1s apart, with backoff on 429. That is ~40s of wall clock
- * for the full endpoint list — irrelevant inside a nightly cron (which is
- * bounded by wall time, not CPU, and spends this waiting on fetch).
+ * `/pricing`: measured live, even sequential requests 800ms apart start
+ * returning 429 after the third. One at a time, ~1s apart, backoff on 429.
  */
-const ESTIMATE_CONCURRENCY = 1;
-const ESTIMATE_CHUNK_DELAY_MS = 1_000;
+const ESTIMATE_DELAY_MS = 1_000;
 const ESTIMATE_MAX_ATTEMPTS = 4;
 const ESTIMATE_BACKOFF_MS = 2_000;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Honour fal's `Retry-After` (seconds) when it sends one. */
-function retryAfterMs(resp: Response, attempt: number): number {
+/** Honour fal's `Retry-After` (seconds), else exponential backoff. */
+function retryAfterMs(
+  resp: Response,
+  attempt: number,
+  backoffMs: number
+): number {
   const header = Number(resp.headers.get('retry-after'));
   if (Number.isFinite(header) && header > 0) return header * 1000;
-  return ESTIMATE_BACKOFF_MS * 2 ** (attempt - 1);
+  return backoffMs * 2 ** (attempt - 1);
 }
 
 /**
- * "fal has no history for this endpoint" and "we failed to ask fal" look
- * identical downstream but must be handled oppositely: the first is a real
- * absence to record, the second must preserve whatever we already stored.
- * Collapsing them let one transient 429 null out good data permanently.
+ * "fal has no history" and "we failed to ask" must be handled oppositely: the
+ * first is a real absence to record, the second must preserve stored data.
  */
 type HistoricalCost =
   | { status: 'ok'; costUsd: number }
@@ -213,10 +259,8 @@ async function fetchHistoricalCostUsd(
           }),
         }
       );
-      // 429 is the expected steady state here, not an anomaly — retry it.
-      // Any other error status is a real failure worth preserving stored data.
       if (resp.status === 429 && attempt < ESTIMATE_MAX_ATTEMPTS) {
-        await sleep(retryAfterMs(resp, attempt));
+        await sleep(retryAfterMs(resp, attempt, ESTIMATE_BACKOFF_MS));
         continue;
       }
       if (!resp.ok) {
@@ -225,10 +269,8 @@ async function fetchHistoricalCostUsd(
         );
         return { status: 'failed' };
       }
-      // Inside the try: a 200 carrying HTML (a CDN error page, a proxy
-      // interstitial) rejects here, and outside it that rejection escapes the
-      // caller's loop and takes down every remaining endpoint — defeating both
-      // this union and the caller's failure-ratio guard.
+      // Inside the try: a 200 carrying HTML (CDN error page) must not escape
+      // and abort every remaining endpoint.
       body = await resp.json();
     } catch (error) {
       logger.warn(`${endpointId}: historical estimate request failed`, {
@@ -237,7 +279,6 @@ async function fetchHistoricalCostUsd(
       return { status: 'failed' };
     }
     if (!Number.isFinite(body.total_cost) || body.total_cost <= 0) {
-      // fal answered and genuinely has no usage history (or the model is free).
       return { status: 'no-history' };
     }
     return { status: 'ok', costUsd: body.total_cost };
@@ -257,19 +298,16 @@ export type FalTypicalUnits = {
   /** Endpoints fal returned a usable historical cost for. */
   typicalUnits: Map<string, number>;
   /**
-   * Endpoints we could not reach. Distinct from "absent from `typicalUnits`",
-   * which also covers endpoints fal answered about but has no history for —
-   * callers must preserve stored values for these rather than null them.
+   * Endpoints we could not reach — callers must preserve stored values for
+   * these. Absent-from-both means fal answered "no history".
    */
   failedEndpoints: Set<string>;
 };
 
 /**
- * Fetch fal's historical per-call cost for each endpoint and convert it to a
- * typical unit count (cost / unit price). Endpoints fal has no usage history
- * for (total_cost 0 — true for every compute-seconds endpoint we use, six at
- * the time of writing, see #1069) are absent from `typicalUnits` and absent
- * from `failedEndpoints`.
+ * Fal's historical per-call cost converted to a unit count (cost / unit
+ * price). Endpoints with no usage history (total_cost 0 — true for every
+ * compute-seconds endpoint we use, #1069) are absent from both outputs.
  */
 export async function fetchFalTypicalUnits(
   apiKey: string,
@@ -277,30 +315,19 @@ export async function fetchFalTypicalUnits(
 ): Promise<FalTypicalUnits> {
   const typicalUnits = new Map<string, number>();
   const failedEndpoints = new Set<string>();
-  for (let i = 0; i < unitPrices.length; i += ESTIMATE_CONCURRENCY) {
-    const chunk = unitPrices.slice(i, i + ESTIMATE_CONCURRENCY);
-    const costs = await Promise.all(
-      chunk.map((p) => fetchHistoricalCostUsd(apiKey, p.endpointId))
-    );
-    for (let j = 0; j < chunk.length; j++) {
-      const price = chunk[j];
-      const cost = costs[j];
-      if (price == null || cost == null) continue;
-      if (cost.status === 'failed') {
-        failedEndpoints.add(price.endpointId);
-        continue;
-      }
-      // `fetchFalUnitPrices` guarantees a positive unitPriceUsd, so the only
-      // remaining non-ok status is a genuine absence of history.
-      if (cost.status === 'no-history') continue;
+  for (let i = 0; i < unitPrices.length; i++) {
+    const price = unitPrices[i];
+    if (!price) continue;
+    const cost = await fetchHistoricalCostUsd(apiKey, price.endpointId);
+    if (cost.status === 'failed') {
+      failedEndpoints.add(price.endpointId);
+    } else if (cost.status === 'ok') {
       typicalUnits.set(
         price.endpointId,
         roundTypicalUnits(cost.costUsd / price.unitPriceUsd)
       );
     }
-    if (i + ESTIMATE_CONCURRENCY < unitPrices.length) {
-      await new Promise((r) => setTimeout(r, ESTIMATE_CHUNK_DELAY_MS));
-    }
+    if (i < unitPrices.length - 1) await sleep(ESTIMATE_DELAY_MS);
   }
   return { typicalUnits, failedEndpoints };
 }

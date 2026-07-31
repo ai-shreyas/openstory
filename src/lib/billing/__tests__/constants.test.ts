@@ -1,7 +1,7 @@
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import { describe, expect, it } from 'vitest';
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
 import {
   SIGNUP_GRANT_MICROS,
   formatProcessingFeePercent,

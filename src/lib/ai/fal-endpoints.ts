@@ -20,3 +20,17 @@ export function getFalEndpointIds(): string[] {
 
   return [...new Set([...video, ...image, ...edit, ...audio, ...motionRef])];
 }
+
+/**
+ * Priceable fal endpoints that appear in NO listing — not fal's active
+ * catalog, not modelschemas — so the pricing refresh must name them
+ * explicitly. Verified against the pricing API when added. Endpoints we use
+ * in model configs don't belong here (`getFalEndpointIds` covers those), and
+ * neither do aliases: fal canonicalizes e.g.
+ * `enterprise/image-to-video` → `enterprise/v2/image-to-video` and omits the
+ * alias from any response that also names the canonical id.
+ */
+export const UNLISTED_FAL_ENDPOINTS = [
+  'bytedance/seedance-2.0/enterprise/text-to-video',
+  'bytedance/seedance-2.0/enterprise/v2/video-to-video',
+];

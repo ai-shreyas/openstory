@@ -1,15 +1,10 @@
 /**
- * Cost Estimation Utilities
- * Estimate generation costs before triggering workflows.
- * All functions return Microdollars for exact arithmetic — or null when no
- * honest estimate exists for the model (#1069; see `estimateFalCost`).
+ * Cost estimation for pre-flight credit gates. Returns Microdollars, or null
+ * when no honest estimate exists (#1069; see `estimateFalCost`).
  *
- * `pricing` is REQUIRED on every estimator. Server paths pass
- * `getEffectiveFalPricing()` (live `model_pricing` — observed median units and
- * current prices); tests pass `FAL_PRICING` to assert against the seed
- * deliberately. It used to be optional and defaulted to the seed, so a call
- * site that forgot it estimated on frozen prices and still looked right.
- * Estimators stay synchronous, so pure callers and tests need no DB.
+ * `pricing` is REQUIRED on every estimator — server paths pass
+ * `getEffectiveFalPricing()`, tests pass a fixture. A default would let a
+ * call site silently estimate on stale data. Estimators stay synchronous.
  */
 
 import { estimateFalCost, type EffectiveFalPricing } from '@/lib/ai/fal-cost';
@@ -33,23 +28,17 @@ type FalPricingMap = Record<string, EffectiveFalPricing>;
 
 /**
  * Conservative per-call floor the credit gate assumes when a model has no
- * honest estimate (null). Over-gating slightly beats under-gating — the
- * unknown compute-seconds models really cost ~$0.02–0.07/image, and the old
- * fabricated default gated Grok Imagine ~98× low (#1069).
- *
- * A model leaves the floor once `MIN_OBSERVED_SAMPLES` of its generations have
- * been recorded AND the nightly cron has folded them into `model_pricing` — so
- * ~5 generations plus up to 24h, not the first one. If a model is still here
- * long after that, the observation pipeline is broken, not merely cold.
+ * honest estimate. Over-gating slightly beats under-gating — the old
+ * fabricated default gated Grok Imagine ~98× low (#1069). A model leaves the
+ * floor once `MIN_OBSERVED_SAMPLES` generations are recorded AND the nightly
+ * cron folds them into `model_pricing` (~5 generations + up to 24h).
  */
 const UNKNOWN_ESTIMATE_FLOOR = micros(100_000); // $0.10 per call
 
 /**
- * Every operation that can gate on the unknown-estimate floor. A closed union
- * rather than `string` because this value is both the `reportedUnpriced` dedup
- * key and the dimension you group the logs by — a typo would silently fork the
- * dedup AND scatter the very observability the floor's existence depends on.
- * Adding a gate means adding a name here, which keeps the taxonomy greppable.
+ * Operations that can gate on the unknown-estimate floor. A closed union: the
+ * value is both the `reportedUnpriced` dedup key and the log-grouping
+ * dimension, so a typo would fork both.
  */
 type GateOperation =
   | 'add-audio-model'
@@ -72,33 +61,20 @@ type GateOperation =
 /** Any model a fal estimate can be gated for. */
 type GateModel = TextToImageModel | ImageToVideoModel | AudioModel;
 
-/**
- * Which model and operation a gate is standing in for, so the floor is
- * debuggable. Both fields are unions, not `string`: every call site already
- * holds a typed model, so widening here would discard that for free.
- */
+/** Which model and operation a gate is standing in for. */
 export type GateContext = { model: GateModel; operation: GateOperation };
 
 /**
- * Models already reported as unpriced in this isolate. Gates run inside
- * per-shot loops (`estimateBatchMotionCost`, `estimateStoryboardCost`), so
- * without this one unpriced model emits an identical error per shot — 50 log
- * lines that say what one says. Isolates recycle often enough that recurrence
- * still shows up in the data.
+ * Models already reported as unpriced in this isolate — gates run inside
+ * per-shot loops, so without dedup one unpriced model logs once per shot.
  */
 const reportedUnpriced = new Set<string>();
 
 /**
- * Resolve an estimate for the credit gate: the honest number when one
- * exists, otherwise the conservative floor per call. Display paths should
- * NOT use this — show nothing for null instead of a made-up figure.
- *
- * Two signals, deliberately different: the log names WHICH models run on a
- * made-up number and dedupes per model+operation per isolate, because a
- * per-shot loop would otherwise emit one identical line per shot; the PostHog
- * event counts HOW OFTEN and fires every time. Without the second, "this model
- * has been on the floor for six weeks" is unanswerable — which is the state
- * #1069 lived in.
+ * Resolve an estimate for the credit gate: the honest number when one exists,
+ * otherwise the conservative floor per call. Display paths should NOT use
+ * this — show nothing for null. The log dedupes per model+operation; the
+ * PostHog event fires every time so the floor's frequency stays countable.
  */
 export function gateEstimate(
   estimate: Microdollars | null,
@@ -217,25 +193,20 @@ export function estimateStoryboardCost(opts: {
   estimatedSceneCount?: number;
   autoGenerateMotion?: boolean;
   /**
-   * Video models selected for per-shot motion (#545). Each model is priced
-   * individually from its own parameters — fal returns no cost, so a uniform
-   * per-model multiplier would mis-estimate a mixed (e.g. cheap + audio-capable)
-   * selection. First is primary; all are billed once per shot.
+   * Video models for per-shot motion (#545). Each is priced from its own
+   * parameters — a uniform multiplier would mis-estimate a mixed selection.
    */
   videoModels?: ImageToVideoModel[];
   videoDurationSeconds?: number;
   autoGenerateMusic?: boolean;
   /**
-   * Audio models selected for the per-sequence music track (#546). Each model
-   * is priced individually from its own parameters — audio models have
-   * genuinely different rates (e.g. ElevenLabs per-minute vs ACE-Step
-   * per-second), so a uniform multiplier would mis-estimate a mixed selection.
-   * First is primary; one track per model spans the sequence.
+   * Audio models for the per-sequence music track (#546). Each is priced from
+   * its own parameters (ElevenLabs per-minute vs ACE-Step per-second).
    */
   audioModels?: AudioModel[];
   /** Total sequence duration in seconds (one music track spans the sequence) */
   audioDurationSeconds?: number;
-  /** Live pricing map from `getEffectiveFalPricing()` (or the seed, explicitly). */
+  /** Live pricing map from `getEffectiveFalPricing()`. */
   pricing: FalPricingMap;
 }): Microdollars {
   const sceneCount = opts.estimatedSceneCount ?? DEFAULT_ESTIMATED_SCENE_COUNT;

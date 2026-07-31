@@ -1,18 +1,11 @@
 /**
- * Workflow Credit Deduction
- * Shared utility for deducting credits after AI generation in workflows.
- * Skips deduction if team used their own API key (BYOK).
- * Warns and skips (rather than throwing) if credits are insufficient,
- * since the work has already been completed at this point.
+ * Workflow credit deduction. Skips BYOK teams; warns and skips (rather than
+ * throwing) on insufficient credits, since the work is already done.
  *
- * Pricing observations are deliberately NOT recorded here. Charging a team and
- * learning what a model bills are independent concerns, and coupling them is
- * what made #1069 self-sealing: every call site guards deduction behind
- * `cost > 0 && !usedOwnKey`, so a recorder living inside this function would
- * never see the BYOK and unpriced generations whose units we most need. Use
- * `recordFalUsage` in its own workflow step instead.
- *
- * All monetary values are in Microdollars.
+ * Pricing observations are deliberately NOT recorded here: call sites guard
+ * deduction behind `cost > 0 && !usedOwnKey`, so a recorder inside this
+ * function would never see the BYOK/unpriced generations whose units we most
+ * need (#1069). Use `recordFalUsage` in its own workflow step instead.
  */
 
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -43,13 +36,9 @@ type WorkflowDeductionOpts = {
 };
 
 /**
- * Deduct credits for a completed workflow generation.
- *
- * The two branches that aren't a plain skip, in the order the body checks them:
- * - `costMicros <= 0` reports through `reportMissingBillingCost` — a completed
- *   generation with nothing to bill is a pricing bug, not a free call.
- * - insufficient credits warns and skips rather than throwing (the work is
- *   already done and paid for at fal), and fires an auto-top-up attempt.
+ * Deduct credits for a completed workflow generation. A `costMicros <= 0` is
+ * reported as a pricing bug, not treated as a free call; insufficient credits
+ * warn, skip, and fire an auto-top-up attempt.
  */
 export async function deductWorkflowCredits(
   opts: WorkflowDeductionOpts
@@ -125,19 +114,10 @@ function falUsageMetadata(metadata: FalUsage): FalUsage {
 
 /**
  * Persist one usage sample for the pricing cron's observed median (#1069).
- *
- * Call this for **every** fal generation, in its own `step.do`, before any
- * `cost > 0 && !usedOwnKey` branching — BYOK and unpriced generations tell us
- * just as much about a model's unit count as billed ones, and an unpriced
- * model has no other route off the `UNKNOWN_ESTIMATE_FLOOR`. Its own step also
- * makes the insert replay-safe: outside one, a workflow replay re-records.
- *
- * Errors propagate. The caller's `step.do` isolates them from the generation —
- * a retry re-runs only this insert, never the fal call — so swallowing them
- * here would make the step always succeed and throw away the free retry the
- * step exists for. Samples are the only route off `UNKNOWN_ESTIMATE_FLOOR`,
- * and the endpoints that need them most are the low-volume ones where losing
- * one of five delays the median by days.
+ * Call for **every** fal generation — BYOK and unpriced ones included; an
+ * unpriced model has no other route off `UNKNOWN_ESTIMATE_FLOOR`. Errors
+ * propagate: the caller's `step.do` retries only this insert, never the fal
+ * call.
  */
 export async function recordFalUsage(
   scopedDb: ScopedDb | undefined,
@@ -171,16 +151,10 @@ export async function recordFalUsage(
 }
 
 /**
- * Record one fal usage sample in its own workflow step.
- *
- * The step must sit BEFORE the `cost > 0 && !usedOwnKey` deduction guard: BYOK
- * and unpriced generations bill the same units as charged ones, and an
- * unpriced model has no other route off `UNKNOWN_ESTIMATE_FLOOR` (#1069). The
- * separate step also makes the insert replay-safe — outside one, a workflow
- * replay re-records the same sample and skews the median.
- *
- * Returns the narrowed usage so the caller can spread it into the deduction's
- * transaction metadata without re-deriving it.
+ * Record one fal usage sample in its own workflow step, BEFORE any
+ * `cost > 0 && !usedOwnKey` deduction guard. The separate step makes the
+ * insert replay-safe. Returns the narrowed usage so the caller can spread it
+ * into the deduction's transaction metadata.
  */
 export async function recordFalUsageStep(
   step: { do: (name: string, fn: () => Promise<void>) => Promise<void> },

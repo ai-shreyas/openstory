@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
 import {
   estimateBatchMotionCost,
   resolveBatchShotVideoModel,

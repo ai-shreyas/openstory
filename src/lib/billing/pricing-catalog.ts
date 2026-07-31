@@ -1,13 +1,11 @@
 /**
  * Public model pricing catalog — single source for the /pricing page.
- * Combines fal media pricing with OpenRouter LLM token rates.
+ * Combines live fal pricing (`model_pricing`, passed in by the server
+ * function) with OpenRouter LLM token rates.
  */
 
-import {
-  FAL_PRICING,
-  PRICING_LAST_UPDATED as FAL_PRICING_LAST_UPDATED,
-  type FalUnit,
-} from '@/lib/ai/fal-pricing-data';
+import type { EffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { estimateStrategy, knownUnitsPerCall } from '@/lib/ai/fal-cost';
 import {
   AUDIO_MODELS,
   IMAGE_MODELS,
@@ -28,71 +26,70 @@ type PricingRow = {
   detail?: string;
 };
 
-export type PricingSection = {
+type PricingSection = {
   id: string;
   title: string;
   description: string;
   rows: PricingRow[];
 };
 
-const FAL_UNIT_LABELS: Record<FalUnit, string> = {
-  images: 'image',
-  seconds: 'second',
-  minutes: 'minute',
-  megapixels: 'megapixel',
-  compute_seconds: 'compute second',
-  flat: 'generation',
-  tokens: '1K tokens',
+export type PricingCatalog = {
+  sections: PricingSection[];
+  lastUpdated: string;
 };
+
+/** Display label for a raw fal unit string. */
+function falUnitLabel(unit: string): string {
+  const u = unit.trim().toLowerCase();
+  const known: Record<string, string> = {
+    images: 'image',
+    seconds: 'second',
+    minutes: 'minute',
+    megapixels: 'megapixel',
+    'processed megapixels': 'megapixel',
+    'compute seconds': 'compute second',
+    videos: 'video',
+    '1000 tokens': '1K tokens',
+    units: 'generation',
+  };
+  return known[u] ?? (u || 'generation');
+}
 
 function formatUsd(amount: number): string {
   if (amount === 0) return 'Free';
-  if (amount >= 1) return `$${amount.toFixed(2)}`;
   if (amount >= 0.01) return `$${amount.toFixed(2)}`;
   if (amount >= 0.0001) return `$${amount.toFixed(4)}`;
   return `$${amount.toFixed(6)}`;
 }
 
-function formatFalPrice(endpointId: string): {
-  price: string;
-  detail?: string;
-} {
-  const pricing = FAL_PRICING[endpointId];
+function formatFalPrice(
+  falPricing: Record<string, EffectiveFalPricing>,
+  endpointId: string
+): { price: string; detail?: string } {
+  const pricing = falPricing[endpointId];
   if (!pricing) {
     return { price: 'Contact support', detail: 'Pricing unavailable' };
   }
 
   const unitUsd = microsToUsd(pricing.unitPrice);
-  const unitLabel = FAL_UNIT_LABELS[pricing.unit];
+  const unitLabel = falUnitLabel(pricing.unit);
 
-  // Prefer typical per-call cost when fal historical units differ from 1
+  // For per-call-priced models, show the typical cost the credit gate uses
   // (e.g. gpt-image-2: unit_price=$1 but ~0.22 units → ~$0.22/image).
-  const typical =
-    pricing.typicalUnitsPerCall != null &&
-    pricing.typicalUnitsPerCall > 0 &&
-    (pricing.unit === 'images' || pricing.unit === 'flat')
-      ? unitUsd * pricing.typicalUnitsPerCall
-      : null;
-
+  // Duration/megapixel models keep their per-unit rate.
+  const unitsPerCall =
+    estimateStrategy(endpointId, pricing.unit) === 'per_call'
+      ? knownUnitsPerCall(pricing)
+      : undefined;
+  const typical = unitsPerCall != null ? unitUsd * unitsPerCall : null;
   if (typical != null && Math.abs(typical - unitUsd) > unitUsd * 0.05) {
     return {
-      price: `~${formatUsd(typical)} / ${unitLabel}`,
-      detail:
-        pricing.unit === 'flat'
-          ? 'Typical cost per generation (billed from provider units)'
-          : 'Typical cost per image (billed from provider units)',
+      price: `~${formatUsd(typical)} / generation`,
+      detail: 'Typical cost per generation (billed from provider units)',
     };
   }
 
-  return {
-    price: `${formatUsd(unitUsd)} / ${unitLabel}`,
-    detail:
-      pricing.unit === 'flat'
-        ? 'Flat rate per video'
-        : pricing.unit === 'tokens'
-          ? 'Billed per 1,000 video tokens'
-          : undefined,
-  };
+  return { price: `${formatUsd(unitUsd)} / ${unitLabel}` };
 }
 
 function formatLlmPrice(modelId: string): { price: string; detail?: string } {
@@ -120,48 +117,38 @@ function visibleImageModels() {
   );
 }
 
-export function buildPricingCatalog(): {
-  sections: PricingSection[];
-  lastUpdated: string;
-} {
-  const imageRows: PricingRow[] = visibleImageModels()
-    .sort((a, b) => a.qualityRank - b.qualityRank)
-    .map((model) => {
-      const { price, detail } = formatFalPrice(model.id);
-      return {
-        name: model.name,
-        provider: model.provider,
-        license: model.license,
-        price,
-        detail,
-      };
-    });
+export function buildPricingCatalog(opts: {
+  falPricing: Record<string, EffectiveFalPricing>;
+  /** When the fal snapshot was last refreshed (null = never). */
+  falUpdatedAt: Date | null;
+}): PricingCatalog {
+  const { falPricing } = opts;
 
-  const videoRows: PricingRow[] = Object.values(IMAGE_TO_VIDEO_MODELS)
-    .sort((a, b) => a.qualityRank - b.qualityRank)
-    .map((model) => {
-      const { price, detail } = formatFalPrice(model.id);
-      return {
-        name: model.name,
-        provider: model.provider,
-        license: model.license,
-        price,
-        detail,
-      };
-    });
+  const toRow = (model: {
+    id: string;
+    name: string;
+    provider: string;
+    license?: 'open-source' | 'proprietary';
+  }): PricingRow => {
+    const { price, detail } = formatFalPrice(falPricing, model.id);
+    return {
+      name: model.name,
+      provider: model.provider,
+      license: model.license,
+      price,
+      detail,
+    };
+  };
 
-  const audioRows: PricingRow[] = Object.values(AUDIO_MODELS)
+  const imageRows = visibleImageModels()
     .sort((a, b) => a.qualityRank - b.qualityRank)
-    .map((model) => {
-      const { price, detail } = formatFalPrice(model.id);
-      return {
-        name: model.name,
-        provider: model.provider,
-        license: model.license,
-        price,
-        detail,
-      };
-    });
+    .map(toRow);
+  const videoRows = Object.values(IMAGE_TO_VIDEO_MODELS)
+    .sort((a, b) => a.qualityRank - b.qualityRank)
+    .map(toRow);
+  const audioRows = Object.values(AUDIO_MODELS)
+    .sort((a, b) => a.qualityRank - b.qualityRank)
+    .map(toRow);
 
   const llmRows: PricingRow[] = SCRIPT_ANALYSIS_MODELS.map((model) => {
     const { price, detail } = formatLlmPrice(model.id);
@@ -174,13 +161,13 @@ export function buildPricingCatalog(): {
     };
   });
 
-  const falDate = new Date(FAL_PRICING_LAST_UPDATED).toLocaleDateString(
-    'en-US',
-    { month: 'short', day: 'numeric', year: 'numeric' }
-  );
+  const dateFmt = { month: 'short', day: 'numeric', year: 'numeric' } as const;
+  const falDate = opts.falUpdatedAt
+    ? opts.falUpdatedAt.toLocaleDateString('en-US', dateFmt)
+    : 'pending refresh';
   const orDate = new Date(OPENROUTER_PRICING_LAST_UPDATED).toLocaleDateString(
     'en-US',
-    { month: 'short', day: 'numeric', year: 'numeric' }
+    dateFmt
   );
 
   return {

@@ -1,19 +1,17 @@
 /**
- * Guards for the fal pricing client (#1069).
- *
- * `unit` selects the entire estimation branch, so resolving it wrongly is off
- * by orders of magnitude rather than a little — and the failure is silent,
- * because a wrong-but-recognised unit produces a confident number. These tests
- * pin the two ways that happens: the substring order in `normalizeUnit`, and a
- * transient fal failure being mistaken for "fal says there is no history".
+ * Guards for the fal pricing client (#1069): batch splitting, one bad id not
+ * losing its whole batch, non-positive prices never landing, and a transient
+ * fal failure never being mistaken for "fal says there is no history".
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  fetchFalCatalogIds,
   fetchFalTypicalUnits,
   fetchFalUnitPrices,
 } from '@/lib/ai/fal-pricing-fetch';
 
+const MODELS_URL = 'https://api.fal.ai/v1/models';
 const PRICING_URL = 'https://api.fal.ai/v1/models/pricing';
 const ESTIMATE_URL = 'https://api.fal.ai/v1/models/pricing/estimate';
 
@@ -31,7 +29,6 @@ function stubFetch(handler: (url: string) => Response): void {
   );
 }
 
-/** One price row, with only the fields the client reads. */
 function priceRow(overrides: {
   endpoint_id: string;
   unit: string;
@@ -40,19 +37,49 @@ function priceRow(overrides: {
   return { unit_price: 0.00167, currency: 'USD', ...overrides };
 }
 
+/** endpoint ids a pricing request asked about */
+function requestedIds(url: string): string[] {
+  const raw = new URL(url).searchParams.get('endpoint_id') ?? '';
+  return raw ? raw.split(',') : [];
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('fetchFalCatalogIds', () => {
+  it('paginates with the cursor and deduplicates', async () => {
+    stubFetch((url) => {
+      const cursor = new URL(url).searchParams.get('cursor');
+      if (!cursor) {
+        return json({
+          models: [{ endpoint_id: 'a/one' }, { endpoint_id: 'a/two' }],
+          has_more: true,
+          next_cursor: 'c1',
+        });
+      }
+      return json({
+        models: [{ endpoint_id: 'a/two' }, { endpoint_id: 'a/three' }],
+        has_more: false,
+        next_cursor: null,
+      });
+    });
+
+    expect(await fetchFalCatalogIds('key')).toEqual([
+      'a/one',
+      'a/two',
+      'a/three',
+    ]);
+  });
+
+  it('throws on an API failure', async () => {
+    stubFetch(() => json({ error: 'boom' }, 500));
+    await expect(fetchFalCatalogIds('key')).rejects.toThrow(/HTTP 500/);
+  });
+});
+
 describe('fetchFalUnitPrices', () => {
-  it('resolves "compute seconds" to compute_seconds, not seconds', async () => {
-    // The substring checks are ordered, and 'compute second' CONTAINS
-    // 'second'. Swapping those two lines — a plausible reorder during a lint
-    // or alphabetise pass — sends all seven compute-seconds endpoints down the
-    // `seconds` branch, where `durationSeconds` is undefined for an image
-    // generation and the estimate comes out $0.00 rather than null. $0 is not
-    // null, so `gateEstimate` passes it straight through and the credit gate
-    // clears every FLUX.2 / Grok Imagine generation for free.
+  it('keeps the raw unit string verbatim', async () => {
     stubFetch(() =>
       json({
         prices: [
@@ -61,55 +88,73 @@ describe('fetchFalUnitPrices', () => {
       })
     );
 
-    const prices = await fetchFalUnitPrices('key', ['fal-ai/flux-2']);
-    expect(prices[0]?.unit).toBe('compute_seconds');
+    const { prices } = await fetchFalUnitPrices('key', ['fal-ai/flux-2']);
+    expect(prices[0]?.unit).toBe('Compute Seconds');
   });
 
-  it('throws on the ambiguous "units" with no UNITS_KIND entry', async () => {
-    // fal reports "units" for flat, per-image and per-1000-token alike. A
-    // guess picks the wrong denominator; there is no safe default.
-    stubFetch(() =>
-      json({
-        prices: [priceRow({ endpoint_id: 'fal-ai/not-tagged', unit: 'units' })],
-      })
-    );
+  it('splits requests into batches of 50 (the API cap)', async () => {
+    vi.useFakeTimers();
+    try {
+      const batches: string[][] = [];
+      stubFetch((url) => {
+        const ids = requestedIds(url);
+        batches.push(ids);
+        return json({
+          prices: ids.map((id) =>
+            priceRow({ endpoint_id: id, unit: 'images' })
+          ),
+        });
+      });
 
-    await expect(
-      fetchFalUnitPrices('key', ['fal-ai/not-tagged'])
-    ).rejects.toThrow(/UNITS_KIND/);
+      const ids = Array.from({ length: 120 }, (_, i) => `m/${i}`);
+      const pending = fetchFalUnitPrices('key', ids);
+      await vi.runAllTimersAsync();
+      const { prices } = await pending;
+
+      expect(batches.map((b) => b.length)).toEqual([50, 50, 20]);
+      expect(prices).toHaveLength(120);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('throws on an unrecognised unit rather than defaulting it', async () => {
-    stubFetch(() =>
-      json({
-        prices: [priceRow({ endpoint_id: 'fal-ai/flux-2', unit: 'furlongs' })],
-      })
-    );
+  it('bisects a failing batch so one bad id cannot lose the other prices', async () => {
+    stubFetch((url) => {
+      const ids = requestedIds(url);
+      // The API errors on any batch containing the poisoned id.
+      if (ids.includes('m/bad')) return json({ error: 'nope' }, 404);
+      return json({
+        prices: ids.map((id) => priceRow({ endpoint_id: id, unit: 'images' })),
+      });
+    });
 
-    await expect(fetchFalUnitPrices('key', ['fal-ai/flux-2'])).rejects.toThrow(
-      /unrecognised unit/
-    );
+    const { prices, failedEndpoints } = await fetchFalUnitPrices('key', [
+      'm/one',
+      'm/bad',
+      'm/two',
+      'm/three',
+    ]);
+    expect(prices.map((p) => p.endpointId).sort()).toEqual([
+      'm/one',
+      'm/three',
+      'm/two',
+    ]);
+    expect(failedEndpoints).toEqual(['m/bad']);
   });
 
-  it('throws on a non-positive unit_price', async () => {
-    // A 0 or null price reaches `unitPriceMicros` as 0/NaN, and every charge on
-    // that endpoint silently becomes 0 — `falCostFromUnits` has no log of its
-    // own for a zero price.
+  it('skips a non-positive unit_price rather than storing it', async () => {
+    // A 0 or null price would bill every generation on that endpoint as free.
     stubFetch(() =>
       json({
         prices: [
-          priceRow({
-            endpoint_id: 'fal-ai/flux-2',
-            unit: 'images',
-            unit_price: 0,
-          }),
+          priceRow({ endpoint_id: 'm/free', unit: 'images', unit_price: 0 }),
+          priceRow({ endpoint_id: 'm/ok', unit: 'images' }),
         ],
       })
     );
 
-    await expect(fetchFalUnitPrices('key', ['fal-ai/flux-2'])).rejects.toThrow(
-      /non-positive unit_price/
-    );
+    const { prices } = await fetchFalUnitPrices('key', ['m/free', 'm/ok']);
+    expect(prices.map((p) => p.endpointId)).toEqual(['m/ok']);
   });
 });
 
@@ -117,7 +162,7 @@ describe('fetchFalTypicalUnits', () => {
   const price = {
     endpointId: 'fal-ai/flux-2',
     unitPriceUsd: 0.5,
-    unit: 'images' as const,
+    unit: 'images',
   };
 
   it('reports an HTTP failure as failed, not as "no history"', async () => {
@@ -136,10 +181,8 @@ describe('fetchFalTypicalUnits', () => {
   });
 
   it('retries a 429 rather than recording it as a failure', async () => {
-    // Measured against the live API, fal 429s this endpoint after ~3 requests
-    // even strictly sequential. Without a retry the refresh sits permanently
-    // over MAX_TYPICAL_FETCH_FAILURE_RATIO and never records a single
-    // typicalUnitsPerCall — the feature would be inert in production.
+    // fal 429s this endpoint after ~3 requests even strictly sequential;
+    // without a retry the refresh could never record a typicalUnitsPerCall.
     vi.useFakeTimers();
     try {
       let calls = 0;
@@ -185,9 +228,7 @@ describe('fetchFalTypicalUnits', () => {
   });
 
   it('treats an unparseable 200 body as failed instead of rejecting', async () => {
-    // A CDN error page served as 200 text/html. Parsed outside the try, the
-    // rejection escapes Promise.all and takes down every endpoint in the run,
-    // defeating both this union and the caller's failure-ratio guard.
+    // A CDN error page served as 200 text/html must not abort the whole run.
     stubFetch((url) =>
       url === ESTIMATE_URL
         ? new Response('<html>502</html>', {
@@ -238,5 +279,15 @@ describe('the pricing URL is unchanged', () => {
     await fetchFalUnitPrices('key', ['fal-ai/flux-2']);
     expect(seen[0]?.startsWith(PRICING_URL)).toBe(true);
     expect(seen[0]).toContain('endpoint_id=fal-ai%2Fflux-2');
+  });
+
+  it('lists the catalog from the models URL', async () => {
+    const seen: string[] = [];
+    stubFetch((url) => {
+      seen.push(url);
+      return json({ models: [], has_more: false, next_cursor: null });
+    });
+    await fetchFalCatalogIds('key');
+    expect(seen[0]?.startsWith(MODELS_URL)).toBe(true);
   });
 });

@@ -1,26 +1,14 @@
 /**
- * Model Pricing (#1069).
+ * Model pricing (#1069) — the platform's only pricing record.
  *
- * Live per-provider pricing store, refreshed by the Worker cron
- * (`src/lib/cron/refresh-fal-pricing.ts` — fal today; an OpenRouter fetcher
- * can add `provider: 'openrouter'` rows later with no migration).
- * Platform-global (not team-scoped), pure derived cache — every row is
- * rebuildable from the provider APIs + our own transactions.
+ * `model_pricing` is a snapshot of provider prices, refreshed daily by the
+ * Worker cron (`src/lib/cron/refresh-fal-pricing.ts`) for every priced
+ * endpoint in fal's catalog. Platform-global, pure derived cache — every row
+ * is rebuildable from the provider APIs + our own usage samples. The key is
+ * (provider, endpointId, unit) so a re-denominated endpoint gets a fresh row.
  *
- * `model_pricing` is the current snapshot. The key is
- * (provider, endpointId, unit): one row per fal endpoint, and room for
- * multi-rate models later (an LLM's input/output token rates are two rows).
- * Each row carries the provider's per-unit price plus two unit-count signals
- * for pre-flight estimation — `observedMedianUnits` (median `unitsBilled`
- * from our own generations, the preferred signal) and `typicalUnitsPerCall`
- * (fal's historical estimate, the fallback). Estimation merges these rows
- * over the baked-in `FAL_PRICING` seed. Billing reads the same merged prices
- * (`falCostFromUnits`), multiplying them by the provider-reported
- * `unitsBilled` — so a provider price move reaches charges without waiting on
- * a seed regeneration.
- *
- * `model_pricing_history` appends a row whenever a model's unit price
- * changes (and on first sight), giving a time-series of model costs.
+ * `model_pricing_history` appends a row whenever a unit price changes (and on
+ * first sight), giving a time-series of model costs.
  */
 
 import {
@@ -33,29 +21,14 @@ import {
   text,
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
-import type { FalUnit } from '@/lib/ai/fal-pricing-data';
 import { generateId } from '../id';
 
 export type ModelPricingProvider = 'fal' | 'openrouter';
 
 /**
- * Billed unit denominators across providers — fal's kinds today.
- *
- * When the OpenRouter fetcher lands, widen THIS type
- * (`FalUnit | OpenRouterUnit`) and not `FalUnit`. `estimateFalCost` switches
- * exhaustively over `FalUnit` and has no meaningful branch for a token rate,
- * so adding token kinds there would force dead cases into the fal estimator.
- * (Pre-declaring `OpenRouterUnit = never` doesn't help — `T | never` is just
- * `T`, so it buys no enforcement, only noise.)
- */
-export type ModelPricingUnit = FalUnit;
-
-/**
- * The observed-units pair, shared by every layer that carries it: this table's
- * columns, the cron's in-memory map, and `EffectiveFalPricing.observed`. One
- * declaration because a median and its sample count are both `number` — three
- * separately-named shapes meant the hand-written mappings between them would
- * compile with the two fields swapped.
+ * The observed-units pair, shared by this table, the cron, and
+ * `EffectiveFalPricing.observed` — one declaration so a mapping cannot swap
+ * the two `number` fields.
  */
 export type ObservedUnits = {
   /** Median unitsBilled per image across our own recent generations. */
@@ -69,15 +42,13 @@ export const modelPricing = snakeCase.table(
   {
     provider: text({ length: 50 }).$type<ModelPricingProvider>().notNull(),
     endpointId: text({ length: 200 }).notNull(),
-    unit: text({ length: 30 }).$type<ModelPricingUnit>().notNull(),
+    /** Raw provider unit string (e.g. "images", "compute seconds", "units"). */
+    unit: text({ length: 30 }).notNull(),
     /** Per-unit price in microdollars, verbatim from the provider's API. */
     unitPriceMicros: integer().notNull(),
     /** Provider's historical estimate of units per call (null = no history). */
     typicalUnitsPerCall: real(),
-    /**
-     * Median unitsBilled across our own recent generations (null = none yet).
-     * Travels with `observedSampleCount` — see the CHECK below.
-     */
+    /** Median unitsBilled across our own recent generations (null = none). */
     observedMedianUnits: real(),
     /** How many of our generations back the observed median. */
     observedSampleCount: integer().default(0).notNull(),
@@ -89,15 +60,8 @@ export const modelPricing = snakeCase.table(
   },
   (table) => [
     primaryKey({ columns: [table.provider, table.endpointId, table.unit] }),
-    /**
-     * A median and its sample count are one fact, but two nullable-vs-not
-     * columns can disagree: `(NULL, 42)` silently discards a real signal, and
-     * `(3.5, 0)` is an anecdote the estimator only rejects by luck. The
-     * writer is consistent today; this makes it structural.
-     *
-     * Added while the table is still new — retrofitting a CHECK later means a
-     * full SQLite table rebuild, which is the D1 CASCADE trap in CLAUDE.md.
-     */
+    // Median and sample count are one fact: (NULL, 42) discards a real
+    // signal, (3.5, 0) is an anecdote the estimator only rejects by luck.
     check(
       'model_pricing_observed_pair',
       sql`(${table.observedMedianUnits} IS NULL) = (${table.observedSampleCount} = 0)`
@@ -106,18 +70,12 @@ export const modelPricing = snakeCase.table(
 );
 
 /**
- * Raw per-generation usage samples — the input the observed median is computed
- * from. Written by `recordFalUsage` for every fal generation that reports
- * `unitsBilled` and has a team context, including BYOK, unpriced and
- * insufficient-credit ones: those write no transaction row, so mining the
- * ledger only ever learned from teams in good standing without their own key.
- * That is why the write lives in its own workflow step rather than inside
- * `deductWorkflowCredits`, which every call site guards behind
- * `cost > 0 && !usedOwnKey`.
- *
- * Deliberately carries no `teamId`: it is anonymous model-behaviour telemetry,
- * not team data, so it needs no FK (and cannot participate in the D1
- * table-rebuild cascade trap). Pruned to the observation window by the cron.
+ * Raw per-generation usage samples — the input to the observed median.
+ * Written by `recordFalUsage` for every fal generation that reports
+ * `unitsBilled`, including BYOK and unpriced ones (those write no transaction
+ * row, so mining the ledger would miss them). Anonymous model telemetry:
+ * deliberately no `teamId`, so no FK and no D1 cascade exposure. Pruned to
+ * the observation window by the cron.
  */
 export const modelUsageObservations = snakeCase.table(
   'model_usage_observations',
@@ -154,7 +112,7 @@ export const modelPricingHistory = snakeCase.table(
       .notNull(),
     provider: text({ length: 50 }).$type<ModelPricingProvider>().notNull(),
     endpointId: text({ length: 200 }).notNull(),
-    unit: text({ length: 30 }).$type<ModelPricingUnit>().notNull(),
+    unit: text({ length: 30 }).notNull(),
     unitPriceMicros: integer().notNull(),
     recordedAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())

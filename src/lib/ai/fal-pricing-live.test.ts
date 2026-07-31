@@ -1,17 +1,9 @@
 /**
- * Guards for the seed merge (#1069).
- *
- * `getEffectiveFalPricing` layers `model_pricing` rows over the baked-in
- * `FAL_PRICING` seed **field by field**. A wholesale replace would let one
- * null column erase a good seeded value — a single transient fal 429 leaves
- * `typicalUnitsPerCall` null for an endpoint, and gpt-image-2 would then gate
- * at its $1.00 unit price instead of the ~$0.22 an image actually bills
- * (#1062). Both shapes typecheck and neither logs, so only a test tells them
- * apart.
+ * `model_pricing` is the only pricing record — these tests pin how rows
+ * become the runtime map (#1069).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import { micros } from '@/lib/billing/money';
 
 type Row = {
@@ -56,35 +48,31 @@ describe('getEffectiveFalPricing', () => {
     vi.resetModules();
   });
 
-  it('honours a null typicalUnitsPerCall on a present row as "fal has no history"', async () => {
-    // The cron preserves the stored figure whenever a fetch merely FAILED, so
-    // a null that survives to the table is fal's actual answer. Reading the
-    // seed here would resurrect a figure the cron deliberately cleared, and no
-    // model fal stops reporting on could ever shed it.
-    const seeded = FAL_PRICING['openai/gpt-image-2']?.typicalUnitsPerCall;
-    expect(seeded).toBeGreaterThan(0); // guard the fixture, not the code
-
+  it('builds pricing from rows, with a null typicalUnitsPerCall as "no history"', async () => {
     const { getEffectiveFalPricing } = await loadWithRows([
-      row({ endpointId: 'openai/gpt-image-2', typicalUnitsPerCall: null }),
+      row({
+        endpointId: 'openai/gpt-image-2',
+        unit: 'units',
+        typicalUnitsPerCall: null,
+      }),
     ]);
 
-    const merged = (await getEffectiveFalPricing())['openai/gpt-image-2'];
-    expect(merged?.typicalUnitsPerCall).toBeUndefined();
-    // The rest of the seed still merges field-wise (#1062).
-    expect(merged?.unit).toBe('images');
+    const pricing = (await getEffectiveFalPricing())['openai/gpt-image-2'];
+    expect(pricing?.unit).toBe('units');
+    expect(pricing?.unitPrice).toBe(micros(1_000_000));
+    expect(pricing?.typicalUnitsPerCall).toBeUndefined();
   });
 
   it('drops an endpoint with two rows rather than billing an arbitrary rate', async () => {
-    // Legitimate mid-re-denomination state. The map is keyed by endpointId
-    // alone, so picking the last row would multiply unitsBilled by whichever
-    // rate happened to sort last — a wrong charge, not a wrong estimate. Gone
-    // from the map, it gates on the floor and reports a $0 charge; both are
-    // visible, an arbitrary winner is not.
+    // Legitimate mid-re-denomination state: the map is keyed by endpointId
+    // alone, so picking either row would multiply unitsBilled by an arbitrary
+    // rate. Gone from the map, it gates on the floor and reports a $0 charge —
+    // both visible.
     const { getEffectiveFalPricing } = await loadWithRows([
       row({ endpointId: 'openai/gpt-image-2', unit: 'images' }),
       row({
         endpointId: 'openai/gpt-image-2',
-        unit: 'compute_seconds',
+        unit: 'compute seconds',
         unitPriceMicros: 170,
       }),
     ]);
@@ -93,18 +81,9 @@ describe('getEffectiveFalPricing', () => {
     expect(map['openai/gpt-image-2']).toBeUndefined();
   });
 
-  it('takes the live unit price over the seed', async () => {
-    const { getEffectiveFalPricing } = await loadWithRows([
-      row({ endpointId: 'openai/gpt-image-2', unitPriceMicros: 2_500_000 }),
-    ]);
-
-    const merged = (await getEffectiveFalPricing())['openai/gpt-image-2'];
-    expect(merged?.unitPrice).toBe(micros(2_500_000));
-  });
-
   it('omits `observed` entirely when there is no median', async () => {
-    // An `observed` present with a null median would put the burden of
-    // rejecting it on isUsableCount, one `??` away from a $0 gate.
+    // An `observed` with a null median would put the burden of rejecting it
+    // on isUsableCount, one `??` away from a $0 gate.
     const { getEffectiveFalPricing } = await loadWithRows([
       row({
         endpointId: 'openai/gpt-image-2',
@@ -113,30 +92,38 @@ describe('getEffectiveFalPricing', () => {
       }),
     ]);
 
-    const merged = (await getEffectiveFalPricing())['openai/gpt-image-2'];
-    expect(merged?.observed).toBeUndefined();
+    const pricing = (await getEffectiveFalPricing())['openai/gpt-image-2'];
+    expect(pricing?.observed).toBeUndefined();
   });
 
   it('carries the median and its sample count together', async () => {
     const { getEffectiveFalPricing } = await loadWithRows([
       row({
         endpointId: 'xai/grok-imagine',
-        unit: 'compute_seconds',
+        unit: 'compute seconds',
         observedMedianUnits: 294,
         observedSampleCount: 7,
       }),
     ]);
 
-    const merged = (await getEffectiveFalPricing())['xai/grok-imagine'];
-    expect(merged?.observed).toEqual({ medianUnits: 294, sampleCount: 7 });
+    const pricing = (await getEffectiveFalPricing())['xai/grok-imagine'];
+    expect(pricing?.observed).toEqual({ medianUnits: 294, sampleCount: 7 });
   });
 
-  it('falls back to the seed for endpoints with no row yet', async () => {
+  it('returns an empty map (not a throw) when the table is empty', async () => {
+    // Local dev / fresh deploy before the first refresh: estimates gate on
+    // the floor and billing reports $0 — visible, not fatal.
     const { getEffectiveFalPricing } = await loadWithRows([]);
+    expect(await getEffectiveFalPricing()).toEqual({});
+  });
 
-    const map = await getEffectiveFalPricing();
-    expect(map['openai/gpt-image-2']?.typicalUnitsPerCall).toBe(
-      FAL_PRICING['openai/gpt-image-2']?.typicalUnitsPerCall
-    );
+  it('reports when the newest row was fetched', async () => {
+    const older = new Date('2026-07-01T00:00:00Z');
+    const newer = new Date('2026-07-02T00:00:00Z');
+    const { getFalPricingUpdatedAt } = await loadWithRows([
+      row({ endpointId: 'a/b', fetchedAt: older }),
+      row({ endpointId: 'c/d', fetchedAt: newer }),
+    ]);
+    expect(await getFalPricingUpdatedAt()).toEqual(newer);
   });
 });

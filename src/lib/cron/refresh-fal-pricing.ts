@@ -1,32 +1,33 @@
 /**
  * Daily fal pricing refresh (#1069).
  *
- * Driven by the Cloudflare Workers cron in `src/server.ts` (schedule in
- * `wrangler.jsonc` `triggers.crons`). Keeps the `model_pricing` D1 table —
- * the live source pre-flight estimation merges over the baked-in
- * `FAL_PRICING` seed — current from three signals:
+ * Driven by the Workers cron in `src/server.ts` (schedule in `wrangler.jsonc`
+ * `triggers.crons`). Rebuilds the `model_pricing` D1 table — the platform's
+ * only pricing record — from three signals:
  *
- * 1. fal's pricing API — per-unit price + unit kind, verbatim.
- * 2. fal's historical estimate — typical units per call (absent for every
- *    compute-seconds endpoint we use, the original #1069 bug). A failed
- *    fetch preserves the stored value rather than nulling it.
+ * 1. fal's pricing API — per-unit price + raw unit for **every priced
+ *    endpoint in fal's catalog** (~1,350), not just the models we expose.
+ * 2. fal's historical estimate — typical units per call, fetched only for
+ *    endpoints we use (the estimate API allows ~1 req/s). A failed fetch
+ *    preserves the stored value rather than nulling it.
  * 3. `model_usage_observations` — median units per image from our own
- *    generations. The preferred estimation signal: it reflects our
- *    resolutions and prompts, and self-corrects as usage accumulates.
+ *    generations, the preferred estimation signal.
  *
- * Also appends a `model_pricing_history` row whenever an endpoint's unit
- * price changes (and on first sight), building a time-series of model costs.
- *
- * Both estimation AND billing read the resulting prices (`falCostFromUnits`
- * goes through `getEffectiveFalPricing`), so a fal price move reaches real
+ * Also appends `model_pricing_history` rows on price changes (and first
+ * sight). Billing reads these prices, so a fal price move reaches real
  * charges on the next refresh — hence the warn log on every change.
  */
 
 import { getDb } from '#db-client';
 import { getEnv } from '#env';
-import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';
+import {
+  getFalEndpointIds,
+  UNLISTED_FAL_ENDPOINTS,
+} from '@/lib/ai/fal-endpoints';
+import { listCatalogEndpointIds } from '@/lib/models/catalog';
 import {
   type FalUnitPrice,
+  fetchFalCatalogIds,
   fetchFalTypicalUnits,
   fetchFalUnitPrices,
 } from '@/lib/ai/fal-pricing-fetch';
@@ -44,31 +45,23 @@ import type { drizzle as drizzleD1 } from 'drizzle-orm/d1';
 const logger = getLogger(['openstory', 'cron', 'refresh-fal-pricing']);
 
 /**
- * A db handle this job can write through. In Workerd that's `getDb()`; a CLI
- * run (`bun scripts/refresh-fal-pricing.ts`) builds drizzle's D1 client over
- * the local Miniflare binding instead. The two differ only in their
- * result-set generics, so the union is what keeps both honest without a cast
- * — the same shape `SeedDb` in `src/lib/db/seed-system-templates.ts` uses.
+ * A db handle this job can write through: `getDb()` in Workerd, or drizzle
+ * over the local Miniflare binding for `bun scripts/refresh-fal-pricing.ts`.
  */
 export type PricingRefreshDb =
   | ReturnType<typeof getDb>
   | ReturnType<typeof drizzleD1>;
 
 /**
- * Cron expression for this job — must match an entry in `wrangler.jsonc`
- * `triggers.crons` (default AND production blocks). `scheduled()` in
- * `src/server.ts` routes on it.
+ * Cron expression — must match `wrangler.jsonc` `triggers.crons` (default AND
+ * production blocks); `scheduled()` in `src/server.ts` routes on it.
  */
 export const FAL_PRICING_CRON = '17 3 * * *';
 
 /** How far back observed unitsBilled samples count toward the median. */
 const OBSERVATION_WINDOW_DAYS = 90;
 
-/**
- * Samples per endpoint feeding the median, newest-first — so under heavy
- * volume the median reflects the most recent generations, and a busy endpoint
- * cannot crowd out a quiet one.
- */
+/** Newest-first sample cap per endpoint, so a busy endpoint cannot crowd out a quiet one. */
 export const OBSERVATIONS_PER_ENDPOINT = 200;
 
 /**
@@ -79,14 +72,16 @@ export const UPSERT_CHUNK = 10;
 export const HISTORY_CHUNK = 15;
 
 /**
- * Abort the refresh if more than this share of endpoints failed their
- * historical-estimate fetch. A handful of 429s is normal and handled by
- * preserving stored values; a broad failure (auth, outage) means the snapshot
- * we would write is mostly degraded, and yesterday's is strictly better.
+ * Fail the run when more than this share of used endpoints lost their
+ * historical-estimate fetch — a broad failure (auth, outage) means nothing
+ * fal said about history is trustworthy.
  */
 const MAX_TYPICAL_FETCH_FAILURE_RATIO = 0.25;
 
 export type FalPricingRefreshSummary = {
+  /** Active models in fal's catalog. */
+  catalogSize: number;
+  /** Endpoints written to model_pricing (those with a price). */
   endpoints: number;
   priceChanges: number;
   observedEndpoints: number;
@@ -103,29 +98,20 @@ function median(values: number[]): number {
   return ((sorted[mid - 1] ?? 0) + upper) / 2;
 }
 
-/**
- * Observed units per fal endpoint. Values use the shared {@link ObservedUnits}
- * field names so the hand-off into the `model_pricing` row and out again into
- * `EffectiveFalPricing.observed` is a rename-free copy — with two locally-named
- * `number` fields, a mapping that swapped median and count would compile.
- */
 type ObservedUnitsByEndpoint = Map<string, ObservedUnits>;
 
 /**
- * The single method `computeObservedUnits` needs. Declared structurally rather
- * than as the full D1 client so the query can be exercised against a plain
- * libsql instance in tests — the bug this guards lives in drizzle's column
- * mapping, so a hand-rolled stub would reproduce nothing worth testing.
+ * The single method `computeObservedUnits` needs — structural so tests can
+ * run the query against plain libsql (the bug this guards lives in drizzle's
+ * column mapping, so a stub would prove nothing).
  */
 type ObservationReader = {
   all<T>(query: SQL): Promise<T[]>;
 };
 
 /**
- * The `model_pricing` composite key, flattened for Map/Set lookup. The
- * separator is written as the `\u0000` escape, never a literal NUL byte —
- * an embedded NUL makes the whole source file binary to git (no diff, no
- * blame, invisible to grep).
+ * The `model_pricing` composite key flattened for Map/Set lookup. `\u0000`
+ * as an escape, never a literal NUL — that would make the file binary to git.
  */
 function pricingKey(row: { endpointId: string; unit: string }): string {
   return `${row.endpointId}\u0000${row.unit}`;
@@ -136,30 +122,20 @@ function observationCutoff(): Date {
 }
 
 /**
- * `createdAt` is `integer({ mode: 'timestamp' })`, which drizzle stores in
- * **seconds**. Raw `sql` interpolation bypasses that mapping, so a `Date` or a
- * `getTime()` millisecond value compared against the column is always false —
- * silently, forever. Only the query builder's own operators (see the prune's
- * `lt(...)` below) apply the conversion for you.
+ * `createdAt` is `integer({ mode: 'timestamp' })` — stored in **seconds**.
+ * Raw `sql` interpolation bypasses drizzle's Date mapping, so compare against
+ * epoch seconds explicitly (the query-builder operators convert for you).
  */
 function toEpochSeconds(date: Date): number {
   return Math.floor(date.getTime() / 1000);
 }
 
 /**
- * Median observed units **per image** per fal endpoint, from the
- * `model_usage_observations` samples every fal generation records.
- *
- * `unitsBilled` is reported per fal *call*, and one call can render up to 4
- * images (`numImages`). The estimator multiplies its unit count back up by
- * `numImages`, so samples are divided down here — otherwise a 4-image call
- * would contribute a 4× sample and a later 4-image estimate would multiply it
- * again. Endpoints that don't take `numImages` record 1.
- *
- * The newest-first cap is applied **per endpoint** via a window function, not
- * as one global row limit: a global cap lets a high-volume model crowd out
- * every other one, starving exactly the rarely-used compute-seconds endpoints
- * that most need an observed median (#1069).
+ * Median observed units **per image** per fal endpoint. `unitsBilled` is per
+ * call and a call can render several images, so samples divide by
+ * `numImages` — the estimator multiplies back up. The newest-first cap is per
+ * endpoint (window function), not global, so a high-volume model cannot
+ * starve the rarely-used ones that most need a median (#1069).
  */
 export async function computeObservedUnits(
   db: ObservationReader
@@ -219,20 +195,12 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * Drop observations for any endpoint fal has re-denominated since the last
- * refresh.
- *
- * `model_usage_observations` records a bare `unitsBilled` with no unit of its
- * own, so samples taken while an endpoint was priced in `compute_seconds`
- * (~294 units/call for Grok Imagine) are not comparable to samples taken after
- * a move to `images` (~1 unit/call). A median over the mixed bag is a
- * *confident* number that can be two orders of magnitude wrong — and because
- * it is non-null it never reaches `gateEstimate`'s floor and never logs. That
- * is #1069 reproduced through the very mechanism meant to prevent it.
- *
- * Discarding beats keeping: the median rebuilds from post-change samples
- * within `MIN_OBSERVED_SAMPLES` generations, and until then the endpoint gates
- * on the honest floor.
+ * Drop observations for any endpoint fal re-denominated since the last
+ * refresh: samples taken under the old unit (e.g. compute-seconds, ~294/call)
+ * are not comparable to the new one (images, ~1/call), and a median over the
+ * mixed bag is a confident number that is orders of magnitude wrong — #1069
+ * through the mechanism meant to prevent it. The median rebuilds within
+ * `MIN_OBSERVED_SAMPLES` generations.
  */
 async function discardObservationsForRedenominatedEndpoints(
   db: PricingRefreshDb,
@@ -262,8 +230,7 @@ async function discardObservationsForRedenominatedEndpoints(
  * Fetch fal pricing + our observed units and write snapshot + history.
  *
  * `deps` exists for `bun scripts/refresh-fal-pricing.ts`: outside Workerd
- * `getDb()` throws by design (see client-node.ts) and `#env` has no Worker
- * bindings, so a CLI run injects both. The cron passes nothing.
+ * `getDb()` throws by design and `#env` has no Worker bindings.
  */
 export async function refreshFalPricing(
   deps: { db?: PricingRefreshDb; apiKey?: string } = {}
@@ -274,36 +241,67 @@ export async function refreshFalPricing(
   }
 
   const db = deps.db ?? getDb();
-  const endpoints = getFalEndpointIds();
+  const catalogIds = await fetchFalCatalogIds(apiKey);
+  const usedEndpoints = getFalEndpointIds();
 
-  const unitPrices = await fetchFalUnitPrices(apiKey, endpoints);
-  // Nothing downstream distinguishes "fal listed no endpoints" from "we asked
-  // about none", and the stale sweep below deletes every row absent from this
-  // list — so an empty result silently wipes `model_pricing` and drops the
-  // whole platform back to the seed. Refuse before the first write.
-  if (unitPrices.length === 0) {
+  // The Models feature runs any endpoint the modelschemas catalog lists, and
+  // that set is not a subset of fal's active listing — so union both, plus
+  // our configured endpoints and the known unlisted ones (seedance
+  // enterprise), none of which appear in either listing. A modelschemas
+  // outage degrades coverage, not the refresh.
+  let modelsCatalogIds: string[] = [];
+  try {
+    modelsCatalogIds = await listCatalogEndpointIds();
+  } catch (err) {
+    logger.warn('modelschemas catalog unreachable — refreshing without it', {
+      err,
+    });
+  }
+  const requestedIds = [
+    ...new Set([
+      ...catalogIds,
+      ...modelsCatalogIds,
+      ...UNLISTED_FAL_ENDPOINTS,
+      ...usedEndpoints,
+    ]),
+  ];
+
+  const { prices, failedEndpoints: priceFetchFailures } =
+    await fetchFalUnitPrices(apiKey, requestedIds);
+  // The stale sweep below deletes every row absent from this list, so an
+  // empty result would silently wipe model_pricing. Refuse before writing.
+  if (prices.length === 0) {
     throw new Error(
-      `refreshFalPricing: fal returned no prices for ${endpoints.length} requested ` +
+      `refreshFalPricing: fal returned no prices for ${requestedIds.length} requested ` +
         'endpoints — aborting before the stale sweep would empty model_pricing'
     );
   }
 
+  // A used endpoint without a price would bill $0 after the sweep dropped its
+  // row. Abort the whole run so yesterday's snapshot survives.
+  const pricedIds = new Set(prices.map((p) => p.endpointId));
+  const missingUsed = usedEndpoints.filter((id) => !pricedIds.has(id));
+  if (missingUsed.length > 0) {
+    throw new Error(
+      `refreshFalPricing: fal returned no price for used endpoint(s): ${missingUsed.join(', ')}`
+    );
+  }
+
+  // Historical estimates only for endpoints we use — the estimate API allows
+  // ~1 req/s, so the full catalog would take ~25 minutes per run.
+  const usedSet = new Set(usedEndpoints);
+  const usedPrices = prices.filter((p) => usedSet.has(p.endpointId));
   const { typicalUnits, failedEndpoints } = await fetchFalTypicalUnits(
     apiKey,
-    unitPrices
+    usedPrices
   );
 
-  /**
-   * A broad historical-fetch failure (auth, outage) leaves `typicalUnits`
-   * mostly empty. That is not a reason to discard the live unit prices, which
-   * fetched cleanly and drive every real charge, nor the observed medians,
-   * which come from our own D1 and don't depend on fal being reachable at all
-   * — aborting here kept the compute-seconds endpoints pinned to the estimate
-   * floor for the length of the outage despite samples already being in hand.
-   * Preserve every stored typical figure, write the rest, throw at the end.
-   */
+  // A broad historical-fetch failure is no reason to discard the live unit
+  // prices (which drive every real charge) or the observed medians (which
+  // don't depend on fal at all). Preserve stored typicals, write the rest,
+  // throw at the end so the cron still reads as failed.
   const typicalDegraded =
-    failedEndpoints.size / unitPrices.length > MAX_TYPICAL_FETCH_FAILURE_RATIO;
+    failedEndpoints.size / usedPrices.length > MAX_TYPICAL_FETCH_FAILURE_RATIO;
 
   const existing = await db
     .select()
@@ -316,18 +314,15 @@ export async function refreshFalPricing(
     existing.map((row) => [pricingKey(row), row.typicalUnitsPerCall])
   );
 
-  await discardObservationsForRedenominatedEndpoints(db, existing, unitPrices);
+  await discardObservationsForRedenominatedEndpoints(db, existing, prices);
   const { observed, samples } = await computeObservedUnits(db);
 
   const now = new Date();
-  const snapshotRows = unitPrices.map((p) => {
+  const snapshotRows = prices.map((p) => {
     const obs = observed.get(p.endpointId);
     const key = pricingKey(p);
-    // On a failed fetch, carry the stored value forward — absence of an answer
-    // is not an answer of "none". A genuine no-history reply still nulls it,
-    // so a model fal stops reporting on doesn't keep a stale figure forever.
-    // Under `typicalDegraded` nothing fal said about history is trustworthy,
-    // so every endpoint carries forward.
+    // A failed typical fetch carries the stored value forward — absence of an
+    // answer is not an answer of "none". A genuine no-history reply nulls it.
     const typical =
       typicalUnits.get(p.endpointId) ??
       (typicalDegraded || failedEndpoints.has(p.endpointId)
@@ -363,12 +358,11 @@ export async function refreshFalPricing(
     await db.insert(modelPricingHistory).values(rows);
   }
 
-  // Billing multiplies unitsBilled by these prices, so a move here changes what
-  // every team is charged from the next refresh onward. Say so loudly rather
-  // than only appending a history row nobody reads.
+  // A price move changes what teams are charged for endpoints we expose —
+  // say so loudly rather than only appending a history row nobody reads.
   for (const row of historyRows) {
     const previous = existingPriceByKey.get(pricingKey(row));
-    if (previous == null) continue; // first sight, not a change
+    if (previous == null || !usedSet.has(row.endpointId)) continue;
     logger.warn('fal unit price changed — charges move with it', {
       endpointId: row.endpointId,
       unit: row.unit,
@@ -398,11 +392,13 @@ export async function refreshFalPricing(
       });
   }
 
-  // An endpoint we no longer use (or that fal re-denominated to a different
-  // unit) leaves a stale snapshot row on the old key — drop it so estimation
-  // can't read a dead price.
+  // Sweep rows fal no longer prices (retired endpoints, re-denominated units)
+  // — but never ones whose price fetch merely errored this run.
   const freshKeys = new Set(snapshotRows.map((row) => pricingKey(row)));
-  const staleRows = existing.filter((row) => !freshKeys.has(pricingKey(row)));
+  const fetchFailed = new Set(priceFetchFailures);
+  const staleRows = existing.filter(
+    (row) => !freshKeys.has(pricingKey(row)) && !fetchFailed.has(row.endpointId)
+  );
   for (const row of staleRows) {
     await db
       .delete(modelPricing)
@@ -415,9 +411,9 @@ export async function refreshFalPricing(
       );
   }
 
-  // Samples past the window can never feed a median again. Counted separately
-  // rather than through `.returning()`, which materialises every pruned id in
-  // the isolate — unbounded on the first run after a long gap.
+  // Samples past the window can never feed a median again. Counted with a
+  // SELECT rather than `.returning()`, which would materialise every pruned
+  // id in the isolate.
   const pruneCutoff = observationCutoff();
   const [pruneCount] = await db.all<{ n: number }>(
     sql`SELECT count(*) AS n FROM ${modelUsageObservations}
@@ -428,20 +424,21 @@ export async function refreshFalPricing(
     .where(lt(modelUsageObservations.createdAt, pruneCutoff));
 
   const summary: FalPricingRefreshSummary = {
-    prunedObservations: pruneCount?.n ?? 0,
+    catalogSize: catalogIds.length,
     endpoints: snapshotRows.length,
     priceChanges: historyRows.length,
     observedEndpoints: observed.size,
     observationSamples: samples,
+    prunedObservations: pruneCount?.n ?? 0,
   };
   logger.info('fal pricing refresh complete', { ...summary });
 
-  // Thrown after the write, so a fal historical-API outage costs us only the
-  // typical-units refresh: today's prices and medians still landed, and the
-  // operator still sees a failed cron rather than a silent degradation.
+  // Thrown after the write: an estimate-API outage costs only the typical
+  // refresh — prices and medians still landed, and the operator still sees a
+  // failed cron rather than a silent degradation.
   if (typicalDegraded) {
     throw new Error(
-      `refreshFalPricing: ${failedEndpoints.size}/${unitPrices.length} historical ` +
+      `refreshFalPricing: ${failedEndpoints.size}/${usedPrices.length} historical ` +
         'estimate fetches failed — prices and observed medians were written and ' +
         'stored typicalUnitsPerCall values preserved'
     );

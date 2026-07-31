@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, test, vi } from 'vitest';
-import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
+import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
 import type { Frame, Sequence } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
@@ -44,14 +44,10 @@ vi.doMock('@/lib/billing/preflight', () => ({
   requireCredits: requireCreditsMock,
 }));
 
-// The live pricing loader reads D1 (unavailable under node tests). Returning
-// the seed verbatim is what an EMPTY `model_pricing` table produces in
-// production too — `getEffectiveFalPricing` starts from `{ ...FAL_PRICING }`
-// and layers rows over it — so these estimates match a fresh deploy's.
-vi.doMock('@/lib/ai/fal-pricing-live', async () => {
-  const { FAL_PRICING } = await import('@/lib/ai/fal-pricing-data');
-  return { getEffectiveFalPricing: async () => FAL_PRICING };
-});
+// The live pricing loader reads D1 (unavailable under node tests).
+vi.doMock('@/lib/ai/fal-pricing-live', () => ({
+  getEffectiveFalPricing: async () => FAL_PRICING,
+}));
 
 // Dynamic imports so the mocks above apply (vi.doMock is not hoisted).
 const { executeSmartRetry } = await import('../smart-retry');
