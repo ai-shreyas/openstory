@@ -89,6 +89,21 @@ export class InsufficientCreditsError extends OpenStoryError {
 }
 
 /**
+ * Is this an insufficient-credits failure? Callers gate the billing dialog on
+ * it. Server-side the real class survives, so check that first; the message
+ * match is the client fallback, where the error crosses the server-fn
+ * boundary as a plain `Error` and only the message is left.
+ */
+export function isInsufficientCreditsError(error: unknown): boolean {
+  if (error instanceof InsufficientCreditsError) return true;
+  return (
+    error instanceof Error &&
+    (error.message.includes('INSUFFICIENT_CREDITS') ||
+      error.message.includes('Insufficient credits'))
+  );
+}
+
+/**
  * Utility function to handle and format errors consistently for API routes
  */
 export const handleApiError = (error: unknown): OpenStoryError => {

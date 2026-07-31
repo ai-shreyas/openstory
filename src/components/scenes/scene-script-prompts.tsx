@@ -38,6 +38,7 @@ import {
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import {
   type ShotStaleness,
+  shotIsStale,
   shotStalenessKey,
   shotStalenessNamespace,
   useShotStaleness,
@@ -90,6 +91,7 @@ import {
   type SceneFacet,
   type SelectionScope,
 } from '@/lib/scenes/scene-selection';
+import { isInsufficientCreditsError } from '@/lib/errors';
 import { SceneCastTab } from './scene-cast-tab';
 import { SceneStaleShots } from './scene-stale-shots';
 import { SceneElementsTab } from './scene-elements-tab';
@@ -141,16 +143,6 @@ export function tabsForScope(scope: SelectionScope): TabDescriptor[] {
     { value: 'elements', label: 'Elements' },
     { value: 'music', label: 'Music' },
   ];
-}
-
-function isInsufficientCreditsError(error: unknown): boolean {
-  if (error instanceof Error) {
-    return (
-      error.message.includes('INSUFFICIENT_CREDITS') ||
-      error.message.includes('Insufficient credits')
-    );
-  }
-  return false;
 }
 
 function isValidTabValue(value: string): value is TabValue {
@@ -332,11 +324,14 @@ type SceneScriptPromptsProps = {
   /** That scene's current script extract (selected version, #1030). */
   scriptText?: string;
   /**
-   * The script scene's shots + their batched staleness (#1077) — drives the
-   * scene-scope stale-shot summary. Only meaningful at scene scope.
+   * The in-scope shots + their batched staleness (#1077) — the selected
+   * scene's at scene scope, every shot at sequence scope. Drives the
+   * stale-shot summary above the tabs.
    */
-  sceneShots?: ShotWithImage[];
-  sceneStaleness?: Record<string, ShotStaleness>;
+  scopeShots?: ShotWithImage[];
+  scopeStaleness?: Record<string, ShotStaleness>;
+  /** The batched staleness request failed — surfaced instead of "all clear". */
+  scopeStalenessFailed?: boolean;
   /** Navigate down to a shot — same handler the left rail uses. */
   onSelectShot?: (shotId: string) => void;
 };
@@ -371,8 +366,9 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   musicEditable = false,
   scriptSceneId,
   scriptText,
-  sceneShots,
-  sceneStaleness,
+  scopeShots,
+  scopeStaleness,
+  scopeStalenessFailed,
   onSelectShot,
 }) => {
   const divergentImageVariant = useMemo(
@@ -842,166 +838,86 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     }
   }, [editedImagePrompt, imagePrompt, handleSaveVisualPrompt]);
 
-  const handleRegenerate = useCallback(
-    async (opts?: {
-      /**
-       * Ignore the local prompt draft and let the server use the stored
-       * prompt. Used by "Update all" (#1077): when image regen is chained
-       * after a prompt regen, the local draft may still hold the OLD prompt
-       * (the refetch swap races the chain), and passing it would regenerate
-       * the image from stale inputs.
-       */
-      useStoredPrompt?: boolean;
-    }) => {
-      if (!shot?.id || !shot.sequenceId) return;
+  const handleRegenerate = useCallback(async () => {
+    if (!shot?.id || !shot.sequenceId) return;
 
-      const promptOverride = opts?.useStoredPrompt
-        ? undefined
-        : editedImagePrompt || undefined;
+    const promptOverride = editedImagePrompt || undefined;
 
-      onRegenerateStart(shot.id, 'image');
+    onRegenerateStart(shot.id, 'image');
 
-      // Optimistic update for shot list query
-      queryClient.setQueryData<ShotWithImage[]>(
-        shotKeys.list(shot.sequenceId),
-        (oldShots) => {
-          if (!oldShots) return oldShots;
-          return oldShots.map((f) =>
-            f.id === shot.id
-              ? {
-                  ...f,
-                  thumbnailStatus: 'generating' as const,
-                  imagePrompt: promptOverride ?? f.imagePrompt,
-                  imageModel: regenImageModel,
-                }
-              : f
-          );
-        }
-      );
+    // Optimistic update for shot list query
+    queryClient.setQueryData<ShotWithImage[]>(
+      shotKeys.list(shot.sequenceId),
+      (oldShots) => {
+        if (!oldShots) return oldShots;
+        return oldShots.map((f) =>
+          f.id === shot.id
+            ? {
+                ...f,
+                thumbnailStatus: 'generating' as const,
+                imagePrompt: promptOverride ?? f.imagePrompt,
+                imageModel: regenImageModel,
+              }
+            : f
+        );
+      }
+    );
 
-      // Optimistic update for individual shot query
-      queryClient.setQueryData<ShotWithImage>(
-        shotKeys.detail(shot.id),
-        (oldShot) => {
-          if (!oldShot) return oldShot;
-          return {
-            ...oldShot,
-            thumbnailStatus: 'generating' as const,
-            imagePrompt: promptOverride ?? oldShot.imagePrompt,
-            imageModel: regenImageModel,
-          };
-        }
-      );
+    // Optimistic update for individual shot query
+    queryClient.setQueryData<ShotWithImage>(
+      shotKeys.detail(shot.id),
+      (oldShot) => {
+        if (!oldShot) return oldShot;
+        return {
+          ...oldShot,
+          thumbnailStatus: 'generating' as const,
+          imagePrompt: promptOverride ?? oldShot.imagePrompt,
+          imageModel: regenImageModel,
+        };
+      }
+    );
 
-      try {
-        await generateShotImageFn({
-          data: {
-            sequenceId: shot.sequenceId,
-            shotId: shot.id,
-            model: regenImageModel,
-            prompt: promptOverride,
-          },
+    try {
+      await generateShotImageFn({
+        data: {
+          sequenceId: shot.sequenceId,
+          shotId: shot.id,
+          model: regenImageModel,
+          prompt: promptOverride,
+        },
+      });
+
+      // Don't invalidate immediately - let auto-polling pick up server updates
+      // The optimistic update shows 'generating' instantly, and the workflow
+      // will update the server status which auto-polling will detect
+    } catch (error) {
+      if (isInsufficientCreditsError(error)) {
+        showFalGate();
+        void queryClient.invalidateQueries({
+          queryKey: [...BILLING_BALANCE_KEY],
         });
-
-        // Don't invalidate immediately - let auto-polling pick up server updates
-        // The optimistic update shows 'generating' instantly, and the workflow
-        // will update the server status which auto-polling will detect
-      } catch (error) {
-        if (isInsufficientCreditsError(error)) {
-          showFalGate();
-          void queryClient.invalidateQueries({
-            queryKey: [...BILLING_BALANCE_KEY],
-          });
-        } else {
-          toast.error('Image generation failed', {
-            description:
-              error instanceof Error ? error.message : 'Unknown error',
-          });
-        }
-
-        // Rollback on error - set status to failed
-        await queryClient.invalidateQueries({
-          queryKey: shotKeys.list(shot.sequenceId),
-        });
-        await queryClient.invalidateQueries({
-          queryKey: shotKeys.detail(shot.id),
+      } else {
+        toast.error('Image generation failed', {
+          description: error instanceof Error ? error.message : 'Unknown error',
         });
       }
-    },
-    [
-      shot,
-      regenImageModel,
-      editedImagePrompt,
-      queryClient,
-      onRegenerateStart,
-      showFalGate,
-    ]
-  );
 
-  // "Update all" (#1077) runs the dependency chain prompt → image: when the
-  // visual prompt is stale, regenerating the image first would just render
-  // another stale image. `'await-prompt'` marks the window between the prompt
-  // regen enqueue and its stream completing, at which point the image regen
-  // fires against the freshly stored prompt.
-  const [updateAllPhase, setUpdateAllPhase] = useState<'await-prompt' | null>(
-    null
-  );
-
-  const handleUpdateAll = useCallback(() => {
-    if (!shot?.id) return;
-    if (falNeedsBillingSetup) {
-      showFalGate();
-      return;
-    }
-    // The motion prompt has no downstream artifact to chain here (video regen
-    // stays a manual pick on its tab), so it regenerates in parallel.
-    if (staleness?.motionPrompt === 'stale') {
-      regeneratePromptMutation.mutate({ promptType: 'motion' });
-    }
-    if (staleness?.visualPrompt === 'stale') {
-      // Only chain the image step when there is an image to update —
-      // "Update all" must not spend credits rendering a first image for a
-      // shot that never had one.
-      const chainImage = !!shot.thumbnailUrl;
-      if (chainImage) setUpdateAllPhase('await-prompt');
-      regeneratePromptMutation.mutate(
-        { promptType: 'visual' },
-        {
-          onSuccess: (result) => {
-            // No workflow enqueued → no stream completion to wait for; run
-            // the image step now.
-            if (result.alreadyUpToDate && chainImage) {
-              setUpdateAllPhase(null);
-              void handleRegenerate({ useStoredPrompt: true });
-            }
-          },
-          onError: () => setUpdateAllPhase(null),
-        }
-      );
-    } else if (staleness?.thumbnail === 'stale') {
-      void handleRegenerate({ useStoredPrompt: true });
+      // Rollback on error - set status to failed
+      await queryClient.invalidateQueries({
+        queryKey: shotKeys.list(shot.sequenceId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: shotKeys.detail(shot.id),
+      });
     }
   }, [
-    shot?.id,
-    shot?.thumbnailUrl,
-    staleness,
-    falNeedsBillingSetup,
+    shot,
+    regenImageModel,
+    editedImagePrompt,
+    queryClient,
+    onRegenerateStart,
     showFalGate,
-    regeneratePromptMutation,
-    handleRegenerate,
   ]);
-
-  // Second link of the chain: the visual-prompt stream finished, so the new
-  // prompt is persisted — regenerate the image from it.
-  useEffect(() => {
-    if (updateAllPhase !== 'await-prompt') return;
-    if (shotPromptStream.visual.status === 'completed') {
-      setUpdateAllPhase(null);
-      void handleRegenerate({ useStoredPrompt: true });
-    } else if (shotPromptStream.visual.status === 'failed') {
-      setUpdateAllPhase(null);
-    }
-  }, [updateAllPhase, shotPromptStream.visual.status, handleRegenerate]);
 
   const handleRegenerateMotion = useCallback(async () => {
     if (!shot?.id || !shot.sequenceId) return;
@@ -1308,9 +1224,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     dirtyMotionRef.current = false;
     imageFocusedRef.current = false;
     motionFocusedRef.current = false;
-    // An in-flight Update-all chain belongs to the previous shot — never let
-    // its image step fire against the newly selected one.
-    setUpdateAllPhase(null);
   }
   // The script draft is keyed by SCENE, not shot: moving between shots of one
   // scene must not discard an in-progress script edit, because they all edit
@@ -1365,16 +1278,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   // Anything on this shot out of date? Drives the status line (#1077). The
   // per-prompt optimistic 'fresh' writes clear the relevant term the moment a
-  // regenerate is clicked, so the line retracts as the chain progresses.
-  const shotHasStale =
-    !!shot &&
-    !!staleness &&
-    (staleness.visualPrompt === 'stale' ||
-      staleness.motionPrompt === 'stale' ||
-      staleness.thumbnail === 'stale');
-  const isUpdatingAll =
-    updateAllPhase !== null ||
-    (staleness?.thumbnail === 'stale' && isGenerating);
+  // regenerate is clicked, so the line retracts as the update progresses.
+  const shotHasStale = !!shot && shotIsStale(staleness);
 
   return (
     <Tabs
@@ -1387,25 +1292,24 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       className="w-full"
     >
       {/* Staleness status line (#1077) — one quiet summary under the scope
-          header instead of the old filled banners. "Update all" regenerates in
-          dependency order: stale prompt first, then the image once the new
-          prompt lands. Video regeneration stays a manual pick on its tab. */}
+          header instead of the old filled banners. Purely informational: each
+          artifact carries its own Regenerate control on its tab, so the
+          summary states the condition and the tabs own the action. */}
       {shot && shotHasStale && (
         <StalenessIndicator
           artifact="thumbnail"
           entityType="shot"
           density="status-line"
-          isRegenerating={isUpdatingAll}
-          onRegenerate={handleUpdateAll}
         />
       )}
 
-      {/* Scene scope (#1077): same one-line pattern, ending in shot-number
-          chips that navigate down to shot scope. */}
-      {!shot && sceneShots && onSelectShot && (
+      {/* Scene/sequence scope (#1077): same one-line pattern, ending in
+          shot-number chips that navigate down to shot scope. */}
+      {!shot && scopeShots && onSelectShot && (
         <SceneStaleShots
-          shots={sceneShots}
-          staleness={sceneStaleness}
+          shots={scopeShots}
+          staleness={scopeStaleness}
+          stalenessFailed={scopeStalenessFailed}
           onSelectShot={onSelectShot}
         />
       )}
