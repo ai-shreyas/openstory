@@ -680,17 +680,8 @@ export const ScriptView: FC<{
   const handleCancel = onCancel;
 
   const executeRegeneration = () => {
-    posthog.capture('sequence_generated', {
-      is_editing: isEditing,
-      aspect_ratio: aspectRatio,
-      image_models: imageModels,
-      video_models: videoModels,
-      audio_models: audioModels,
-      auto_generate_motion: autoGenerateMotion,
-      auto_generate_music: autoGenerateMusic,
-      analysis_model_count: analysisModels.length,
-      script_length: (script ?? baseScript ?? '').length,
-    });
+    // sequence_generated is captured server-side in createSequences (#1088)
+    // so dashboard + public API both feed #product-alerts once.
     createSequenceMutation.mutate(
       {
         title: undefined,

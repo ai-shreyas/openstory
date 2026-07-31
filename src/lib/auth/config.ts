@@ -33,6 +33,7 @@ import {
 import { apiKey } from '@better-auth/api-key';
 import { passkey as passkeyPlugin } from '@better-auth/passkey';
 
+import { captureProductEvent } from '@/lib/observability/product-events';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'auth', 'config']);
@@ -269,6 +270,32 @@ function createAuth() {
                 metadata: { signupGrant: true },
               }
             );
+
+            // First-time account only — drives #product-alerts via PostHog (#1088).
+            captureProductEvent({
+              distinctId: user.id,
+              event: 'user_signed_up',
+              properties: {
+                email: user.email,
+                name: user.name,
+                team_id: team.id,
+              },
+            });
+          },
+        },
+      },
+      // Real session rows only (API-key auth uses an in-memory session and
+      // does not hit this hook). Covers email OTP, Google, and passkeys.
+      session: {
+        create: {
+          after: async (session, context) => {
+            captureProductEvent({
+              distinctId: session.userId,
+              event: 'user_signed_in',
+              properties: {
+                path: context?.path,
+              },
+            });
           },
         },
       },
