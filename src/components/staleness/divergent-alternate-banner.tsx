@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import type {
   StalenessArtifact,
   StalenessEntityType,
-  StalenessIndicatorDensity,
+  BannerDensity,
 } from './staleness-indicator';
 
 type DivergentAlternateBannerProps = {
@@ -18,7 +18,7 @@ type DivergentAlternateBannerProps = {
   onPromote?: () => void;
   /** Inline-only: discard button is rendered only when this is provided. */
   onDiscard?: () => void;
-  density?: StalenessIndicatorDensity;
+  density?: BannerDensity;
   className?: string;
 };
 

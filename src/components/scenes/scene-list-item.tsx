@@ -33,6 +33,11 @@ type SceneListItemProps = {
   modelMissing?: boolean;
   /** Name of the pinned image model, for the "No {model}" badge. */
   modelMissingLabel?: string | null;
+  /**
+   * Prompts/image out of date since the last edit (#1077) — quiet amber
+   * corner dot. Divergent alternates and the regen spinner take precedence.
+   */
+  isStale?: boolean;
 };
 
 const SceneListItemComponent: React.FC<SceneListItemProps> = ({
@@ -47,6 +52,7 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   onCompareDivergent,
   modelMissing = false,
   modelMissingLabel,
+  isStale = false,
 }) => {
   // Divergent alternate takes precedence: promoting it resolves staleness too.
   const showDivergentDot = !!divergentVariantId;
@@ -116,6 +122,18 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
             'bg-primary/10 text-primary'
           )}
         />
+      )}
+      {!showDivergentDot && shot && !isRegeneratingImage && isStale && (
+        <span
+          className="absolute right-3 top-3 z-10"
+          title="Out of date since your last edit"
+        >
+          <span className="sr-only">Out of date since your last edit</span>
+          <span
+            aria-hidden="true"
+            className="block h-2 w-2 rounded-full bg-amber-500 ring-2 ring-amber-500/30"
+          />
+        </span>
       )}
 
       <CardHeader>
@@ -209,7 +227,8 @@ const areEqual = (
     prevProps.isRegeneratingMotion !== nextProps.isRegeneratingMotion ||
     prevProps.divergentVariantId !== nextProps.divergentVariantId ||
     prevProps.modelMissing !== nextProps.modelMissing ||
-    prevProps.modelMissingLabel !== nextProps.modelMissingLabel
+    prevProps.modelMissingLabel !== nextProps.modelMissingLabel ||
+    prevProps.isStale !== nextProps.isStale
   ) {
     return false;
   }

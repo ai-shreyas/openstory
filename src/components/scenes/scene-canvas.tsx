@@ -41,6 +41,8 @@ type SceneCanvasProps = {
   overrideVideoUrl?: string | null;
   badgeMessage?: string | null;
   modelMismatchLabel?: string | null;
+  /** Quiet stale chip for the displayed image (#1077). */
+  staleLabel?: string | null;
   progressMessage?: string;
   retry?: { attempt: number; maxAttempts?: number };
   onSelectShot?: (shotId: string) => void;
@@ -160,6 +162,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
   overrideVideoUrl,
   badgeMessage,
   modelMismatchLabel,
+  staleLabel,
   progressMessage,
   retry,
   onSelectShot,
@@ -230,6 +233,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
           overrideVideoUrl={overrideVideoUrl}
           badgeMessage={badgeMessage}
           modelMismatchLabel={modelMismatchLabel}
+          staleLabel={staleLabel}
           progressMessage={progressMessage}
           retry={retry}
           posterUrl={sequence?.posterUrl ?? undefined}

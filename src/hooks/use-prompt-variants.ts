@@ -9,7 +9,7 @@ import {
 } from '@/functions/prompt-variants';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sequenceKeys } from './use-sequences';
-import { shotStalenessKey } from './use-shot-staleness';
+import { shotStalenessNamespace } from './use-shot-staleness';
 import { shotKeys } from './use-shots';
 
 /**
@@ -140,7 +140,7 @@ export function useSaveShotPrompt(args: {
           queryKey: shotKeys.list(args.sequenceId),
         }),
         queryClient.invalidateQueries({
-          queryKey: shotStalenessKey(args.shotId),
+          queryKey: shotStalenessNamespace,
         }),
       ]);
     },

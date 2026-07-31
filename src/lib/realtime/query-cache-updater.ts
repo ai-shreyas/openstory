@@ -1,6 +1,7 @@
 import { characterSheetVariantKeys } from '@/hooks/use-character-sheet-variants';
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { sceneKeys } from '@/hooks/use-scenes';
+import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
 import { segmentKeys } from '@/hooks/use-segments';
 import { shotKeys } from '@/hooks/use-shots';
 import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
@@ -425,10 +426,15 @@ export function updateQueryCacheFromEvent(
             shotKeys.list(sequenceId),
             `shots:${sequenceId}`
           );
+          // Namespace-wide: also refreshes the scene-scoped entry that feeds
+          // the scene summary and left-rail dots (#1077). Debounced per
+          // sequence, not per shot — the payload is sequence-wide, so a
+          // per-shot key would fan a burst of shot events into N identical
+          // namespace invalidations, each refetching every shot's hashes.
           debouncedInvalidate(
             queryClient,
-            ['shot-staleness', entityId],
-            `shot-staleness:${entityId}`
+            [...shotStalenessNamespace],
+            `shot-staleness:${sequenceId}`
           );
           break;
 

@@ -41,6 +41,7 @@ import {
 } from '@/functions/model-assets';
 import { getModelDetailFn, getModelFamilyFn } from '@/functions/model-catalog';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
+import { isInsufficientCreditsError } from '@/lib/errors';
 import type { GeneratedAsset } from '@/lib/db/schema';
 import {
   CATALOG_ACTIVITIES,
@@ -105,14 +106,6 @@ async function fetchModelDetail(
 // ---------------------------------------------------------------------------
 // Run mutation error handling
 // ---------------------------------------------------------------------------
-
-function isInsufficientCreditsError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes('INSUFFICIENT_CREDITS') ||
-      error.message.includes('Insufficient credits'))
-  );
-}
 
 /**
  * A non-terminal run past the workflow's absolute budget (30 min) plus slack

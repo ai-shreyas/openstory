@@ -1,28 +1,113 @@
-import { getShotStalenessFn } from '@/functions/shots';
-import { useQuery } from '@tanstack/react-query';
+import { getShotStalenessBatchFn, getShotStalenessFn } from '@/functions/shots';
+import {
+  SHOT_ARTIFACTS,
+  type ShotArtifact,
+  type ShotStalenessResult,
+} from '@/lib/shots/shot-staleness';
+import {
+  type QueryClient,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+
+export type { ShotArtifact };
 
 /**
- * Per-artifact staleness state.
- *   - `'stale'`     — stored input hash no longer matches a freshly-computed one.
- *   - `'fresh'`     — stored input hash matches; the artifact is up-to-date.
- *   - `'untracked'` — the artifact has no input hash on file (legacy data, or
- *                     never generated). The UI must not show a regenerate
- *                     prompt — we have no opinion to surface.
+ * The server's result shape, re-exported rather than redeclared so the two
+ * can't drift on either the state vocabulary or the artifact keys.
  */
-type ArtifactStaleness = 'stale' | 'fresh' | 'untracked';
+export type ShotStaleness = ShotStalenessResult;
 
-export type ShotStaleness = {
-  thumbnail: ArtifactStaleness;
-  visualPrompt: ArtifactStaleness;
-  motionPrompt: ArtifactStaleness;
-};
+/** Which of the shot's artifacts are out of date, if any. */
+const staleArtifacts = (staleness: ShotStaleness | undefined): ShotArtifact[] =>
+  SHOT_ARTIFACTS.filter((artifact) => staleness?.[artifact] === 'stale');
 
-export const shotStalenessKey = (shotId: string | undefined) =>
-  ['shot-staleness', shotId] as const;
+/** Any artifact on the shot out of date? */
+export const shotIsStale = (staleness: ShotStaleness | undefined): boolean =>
+  staleArtifacts(staleness).length > 0;
 
 /**
- * Shared query for shot staleness — consumers must use this hook rather
- * than an inline `useQuery` so cache invalidation hits one entry.
+ * Any artifact whose comparison failed. Surfaced separately from `shotIsStale`
+ * so a broken check reads as "couldn't check" rather than as "up to date".
+ */
+export const shotStalenessUnknown = (
+  staleness: ShotStaleness | undefined
+): boolean =>
+  SHOT_ARTIFACTS.some((artifact) => staleness?.[artifact] === 'unknown');
+
+/**
+ * Invalidation target for anything that moves a shot's staleness (prompt
+ * regen, image/video set, duration edit, script save). The per-shot,
+ * scene-scoped and sequence-scoped entries all live under this prefix, so
+ * invalidating the namespace keeps the shot indicators AND the scene/sequence
+ * summaries / left-rail dots in step — a per-shot key invalidation would
+ * leave the batched entries stale.
+ */
+export const shotStalenessNamespace = ['shot-staleness'] as const;
+
+const shotStalenessKey = (shotId: string | undefined) =>
+  [...shotStalenessNamespace, shotId] as const;
+
+/**
+ * Batched keys live under the same `'shot-staleness'` namespace so the
+ * existing namespace invalidations (script save, realtime events) refresh
+ * them too. No collision with `shotStalenessKey`: shot ids are ULIDs, never
+ * `'scene'`/`'sequence'`.
+ */
+const sceneShotStalenessKey = (sceneId: string | undefined) =>
+  [...shotStalenessNamespace, 'scene', sceneId] as const;
+const sequenceShotStalenessKey = (sequenceId: string) =>
+  [...shotStalenessNamespace, 'sequence', sequenceId] as const;
+
+const isBatchedKey = (key: readonly unknown[]) =>
+  key[1] === 'scene' || key[1] === 'sequence';
+
+/**
+ * Optimistically mark one artifact fresh everywhere it is cached — the shot's
+ * own entry plus the batched entries the left-rail dots and scope summary read
+ * from, which would otherwise keep showing the shot stale. Returns a rollback
+ * for the mutation's `onError`.
+ */
+export function markArtifactFresh(
+  queryClient: QueryClient,
+  shotId: string,
+  artifact: ShotArtifact
+): () => void {
+  const rollbacks: Array<() => void> = [];
+
+  const perShotKey = shotStalenessKey(shotId);
+  const perShot = queryClient.getQueryData<ShotStaleness>(perShotKey);
+  if (perShot) {
+    queryClient.setQueryData<ShotStaleness>(perShotKey, {
+      ...perShot,
+      [artifact]: 'fresh',
+    });
+    rollbacks.push(() => queryClient.setQueryData(perShotKey, perShot));
+  }
+
+  const batched = queryClient.getQueriesData<Record<string, ShotStaleness>>({
+    queryKey: shotStalenessNamespace,
+    predicate: (query) => isBatchedKey(query.queryKey),
+  });
+  for (const [key, byShot] of batched) {
+    const entry = byShot?.[shotId];
+    if (!byShot || !entry) continue;
+    queryClient.setQueryData(key, {
+      ...byShot,
+      [shotId]: { ...entry, [artifact]: 'fresh' },
+    });
+    rollbacks.push(() => queryClient.setQueryData(key, byShot));
+  }
+
+  return () => {
+    for (const rollback of rollbacks) rollback();
+  };
+}
+
+/**
+ * Shared query for shot staleness — consumers must use this hook rather than
+ * an inline `useQuery`, and invalidate via `shotStalenessNamespace` so the
+ * batched entries move with it.
  */
 export function useShotStaleness(args: {
   sequenceId: string;
@@ -36,6 +121,62 @@ export function useShotStaleness(args: {
       return getShotStalenessFn({ data: { sequenceId, shotId } });
     },
     enabled: !!shotId,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Fetch the batch and prime the per-shot `shotStalenessKey` entries so
+ * landing on a shot from the stale-shot navigation doesn't refire the
+ * single-shot query.
+ */
+async function fetchAndPrimeBatch(
+  queryClient: QueryClient,
+  data: { sequenceId: string; sceneId?: string }
+): Promise<Record<string, ShotStaleness>> {
+  const byShot = await getShotStalenessBatchFn({ data });
+  for (const [shotId, staleness] of Object.entries(byShot)) {
+    queryClient.setQueryData<ShotStaleness>(
+      shotStalenessKey(shotId),
+      staleness
+    );
+  }
+  return byShot;
+}
+
+/** Batched staleness for every shot in a scene (#1077), keyed by shot id. */
+export function useSceneShotStaleness(args: {
+  sequenceId: string;
+  sceneId: string | undefined;
+}) {
+  const { sequenceId, sceneId } = args;
+  const queryClient = useQueryClient();
+  return useQuery<Record<string, ShotStaleness>>({
+    queryKey: sceneShotStalenessKey(sceneId),
+    queryFn: () => {
+      if (!sceneId) throw new Error('sceneId required');
+      return fetchAndPrimeBatch(queryClient, { sequenceId, sceneId });
+    },
+    enabled: !!sceneId,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Sequence-wide staleness (#1077), keyed by shot id. Gated by `enabled` —
+ * it recomputes hashes for every shot in the sequence, so callers only turn
+ * it on while the sequence-scope panel is actually showing.
+ */
+export function useSequenceShotStaleness(args: {
+  sequenceId: string;
+  enabled?: boolean;
+}) {
+  const { sequenceId, enabled = true } = args;
+  const queryClient = useQueryClient();
+  return useQuery<Record<string, ShotStaleness>>({
+    queryKey: sequenceShotStalenessKey(sequenceId),
+    queryFn: () => fetchAndPrimeBatch(queryClient, { sequenceId }),
+    enabled: enabled && !!sequenceId,
     staleTime: 30_000,
   });
 }

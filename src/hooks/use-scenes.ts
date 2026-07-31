@@ -5,6 +5,7 @@ import {
 } from '@/functions/scenes';
 import type { SceneRow } from '@/lib/db/schema';
 import { sequenceKeys } from '@/hooks/use-sequences';
+import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
 import { shotKeys } from '@/hooks/use-shots';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -72,7 +73,7 @@ export function useSaveSceneScript(sequenceId: string) {
         }),
         // Staleness is per-shot and keyed by shot id; the scene's shots aren't
         // enumerated here, so drop the whole staleness namespace.
-        queryClient.invalidateQueries({ queryKey: ['shot-staleness'] }),
+        queryClient.invalidateQueries({ queryKey: shotStalenessNamespace }),
       ]);
     },
   });

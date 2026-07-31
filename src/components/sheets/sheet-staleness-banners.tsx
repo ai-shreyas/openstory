@@ -2,7 +2,7 @@ import { DivergentAlternateBanner } from '@/components/staleness/divergent-alter
 import { StalenessIndicator } from '@/components/staleness/staleness-indicator';
 import type {
   StalenessEntityType,
-  StalenessIndicatorDensity,
+  BannerDensity,
 } from '@/components/staleness/staleness-indicator';
 
 type SheetEntityType = Exclude<StalenessEntityType, 'shot' | 'sequence'>;
@@ -18,7 +18,7 @@ type SheetStalenessBannersProps = {
   divergentVariantId?: string;
   /** Whether the live primary's input hash has drifted from the current state. */
   isStale?: boolean;
-  density?: StalenessIndicatorDensity;
+  density?: BannerDensity;
   onCompareDivergent?: () => void;
   onPromoteDivergent?: () => void;
   onDiscardDivergent?: () => void;

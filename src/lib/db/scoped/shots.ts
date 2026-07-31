@@ -119,7 +119,7 @@ const SHOT_ARTIFACT_HASH_COLUMNS = {
 // well under D1's 100-bound-parameter ceiling (see `ensureAnchorFrames`).
 const ANCHOR_FRAMES_BATCH = 9;
 
-export type ShotArtifact = keyof typeof SHOT_ARTIFACT_HASH_COLUMNS;
+export type ShotHashArtifact = keyof typeof SHOT_ARTIFACT_HASH_COLUMNS;
 
 type ShotFilters = {
   orderBy?: ShotOrderBy;
@@ -373,7 +373,7 @@ export function createShotsMethods(db: Database) {
      */
     isStale: async (
       shotId: string,
-      artifact: ShotArtifact,
+      artifact: ShotHashArtifact,
       currentHash: string
     ): Promise<boolean> => {
       const result = await db

@@ -47,6 +47,8 @@ type SceneListProps = {
   initialMusicModel?: AudioModel;
   modelMissingShotIds?: Set<string>;
   modelMissingLabel?: string | null;
+  /** Shots with stale prompts/image in the in-focus scene (#1077) — amber dots. */
+  staleShotIds?: Set<string>;
 };
 
 const SceneListComponent: React.FC<SceneListProps> = ({
@@ -70,6 +72,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
   initialMusicModel,
   modelMissingShotIds,
   modelMissingLabel,
+  staleShotIds,
 }) => {
   const divergentByShotId = useMemo(() => {
     const map = new Map<string, ShotVariant>();
@@ -255,6 +258,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
               onCompareDivergent={onCompareDivergent}
               modelMissingShotIds={modelMissingShotIds}
               modelMissingLabel={modelMissingLabel}
+              staleShotIds={staleShotIds}
             />
           ))}
 
@@ -279,6 +283,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
                   (modelMissingShotIds?.has(shot.id) ?? false)
                 }
                 modelMissingLabel={modelMissingLabel}
+                isStale={staleShotIds?.has(shot.id) ?? false}
               />
             );
           })}

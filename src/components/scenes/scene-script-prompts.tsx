@@ -38,7 +38,10 @@ import {
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import {
   type ShotStaleness,
-  shotStalenessKey,
+  markArtifactFresh,
+  shotIsStale,
+  shotStalenessNamespace,
+  shotStalenessUnknown,
   useShotStaleness,
 } from '@/hooks/use-shot-staleness';
 import { useSaveSceneScript } from '@/hooks/use-scenes';
@@ -84,13 +87,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CopyIcon, History, Loader2, Minimize2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ShotStalenessBanners } from './shot-staleness-banners';
 import {
   SCENE_FACETS,
   type SceneFacet,
   type SelectionScope,
 } from '@/lib/scenes/scene-selection';
+import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
 import { SceneCastTab } from './scene-cast-tab';
+import { SceneStaleShots } from './scene-stale-shots';
 import { SceneElementsTab } from './scene-elements-tab';
 import { SceneLocationTab } from './scene-location-tab';
 import { SceneMusicFacet } from './scene-music-facet';
@@ -140,16 +144,6 @@ export function tabsForScope(scope: SelectionScope): TabDescriptor[] {
     { value: 'elements', label: 'Elements' },
     { value: 'music', label: 'Music' },
   ];
-}
-
-function isInsufficientCreditsError(error: unknown): boolean {
-  if (error instanceof Error) {
-    return (
-      error.message.includes('INSUFFICIENT_CREDITS') ||
-      error.message.includes('Insufficient credits')
-    );
-  }
-  return false;
 }
 
 function isValidTabValue(value: string): value is TabValue {
@@ -330,6 +324,17 @@ type SceneScriptPromptsProps = {
   scriptSceneId?: string;
   /** That scene's current script extract (selected version, #1030). */
   scriptText?: string;
+  /**
+   * The in-scope shots + their batched staleness (#1077) — the selected
+   * scene's at scene scope, every shot at sequence scope. Drives the
+   * stale-shot summary above the tabs.
+   */
+  scopeShots?: ShotWithImage[];
+  scopeStaleness?: Record<string, ShotStaleness>;
+  /** The batched staleness request failed — surfaced instead of "all clear". */
+  scopeStalenessFailed?: boolean;
+  /** Navigate down to a shot — same handler the left rail uses. */
+  onSelectShot?: (shotId: string) => void;
 };
 
 export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
@@ -362,6 +367,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   musicEditable = false,
   scriptSceneId,
   scriptText,
+  scopeShots,
+  scopeStaleness,
+  scopeStalenessFailed,
+  onSelectShot,
 }) => {
   const divergentImageVariant = useMemo(
     () => shotDivergentVariants?.find((v) => v.variantType === 'image'),
@@ -435,8 +444,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         {
           onError: (error) => {
             toast.error('Failed to switch video version', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -451,7 +459,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     stripeEnabled,
   } = useFalBillingGate();
 
-  const { data: staleness } = useShotStaleness({
+  const { data: staleness, isError: isStalenessError } = useShotStaleness({
     sequenceId,
     shotId: shot?.id,
   });
@@ -493,21 +501,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       // completion swap below should win.
       if (vars.promptType === 'visual') dirtyImageRef.current = false;
       else dirtyMotionRef.current = false;
-      if (!shot?.id) return { previous: undefined };
-      const key = shotStalenessKey(shot.id);
-      await queryClient.cancelQueries({ queryKey: key });
-      const previous = queryClient.getQueryData<ShotStaleness>(key);
-      if (previous) {
-        const promptKey =
-          vars.promptType === 'visual' ? 'visualPrompt' : 'motionPrompt';
-        queryClient.setQueryData<ShotStaleness>(key, {
-          ...previous,
-          [promptKey]: 'fresh',
-        });
-      }
-      return { previous };
+      if (!shot?.id) return { rollback: undefined };
+      await queryClient.cancelQueries({ queryKey: shotStalenessNamespace });
+      const rollback = markArtifactFresh(
+        queryClient,
+        shot.id,
+        vars.promptType === 'visual' ? 'visualPrompt' : 'motionPrompt'
+      );
+      return { rollback };
     },
-    onSuccess: async (result, vars) => {
+    onSuccess: (result, vars) => {
       if (result.alreadyUpToDate) {
         toast.info('Prompt is already up to date');
       } else {
@@ -521,18 +524,14 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             : 'Regenerating motion prompt…'
         );
       }
-      if (shot?.id) {
-        await queryClient.invalidateQueries({
-          queryKey: shotStalenessKey(shot.id),
-        });
-      }
+      // Deliberately no staleness invalidation here: the workflow has only been
+      // enqueued, so a refetch now would answer 'stale' and undo the optimistic
+      // write. The completion event invalidates the namespace instead.
     },
     onError: (error, _vars, context) => {
-      if (context?.previous && shot?.id) {
-        queryClient.setQueryData(shotStalenessKey(shot.id), context.previous);
-      }
+      context?.rollback?.();
       toast.error('Prompt regenerate failed', {
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage(error),
       });
     },
   });
@@ -628,7 +627,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       queryKey: shotKeys.list(sequenceId),
     });
     void queryClient.invalidateQueries({
-      queryKey: shotStalenessKey(shotId),
+      queryKey: shotStalenessNamespace,
     });
   }, [shotPromptStream.visual.status, shotId, sequenceId, queryClient]);
   useEffect(() => {
@@ -641,7 +640,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       queryKey: shotKeys.list(sequenceId),
     });
     void queryClient.invalidateQueries({
-      queryKey: shotStalenessKey(shotId),
+      queryKey: shotStalenessNamespace,
     });
   }, [shotPromptStream.motion.status, shotId, sequenceId, queryClient]);
 
@@ -662,8 +661,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         },
         onError: (error) => {
           toast.error('Failed to save scene', {
-            description:
-              error instanceof Error ? error.message : 'Unknown error',
+            description: errorMessage(error),
           });
         },
       }
@@ -692,7 +690,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         setTimeout(() => setCopiedTab(null), 2000);
       } catch (error) {
         toast.error('Failed to copy', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
     },
@@ -755,7 +753,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       });
     } catch (error) {
       toast.error('Failed to set image', {
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage(error),
       });
     }
   }, [shot, effectiveImageModel, setImageFromVariant]);
@@ -789,7 +787,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       });
     } catch (error) {
       toast.error('Failed to set video', {
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage(error),
       });
     }
   }, [shot, effectiveMotionModel, setVideoFromVariant]);
@@ -833,6 +831,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const handleRegenerate = useCallback(async () => {
     if (!shot?.id || !shot.sequenceId) return;
 
+    const promptOverride = editedImagePrompt || undefined;
+
     onRegenerateStart(shot.id, 'image');
 
     // Optimistic update for shot list query
@@ -845,7 +845,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             ? {
                 ...f,
                 thumbnailStatus: 'generating' as const,
-                imagePrompt: editedImagePrompt || f.imagePrompt,
+                imagePrompt: promptOverride ?? f.imagePrompt,
                 imageModel: regenImageModel,
               }
             : f
@@ -861,7 +861,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         return {
           ...oldShot,
           thumbnailStatus: 'generating' as const,
-          imagePrompt: editedImagePrompt || oldShot.imagePrompt,
+          imagePrompt: promptOverride ?? oldShot.imagePrompt,
           imageModel: regenImageModel,
         };
       }
@@ -873,7 +873,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           sequenceId: shot.sequenceId,
           shotId: shot.id,
           model: regenImageModel,
-          prompt: editedImagePrompt || undefined,
+          prompt: promptOverride,
         },
       });
 
@@ -888,7 +888,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         });
       } else {
         toast.error('Image generation failed', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
 
@@ -969,7 +969,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         });
       } else {
         toast.error('Motion generation failed', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
 
@@ -1266,6 +1266,20 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     shot?.videoStatus === 'generating' ||
     (shot?.id ? regeneratingMotion.has(shot.id) : false);
 
+  // Anything on this shot out of date? Drives the status line (#1077). The
+  // per-prompt optimistic 'fresh' writes clear the relevant term the moment a
+  // regenerate is clicked, so the line retracts as the update progresses.
+  // Suppressed while a regenerate is in flight — the busy controls already say
+  // so, and "out of date" over a regenerating still just reads as stuck.
+  const shotBusy = isGenerating || isGeneratingMotion;
+  const shotHasStale = !!shot && !shotBusy && shotIsStale(staleness);
+  // The comparison failed rather than came back clean — say so instead of
+  // rendering the confident silence of an up-to-date shot.
+  const shotStaleUnknown =
+    !!shot &&
+    !shotBusy &&
+    (isStalenessError || shotStalenessUnknown(staleness));
+
   return (
     <Tabs
       value={selectedTab}
@@ -1276,19 +1290,32 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       }}
       className="w-full"
     >
-      <ShotStalenessBanners
-        shotId={shot?.id}
-        sequenceId={sequenceId}
-        isRegenerating={isGenerating}
-        onRegenerate={() => {
-          onTabChange('image-prompt');
-          if (falNeedsBillingSetup) {
-            showFalGate();
-            return;
-          }
-          void handleRegenerate();
-        }}
-      />
+      {/* Staleness status line (#1077) — one quiet summary under the scope
+          header instead of the old filled banners. Purely informational: each
+          artifact carries its own Regenerate control on its tab, so the
+          summary states the condition and the tabs own the action. */}
+      {shotHasStale && (
+        <StalenessIndicator entityType="shot" density="status-line" />
+      )}
+      {shotStaleUnknown && !shotHasStale && (
+        <StalenessIndicator
+          entityType="shot"
+          density="status-line"
+          tone="unknown"
+          message="Couldn’t check whether this shot is up to date"
+        />
+      )}
+
+      {/* Scene/sequence scope (#1077): same one-line pattern, ending in
+          shot-number chips that navigate down to shot scope. */}
+      {!shot && scopeShots && onSelectShot && (
+        <SceneStaleShots
+          shots={scopeShots}
+          staleness={scopeStaleness}
+          stalenessFailed={scopeStalenessFailed}
+          onSelectShot={onSelectShot}
+        />
+      )}
 
       {/* Mobile: Select dropdown */}
       <div className="md:hidden">
@@ -1374,30 +1401,31 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             </Alert>
           )}
 
-          {/* Prompt-stale banner — above the field so it reads with the text
-              it refers to, not below History / actions. Hide while regenerating
-              so "Inputs changed" doesn't sit over a streaming field. */}
-          {staleness?.visualPrompt === 'stale' &&
-            !isRegeneratingVisualPrompt && (
-              <StalenessIndicator
-                artifact="visual-prompt"
-                entityType="shot"
-                density="inline"
-                onRegenerate={() =>
-                  regeneratePromptMutation.mutate({ promptType: 'visual' })
-                }
-              />
-            )}
-
           {/* Editable prompt */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label
-                htmlFor="image-prompt-input"
-                className="text-sm font-medium"
-              >
-                Prompt
-              </label>
+              <span className="flex items-center gap-2">
+                <label
+                  htmlFor="image-prompt-input"
+                  className="text-sm font-medium"
+                >
+                  Prompt
+                </label>
+                {/* Quiet stale chip on the artifact itself (#1077); the
+                    optimistic 'fresh' write clears it the moment Regenerate
+                    is clicked. */}
+                {staleness?.visualPrompt === 'stale' && (
+                  <StalenessIndicator
+                    artifact="visual-prompt"
+                    entityType="shot"
+                    density="header-chip"
+                    isRegenerating={isRegeneratingVisualPrompt}
+                    onRegenerate={() =>
+                      regeneratePromptMutation.mutate({ promptType: 'visual' })
+                    }
+                  />
+                )}
+              </span>
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground">
                   {
@@ -1645,28 +1673,29 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               prompt starts streaming back ('pending' → first delta). */}
           <ThinkingBar active={shotPromptStream.motion.status === 'pending'} />
 
-          {/* Prompt-stale banner — above the field (same as image tab). */}
-          {staleness?.motionPrompt === 'stale' &&
-            !isRegeneratingMotionPrompt && (
-              <StalenessIndicator
-                artifact="motion-prompt"
-                entityType="shot"
-                density="inline"
-                onRegenerate={() =>
-                  regeneratePromptMutation.mutate({ promptType: 'motion' })
-                }
-              />
-            )}
-
           {/* Editable raw motion prompt */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label
-                htmlFor="motion-prompt-input"
-                className="text-sm font-medium"
-              >
-                Prompt
-              </label>
+              <span className="flex items-center gap-2">
+                <label
+                  htmlFor="motion-prompt-input"
+                  className="text-sm font-medium"
+                >
+                  Prompt
+                </label>
+                {/* Quiet stale chip — same pattern as the image tab (#1077). */}
+                {staleness?.motionPrompt === 'stale' && (
+                  <StalenessIndicator
+                    artifact="motion-prompt"
+                    entityType="shot"
+                    density="header-chip"
+                    isRegenerating={isRegeneratingMotionPrompt}
+                    onRegenerate={() =>
+                      regeneratePromptMutation.mutate({ promptType: 'motion' })
+                    }
+                  />
+                )}
+              </span>
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground">
                   {

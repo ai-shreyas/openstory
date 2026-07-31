@@ -26,6 +26,12 @@ import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useSceneSelection } from '@/hooks/use-scene-selection';
 import { useSequenceSegments } from '@/hooks/use-segments';
 import { useScenesBySequence } from '@/hooks/use-scenes';
+import {
+  shotIsStale,
+  useSceneShotStaleness,
+  useSequenceShotStaleness,
+} from '@/hooks/use-shot-staleness';
+import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
 import { sequenceKeys, useSequence } from '@/hooks/use-sequences';
 import {
   shotKeys,
@@ -201,14 +207,6 @@ function removeAllFromSet(prev: Set<string>, ids: string[]): Set<string> {
 
 function isTerminalStatus(status: string | null): boolean {
   return status === 'completed' || status === 'failed';
-}
-
-function isInsufficientCreditsError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes('INSUFFICIENT_CREDITS') ||
-      error.message.includes('Insufficient credits'))
-  );
 }
 
 export const ScenesView: React.FC<ScenesViewProps> = ({
@@ -483,8 +481,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           {
             onError: (error) => {
               toast.error('Failed to restore alternate', {
-                description:
-                  error instanceof Error ? error.message : 'Unknown error',
+                description: errorMessage(error),
               });
             },
           }
@@ -503,8 +500,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           },
           onError: (error) => {
             toast.error('Failed to discard alternate', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -536,8 +532,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           },
           onError: (error) => {
             toast.error('Failed to promote alternate', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -639,6 +634,46 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       scriptScene.originalScript?.extract
     );
   }, [scriptScene, shots]);
+
+  // Batched staleness for the in-focus scene's shots (#1077): feeds the scene
+  // panel's stale-shot summary, the left-rail dots and the canvas chip, and
+  // primes the per-shot staleness cache. `scriptScene` is the shot's own scene
+  // at shot scope, so this covers both scopes.
+  const { data: sceneStaleness, isError: sceneStalenessFailed } =
+    useSceneShotStaleness({
+      sequenceId,
+      sceneId: scriptScene?.id,
+    });
+  // Sequence scope has no focused scene — its summary covers every shot.
+  // Gated so the whole-sequence hash recompute only runs while that panel
+  // is actually showing.
+  const { data: sequenceStaleness, isError: sequenceStalenessFailed } =
+    useSequenceShotStaleness({
+      sequenceId,
+      enabled: scope === 'sequence',
+    });
+  const scriptSceneShots = useMemo(
+    () =>
+      scriptScene && shots
+        ? shots.filter((s) => s.sceneId === scriptScene.id)
+        : undefined,
+    [scriptScene, shots]
+  );
+  const scopeStaleness =
+    scope === 'sequence' ? sequenceStaleness : sceneStaleness;
+  // A failed staleness check must not render as "everything is up to date":
+  // with no data every downstream consumer draws a confidently clean UI (no
+  // dots, no chips, no summary) off the back of a request that errored.
+  const scopeStalenessFailed =
+    scope === 'sequence' ? sequenceStalenessFailed : sceneStalenessFailed;
+  const scopeShots = scope === 'sequence' ? shots : scriptSceneShots;
+  const staleShotIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const [shotId, staleness] of Object.entries(scopeStaleness ?? {})) {
+      if (shotIsStale(staleness)) set.add(shotId);
+    }
+    return set;
+  }, [scopeStaleness]);
 
   // Model identity lives on the version that produced the asset (#1066), so the
   // tabs target whatever the selected shot's selected image/video version was
@@ -1081,7 +1116,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         });
       } else {
         toast.error('Failed to retry', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
     } finally {
@@ -1266,6 +1301,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             initialMusicModel={sequenceMusicModel}
             modelMissingShotIds={shotsMissingActiveImage}
             modelMissingLabel={activeImageModelLabel}
+            staleShotIds={staleShotIds}
           />
         </div>
 
@@ -1323,6 +1359,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   curSelectedShotId &&
                   shotsMissingActiveImage.has(curSelectedShotId)
                     ? `Not generated with ${activeImageModelLabel}`
+                    : null
+                }
+                staleLabel={
+                  effectiveTab === 'image-prompt' &&
+                  curSelectedShotId &&
+                  !regeneratingImages.has(curSelectedShotId) &&
+                  scopeStaleness?.[curSelectedShotId]?.thumbnail === 'stale'
+                    ? 'Out of date'
                     : null
                 }
                 progressMessage={
@@ -1389,6 +1433,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   musicEditable={scope === 'sequence'}
                   scriptSceneId={scriptScene?.id}
                   scriptText={scriptText}
+                  scopeShots={scopeShots}
+                  scopeStaleness={scopeStaleness}
+                  scopeStalenessFailed={scopeStalenessFailed}
+                  onSelectShot={handleSelectShot}
                 />
               </ScrollArea>
             </div>
@@ -1440,6 +1488,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 musicEditable={scope === 'sequence'}
                 scriptSceneId={scriptScene?.id}
                 scriptText={scriptText}
+                scopeShots={scopeShots}
+                scopeStaleness={scopeStaleness}
+                scopeStalenessFailed={scopeStalenessFailed}
+                onSelectShot={handleSelectShot}
               />
             </ScrollArea>
           </div>
