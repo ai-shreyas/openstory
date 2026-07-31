@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "d6925783-dc5b-4b5b-81b2-dd05cf2a97b5",
-  "prevIds": ["4fe64890-e5aa-4dee-ab96-c89bcfbd75fa"],
+  "id": "1da98632-aa7a-497e-b302-2aae29701075",
+  "prevIds": ["53b35518-2c91-46cf-88cd-0ffbaba14b06"],
   "ddl": [
     {
       "name": "account",
@@ -9438,6 +9438,12 @@
       "name": "positive_balance",
       "entityType": "checks",
       "table": "credits"
+    },
+    {
+      "value": "(\"observed_median_units\" IS NULL) = (\"observed_sample_count\" = 0)",
+      "name": "model_pricing_observed_pair",
+      "entityType": "checks",
+      "table": "model_pricing"
     }
   ],
   "renames": []

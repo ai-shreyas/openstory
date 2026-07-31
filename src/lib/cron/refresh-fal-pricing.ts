@@ -35,8 +35,9 @@ import {
   modelPricingHistory,
   modelUsageObservations,
 } from '@/lib/db/schema';
+import type { ObservedUnits } from '@/lib/db/schema/model-pricing';
 import { getLogger } from '@/lib/observability/logger';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, lt, sql, type SQL } from 'drizzle-orm';
 
 const logger = getLogger(['openstory', 'cron', 'refresh-fal-pricing']);
 
@@ -89,7 +90,23 @@ function median(values: number[]): number {
   return ((sorted[mid - 1] ?? 0) + upper) / 2;
 }
 
-type ObservedUnits = Map<string, { median: number; count: number }>;
+/**
+ * Observed units per fal endpoint. Values use the shared {@link ObservedUnits}
+ * field names so the hand-off into the `model_pricing` row and out again into
+ * `EffectiveFalPricing.observed` is a rename-free copy — with two locally-named
+ * `number` fields, a mapping that swapped median and count would compile.
+ */
+type ObservedUnitsByEndpoint = Map<string, ObservedUnits>;
+
+/**
+ * The single method `computeObservedUnits` needs. Declared structurally rather
+ * than as the full D1 client so the query can be exercised against a plain
+ * libsql instance in tests — the bug this guards lives in drizzle's column
+ * mapping, so a hand-rolled stub would reproduce nothing worth testing.
+ */
+type ObservationReader = {
+  all<T>(query: SQL): Promise<T[]>;
+};
 
 /**
  * The `model_pricing` composite key, flattened for Map/Set lookup. The
@@ -103,6 +120,17 @@ function pricingKey(row: { endpointId: string; unit: string }): string {
 
 function observationCutoff(): Date {
   return new Date(Date.now() - OBSERVATION_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * `createdAt` is `integer({ mode: 'timestamp' })`, which drizzle stores in
+ * **seconds**. Raw `sql` interpolation bypasses that mapping, so a `Date` or a
+ * `getTime()` millisecond value compared against the column is always false —
+ * silently, forever. Only the query builder's own operators (see the prune's
+ * `lt(...)` below) apply the conversion for you.
+ */
+function toEpochSeconds(date: Date): number {
+  return Math.floor(date.getTime() / 1000);
 }
 
 /**
@@ -120,9 +148,9 @@ function observationCutoff(): Date {
  * every other one, starving exactly the rarely-used compute-seconds endpoints
  * that most need an observed median (#1069).
  */
-async function computeObservedUnits(
-  db: ReturnType<typeof getDb>
-): Promise<{ observed: ObservedUnits; samples: number }> {
+export async function computeObservedUnits(
+  db: ObservationReader
+): Promise<{ observed: ObservedUnitsByEndpoint; samples: number }> {
   const cutoff = observationCutoff();
   const rows = await db.all<{
     endpoint_id: string;
@@ -140,7 +168,7 @@ async function computeObservedUnits(
         ) AS rn
       FROM ${modelUsageObservations}
       WHERE ${modelUsageObservations.provider} = 'fal'
-        AND ${modelUsageObservations.createdAt} > ${cutoff.getTime()}
+        AND ${modelUsageObservations.createdAt} > ${toEpochSeconds(cutoff)}
     ) WHERE rn <= ${OBSERVATIONS_PER_ENDPOINT}
   `);
 
@@ -157,10 +185,13 @@ async function computeObservedUnits(
     else byEndpoint.set(row.endpoint_id, [perImage]);
   }
 
-  const observed: ObservedUnits = new Map();
+  const observed: ObservedUnitsByEndpoint = new Map();
   let samples = 0;
   for (const [endpointId, units] of byEndpoint) {
-    observed.set(endpointId, { median: median(units), count: units.length });
+    observed.set(endpointId, {
+      medianUnits: median(units),
+      sampleCount: units.length,
+    });
     samples += units.length;
   }
   return { observed, samples };
@@ -231,8 +262,8 @@ export async function refreshFalPricing(): Promise<FalPricingRefreshSummary> {
       unit: p.unit,
       unitPriceMicros: usdToMicros(p.unitPriceUsd),
       typicalUnitsPerCall: typical,
-      observedMedianUnits: obs?.median ?? null,
-      observedSampleCount: obs?.count ?? 0,
+      observedMedianUnits: obs?.medianUnits ?? null,
+      observedSampleCount: obs?.sampleCount ?? 0,
       fetchedAt: now,
       updatedAt: now,
     };

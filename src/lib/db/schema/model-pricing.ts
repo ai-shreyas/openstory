@@ -24,6 +24,7 @@
  */
 
 import {
+  check,
   index,
   integer,
   primaryKey,
@@ -31,17 +32,37 @@ import {
   snakeCase,
   text,
 } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 import type { FalUnit } from '@/lib/ai/fal-pricing-data';
 import { generateId } from '../id';
 
 export type ModelPricingProvider = 'fal' | 'openrouter';
 
 /**
- * Billed unit denominators across providers — fal's kinds today; LLM token
- * rate kinds (e.g. 'input_tokens' / 'output_tokens') widen this union when
- * the OpenRouter fetcher lands.
+ * Billed unit denominators across providers — fal's kinds today.
+ *
+ * When the OpenRouter fetcher lands, widen THIS type
+ * (`FalUnit | OpenRouterUnit`) and not `FalUnit`. `estimateFalCost` switches
+ * exhaustively over `FalUnit` and has no meaningful branch for a token rate,
+ * so adding token kinds there would force dead cases into the fal estimator.
+ * (Pre-declaring `OpenRouterUnit = never` doesn't help — `T | never` is just
+ * `T`, so it buys no enforcement, only noise.)
  */
 export type ModelPricingUnit = FalUnit;
+
+/**
+ * The observed-units pair, shared by every layer that carries it: this table's
+ * columns, the cron's in-memory map, and `EffectiveFalPricing.observed`. One
+ * declaration because a median and its sample count are both `number` — three
+ * separately-named shapes meant the hand-written mappings between them would
+ * compile with the two fields swapped.
+ */
+export type ObservedUnits = {
+  /** Median unitsBilled per image across our own recent generations. */
+  medianUnits: number;
+  /** How many of our generations back that median. */
+  sampleCount: number;
+};
 
 export const modelPricing = snakeCase.table(
   'model_pricing',
@@ -53,7 +74,10 @@ export const modelPricing = snakeCase.table(
     unitPriceMicros: integer().notNull(),
     /** Provider's historical estimate of units per call (null = no history). */
     typicalUnitsPerCall: real(),
-    /** Median unitsBilled across our own recent generations (null = none yet). */
+    /**
+     * Median unitsBilled across our own recent generations (null = none yet).
+     * Travels with `observedSampleCount` — see the CHECK below.
+     */
     observedMedianUnits: real(),
     /** How many of our generations back the observed median. */
     observedSampleCount: integer().default(0).notNull(),
@@ -65,14 +89,31 @@ export const modelPricing = snakeCase.table(
   },
   (table) => [
     primaryKey({ columns: [table.provider, table.endpointId, table.unit] }),
+    /**
+     * A median and its sample count are one fact, but two nullable-vs-not
+     * columns can disagree: `(NULL, 42)` silently discards a real signal, and
+     * `(3.5, 0)` is an anecdote the estimator only rejects by luck. The
+     * writer is consistent today; this makes it structural.
+     *
+     * Added while the table is still new — retrofitting a CHECK later means a
+     * full SQLite table rebuild, which is the D1 CASCADE trap in CLAUDE.md.
+     */
+    check(
+      'model_pricing_observed_pair',
+      sql`(${table.observedMedianUnits} IS NULL) = (${table.observedSampleCount} = 0)`
+    ),
   ]
 );
 
 /**
  * Raw per-generation usage samples — the input the observed median is computed
- * from. Written for **every** fal generation, including BYOK, zero-cost and
+ * from. Written by `recordFalUsage` for every fal generation that reports
+ * `unitsBilled` and has a team context, including BYOK, unpriced and
  * insufficient-credit ones: those write no transaction row, so mining the
  * ledger only ever learned from teams in good standing without their own key.
+ * That is why the write lives in its own workflow step rather than inside
+ * `deductWorkflowCredits`, which every call site guards behind
+ * `cost > 0 && !usedOwnKey`.
  *
  * Deliberately carries no `teamId`: it is anonymous model-behaviour telemetry,
  * not team data, so it needs no FK (and cannot participate in the D1

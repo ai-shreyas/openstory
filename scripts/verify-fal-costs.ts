@@ -19,6 +19,11 @@
  */
 
 import { estimateFalCost } from '@/lib/ai/fal-cost';
+// This CLI runs outside the Worker, so it cannot read the live `model_pricing`
+// table — it verifies the checked-in seed against fal's actual usage, which is
+// what `bun scripts/update-fal-pricing.ts` writes. Passed explicitly because
+// estimators no longer default to it.
+import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import {
   AUDIO_MODELS,
   IMAGE_MODELS,
@@ -231,12 +236,16 @@ function calculateImageCostForVariation(
 ): number | null {
   const dims = IMAGE_DIMS[variation];
   return estimateUsd(
-    estimateFalCost(endpointId, {
-      numImages: 1,
-      widthPx: dims.width,
-      heightPx: dims.height,
-      resolution: getImageCostResolution(modelKey, variation),
-    })
+    estimateFalCost(
+      endpointId,
+      {
+        numImages: 1,
+        widthPx: dims.width,
+        heightPx: dims.height,
+        resolution: getImageCostResolution(modelKey, variation),
+      },
+      FAL_PRICING
+    )
   );
 }
 
@@ -312,10 +321,14 @@ function buildVideoTasks(imageUrl: string): Task[] {
         tier,
         input: input as Record<string, unknown>,
         estimatedCostUsd: estimateUsd(
-          estimateFalCost(config.id, {
-            durationSeconds: duration,
-            resolution,
-          })
+          estimateFalCost(
+            config.id,
+            {
+              durationSeconds: duration,
+              resolution,
+            },
+            FAL_PRICING
+          )
         ),
       });
     }
@@ -386,9 +399,13 @@ function buildAudioTasks(): Task[] {
         tier,
         input: buildAudioInput(modelKey, config, duration),
         estimatedCostUsd: estimateUsd(
-          estimateFalCost(config.id, {
-            durationSeconds: duration,
-          })
+          estimateFalCost(
+            config.id,
+            {
+              durationSeconds: duration,
+            },
+            FAL_PRICING
+          )
         ),
       });
     }

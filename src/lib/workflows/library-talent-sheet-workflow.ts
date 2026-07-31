@@ -20,6 +20,7 @@ import {
   deductWorkflowCredits,
   extractImageCost,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -133,6 +134,14 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       return await generateImageWithProvider(generationParams, { scopedDb });
     });
 
+    const sheetUsage = falUsageMetadata(imageResult.metadata);
+
+    // Recorded outside the deduction: BYOK generations bill the same units as
+    // charged ones, and deductWorkflowCredits returns early on them (#1069).
+    await step.do('record-fal-usage-sheet', async () => {
+      await recordFalUsage(scopedDb, sheetUsage);
+    });
+
     // Deduct credits for sheet generation (skip if team used own fal key)
     await step.do('deduct-credits-sheet', async () => {
       await deductWorkflowCredits({
@@ -141,9 +150,8 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Talent sheet (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:sheet`,
-        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
-          ...falUsageMetadata(imageResult.metadata),
+          ...sheetUsage,
           talentId: input.talentId,
           type: 'sheet',
         },
@@ -336,6 +344,12 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       }
     );
 
+    const headshotUsage = falUsageMetadata(headshotResult.metadata);
+
+    await step.do('record-fal-usage-headshot', async () => {
+      await recordFalUsage(scopedDb, headshotUsage);
+    });
+
     // Deduct credits for headshot generation (skip if team used own fal key)
     await step.do('deduct-credits-headshot', async () => {
       await deductWorkflowCredits({
@@ -344,9 +358,8 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         usedOwnKey: headshotResult.metadata.usedOwnKey,
         description: `Talent headshot (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:headshot`,
-        falUsage: falUsageMetadata(headshotResult.metadata),
         metadata: {
-          ...falUsageMetadata(headshotResult.metadata),
+          ...headshotUsage,
           talentId: input.talentId,
           type: 'headshot',
         },

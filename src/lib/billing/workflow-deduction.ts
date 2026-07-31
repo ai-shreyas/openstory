@@ -5,8 +5,12 @@
  * Warns and skips (rather than throwing) if credits are insufficient,
  * since the work has already been completed at this point.
  *
- * Usage observations are recorded regardless of any of those skips — a
- * generation tells us what a model bills whether or not it was charged.
+ * Pricing observations are deliberately NOT recorded here. Charging a team and
+ * learning what a model bills are independent concerns, and coupling them is
+ * what made #1069 self-sealing: every call site guards deduction behind
+ * `cost > 0 && !usedOwnKey`, so a recorder living inside this function would
+ * never see the BYOK and unpriced generations whose units we most need. Use
+ * `recordFalUsage` in its own workflow step instead.
  *
  * All monetary values are in Microdollars.
  */
@@ -36,13 +40,6 @@ type WorkflowDeductionOpts = {
   metadata?: Record<string, unknown>;
   /** Workflow name for the logger.warn prefix (e.g., "VariantWorkflow") */
   workflowName?: string;
-  /**
-   * Provider usage for this generation, recorded as a pricing observation
-   * regardless of whether the team is charged (#1069). Pass it for every
-   * fal-backed call — BYOK and zero-cost generations tell us just as much
-   * about a model's unit count as billed ones.
-   */
-  falUsage?: FalUsage;
 };
 
 /**
@@ -52,20 +49,12 @@ type WorkflowDeductionOpts = {
  * - Skips if costMicros <= 0
  * - Skips if the team used their own API key (usedOwnKey = true)
  * - Warns and skips if the team has insufficient credits (work already done)
- *
- * `falUsage` is recorded as a pricing observation before any of those skips,
- * so the observed-median signal sees every generation rather than only the
- * billable ones.
  */
 export async function deductWorkflowCredits(
   opts: WorkflowDeductionOpts
 ): Promise<void> {
   if (!opts.scopedDb) return;
   const { scopedDb } = opts;
-
-  if (opts.falUsage) {
-    await recordFalUsage(scopedDb, opts.falUsage);
-  }
 
   if (opts.usedOwnKey) return;
 
@@ -121,9 +110,10 @@ export type FalUsage = {
 };
 
 /**
- * Narrow a generation result's metadata to the usage fields. Pass the result to
- * `deductWorkflowCredits({ falUsage })`; it is also spread into transaction
- * metadata at the call sites so a charge can be traced back to its units.
+ * Narrow a generation result's metadata to the usage fields, for spreading into
+ * a credit transaction's metadata so a charge can be traced back to its units.
+ * Recording an observation takes the result metadata directly — this is only
+ * for the billing trail.
  */
 export function falUsageMetadata(metadata: FalUsage): FalUsage {
   return {
@@ -136,14 +126,23 @@ export function falUsageMetadata(metadata: FalUsage): FalUsage {
 /**
  * Persist one usage sample for the pricing cron's observed median (#1069).
  *
+ * Call this for **every** fal generation, in its own `step.do`, before any
+ * `cost > 0 && !usedOwnKey` branching — BYOK and unpriced generations tell us
+ * just as much about a model's unit count as billed ones, and an unpriced
+ * model has no other route off the `UNKNOWN_ESTIMATE_FLOOR`. Its own step also
+ * makes the insert replay-safe: outside one, a workflow replay re-records.
+ *
  * Best-effort: a failure here must never fail a generation that already
  * succeeded and was already paid for, so it logs rather than throws. Samples
  * with no `unitsBilled` carry no signal and are skipped.
  */
-async function recordFalUsage(
-  scopedDb: ScopedDb,
+export async function recordFalUsage(
+  scopedDb: ScopedDb | undefined,
   usage: FalUsage
 ): Promise<void> {
+  // Observations are platform-global telemetry with no teamId (see
+  // model_usage_observations), but the write still needs a db handle.
+  if (!scopedDb) return;
   const { unitsBilled } = usage;
   if (
     unitsBilled == null ||

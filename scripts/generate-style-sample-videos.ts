@@ -51,7 +51,9 @@ import {
   type ImageToVideoModel,
   type TextToImageModel,
 } from '@/lib/ai/models';
-import { microsToUsd, ZERO_MICROS } from '@/lib/billing/money';
+import { microsToUsd } from '@/lib/billing/money';
+// CLI: no Worker, so no live model_pricing — estimate against the seed.
+import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import {
   aspectRatioSchema,
   type AspectRatio,
@@ -421,21 +423,42 @@ async function renderJob(job: RenderJob, submitOnly: boolean): Promise<void> {
  * Rough motion-cost indicator (raw model price × planned scenes). Generation
  * bills the API key's team in platform credits — images, motion, and music —
  * so the real bill is higher; this is only a relative size of the run.
+ *
+ * Models we can't price yet return null. They are counted separately rather
+ * than added as $0: this figure is printed to an operator about to spend real
+ * money, and "unknown" silently reading as "free" is exactly the #1069 error.
  */
-function estimateCost(jobs: RenderJob[]): number {
+function estimateCost(jobs: RenderJob[]): { usd: number; unpriced: number } {
   let usd = 0;
+  let unpriced = 0;
   for (const job of jobs) {
-    const { cost } = calculateMotionMetadata({
-      imageUrl: 'https://example.com/x.webp',
-      prompt: 'sample',
-      model: job.videoModel,
-      duration: NOMINAL_BEAT_SECONDS,
-      aspectRatio: job.aspectRatio,
-      generateAudio: false,
-    });
-    usd += microsToUsd(cost ?? ZERO_MICROS) * job.plannedScenes;
+    const { cost } = calculateMotionMetadata(
+      {
+        imageUrl: 'https://example.com/x.webp',
+        prompt: 'sample',
+        model: job.videoModel,
+        duration: NOMINAL_BEAT_SECONDS,
+        aspectRatio: job.aspectRatio,
+        generateAudio: false,
+      },
+      FAL_PRICING
+    );
+    if (cost == null) {
+      unpriced += 1;
+      continue;
+    }
+    usd += microsToUsd(cost) * job.plannedScenes;
   }
-  return usd;
+  return { usd, unpriced };
+}
+
+/** Renders the indicator as a lower bound when some models are unpriced. */
+function formatCostIndicator(jobs: RenderJob[]): string {
+  const { usd, unpriced } = estimateCost(jobs);
+  const amount = `$${usd.toFixed(2)}`;
+  return unpriced > 0
+    ? `≥ ${amount} (${unpriced} job(s) on unpriced models — excluded)`
+    : `≈ ${amount}`;
 }
 
 function printDryRun(jobs: RenderJob[]) {
@@ -466,7 +489,7 @@ function printDryRun(jobs: RenderJob[]) {
   console.log(
     `\nTotals: ${byStyle.size} styles, ${jobs.length} videos, ~${clips} clips ` +
       `(+~${clips} image gens + music per sequence), all via the OpenStory pipeline ` +
-      `at ${OPENSTORY_API_URL}. Motion-cost indicator ≈ $${estimateCost(jobs).toFixed(2)} ` +
+      `at ${OPENSTORY_API_URL}. Motion-cost indicator ${formatCostIndicator(jobs)} ` +
       `(bills the API key's team in credits).`
   );
   if (!OPENSTORY_API_KEY) {
@@ -521,9 +544,9 @@ async function main() {
     flags.submitOnly
       ? `🚀 Submitting ${jobs.length} sequence(s) to the OpenStory pipeline (${OPENSTORY_API_URL}) — ` +
           `no polling; ids land in sample-videos/{slug}/{kind}.sequence.json. ` +
-          `Motion-cost indicator ≈ $${estimateCost(jobs).toFixed(2)} (bills the API key's team)\n`
+          `Motion-cost indicator ${formatCostIndicator(jobs)} (bills the API key's team)\n`
       : `🎬 Rendering ${jobs.length} videos via the OpenStory pipeline (${OPENSTORY_API_URL}). ` +
-          `Motion-cost indicator ≈ $${estimateCost(jobs).toFixed(2)} (bills the API key's team)\n`
+          `Motion-cost indicator ${formatCostIndicator(jobs)} (bills the API key's team)\n`
   );
   await mkdir(OUTPUT_DIR, { recursive: true });
   const failures = await runPool(jobs, flags.submitOnly);

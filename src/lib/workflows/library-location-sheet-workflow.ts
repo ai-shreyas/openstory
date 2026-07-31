@@ -16,6 +16,7 @@ import {
   deductWorkflowCredits,
   extractImageCost,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -97,6 +98,14 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       return generateImageWithProvider(generationParams, { scopedDb });
     });
 
+    const sheetUsage = falUsageMetadata(imageResult.metadata);
+
+    // Recorded outside the deduction: BYOK generations bill the same units as
+    // charged ones, and deductWorkflowCredits returns early on them (#1069).
+    await step.do('record-fal-usage-sheet', async () => {
+      await recordFalUsage(scopedDb, sheetUsage);
+    });
+
     // Deduct credits for image generation (skip if team used own fal key)
     await step.do('deduct-credits-sheet', async () => {
       await deductWorkflowCredits({
@@ -105,9 +114,8 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Library location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
-        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
-          ...falUsageMetadata(imageResult.metadata),
+          ...sheetUsage,
           model: generationParams.model,
           locationName: input.locationName,
           locationDbId: input.locationDbId,
@@ -194,6 +202,12 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       return generateImageWithProvider(previewParams, { scopedDb });
     });
 
+    const previewUsage = falUsageMetadata(previewResult.metadata);
+
+    await step.do('record-fal-usage-preview', async () => {
+      await recordFalUsage(scopedDb, previewUsage);
+    });
+
     // Deduct credits for preview generation
     await step.do('deduct-credits-preview', async () => {
       await deductWorkflowCredits({
@@ -202,9 +216,8 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         usedOwnKey: previewResult.metadata.usedOwnKey,
         description: `Location preview (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
         idempotencyKey: `${event.instanceId}:preview`,
-        falUsage: falUsageMetadata(previewResult.metadata),
         metadata: {
-          ...falUsageMetadata(previewResult.metadata),
+          ...previewUsage,
           locationDbId: input.locationDbId,
           type: 'preview',
         },

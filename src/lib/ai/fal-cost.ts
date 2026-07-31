@@ -21,15 +21,24 @@ const logger = getLogger(['openstory', 'ai', 'fal-cost']);
  * 2. `typicalUnitsPerCall` — fal's historical estimate (baked into
  *    fal-pricing-data.ts by `bun scripts/update-fal-pricing.ts`, refreshed
  *    live by the same cron).
- * 3. For compute_seconds models with neither signal: **null** ("unknown").
- *    No fabricated default — the old `DEFAULT_COMPUTE_SECONDS = 3` made
- *    Grok Imagine read ~98× cheap (it really bills ~294 compute-seconds
- *    per image). Callers gate conservatively / display nothing instead.
+ * 3. With neither signal: **null** ("unknown"), logged. No fabricated
+ *    default — a fixed one made Grok Imagine read ~98× cheap, which is what
+ *    #1069 was. Callers gate conservatively / display nothing instead.
  *
- * Duration-based models still use parametric math from request params.
+ * That applies to compute_seconds, images and flat alike: an `images` price
+ * is not reliably per-image (fal denominates gpt-image-2 and phota in
+ * fractional "units", so a real call bills ~0.22), and a flat rate can cover
+ * an arbitrary unit count. Guessing 1 is the same class of error as guessing
+ * 3 seconds — it just happens to be wrong by less on the models we seed.
+ *
+ * Megapixel and duration-based models (seconds / minutes / tokens) stay
+ * parametric from request params and never need a unit-count signal.
  */
 
-import { FAL_PRICING, type FalPricing } from '@/lib/ai/fal-pricing-data';
+import type { FalPricing } from '@/lib/ai/fal-pricing-data';
+// Type-only: erased at compile, so this adds no runtime edge to the DB schema
+// module and this file stays importable by pure, DB-free callers.
+import type { ObservedUnits } from '@/lib/db/schema/model-pricing';
 import {
   type Microdollars,
   ZERO_MICROS,
@@ -39,15 +48,20 @@ import {
 /** `FalPricing` plus the observed-units signal from the `model_pricing` table. */
 export type EffectiveFalPricing = FalPricing & {
   /**
-   * Our own recent generations, when we have enough of them. Median and
-   * sample count travel together so a median can never be read without the
+   * Our own recent generations. Median and sample count travel together (one
+   * shared {@link ObservedUnits}) so a median can never be read without the
    * confidence behind it — an n=1 median is an anecdote, not a statistic.
+   *
+   * Present whenever the table has a median at all, at ANY sample count —
+   * `MIN_OBSERVED_SAMPLES` is applied by readers, not at construction, so a
+   * future caller that wants to show "based on N samples" still can. Anything
+   * deciding money must go through `knownUnitsPerCall`.
    *
    * `medianUnits` is per **image** (per call for non-image endpoints): the
    * refresh cron divides each sample's `unitsBilled` by that call's
    * `numImages`, matching how the estimator multiplies it back up below.
    */
-  observed?: { medianUnits: number; sampleCount: number };
+  observed?: ObservedUnits;
 };
 
 /**
@@ -84,6 +98,11 @@ const TOKEN_RESOLUTION_DIMENSIONS: Record<
  * Returns `ZERO_MICROS` and logs an error when pricing is missing or fal did
  * not report `unitsBilled` — we charge nothing rather than guess, so a usage
  * regression surfaces loudly instead of silently mis-billing.
+ *
+ * Every caller runs this AFTER fal has generated and billed, inside a retried
+ * workflow step, so it must never throw: a rejected promise there discards a
+ * finished image and pays fal a second time on the retry. A failed pricing
+ * read therefore takes the same deliberate under-charge as missing pricing.
  */
 export async function falCostFromUnits(
   endpointId: string,
@@ -91,16 +110,23 @@ export async function falCostFromUnits(
   pricingMap?: Record<string, EffectiveFalPricing>
 ): Promise<Microdollars> {
   // Resolved lazily so pure callers (and tests) can pass a map and skip D1,
-  // mirroring `estimateFalCost`'s optional-map shape. The dynamic import also
-  // keeps the fal-cost → fal-pricing-live edge out of the module graph, which
-  // would otherwise be a cycle (fal-pricing-live imports this module's types).
+  // mirroring `estimateFalCost`'s optional-map shape. The dynamic import keeps
+  // `#db-client` out of the module graph for callers that only ever estimate.
   let resolved: Record<string, EffectiveFalPricing>;
   if (pricingMap) {
     resolved = pricingMap;
   } else {
-    const { getEffectiveFalPricing } =
-      await import('@/lib/ai/fal-pricing-live');
-    resolved = await getEffectiveFalPricing();
+    try {
+      const { getEffectiveFalPricing } =
+        await import('@/lib/ai/fal-pricing-live');
+      resolved = await getEffectiveFalPricing();
+    } catch (err) {
+      logger.error(
+        `Failed to read live pricing for ${endpointId} — charging nothing rather than failing a completed generation`,
+        { err, endpointId, unitsBilled }
+      );
+      return ZERO_MICROS;
+    }
   }
   const pricing = resolved[endpointId];
   if (!pricing) {
@@ -170,13 +196,17 @@ function knownUnitsPerCall(pricing: EffectiveFalPricing): number | undefined {
  * params — historical averages encode a random past duration and would be
  * wrong for the requested length.
  *
- * Pass `pricingMap` from `getEffectiveFalPricing()` to estimate against the
- * live `model_pricing` table; the default is the baked-in static seed.
+ * `pricingMap` is required, and required on every wrapper in
+ * `cost-estimation.ts` too. It used to default to the baked-in seed, which
+ * meant a call site that forgot it silently estimated on frozen prices — the
+ * #1069 failure mode reached by a different route, and invisible because the
+ * number still looked plausible. Pass `getEffectiveFalPricing()` on server
+ * paths; pass `FAL_PRICING` explicitly to assert against the seed.
  */
 export function estimateFalCost(
   endpointId: string,
   params: FalCostEstimateParams,
-  pricingMap: Record<string, EffectiveFalPricing> = FAL_PRICING
+  pricingMap: Record<string, EffectiveFalPricing>
 ): Microdollars | null {
   const pricing = pricingMap[endpointId];
   if (!pricing) {
@@ -188,19 +218,25 @@ export function estimateFalCost(
   const duration = params.durationSeconds ?? 0;
 
   switch (pricing.unit) {
-    case 'images': {
-      // One billable generation per image. Observed/historical units capture
-      // quality / resolution premiums (nano-banana 1.5× at 2K, gpt-image-2
-      // ≈ 0.22); with neither signal, 1 unit per image is the honest read of
-      // an images-denominated price.
-      const unitsPerImage = knownUnitsPerCall(pricing) ?? 1;
-      return multiplyMicros(pricing.unitPrice, unitsPerImage * numImages);
-    }
-
+    // Per-call unit counts. Observed/historical units capture quality and
+    // resolution premiums (nano-banana bills ~1.5 units, gpt-image-2 ~0.22),
+    // and fal's "units" denominator means neither price is reliably per-call —
+    // so with no signal these report unknown rather than assuming 1. Every
+    // seeded endpoint carries a historical figure today; the null path is for
+    // a model the cron has just discovered.
+    case 'images':
     case 'flat': {
-      // Flat-rate video: one unit set per generation, not per "image".
-      const unitsPerCall = knownUnitsPerCall(pricing) ?? 1;
-      return multiplyMicros(pricing.unitPrice, unitsPerCall);
+      const unitsPerCall = knownUnitsPerCall(pricing);
+      if (unitsPerCall == null) {
+        logger.error(
+          `No unit-count signal for ${pricing.unit} endpoint ${endpointId} — ` +
+            'estimate unknown (returns once a generation records unitsBilled)'
+        );
+        return null;
+      }
+      // Flat-rate video bills one unit set per generation, not per image.
+      const calls = pricing.unit === 'images' ? numImages : 1;
+      return multiplyMicros(pricing.unitPrice, unitsPerCall * calls);
     }
 
     case 'megapixels': {
@@ -248,7 +284,15 @@ export function estimateFalCost(
     default: {
       // Exhaustiveness guard: a new FalUnit without a case fails to compile.
       const _exhaustive: never = pricing.unit;
-      return _exhaustive;
+      // `unit` is a `$type<>()` assertion over a plain D1 text column, so an
+      // unrecognised value reaches here at runtime despite the compile-time
+      // check. Returning `_exhaustive` would hand that raw string back as
+      // `Microdollars` and float it into the credit gate — report unknown.
+      logger.error(
+        `Unrecognised fal unit for ${endpointId} — estimate unknown`,
+        { unit: String(_exhaustive) }
+      );
+      return null;
     }
   }
 }

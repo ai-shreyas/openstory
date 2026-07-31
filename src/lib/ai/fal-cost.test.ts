@@ -76,35 +76,45 @@ describe('falCostFromUnits', () => {
 describe('estimateFalCost', () => {
   test('per-image uses typicalUnitsPerCall × numImages (nano-banana historical 1.5×)', () => {
     // unitPrice $0.08, typicalUnitsPerCall 1.5 → $0.12 each, $0.24 for 2.
-    expect(estimateFalCost('fal-ai/nano-banana-2', { numImages: 2 })).toBe(
-      micros(240_000)
-    );
+    expect(
+      estimateFalCost('fal-ai/nano-banana-2', { numImages: 2 }, FAL_PRICING)
+    ).toBe(micros(240_000));
   });
 
   test('gpt-image-2 is not estimated at $1/image (unit_price is $1 per unit, ~0.22 units/call)', () => {
     // fal historical_api_price ≈ $0.22/call; unit_price=$1 → 0.22 units.
     // Treating unitPrice as a flat per-image dollar cost was the #1062 bug.
-    expect(estimateFalCost('openai/gpt-image-2', { numImages: 1 })).toBe(
-      micros(220_000)
-    );
-    expect(estimateFalCost('openai/gpt-image-2', { numImages: 14 })).toBe(
-      micros(3_080_000)
-    );
+    expect(
+      estimateFalCost('openai/gpt-image-2', { numImages: 1 }, FAL_PRICING)
+    ).toBe(micros(220_000));
+    expect(
+      estimateFalCost('openai/gpt-image-2', { numImages: 14 }, FAL_PRICING)
+    ).toBe(micros(3_080_000));
     // Must stay well under the $1×N overestimate that blocked first storyboards.
     expect(
-      Number(estimateFalCost('openai/gpt-image-2', { numImages: 1 }))
+      Number(
+        estimateFalCost('openai/gpt-image-2', { numImages: 1 }, FAL_PRICING)
+      )
     ).toBeLessThan(Number(usd(1)));
   });
 
   test('per-second scales by duration (ignores historical typical duration)', () => {
     expect(
-      estimateFalCost('fal-ai/veo3.1/image-to-video', { durationSeconds: 8 })
+      estimateFalCost(
+        'fal-ai/veo3.1/image-to-video',
+        { durationSeconds: 8 },
+        FAL_PRICING
+      )
     ).toBe(usd(3.2));
   });
 
   test('per-minute rounds up', () => {
     expect(
-      estimateFalCost('fal-ai/elevenlabs/music', { durationSeconds: 61 })
+      estimateFalCost(
+        'fal-ai/elevenlabs/music',
+        { durationSeconds: 61 },
+        FAL_PRICING
+      )
     ).toBe(usd(1.6));
   });
 
@@ -113,9 +123,13 @@ describe('estimateFalCost', () => {
     // omitted. The old DEFAULT_COMPUTE_SECONDS=3 made this read ~$0.001 when
     // Grok really bills ~294 compute-seconds (~$0.05) per image (#1069).
     expect(
-      estimateFalCost('xai/grok-imagine-image/quality/text-to-image', {
-        numImages: 2,
-      })
+      estimateFalCost(
+        'xai/grok-imagine-image/quality/text-to-image',
+        {
+          numImages: 2,
+        },
+        FAL_PRICING
+      )
     ).toBeNull();
   });
 
@@ -189,15 +203,21 @@ describe('estimateFalCost', () => {
 
   test('tokens estimate from resolution (parametric, not historical)', () => {
     expect(
-      estimateFalCost('bytedance/seedance-2.0/enterprise/v2/image-to-video', {
-        durationSeconds: 5,
-        resolution: '720p',
-      })
+      estimateFalCost(
+        'bytedance/seedance-2.0/enterprise/v2/image-to-video',
+        {
+          durationSeconds: 5,
+          resolution: '720p',
+        },
+        FAL_PRICING
+      )
     ).toBe(micros(1_587_600));
   });
 
   test('unknown endpoint has no estimate', () => {
-    expect(estimateFalCost('unknown/model', { numImages: 1 })).toBeNull();
+    expect(
+      estimateFalCost('unknown/model', { numImages: 1 }, FAL_PRICING)
+    ).toBeNull();
   });
 });
 describe('FAL_PRICING coverage', () => {

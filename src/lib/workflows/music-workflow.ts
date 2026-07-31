@@ -19,6 +19,7 @@ import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -102,6 +103,15 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
     // Deduct credits (skip if team used own fal key)
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
     const musicCostMicros = audioResult.metadata?.cost ?? ZERO_MICROS;
+    const falUsage = falUsageMetadata(audioResult.metadata);
+
+    // Outside the deduction guard below: a BYOK or unpriced generation bills
+    // the same units as a charged one, and is the only route off the
+    // unknown-estimate floor for a model we can't price yet (#1069).
+    await step.do('record-fal-usage', async () => {
+      await recordFalUsage(scopedDb, falUsage);
+    });
+
     if (musicCostMicros > 0 && !audioResult.metadata.usedOwnKey) {
       await step.do('deduct-credits', async () => {
         await deductWorkflowCredits({
@@ -110,9 +120,8 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
           usedOwnKey: audioResult.metadata.usedOwnKey,
           description: `Music generation (${model})`,
           idempotencyKey: `${event.instanceId}:music`,
-          falUsage: falUsageMetadata(audioResult.metadata),
           metadata: {
-            ...falUsageMetadata(audioResult.metadata),
+            ...falUsage,
             model,
             sequenceId,
             // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard

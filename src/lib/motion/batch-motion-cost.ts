@@ -58,11 +58,11 @@ export function estimateBatchMotionCost(
   models: BatchShotModels,
   sequence: SequenceModelFields,
   opts: {
+    /** Live map from `getEffectiveFalPricing()` (or the seed, explicitly). */
+    pricing: Record<string, EffectiveFalPricing>;
     explicitModel?: ImageToVideoModel | null;
     duration?: number;
-    /** Live pricing map from `getEffectiveFalPricing()`; static seed if omitted */
-    pricing?: Record<string, EffectiveFalPricing>;
-  } = {}
+  }
 ): Microdollars {
   return shots.reduce((sum, shot) => {
     const model = resolveBatchShotVideoModel(

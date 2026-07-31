@@ -25,6 +25,7 @@ import {
   deductWorkflowCredits,
   extractImageCost,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -229,6 +230,14 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
       );
     }
 
+    const falUsage = falUsageMetadata(imageResult.metadata);
+
+    // Recorded outside the deduction: BYOK generations bill the same units as
+    // charged ones, and deductWorkflowCredits returns early on them (#1069).
+    await step.do('record-fal-usage', async () => {
+      await recordFalUsage(scopedDb, falUsage);
+    });
+
     // Deduct credits for image generation (skip if team used own fal key)
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
@@ -237,9 +246,8 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Character sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
-        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
-          ...falUsageMetadata(imageResult.metadata),
+          ...falUsage,
           model: generationParams.model,
           characterName: input.characterName,
           characterDbId: input.characterDbId,

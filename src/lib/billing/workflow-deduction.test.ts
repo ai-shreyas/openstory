@@ -37,8 +37,10 @@ function makeScopedDb({ canAfford = true } = {}) {
   };
 }
 
-const { deductWorkflowCredits: deductWorkflowCreditsImpl } =
-  await import('./workflow-deduction');
+const {
+  deductWorkflowCredits: deductWorkflowCreditsImpl,
+  recordFalUsage: recordFalUsageImpl,
+} = await import('./workflow-deduction');
 
 describe('deductWorkflowCredits', () => {
   it('forwards the idempotencyKey to deductCredits', async () => {
@@ -129,28 +131,64 @@ describe('deductWorkflowCredits', () => {
     expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
   });
 
-  it('records a fal usage observation even when the team is BYOK', async () => {
-    // BYOK generations are never charged, but they say just as much about a
-    // model's unit count — mining only billed rows biased the median (#1069).
-    const { scopedDb, deductCredits, recordUsage } = makeScopedDb({
-      canAfford: true,
-    });
+  it('never records a usage observation — that is recordFalUsage’s job', async () => {
+    // Deduction is guarded by `cost > 0 && !usedOwnKey` at every call site, so
+    // a recorder living in here would never see BYOK or unpriced generations.
+    // Keeping the two apart is what makes the observed median unbiased (#1069).
+    const { scopedDb, recordUsage } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
       costMicros: micros(2_000_000),
-      usedOwnKey: true,
+      usedOwnKey: false,
       description: 'Image generation (test-model)',
       idempotencyKey: 'env_image_abc123:image',
-      falUsage: { endpointId: 'fal-ai/nano-banana-2', unitsBilled: 1.5 },
     });
 
-    expect(deductCredits).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe('recordFalUsage', () => {
+  it('records the sample with numImages, so the median can divide by it', async () => {
+    const { scopedDb, recordUsage } = makeScopedDb();
+
+    await recordFalUsageImpl(scopedDb, {
+      endpointId: 'fal-ai/nano-banana-2',
+      unitsBilled: 6,
+      numImages: 4,
+    });
+
     expect(recordUsage).toHaveBeenCalledTimes(1);
     expect(recordUsage.mock.calls[0]?.[0]).toMatchObject({
       provider: 'fal',
       endpointId: 'fal-ai/nano-banana-2',
-      unitsBilled: 1.5,
+      unitsBilled: 6,
+      numImages: 4,
     });
+  });
+
+  it('skips samples with no unitsBilled rather than seeding the median with zeros', async () => {
+    const { scopedDb, recordUsage } = makeScopedDb();
+
+    await recordFalUsageImpl(scopedDb, { endpointId: 'fal-ai/nano-banana-2' });
+    await recordFalUsageImpl(scopedDb, {
+      endpointId: 'fal-ai/nano-banana-2',
+      unitsBilled: 0,
+    });
+
+    expect(recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('swallows a write failure — telemetry must never fail a paid generation', async () => {
+    const { scopedDb, recordUsage } = makeScopedDb();
+    recordUsage.mockRejectedValue(new Error('D1 unavailable'));
+
+    await expect(
+      recordFalUsageImpl(scopedDb, {
+        endpointId: 'fal-ai/nano-banana-2',
+        unitsBilled: 1.5,
+      })
+    ).resolves.toBeUndefined();
   });
 });

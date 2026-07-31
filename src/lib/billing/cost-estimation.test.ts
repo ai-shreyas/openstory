@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import {
   type AudioModel,
   type ImageToVideoModel,
@@ -6,8 +7,10 @@ import {
 } from '@/lib/ai/models';
 import {
   estimateImageCost,
+  estimateLLMCost,
   estimateStoryboardCost,
   estimateVideoCost,
+  gateEstimate,
 } from './cost-estimation';
 
 const IMAGE_MODEL: TextToImageModel = 'nano_banana_2';
@@ -21,15 +24,20 @@ const AUDIO_B: AudioModel = 'ace_step_1_5';
 const SCENE_COUNT = 8;
 const DURATION = 5;
 
+// Every estimator now requires an explicit pricing map. These tests assert
+// against the checked-in seed deliberately, so they name it rather than
+// relying on a default that no longer exists.
 const base = {
   imageModel: IMAGE_MODEL,
   aspectRatio: '16:9' as const,
   estimatedSceneCount: SCENE_COUNT,
+  pricing: FAL_PRICING,
 };
 
 /** Per-shot motion cost a model contributes across the whole storyboard. */
 const motionContribution = (model: ImageToVideoModel) =>
-  Number(estimateVideoCost(model, DURATION)) * SCENE_COUNT;
+  Number(estimateVideoCost(model, DURATION, { pricing: FAL_PRICING })) *
+  SCENE_COUNT;
 
 /** Per-sequence music cost a single audio model adds to the storyboard. */
 const audioContribution = (model: AudioModel) =>
@@ -48,7 +56,9 @@ describe('estimateStoryboardCost', () => {
     // Only per-shot images scale with model count — the character/location
     // sheets and LLM analysis are charged once regardless.
     const perShotImagePass = Number(
-      estimateImageCost(IMAGE_MODEL, base.aspectRatio, SCENE_COUNT)
+      estimateImageCost(IMAGE_MODEL, base.aspectRatio, SCENE_COUNT, {
+        pricing: FAL_PRICING,
+      })
     );
     expect(two - one).toBe(perShotImagePass);
   });
@@ -195,5 +205,57 @@ describe('estimateStoryboardCost', () => {
         })
       )
     ).toBe(noMotion);
+  });
+});
+
+/**
+ * The unknown-estimate floor (#1069). Grok Imagine is a real, selectable model
+ * whose compute-seconds endpoint has no fal historical estimate, so
+ * `estimateFalCost` returns null for it until observations accumulate — the
+ * floor IS its production credit gate. Every other test here uses a priced
+ * model, so `gateEstimate`'s null branch would otherwise never execute.
+ */
+describe('gateEstimate', () => {
+  const UNPRICED: TextToImageModel = 'grok_imagine_image';
+
+  it('returns the honest estimate untouched when one exists', () => {
+    const honest = estimateImageCost(IMAGE_MODEL, '16:9', 1, {
+      pricing: FAL_PRICING,
+    });
+    expect(honest).not.toBeNull();
+    expect(
+      gateEstimate(honest, { model: IMAGE_MODEL, operation: 'shot-image' })
+    ).toBe(honest);
+  });
+
+  it('substitutes the $0.10/call floor when the model has no signal', () => {
+    expect(
+      estimateImageCost(UNPRICED, '16:9', 1, { pricing: FAL_PRICING })
+    ).toBeNull();
+    // Never ZERO_MICROS: gating an unpriced model at zero lets it generate
+    // with no credit check at all.
+    expect(
+      Number(gateEstimate(null, { model: UNPRICED, operation: 'shot-image' }))
+    ).toBe(100_000);
+  });
+
+  it('scales the floor by the call count', () => {
+    expect(
+      Number(
+        gateEstimate(null, { model: UNPRICED, operation: 'shot-image' }, 3)
+      )
+    ).toBe(300_000);
+  });
+
+  it('keeps a storyboard total non-null and floored when the image model is unpriced', () => {
+    // Character sheets (3) + location sheets (3) + one image per scene, each
+    // gated at the floor, plus the flat LLM allowance.
+    const total = Number(
+      estimateStoryboardCost({ ...base, imageModel: UNPRICED })
+    );
+    const flooredImages = (3 + 3 + SCENE_COUNT) * 100_000;
+    const llm = Number(estimateLLMCost(3));
+
+    expect(total).toBe(flooredImages + llm);
   });
 });

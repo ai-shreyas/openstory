@@ -19,6 +19,7 @@ import {
   deductWorkflowCredits,
   extractImageCost,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { generateId } from '@/lib/db/id';
@@ -138,6 +139,14 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
       return await generateImageWithProvider(generationParams, { scopedDb });
     });
 
+    const falUsage = falUsageMetadata(imageResult.metadata);
+
+    // Recorded outside the deduction: BYOK generations bill the same units as
+    // charged ones, and deductWorkflowCredits returns early on them (#1069).
+    await step.do('record-fal-usage', async () => {
+      await recordFalUsage(scopedDb, falUsage);
+    });
+
     // Deduct credits for image generation (skip if team used own fal key)
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
@@ -146,9 +155,8 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
-        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
-          ...falUsageMetadata(imageResult.metadata),
+          ...falUsage,
           model: generationParams.model,
           locationName: input.locationName,
           locationDbId: input.locationDbId,

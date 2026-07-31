@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, test, vi } from 'vitest';
+import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import type { Frame, Sequence } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
@@ -498,15 +499,21 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     const expectedCost = addMicros(
       addMicros(
         ZERO_MICROS,
-        gateEstimate(estimateImageCost('gpt_image_2', '16:9', 1), {
-          model: 'gpt_image_2',
-          operation: 'test',
-        })
+        gateEstimate(
+          estimateImageCost('gpt_image_2', '16:9', 1, { pricing: FAL_PRICING }),
+          {
+            model: 'gpt_image_2',
+            operation: 'smart-retry:motion',
+          }
+        )
       ),
-      gateEstimate(estimateImageCost('flux_2_max', '16:9', 1), {
-        model: 'flux_2_max',
-        operation: 'test',
-      })
+      gateEstimate(
+        estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+        {
+          model: 'flux_2_max',
+          operation: 'smart-retry:motion',
+        }
+      )
     );
     expect(requireCreditsMock).toHaveBeenCalledTimes(1);
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
@@ -578,10 +585,13 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
       addMicros(
         ZERO_MICROS,
-        gateEstimate(estimateImageCost('flux_2_max', '16:9', 1), {
-          model: 'flux_2_max',
-          operation: 'test',
-        })
+        gateEstimate(
+          estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+          {
+            model: 'flux_2_max',
+            operation: 'smart-retry:motion',
+          }
+        )
       )
     );
   });

@@ -32,6 +32,7 @@ import { microsToUsd, type Microdollars } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
@@ -673,6 +674,18 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       });
     });
 
+    const falUsage = falUsageMetadata({
+      endpointId: billedEndpointId,
+      unitsBilled: billedUnits,
+    });
+
+    // Outside the deduction guard below: a BYOK or unpriced generation bills
+    // the same units as a charged one, and is the only route off the
+    // unknown-estimate floor for a model we can't price yet (#1069).
+    await step.do('record-fal-usage', async () => {
+      await recordFalUsage(scopedDb, falUsage);
+    });
+
     // Deduct credits (skip if team used own fal key). Routed through
     // deductWorkflowCredits so insufficient balances warn-and-skip (with an
     // auto-top-up attempt) like every other workflow, instead of debiting
@@ -685,15 +698,8 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           usedOwnKey: job.usedOwnKey,
           description: `Motion generation (${model})`,
           idempotencyKey: `${event.instanceId}:motion`,
-          falUsage: falUsageMetadata({
-            endpointId: billedEndpointId,
-            unitsBilled: billedUnits,
-          }),
           metadata: {
-            ...falUsageMetadata({
-              endpointId: billedEndpointId,
-              unitsBilled: billedUnits,
-            }),
+            ...falUsage,
             model,
             shotId: input.shotId,
             sequenceId: input.sequenceId,

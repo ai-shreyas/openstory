@@ -13,6 +13,7 @@ import {
   deductWorkflowCredits,
   extractImageCost,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import {
   DEFAULT_IMAGE_SIZE,
@@ -150,6 +151,14 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
       return generateImageWithProvider(prep.params, { scopedDb });
     });
 
+    const falUsage = falUsageMetadata(imageResult.metadata);
+
+    // Recorded outside the deduction: BYOK generations bill the same units as
+    // charged ones, and deductWorkflowCredits returns early on them (#1069).
+    await step.do('record-fal-usage', async () => {
+      await recordFalUsage(scopedDb, falUsage);
+    });
+
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
         scopedDb,
@@ -157,9 +166,8 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Variant grid generation (${prep.params.model})`,
         idempotencyKey: `${event.instanceId}:variant-image`,
-        falUsage: falUsageMetadata(imageResult.metadata),
         metadata: {
-          ...falUsageMetadata(imageResult.metadata),
+          ...falUsage,
           model: prep.params.model,
           shotId: input.shotId,
           sequenceId: input.sequenceId,

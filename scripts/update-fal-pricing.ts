@@ -53,13 +53,11 @@ const { typicalUnits, failedEndpoints } = await fetchFalTypicalUnits(
   apiKey,
   unitPrices
 );
-if (failedEndpoints.size > 0) {
-  // Baking a seed while some endpoints were unreachable would silently drop
-  // their typicalUnitsPerCall into the checked-in file (#1069).
-  console.error(
-    `\n${failedEndpoints.size} endpoint(s) failed their historical estimate fetch:\n  ${[...failedEndpoints].join('\n  ')}\nRe-run before committing — the seed would omit their typicalUnitsPerCall.`
-  );
-}
+// A failed fetch is handled below by carrying the committed value forward,
+// mirroring the cron's `failed` vs `no-history` split (fal-pricing-fetch.ts).
+// The cron aborts above MAX_TYPICAL_FETCH_FAILURE_RATIO because nobody is
+// watching it; here a human is, so we repair what we can and fail loudly on
+// the rest.
 
 // ============================================================================
 // Read existing file for a price-change diff
@@ -84,6 +82,10 @@ try {
 // ============================================================================
 
 const pricing: Record<string, BuilderFalPricing> = {};
+/** Endpoints whose typicalUnitsPerCall this run would erase outright. */
+const lostTypicalUnits: string[] = [];
+const carriedTypicalUnits: string[] = [];
+
 for (const p of unitPrices.sort((a, b) =>
   a.endpointId.localeCompare(b.endpointId)
 )) {
@@ -92,12 +94,38 @@ for (const p of unitPrices.sort((a, b) =>
     unit: p.unit,
   };
 
-  const typical = typicalUnits.get(p.endpointId);
-  if (typical != null) {
-    entry.typicalUnitsPerCall = typical;
+  // A 429 is not an answer of "no history": preserve the committed figure
+  // rather than dropping it, or gpt-image-2 loses its ~0.22 and the images
+  // branch reports unknown, gating it on the floor instead (#1069/#1062).
+  const fetched = typicalUnits.get(p.endpointId);
+  const committed = oldPricing[p.endpointId]?.typicalUnitsPerCall;
+  if (fetched != null) {
+    entry.typicalUnitsPerCall = fetched;
+  } else if (failedEndpoints.has(p.endpointId)) {
+    if (committed != null) {
+      entry.typicalUnitsPerCall = committed;
+      carriedTypicalUnits.push(p.endpointId);
+    } else {
+      lostTypicalUnits.push(p.endpointId);
+    }
   }
 
   pricing[p.endpointId] = entry;
+}
+
+if (carriedTypicalUnits.length > 0) {
+  console.error(
+    `\nPreserved the committed typicalUnitsPerCall for ${carriedTypicalUnits.length} endpoint(s) whose historical fetch failed:\n  ${carriedTypicalUnits.join('\n  ')}`
+  );
+}
+
+if (lostTypicalUnits.length > 0) {
+  // Nothing to carry forward, so writing now bakes a strictly worse seed than
+  // the one in git. Refuse rather than let a transient 429 land in a commit.
+  console.error(
+    `\n${lostTypicalUnits.length} endpoint(s) failed their historical estimate fetch with no committed value to fall back on:\n  ${lostTypicalUnits.join('\n  ')}\nRefusing to write a degraded seed — re-run when fal is reachable.`
+  );
+  process.exit(1);
 }
 
 // ============================================================================

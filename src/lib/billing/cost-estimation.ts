@@ -4,10 +4,12 @@
  * All functions return Microdollars for exact arithmetic — or null when no
  * honest estimate exists for the model (#1069; see `estimateFalCost`).
  *
- * Pass `pricing` from `getEffectiveFalPricing()` to estimate against the
- * live `model_pricing` table (observed median units, current prices); the
- * default is the baked-in static seed. Estimators stay synchronous so pure
- * callers and tests need no DB.
+ * `pricing` is REQUIRED on every estimator. Server paths pass
+ * `getEffectiveFalPricing()` (live `model_pricing` — observed median units and
+ * current prices); tests pass `FAL_PRICING` to assert against the seed
+ * deliberately. It used to be optional and defaulted to the seed, so a call
+ * site that forgot it estimated on frozen prices and still looked right.
+ * Estimators stay synchronous, so pure callers and tests need no DB.
  */
 
 import { estimateFalCost, type EffectiveFalPricing } from '@/lib/ai/fal-cost';
@@ -32,14 +34,49 @@ type FalPricingMap = Record<string, EffectiveFalPricing>;
  * Conservative per-call floor the credit gate assumes when a model has no
  * honest estimate (null). Over-gating slightly beats under-gating — the
  * unknown compute-seconds models really cost ~$0.02–0.07/image, and the old
- * fabricated default gated Grok Imagine ~98× low (#1069). The floor stops
- * applying once the model's first observed `unitsBilled` lands in
- * `model_pricing`.
+ * fabricated default gated Grok Imagine ~98× low (#1069).
+ *
+ * A model leaves the floor once `MIN_OBSERVED_SAMPLES` of its generations have
+ * been recorded AND the nightly cron has folded them into `model_pricing` — so
+ * ~5 generations plus up to 24h, not the first one. If a model is still here
+ * long after that, the observation pipeline is broken, not merely cold.
  */
 const UNKNOWN_ESTIMATE_FLOOR = micros(100_000); // $0.10 per call
 
-/** Which model and operation a gate is standing in for, so the floor is debuggable. */
-export type GateContext = { model: string; operation: string };
+/**
+ * Every operation that can gate on the unknown-estimate floor. A closed union
+ * rather than `string` because this value is both the `reportedUnpriced` dedup
+ * key and the dimension you group the logs by — a typo would silently fork the
+ * dedup AND scatter the very observability the floor's existence depends on.
+ * Adding a gate means adding a name here, which keeps the taxonomy greppable.
+ */
+type GateOperation =
+  | 'add-audio-model'
+  | 'add-image-model'
+  | 'add-video-model'
+  | 'batch-motion'
+  | 'motion'
+  | 'motion-workflow'
+  | 'shot-image'
+  | 'shot-variants'
+  | 'smart-retry:image'
+  | 'smart-retry:motion'
+  | 'storyboard:character-sheets'
+  | 'storyboard:location-sheets'
+  | 'storyboard:motion'
+  | 'storyboard:music'
+  | 'storyboard:shot-images'
+  | 'variant-upscale';
+
+/** Any model a fal estimate can be gated for. */
+type GateModel = TextToImageModel | ImageToVideoModel | AudioModel;
+
+/**
+ * Which model and operation a gate is standing in for, so the floor is
+ * debuggable. Both fields are unions, not `string`: every call site already
+ * holds a typed model, so widening here would discard that for free.
+ */
+export type GateContext = { model: GateModel; operation: GateOperation };
 
 /**
  * Models already reported as unpriced in this isolate. Gates run inside
@@ -55,10 +92,11 @@ const reportedUnpriced = new Set<string>();
  * exists, otherwise the conservative floor per call. Display paths should
  * NOT use this — show nothing for null instead of a made-up figure.
  *
- * Every substitution is logged. Without that, the system cannot answer "how
- * often is the gate running on a made-up number, and for which models?" —
- * which is the question #1069 existed to answer, and the floor is only
- * defensible as a temporary state we can see the end of.
+ * The first substitution per model+operation in each isolate is logged (see
+ * `reportedUnpriced`). That names WHICH models are running on a made-up
+ * number; it deliberately does not count HOW OFTEN, since a per-shot loop
+ * would emit one identical line per shot. If the rate ever matters, count it
+ * as an event rather than un-deduping this log.
  */
 export function gateEstimate(
   estimate: Microdollars | null,
@@ -92,7 +130,7 @@ export function estimateImageCost(
   model: TextToImageModel,
   aspectRatio: AspectRatio,
   numImages: number,
-  opts?: { resolution?: string; pricing?: FalPricingMap }
+  opts: { pricing: FalPricingMap; resolution?: string }
 ): Microdollars | null {
   const { width, height } = aspectRatioToDimensions(aspectRatio);
 
@@ -102,9 +140,9 @@ export function estimateImageCost(
       numImages,
       widthPx: width,
       heightPx: height,
-      resolution: opts?.resolution,
+      resolution: opts.resolution,
     },
-    opts?.pricing
+    opts.pricing
   );
 }
 
@@ -114,15 +152,15 @@ export function estimateImageCost(
 export function estimateVideoCost(
   model: ImageToVideoModel,
   durationSeconds: number,
-  opts?: { resolution?: string; pricing?: FalPricingMap }
+  opts: { pricing: FalPricingMap; resolution?: string }
 ): Microdollars | null {
   return estimateFalCost(
     IMAGE_TO_VIDEO_MODELS[model].id,
     {
       durationSeconds,
-      resolution: opts?.resolution,
+      resolution: opts.resolution,
     },
-    opts?.pricing
+    opts.pricing
   );
 }
 
@@ -132,12 +170,12 @@ export function estimateVideoCost(
 export function estimateAudioCost(
   model: AudioModel,
   durationSeconds: number,
-  opts?: { pricing?: FalPricingMap }
+  opts: { pricing: FalPricingMap }
 ): Microdollars | null {
   return estimateFalCost(
     AUDIO_MODELS[model].id,
     { durationSeconds },
-    opts?.pricing
+    opts.pricing
   );
 }
 
@@ -189,8 +227,8 @@ export function estimateStoryboardCost(opts: {
   audioModels?: AudioModel[];
   /** Total sequence duration in seconds (one music track spans the sequence) */
   audioDurationSeconds?: number;
-  /** Live pricing map from `getEffectiveFalPricing()`; static seed if omitted */
-  pricing?: FalPricingMap;
+  /** Live pricing map from `getEffectiveFalPricing()` (or the seed, explicitly). */
+  pricing: FalPricingMap;
 }): Microdollars {
   const sceneCount = opts.estimatedSceneCount ?? DEFAULT_ESTIMATED_SCENE_COUNT;
   const imageModelCount = opts.imageModelCount ?? 1;

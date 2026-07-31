@@ -18,6 +18,7 @@ import type { EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import { FAL_PRICING } from '@/lib/ai/fal-pricing-data';
 import { micros } from '@/lib/billing/money';
 import { modelPricing } from '@/lib/db/schema';
+import type { ObservedUnits } from '@/lib/db/schema/model-pricing';
 import { getLogger } from '@/lib/observability/logger';
 import { eq } from 'drizzle-orm';
 
@@ -51,7 +52,21 @@ export async function getEffectiveFalPricing(): Promise<
     .where(eq(modelPricing.provider, 'fal'));
 
   const map: Record<string, EffectiveFalPricing> = { ...FAL_PRICING };
+  // The table's key is (provider, endpointId, unit) but this map is keyed by
+  // endpointId alone, so two rows for one endpoint — which is legitimate while
+  // fal re-denominates a model, until the cron's stale sweep runs — would
+  // collapse to whichever came last. Billing multiplies unitsBilled by that
+  // price, so an arbitrary winner is a wrong charge. Say so.
+  const seenEndpoints = new Set<string>();
   for (const row of rows) {
+    if (seenEndpoints.has(row.endpointId)) {
+      logger.error(
+        'model_pricing has multiple rows for one endpoint — billing may use either rate',
+        { endpointId: row.endpointId, unit: row.unit }
+      );
+    }
+    seenEndpoints.add(row.endpointId);
+
     // Field-wise over the seed, NOT a wholesale replace. A null column means
     // "the cron has nothing for this field", which must not erase a good
     // seeded value — one transient fal 429 would otherwise drop
@@ -63,11 +78,13 @@ export async function getEffectiveFalPricing(): Promise<
       unitPrice: micros(row.unitPriceMicros),
       unit: row.unit,
       typicalUnitsPerCall: row.typicalUnitsPerCall ?? seed?.typicalUnitsPerCall,
+      // The DB CHECK keeps median and count consistent, so a non-null median
+      // always arrives with its real sample count.
       ...(row.observedMedianUnits != null && {
         observed: {
           medianUnits: row.observedMedianUnits,
           sampleCount: row.observedSampleCount,
-        },
+        } satisfies ObservedUnits,
       }),
     };
   }
@@ -78,11 +95,22 @@ export async function getEffectiveFalPricing(): Promise<
 }
 
 /**
- * Complain once per cache fill when the snapshot has gone stale. Rows exist but
- * nothing refreshed them — the cron is broken, or nothing ever ran it.
+ * Complain once per cache fill when the snapshot can't be trusted — the cron
+ * is broken, or nothing has ever run it. Both states estimate and bill from
+ * the static seed while looking exactly like a healthy table, so these logs
+ * are the only thing that distinguishes them.
  */
 function warnIfStale(rows: { fetchedAt: Date }[]): void {
-  if (rows.length === 0) return;
+  if (rows.length === 0) {
+    // Not merely stale — the refresh has never landed a single row. A fresh
+    // deploy sits here legitimately until the first nightly run, which is
+    // exactly the window worth knowing about.
+    logger.error(
+      'model_pricing is empty — estimating and billing from the static seed',
+      { staleAfterHours: STALE_AFTER_MS / 3_600_000 }
+    );
+    return;
+  }
   const newest = Math.max(...rows.map((row) => row.fetchedAt.getTime()));
   const ageMs = Date.now() - newest;
   if (ageMs <= STALE_AFTER_MS) return;

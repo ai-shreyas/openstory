@@ -15,6 +15,7 @@ import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   falUsageMetadata,
+  recordFalUsage,
 } from '@/lib/billing/workflow-deduction';
 import {
   aspectRatioToImageSize,
@@ -255,6 +256,14 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
       return { upscaledUrl: '', upscaledPath: '' };
     }
 
+    const falUsage = falUsageMetadata(upscaleResult);
+
+    // Recorded outside the deduction: BYOK generations bill the same units as
+    // charged ones, and deductWorkflowCredits returns early on them (#1069).
+    await step.do('record-fal-usage', async () => {
+      await recordFalUsage(scopedDb, falUsage);
+    });
+
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
         scopedDb,
@@ -262,9 +271,8 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         usedOwnKey: upscaleResult.usedOwnKey,
         description: `Variant upscale (${upscaleModel})`,
         idempotencyKey: `${event.instanceId}:upscale`,
-        falUsage: falUsageMetadata(upscaleResult),
         metadata: {
-          ...falUsageMetadata(upscaleResult),
+          ...falUsage,
           shotId,
           sequenceId,
           model: upscaleModel,
