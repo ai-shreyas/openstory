@@ -683,6 +683,9 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     const falUsage = await recordFalUsageStep(step, scopedDb, {
       endpointId: billedEndpointId,
       unitsBilled: billedUnits,
+      // The adapter's jobId is fal's request id — joins this charge to its
+      // billing-events record for the hourly reconcile.
+      requestId: job.jobId,
     });
 
     // Deduct credits (skip if team used own fal key). Routed through

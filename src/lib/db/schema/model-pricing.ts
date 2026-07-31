@@ -52,6 +52,13 @@ export const modelPricing = snakeCase.table(
     observedMedianUnits: real(),
     /** How many of our generations back the observed median. */
     observedSampleCount: integer().default(0).notNull(),
+    /**
+     * When this rate was last confirmed by BILLED data (usage/billing-events)
+     * rather than the provider's advertised pricing API. Once set, an
+     * advertised rate can never overwrite the row — the pricing API has
+     * mispriced endpoints ~59× (Grok, #1069); only newer billed data can.
+     */
+    rateVerifiedAt: integer({ mode: 'timestamp' }),
     /** When the provider's pricing API was last fetched successfully. */
     fetchedAt: integer({ mode: 'timestamp' }).notNull(),
     updatedAt: integer({ mode: 'timestamp' })

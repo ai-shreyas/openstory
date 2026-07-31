@@ -211,6 +211,9 @@ async function generateImageInternal(
       file_sizes: imageUrls.map(() => 0),
       seed: params.seed,
       cost,
+      // The adapter sets `id` to fal's request id — the join key to the
+      // billing-events record the hourly reconcile audits this charge against.
+      requestId: result.id,
       usedOwnKey: falApiKeyInfo.source === 'team',
     },
   };

@@ -274,6 +274,102 @@ export async function fetchFalBilledRates(
 }
 
 // ============================================================================
+// Billing events — per-request billed cost (needs an admin-scoped key)
+// ============================================================================
+
+export type FalBillingEvent = {
+  requestId: string;
+  endpointId: string;
+  /** ISO timestamp of the billing event. */
+  timestamp: string;
+  outputUnits: number;
+  unitPriceUsd: number;
+  /** What fal actually charged for this one request, in microdollars. */
+  costMicros: number;
+};
+
+type BillingEventEntry = {
+  request_id: string;
+  endpoint_id: string;
+  timestamp: string;
+  output_units: number;
+  unit_price: number;
+  cost_total: number;
+  cost_estimate_nano_usd: number;
+};
+
+/**
+ * Per-request billed costs from `/v1/models/billing-events` — the only
+ * source that joins fal's author-reported unit count with the fal-configured
+ * unit price into dollars, keyed by the request id our workflows hold.
+ * Events lag completion by 1s–5min, so callers should exclude the freshest
+ * few minutes.
+ */
+const BILLING_EVENTS_MAX_ATTEMPTS = 3;
+const BILLING_EVENTS_BACKOFF_MS = 2_000;
+
+async function fetchBillingEventsPage(
+  billingKey: string,
+  url: URL
+): Promise<Response> {
+  for (let attempt = 1; attempt <= BILLING_EVENTS_MAX_ATTEMPTS; attempt++) {
+    const resp = await fetch(url, {
+      headers: { Authorization: `Key ${billingKey}` },
+    });
+    if (
+      (resp.status === 429 || resp.status >= 500) &&
+      attempt < BILLING_EVENTS_MAX_ATTEMPTS
+    ) {
+      await sleep(retryAfterMs(resp, attempt, BILLING_EVENTS_BACKOFF_MS));
+      continue;
+    }
+    return resp;
+  }
+  throw new Error('unreachable');
+}
+
+export async function fetchFalBillingEvents(
+  billingKey: string,
+  start: Date,
+  end: Date
+): Promise<FalBillingEvent[]> {
+  const events: FalBillingEvent[] = [];
+  let cursor: string | null = null;
+  do {
+    const url = new URL('https://api.fal.ai/v1/models/billing-events');
+    url.searchParams.set('start', start.toISOString());
+    url.searchParams.set('end', end.toISOString());
+    if (cursor) url.searchParams.set('cursor', cursor);
+    const resp = await fetchBillingEventsPage(billingKey, url);
+    if (!resp.ok) {
+      throw new Error(
+        `fal billing-events API HTTP ${resp.status}: ${await resp.text()}`
+      );
+    }
+    const data: {
+      billing_events: BillingEventEntry[];
+      next_cursor?: string | null;
+      has_more?: boolean;
+    } = await resp.json();
+    for (const e of data.billing_events) {
+      events.push({
+        requestId: e.request_id,
+        endpointId: e.endpoint_id,
+        timestamp: e.timestamp,
+        outputUnits: e.output_units,
+        unitPriceUsd: e.unit_price,
+        // nano → micro; fall back to cost_total dollars.
+        costMicros: Number.isFinite(e.cost_estimate_nano_usd)
+          ? Math.round(e.cost_estimate_nano_usd / 1000)
+          : Math.round(e.cost_total * 1_000_000),
+      });
+    }
+    cursor = data.has_more ? (data.next_cursor ?? null) : null;
+  } while (cursor);
+  return events;
+}
+
+// ============================================================================
 // Historical per-call cost → typicalUnitsPerCall
 // ============================================================================
 

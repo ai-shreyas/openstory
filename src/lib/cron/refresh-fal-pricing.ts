@@ -66,10 +66,10 @@ const OBSERVATION_WINDOW_DAYS = 90;
 export const OBSERVATIONS_PER_ENDPOINT = 200;
 
 /**
- * D1 caps a query at 100 bound params. Snapshot upserts bind 9 columns per
+ * D1 caps a query at 100 bound params. Snapshot upserts bind 10 columns per
  * row and history inserts 6 (defaulted columns bind too) — chunk both.
  */
-export const UPSERT_CHUNK = 10;
+export const UPSERT_CHUNK = 9;
 export const HISTORY_CHUNK = 15;
 
 /**
@@ -288,15 +288,22 @@ export async function refreshFalPricing(
     );
   }
 
+  const existing = await db
+    .select()
+    .from(modelPricing)
+    .where(eq(modelPricing.provider, 'fal'));
+
   // Overlay the usage API's billed rates: the pricing API can disagree with
   // what fal actually bills (Grok Imagine: "compute seconds" × $0.00017
   // reported vs "units" × $0.01 billed — a ~59× under-charge), and the bill
   // is the only source that cannot. Runs BEFORE the typical-units fetch so
   // its cost→units conversion divides by the real price.
+  const verifiedNow = new Set<string>();
   if (billingKey) {
     const billedRates = await fetchFalBilledRates(billingKey);
     const priceByEndpoint = new Map(prices.map((p) => [p.endpointId, p]));
     for (const rate of billedRates) {
+      verifiedNow.add(rate.endpointId);
       const fetched = priceByEndpoint.get(rate.endpointId);
       if (
         fetched &&
@@ -337,6 +344,29 @@ export async function refreshFalPricing(
     );
   }
 
+  // Once the bill has confirmed a rate, the advertised rate can never
+  // overwrite it — only newer billed data (this run's overlay, or the hourly
+  // reconcile) can. Endpoints whose usage aged out of the overlay window
+  // would otherwise revert to a rate already proven wrong.
+  const verifiedExisting = new Map<string, (typeof existing)[number]>();
+  for (const row of existing) {
+    if (row.rateVerifiedAt == null) continue;
+    const prev = verifiedExisting.get(row.endpointId);
+    if (
+      !prev ||
+      row.rateVerifiedAt.getTime() > (prev.rateVerifiedAt?.getTime() ?? 0)
+    ) {
+      verifiedExisting.set(row.endpointId, row);
+    }
+  }
+  for (const p of prices) {
+    if (verifiedNow.has(p.endpointId)) continue;
+    const verified = verifiedExisting.get(p.endpointId);
+    if (!verified) continue;
+    p.unit = verified.unit;
+    p.unitPriceUsd = verified.unitPriceMicros / 1_000_000;
+  }
+
   // A used endpoint without a price would bill $0 after the sweep dropped its
   // row. Abort the whole run so yesterday's snapshot survives.
   const pricedIds = new Set(prices.map((p) => p.endpointId));
@@ -363,10 +393,6 @@ export async function refreshFalPricing(
   const typicalDegraded =
     failedEndpoints.size / usedPrices.length > MAX_TYPICAL_FETCH_FAILURE_RATIO;
 
-  const existing = await db
-    .select()
-    .from(modelPricing)
-    .where(eq(modelPricing.provider, 'fal'));
   const existingPriceByKey = new Map(
     existing.map((row) => [pricingKey(row), row.unitPriceMicros])
   );
@@ -393,6 +419,9 @@ export async function refreshFalPricing(
       endpointId: p.endpointId,
       unit: p.unit,
       unitPriceMicros: usdToMicros(p.unitPriceUsd),
+      rateVerifiedAt: verifiedNow.has(p.endpointId)
+        ? now
+        : (verifiedExisting.get(p.endpointId)?.rateVerifiedAt ?? null),
       typicalUnitsPerCall: typical,
       observedMedianUnits: obs?.medianUnits ?? null,
       observedSampleCount: obs?.sampleCount ?? 0,
@@ -443,6 +472,7 @@ export async function refreshFalPricing(
         ],
         set: {
           unitPriceMicros: sql`excluded.unit_price_micros`,
+          rateVerifiedAt: sql`excluded.rate_verified_at`,
           typicalUnitsPerCall: sql`excluded.typical_units_per_call`,
           observedMedianUnits: sql`excluded.observed_median_units`,
           observedSampleCount: sql`excluded.observed_sample_count`,

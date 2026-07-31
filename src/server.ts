@@ -19,6 +19,10 @@ import {
   FAL_PRICING_CRON,
   refreshFalPricing,
 } from '@/lib/cron/refresh-fal-pricing';
+import {
+  FAL_BILLING_RECONCILE_CRON,
+  reconcileFalBilling,
+} from '@/lib/cron/reconcile-fal-billing';
 import { ensureSystemTemplatesSeeded } from '@/lib/db/seed-system-templates';
 
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
@@ -140,6 +144,15 @@ const exportedHandler: ExportedHandler<WorkerEnv> = {
       ctx.waitUntil(
         refreshFalPricing().catch((error) => {
           logger.error('refreshFalPricing failed:', { err: error });
+        })
+      );
+      return;
+    }
+    // Hourly audit of charges against fal's per-request bill (#1069).
+    if (controller.cron === FAL_BILLING_RECONCILE_CRON) {
+      ctx.waitUntil(
+        reconcileFalBilling().catch((error) => {
+          logger.error('reconcileFalBilling failed:', { err: error });
         })
       );
       return;

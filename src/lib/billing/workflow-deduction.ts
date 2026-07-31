@@ -97,6 +97,11 @@ export type FalUsage = {
   endpointId: string;
   unitsBilled?: number;
   numImages?: number;
+  /**
+   * fal's request id — joins this charge to its `/v1/models/billing-events`
+   * record, the per-request billed cost the hourly reconcile audits against.
+   */
+  requestId?: string;
 };
 
 /**
@@ -109,6 +114,7 @@ function falUsageMetadata(metadata: FalUsage): FalUsage {
     endpointId: metadata.endpointId,
     unitsBilled: metadata.unitsBilled,
     numImages: metadata.numImages,
+    requestId: metadata.requestId,
   };
 }
 

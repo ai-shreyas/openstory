@@ -46,6 +46,37 @@ export function reportFlooredEstimate(ctx: FlooredEstimateContext): void {
   });
 }
 
+export type BillingDriftContext = {
+  teamId: string;
+  transactionId: string;
+  requestId: string;
+  endpointId: string;
+  chargedMicros: number;
+  billedMicros: number;
+};
+
+/**
+ * A charge disagrees with fal's per-request bill (hourly reconcile).
+ * Report-only for now — deltas are not settled back to the ledger.
+ */
+export function reportBillingDrift(ctx: BillingDriftContext): void {
+  logger.error('charge disagrees with fal billed cost', ctx);
+
+  const posthog = getPostHogClient();
+  posthog?.capture({
+    distinctId: ctx.teamId,
+    event: 'billing_drift',
+    properties: {
+      transaction_id: ctx.transactionId,
+      request_id: ctx.requestId,
+      endpoint_id: ctx.endpointId,
+      charged_micros: ctx.chargedMicros,
+      billed_micros: ctx.billedMicros,
+      delta_micros: ctx.billedMicros - ctx.chargedMicros,
+    },
+  });
+}
+
 /** Log and emit analytics when a completed generation has nothing to bill. */
 export function reportMissingBillingCost(ctx: MissingBillingCostContext): void {
   logger.warn('Completed AI generation with no billable cost reported', ctx);

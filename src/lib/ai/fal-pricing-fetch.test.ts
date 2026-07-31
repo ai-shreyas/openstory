@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchFalBilledRates,
+  fetchFalBillingEvents,
   fetchFalCatalogIds,
   fetchFalTypicalUnits,
   fetchFalUnitPrices,
@@ -209,6 +210,63 @@ describe('fetchFalBilledRates', () => {
   it('throws on an API failure', async () => {
     stubFetch(() => json({ error: 'nope' }, 403));
     await expect(fetchFalBilledRates('admin-key')).rejects.toThrow(/HTTP 403/);
+  });
+});
+
+describe('fetchFalBillingEvents', () => {
+  const EVENTS_URL = 'https://api.fal.ai/v1/models/billing-events';
+
+  it('maps events and follows the cursor', async () => {
+    stubFetch((url) => {
+      if (!url.startsWith(EVENTS_URL)) return json({});
+      const cursor = new URL(url).searchParams.get('cursor');
+      if (!cursor) {
+        return json({
+          billing_events: [
+            {
+              request_id: 'r1',
+              endpoint_id: 'a/b',
+              timestamp: '2026-07-31T06:00:00Z',
+              output_units: 7,
+              unit_price: 0.01,
+              cost_total: 0.07,
+              cost_estimate_nano_usd: 70_000_000,
+            },
+          ],
+          next_cursor: 'c1',
+          has_more: true,
+        });
+      }
+      return json({
+        billing_events: [
+          {
+            request_id: 'r2',
+            endpoint_id: 'a/b',
+            timestamp: '2026-07-31T06:01:00Z',
+            output_units: 9,
+            unit_price: 0.01,
+            cost_total: 0.09,
+            cost_estimate_nano_usd: 90_000_000,
+          },
+        ],
+        has_more: false,
+      });
+    });
+
+    const events = await fetchFalBillingEvents(
+      'admin',
+      new Date('2026-07-31T05:00:00Z'),
+      new Date('2026-07-31T07:00:00Z')
+    );
+    expect(events.map((e) => e.requestId)).toEqual(['r1', 'r2']);
+    expect(events[0]?.costMicros).toBe(70_000);
+  });
+
+  it('throws on an API failure', async () => {
+    stubFetch(() => json({ error: 'nope' }, 403));
+    await expect(
+      fetchFalBillingEvents('admin', new Date(0), new Date(1))
+    ).rejects.toThrow(/HTTP 403/);
   });
 });
 

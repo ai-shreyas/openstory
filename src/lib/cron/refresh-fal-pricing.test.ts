@@ -595,6 +595,38 @@ describe('refreshFalPricing', () => {
     ]);
   });
 
+  test('a bill-verified rate outlasts the advertised rate when usage ages out', async () => {
+    // Verified last month; no billed data this run (usage aged out of the
+    // 30-day window). The advertised rate — already proven wrong once — must
+    // not overwrite the verified one.
+    await db.insert(modelPricing).values(
+      seedRow({
+        endpointId: 'xai/grok-imagine',
+        unit: 'units',
+        unitPriceMicros: 10_000,
+        typicalUnitsPerCall: null,
+        rateVerifiedAt: new Date('2026-07-01T00:00:00Z'),
+      })
+    );
+    const { refreshFalPricing } = await load({
+      prices: [
+        {
+          endpointId: 'xai/grok-imagine',
+          unitPriceUsd: 0.00017,
+          unit: 'compute seconds',
+        },
+      ],
+      billed: [], // nothing billed in the overlay window this run
+    });
+
+    await refreshFalPricing({ billingKey: 'admin-key' });
+
+    const [row] = await db.select().from(modelPricing);
+    expect(row?.unit).toBe('units');
+    expect(row?.unitPriceMicros).toBe(10_000);
+    expect(row?.rateVerifiedAt).toEqual(new Date('2026-07-01T00:00:00Z'));
+  });
+
   test('without a billing key the pricing API stands, unverified', async () => {
     const { refreshFalPricing } = await load({
       prices: [
