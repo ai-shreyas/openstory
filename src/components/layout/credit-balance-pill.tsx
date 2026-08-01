@@ -1,24 +1,32 @@
 /**
- * Quiet credit-balance chip in the sidebar footer (above the user menu).
+ * Quiet credit-balance control in the sidebar footer (below the social
+ * separator, above the user menu) — account chrome, not product nav (#1090).
  *
  * Visible when:
  * 1. Low balance with no safety net (amber)
  * 2. Balance topped up — brief green flash
  * 3. User toggled "always show" on the credits page (muted)
  *
- * While visible, subscribes to team billing SSE so generation / enhance
- * deductions update the amount live (#1090). Intentionally not a nav row —
- * dollars are status chrome, not a peer of Sequences/Gallery.
+ * Expanded: wallet + $amount as muted text (no badge chrome).
+ * Collapsed (icon rail): wallet icon only + tooltip with amount — never the
+ * dollar string, so it cannot overlap the avatar.
+ *
+ * Subscribes to team billing SSE only while visible.
  */
 
 import { cn } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
+import {
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from '@/components/ui/sidebar';
 import { useBalanceFlash } from '@/hooks/use-balance-flash';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
 import { useBillingBalanceRealtime } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGateQuery } from '@/hooks/use-billing-gate';
 import { useShowBalance } from '@/hooks/use-show-balance';
 import { Link } from '@tanstack/react-router';
+import { Wallet } from 'lucide-react';
 
 export const CreditBalancePill: React.FC = () => {
   const { balance, teamId, isLowBalance } = useBillingBalance();
@@ -33,44 +41,47 @@ export const CreditBalancePill: React.FC = () => {
   const isLowBalanceVisible = isLowBalance && !hasSafetyNet;
   const isVisible = isLowBalanceVisible || showBalance || isFlashing;
 
-  // Subscribe only while the chip would render — no SSE when hidden.
   useBillingBalanceRealtime(teamId, isVisible);
 
   if (!isVisible) return null;
 
-  // Flash (green) takes priority, then low-balance (amber), then muted.
-  const badgeTone = isFlashing
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+  // Flash (green) > low (amber) > muted account chrome.
+  const toneClass = isFlashing
+    ? 'text-emerald-600 dark:text-emerald-400'
     : isLowBalanceVisible
-      ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-      : 'border-border/50 bg-transparent text-muted-foreground';
+      ? 'text-amber-600 dark:text-amber-400'
+      : 'text-muted-foreground';
 
   const amount = `$${balance?.toFixed(2) ?? '0.00'}`;
+  const tooltip = `Credits · ${amount}`;
 
   return (
-    <div className="px-2 py-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
-      <Link
-        to="/credits"
-        search={{ tab: 'balance' }}
-        title={`Credits ${amount}`}
-        aria-label={`Credit balance ${amount}. Open credits.`}
-        className={cn(
-          'flex w-full items-center justify-start rounded-md outline-none',
-          'focus-visible:ring-2 focus-visible:ring-ring',
-          'group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center'
-        )}
-      >
-        <Badge
-          variant="outline"
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          asChild
+          tooltip={tooltip}
           className={cn(
-            'max-w-full truncate font-normal tabular-nums',
             'animate-[balance-flash-in_300ms_ease-out_both]',
-            badgeTone
+            toneClass,
+            // Keep hover/active readable without fighting the tone tint.
+            'hover:text-sidebar-accent-foreground data-active:text-sidebar-accent-foreground'
           )}
         >
-          {amount}
-        </Badge>
-      </Link>
-    </div>
+          <Link
+            to="/credits"
+            search={{ tab: 'balance' }}
+            aria-label={`Credit balance ${amount}. Open credits.`}
+          >
+            <Wallet />
+            {/* Amount hides in icon mode via SidebarMenuButton truncation
+                (span:last-child); tooltip carries the full amount. */}
+            <span className="tabular-nums" aria-live="polite">
+              {amount}
+            </span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 };

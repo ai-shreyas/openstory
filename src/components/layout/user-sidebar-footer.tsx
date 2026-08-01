@@ -127,7 +127,7 @@ export function UserSidebarFooter() {
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link to="/credits">
+            <Link to="/credits" search={{ tab: 'balance' }}>
               <Wallet className="mr-2 h-4 w-4" />
               Credits
             </Link>
