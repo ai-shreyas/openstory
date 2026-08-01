@@ -67,18 +67,15 @@ import { toast } from 'sonner';
 // ---------------------------------------------------------------------------
 
 /**
- * Server-fn errors arrive as plain `Error`s (CatalogApiError's status/code
- * don't survive serialization), so "this endpoint has no schema" is detected
- * by message — same approach as `isInsufficientCreditsError`. Anchored to the
- * exact message `getModelDetail` throws: a looser match (e.g. on the upstream
- * `unknown_schema` code) would swallow a modelschemas outage into the
- * friendly "not runnable" empty state.
+ * `getModelDetail` throws CatalogApiError(404, 'unknown_schema') when the
+ * endpoint has no input schema. Seroval preserves own props across the
+ * server-fn boundary (#1087), so we match on status+code — not message prose.
+ * A modelschemas outage is 5xx and will not match.
  */
 function isNoSchemaError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes('No input schema for endpoint')
-  );
+  if (typeof error !== 'object' || error === null) return false;
+  const { status, code } = error as { status?: unknown; code?: unknown };
+  return status === 404 && code === 'unknown_schema';
 }
 
 /**

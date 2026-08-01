@@ -1,5 +1,11 @@
 /**
- * Custom error classes for better error handling and categorization
+ * Custom error classes for better error handling and categorization.
+ *
+ * Server-fn boundary: TanStack Start serializes thrown errors with seroval,
+ * which preserves own enumerable properties on `Error` instances. A thrown
+ * `OpenStoryError` arrives on the client as a plain `Error` with the same
+ * `name`/`message`/`code`/`statusCode`/`details` — so branch on `errorCode()`,
+ * never on message prose. See #1087.
  */
 
 export class OpenStoryError extends Error {
@@ -79,45 +85,40 @@ export class NotFoundError extends OpenStoryError {
   }
 }
 
-/**
- * Stamped into the message because only the message survives the server-fn
- * boundary — `code` does not. The prose alone can't carry this: providers
- * throw "Insufficient credits…" about THEIR balance (OpenRouter's is pinned in
- * `llm-client.test.ts`), and routing that to our billing dialog sends the user
- * to top up an account that is already fine.
- */
-const INSUFFICIENT_CREDITS_MARKER = '[INSUFFICIENT_CREDITS]';
-
 export class InsufficientCreditsError extends OpenStoryError {
   constructor(
     message: string = 'Insufficient credits',
     details?: Record<string, unknown>
   ) {
-    super(
-      `${INSUFFICIENT_CREDITS_MARKER} ${message}`,
-      'INSUFFICIENT_CREDITS',
-      402,
-      details
-    );
+    super(message, 'INSUFFICIENT_CREDITS', 402, details);
   }
+}
+
+/**
+ * Stable machine-readable code from a thrown value.
+ *
+ * Works for live `OpenStoryError` instances on the server and for the plain
+ * `Error` objects seroval reconstitutes on the client after a server-fn throw
+ * (own props `code`/`statusCode`/`details` survive; the prototype does not).
+ */
+export function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 /** Is this OUR insufficient-credits failure? Callers gate the billing dialog on it. */
 export function isInsufficientCreditsError(error: unknown): boolean {
-  if (error instanceof InsufficientCreditsError) return true;
-  return (
-    error instanceof Error &&
-    error.message.includes(INSUFFICIENT_CREDITS_MARKER)
-  );
+  return errorCode(error) === 'INSUFFICIENT_CREDITS';
 }
 
-/** Display text for an arbitrary thrown value, minus any internal wire marker. */
+/** Display text for an arbitrary thrown value. */
 export function errorMessage(
   error: unknown,
   fallback = 'Unknown error'
 ): string {
   if (!(error instanceof Error)) return fallback;
-  return error.message.replace(INSUFFICIENT_CREDITS_MARKER, '').trim();
+  return error.message;
 }
 
 /**

@@ -348,20 +348,29 @@ export const stripeWebhookMiddleware = createMiddleware().server(
         typeof obj.metadata !== 'object' ||
         obj.metadata === null
       ) {
-        throw new Error(`Stripe event ${event.id} missing metadata`);
+        throw Response.json(
+          { error: `Stripe event ${event.id} missing metadata` },
+          { status: 400 }
+        );
       }
       const metadata = obj.metadata;
       if (!('teamId' in metadata && 'userId' in metadata)) {
-        throw new Error(
-          `Stripe event ${event.id} missing teamId or userId in metadata`
+        throw Response.json(
+          {
+            error: `Stripe event ${event.id} missing teamId or userId in metadata`,
+          },
+          { status: 400 }
         );
       }
 
       const teamId = metadata.teamId;
       const userId = metadata.userId;
       if (typeof teamId !== 'string' || typeof userId !== 'string') {
-        throw new Error(
-          `Stripe event ${event.id} missing teamId or userId in metadata`
+        throw Response.json(
+          {
+            error: `Stripe event ${event.id} missing teamId or userId in metadata`,
+          },
+          { status: 400 }
         );
       }
       return next({
@@ -373,9 +382,9 @@ export const stripeWebhookMiddleware = createMiddleware().server(
         },
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('missing teamId')) {
-        throw Response.json({ error: error.message }, { status: 400 });
-      }
+      // Metadata validation throws Response above; rethrow as-is. Anything
+      // else (signature verify failure, malformed body) is an invalid webhook.
+      if (error instanceof Response) throw error;
       throw Response.json({ error: 'Invalid signature' }, { status: 400 });
     }
   }

@@ -3,6 +3,7 @@ import {
   ConfigurationError,
   ConnectionError,
   DatabaseError,
+  errorCode,
   errorMessage,
   handleApiError,
   InsufficientCreditsError,
@@ -165,14 +166,32 @@ describe('handleApiError', () => {
   });
 });
 
-describe('isInsufficientCreditsError', () => {
-  it('matches our error across the server-fn boundary but not a provider’s', () => {
+describe('errorCode / isInsufficientCreditsError', () => {
+  it('reads code from a live OpenStoryError', () => {
     const ours = new InsufficientCreditsError('Insufficient credits for image');
-    // Only the message survives the boundary, so re-throw as a plain Error.
-    expect(isInsufficientCreditsError(new Error(ours.message))).toBe(true);
+    expect(errorCode(ours)).toBe('INSUFFICIENT_CREDITS');
+    expect(isInsufficientCreditsError(ours)).toBe(true);
+    expect(ours.message).toBe('Insufficient credits for image');
+  });
+
+  it('matches our error across the server-fn boundary but not a provider’s', () => {
+    // Seroval reconstitutes a thrown OpenStoryError as a plain Error with the
+    // same own props (code/statusCode/details) — not the original class.
+    // See #1087 / seroval Error own-property serialization.
+    const acrossBoundary = Object.assign(
+      new Error('Insufficient credits for image'),
+      {
+        name: 'InsufficientCreditsError',
+        code: 'INSUFFICIENT_CREDITS',
+        statusCode: 402,
+      }
+    );
+    expect(isInsufficientCreditsError(acrossBoundary)).toBe(true);
+    expect(errorCode(acrossBoundary)).toBe('INSUFFICIENT_CREDITS');
 
     // OpenRouter's own balance — pinned in llm-client.test.ts. Routing this to
     // our billing dialog sends the user to top up an account that is fine.
+    // Message prose alone must never open the dialog.
     expect(
       isInsufficientCreditsError(
         new Error(
@@ -180,10 +199,44 @@ describe('isInsufficientCreditsError', () => {
         )
       )
     ).toBe(false);
+    expect(
+      errorCode(
+        new Error(
+          'Insufficient credits. Add more using https://openrouter.ai/settings/credits'
+        )
+      )
+    ).toBeUndefined();
   });
 
-  it('keeps the wire marker out of displayed text', () => {
+  it('preserves code/statusCode/details through a seroval round-trip (server-fn wire)', async () => {
+    // TanStack Start serializes server-fn errors with seroval's toCrossJSONAsync
+    // / fromCrossJSON (see start-server-core server-functions-handler). This is
+    // the empirical check for #1087: own props survive; the class does not.
+    const { toCrossJSONAsync, fromCrossJSON } = await import('seroval');
+    const original = new InsufficientCreditsError(
+      'Insufficient credits for image',
+      { needed: 10 }
+    );
+    const wire = await toCrossJSONAsync(original, { refs: new Map() });
+    const restored: unknown = fromCrossJSON(wire, { refs: new Map() });
+
+    expect(restored).toBeInstanceOf(Error);
+    expect(restored).not.toBeInstanceOf(InsufficientCreditsError);
+    // Own props survive; narrow via errorCode / property access after guards.
+    expect(restored).toMatchObject({
+      name: 'InsufficientCreditsError',
+      message: 'Insufficient credits for image',
+      code: 'INSUFFICIENT_CREDITS',
+      statusCode: 402,
+      details: { needed: 10 },
+    });
+    expect(isInsufficientCreditsError(restored)).toBe(true);
+    expect(errorCode(restored)).toBe('INSUFFICIENT_CREDITS');
+  });
+
+  it('surfaces the plain message for display', () => {
     const ours = new InsufficientCreditsError('Insufficient credits for image');
+    expect(errorMessage(ours)).toBe('Insufficient credits for image');
     expect(errorMessage(new Error(ours.message))).toBe(
       'Insufficient credits for image'
     );
