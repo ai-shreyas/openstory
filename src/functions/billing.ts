@@ -59,6 +59,7 @@ export const getBillingBalanceFn = createServerFn({ method: 'GET' })
     ]);
 
     return {
+      teamId: context.teamId,
       balance: microsToUsd(balance),
       stripeEnabled: isStripeEnabled(),
       autoTopUp: {

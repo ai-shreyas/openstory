@@ -33,11 +33,34 @@ import type {
   TransactionType,
 } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
+import { getBillingChannel } from '@/lib/realtime';
 import { and, count, desc, eq, notExists, sql } from 'drizzle-orm';
 import { generateId } from '../id';
 import { giftTokenRedemptions, giftTokens } from '../schema';
 
 import { getLogger } from '@/lib/observability/logger';
+
+/**
+ * Best-effort live balance push for the credit pill (#1090). Never throws —
+ * realtime is progress signalling; the ledger write already committed.
+ * Call only after a *new* transaction row was inserted (not on idempotent replay).
+ */
+function emitBalanceUpdated(opts: {
+  teamId: string;
+  newBalance: Microdollars;
+  /** Signed ledger amount (negative for usage). */
+  amountMicros: Microdollars;
+  transactionId: string;
+  type: TransactionType;
+}): void {
+  void getBillingChannel(opts.teamId).emit('billing.balance:updated', {
+    teamId: opts.teamId,
+    balanceUsd: microsToUsd(opts.newBalance),
+    amountUsd: microsToUsd(opts.amountMicros),
+    transactionId: opts.transactionId,
+    type: opts.type,
+  });
+}
 
 const logger = getLogger(['openstory', 'db', 'billing']);
 
@@ -257,7 +280,16 @@ export function createBillingMethods(
       expiresAt: calculateExpiryDate(),
     });
 
-    return { newBalance: micros(updated.balance), transactionId };
+    const newBalance = micros(updated.balance);
+    emitBalanceUpdated({
+      teamId,
+      newBalance,
+      amountMicros,
+      transactionId,
+      type: txType,
+    });
+
+    return { newBalance, transactionId };
   }
 
   async function saveStripeCustomerId(stripeCustomerId: string): Promise<void> {
@@ -390,6 +422,9 @@ export function createBillingMethods(
     const newBalance = micros(balanceRow.balance);
 
     let transactionId = insertedRows[0]?.id;
+    // True only when this call wrote the ledger row — not an idempotent replay.
+    // Don't fire "charged $X" side effects (realtime) on replay.
+    const isNewCharge = Boolean(transactionId);
     if (!transactionId) {
       if (!idempotencyKey) {
         throw new Error(
@@ -414,6 +449,16 @@ export function createBillingMethods(
         );
       }
       transactionId = existing.id;
+    }
+
+    if (isNewCharge) {
+      emitBalanceUpdated({
+        teamId,
+        newBalance,
+        amountMicros: negateMicros(chargedAmount),
+        transactionId,
+        type: 'credit_usage',
+      });
     }
 
     void maybeAutoTopUp(newBalance).catch((err) => {
