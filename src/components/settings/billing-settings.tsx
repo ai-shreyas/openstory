@@ -533,9 +533,9 @@ function ShowBalanceToggle() {
   return (
     <div className="flex items-center justify-between border-t pt-4">
       <div>
-        <p className="text-sm font-medium">Show balance in header</p>
+        <p className="text-sm font-medium">Show balance in sidebar</p>
         <p className="text-xs text-muted-foreground">
-          Always display your credit balance
+          Always display your credit balance above your account
         </p>
       </div>
       <Switch checked={showBalance} onCheckedChange={setShowBalance} />

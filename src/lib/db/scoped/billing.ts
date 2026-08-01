@@ -41,19 +41,23 @@ import { giftTokenRedemptions, giftTokens } from '../schema';
 import { getLogger } from '@/lib/observability/logger';
 
 /**
- * Best-effort live balance push for the credit pill (#1090). Never throws —
- * realtime is progress signalling; the ledger write already committed.
- * Call only after a *new* transaction row was inserted (not on idempotent replay).
+ * Best-effort live balance push for the credit pill (#1090).
+ *
+ * **Awaited** (emit itself never throws): request-scoped paths like enhance
+ * script finish the streaming response right after `deductCredits`, and a
+ * fire-and-forget DO fetch can be dropped when the isolate tears down.
+ * Call only after a *new* transaction row was inserted (not on idempotent
+ * replay).
  */
-function emitBalanceUpdated(opts: {
+async function emitBalanceUpdated(opts: {
   teamId: string;
   newBalance: Microdollars;
   /** Signed ledger amount (negative for usage). */
   amountMicros: Microdollars;
   transactionId: string;
   type: TransactionType;
-}): void {
-  void getBillingChannel(opts.teamId).emit('billing.balance:updated', {
+}): Promise<void> {
+  await getBillingChannel(opts.teamId).emit('billing.balance:updated', {
     teamId: opts.teamId,
     balanceUsd: microsToUsd(opts.newBalance),
     amountUsd: microsToUsd(opts.amountMicros),
@@ -281,7 +285,7 @@ export function createBillingMethods(
     });
 
     const newBalance = micros(updated.balance);
-    emitBalanceUpdated({
+    await emitBalanceUpdated({
       teamId,
       newBalance,
       amountMicros,
@@ -452,7 +456,7 @@ export function createBillingMethods(
     }
 
     if (isNewCharge) {
-      emitBalanceUpdated({
+      await emitBalanceUpdated({
         teamId,
         newBalance,
         amountMicros: negateMicros(chargedAmount),

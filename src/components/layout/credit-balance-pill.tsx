@@ -1,28 +1,24 @@
 /**
- * Credit Balance Sidebar Row
- * Shows credit balance as a sidebar nav row. Visible when:
- * 1. Low balance with no safety net (amber warning)
- * 2. Balance topped up — stays until credits are drawn down (green)
- * 3. User toggled "always show" in credits page (neutral)
+ * Quiet credit-balance chip in the sidebar footer (above the user menu).
  *
- * While visible, subscribes to team billing SSE so generation deductions
- * update the amount live (#1090).
+ * Visible when:
+ * 1. Low balance with no safety net (amber)
+ * 2. Balance topped up — brief green flash
+ * 3. User toggled "always show" on the credits page (muted)
+ *
+ * While visible, subscribes to team billing SSE so generation / enhance
+ * deductions update the amount live (#1090). Intentionally not a nav row —
+ * dollars are status chrome, not a peer of Sequences/Gallery.
  */
 
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
-import {
-  SidebarMenuBadge,
-  SidebarMenuButton,
-  SidebarMenuItem,
-} from '@/components/ui/sidebar';
 import { useBalanceFlash } from '@/hooks/use-balance-flash';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
 import { useBillingBalanceRealtime } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGateQuery } from '@/hooks/use-billing-gate';
 import { useShowBalance } from '@/hooks/use-show-balance';
 import { Link } from '@tanstack/react-router';
-import { Wallet } from 'lucide-react';
 
 export const CreditBalancePill: React.FC = () => {
   const { balance, teamId, isLowBalance } = useBillingBalance();
@@ -37,38 +33,44 @@ export const CreditBalancePill: React.FC = () => {
   const isLowBalanceVisible = isLowBalance && !hasSafetyNet;
   const isVisible = isLowBalanceVisible || showBalance || isFlashing;
 
-  // Subscribe only while the pill would render — no SSE when hidden.
+  // Subscribe only while the chip would render — no SSE when hidden.
   useBillingBalanceRealtime(teamId, isVisible);
 
   if (!isVisible) return null;
 
-  // Flash (green) takes priority, then low-balance (amber), then neutral.
+  // Flash (green) takes priority, then low-balance (amber), then muted.
   const badgeTone = isFlashing
-    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-transparent'
+    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
     : isLowBalanceVisible
-      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-transparent'
-      : undefined;
+      ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+      : 'border-border/50 bg-transparent text-muted-foreground';
+
+  const amount = `$${balance?.toFixed(2) ?? '0.00'}`;
 
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton asChild tooltip="Credits">
-        <Link to="/credits">
-          <Wallet />
-          <span>Credits</span>
-        </Link>
-      </SidebarMenuButton>
-      {/* SidebarMenuBadge is only the absolute positioner; Badge is the pill. */}
-      <SidebarMenuBadge className="h-auto min-w-0 p-0 peer-hover/menu-button:text-inherit peer-data-active/menu-button:text-inherit">
+    <div className="px-2 py-1 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
+      <Link
+        to="/credits"
+        search={{ tab: 'balance' }}
+        title={`Credits ${amount}`}
+        aria-label={`Credit balance ${amount}. Open credits.`}
+        className={cn(
+          'flex w-full items-center justify-start rounded-md outline-none',
+          'focus-visible:ring-2 focus-visible:ring-ring',
+          'group-data-[collapsible=icon]:w-auto group-data-[collapsible=icon]:justify-center'
+        )}
+      >
         <Badge
-          variant="secondary"
+          variant="outline"
           className={cn(
-            'tabular-nums animate-[balance-flash-in_300ms_ease-out_both]',
+            'max-w-full truncate font-normal tabular-nums',
+            'animate-[balance-flash-in_300ms_ease-out_both]',
             badgeTone
           )}
         >
-          ${balance?.toFixed(2) ?? '0.00'}
+          {amount}
         </Badge>
-      </SidebarMenuBadge>
-    </SidebarMenuItem>
+      </Link>
+    </div>
   );
 };
