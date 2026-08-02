@@ -292,6 +292,14 @@ SUPER:  CORAL.  OUT NOW.
       }
       createdSequenceId = sequenceId;
 
+      // Progressive reveal (#1091): analysis lands on the forced script view —
+      // the canvas has nothing to show until the first shot preview arrives.
+      // Assert immediately after the redirect, before any preview can land
+      // and auto-reveal the canvas.
+      await expect(
+        page.getByRole('radio', { name: 'Show the script' })
+      ).toHaveAttribute('data-state', 'on');
+
       // 9. Wait for storyboard + shot images to land in the DB.
       //
       // Content-flag retry coverage (#881): two recorded fixtures inject a
@@ -356,6 +364,15 @@ SUPER:  CORAL.  OUT NOW.
       //     each scene's player renders its <video>; that player video is
       //     ordered before the prefetch in the DOM, so `.first()` resolves to
       //     it.
+      // Progressive reveal (#1091): the first preview auto-revealed the canvas
+      // (no explicit view in the URL), so by now the toggle is enabled AND the
+      // canvas is the active view — the playback checks below depend on it.
+      const canvasToggle = page.getByRole('radio', {
+        name: 'Show the canvas',
+      });
+      await expect(canvasToggle).toBeEnabled();
+      await expect(canvasToggle).toHaveAttribute('data-state', 'on');
+
       const sceneItems = page.locator('[data-testid="scene-list-item"]');
       const sceneCount = await sceneItems.count();
       expect(sceneCount, 'sequence has at least one scene').toBeGreaterThan(0);

@@ -14,6 +14,9 @@ import { FileText, Film } from 'lucide-react';
 type CanvasViewToggleProps = {
   view: CanvasView;
   onViewChange: (view: CanvasView) => void;
+  /** Progressive reveal (#1091): the canvas has nothing to show until the
+   *  first shot preview lands, so the item stays disabled during the split. */
+  canvasDisabled?: boolean;
   /** View-scoped action shown at the right of the row. Absolutely positioned so
    *  it can't push the toggle off centre. */
   trailing?: React.ReactNode;
@@ -22,6 +25,7 @@ type CanvasViewToggleProps = {
 export const CanvasViewToggle: React.FC<CanvasViewToggleProps> = ({
   view,
   onViewChange,
+  canvasDisabled,
   trailing,
 }) => (
   <div className="relative flex shrink-0 items-center justify-center pt-4">
@@ -36,7 +40,11 @@ export const CanvasViewToggle: React.FC<CanvasViewToggleProps> = ({
       variant="outline"
       size="sm"
     >
-      <ToggleGroupItem value="canvas" aria-label="Show the canvas">
+      <ToggleGroupItem
+        value="canvas"
+        aria-label="Show the canvas"
+        disabled={canvasDisabled}
+      >
         <Film className="mr-1.5 h-3.5 w-3.5" />
         Canvas
       </ToggleGroupItem>

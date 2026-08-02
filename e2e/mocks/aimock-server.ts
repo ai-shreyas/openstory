@@ -257,7 +257,9 @@ export async function startAimockServer(): Promise<string> {
     // (a 30s reasoning gap becomes 300ms) while still yielding between
     // chunks, so concurrent streams keep interleaving like production.
     // Recording is unaffected — record mode streams live from upstream.
-    replaySpeed: 100,
+    // AIMOCK_REPLAY_SPEED overrides for demo/video runs where streaming
+    // should be watchable (e.g. 10 keeps the script split visibly streaming).
+    replaySpeed: Number(process.env.AIMOCK_REPLAY_SPEED ?? 100),
     requestTransform: falRequestTransform,
     // Record only when E2E_RECORD=1 (real key from .env.local). Default is
     // strict replay against the recorded fixtures — CI runs without the flag

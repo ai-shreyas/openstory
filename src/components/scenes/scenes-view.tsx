@@ -310,6 +310,17 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     shouldPoll ? { refetchInterval: 2000 } : undefined
   );
 
+  // Progressive reveal (#1091): while the script is being split the canvas has
+  // nothing to show, so the Script view is forced and the Canvas toggle stays
+  // disabled. When the first shot preview lands the override drops away and —
+  // unless the user explicitly chose the script view (URL `view=script`) —
+  // the derived view falls back to the canvas default, auto-revealing the
+  // first images as they arrive. No effect, no state: pure derivation.
+  const canvasReady =
+    !isProcessing ||
+    (shots?.some((s) => s.thumbnailUrl || s.previewThumbnailUrl) ?? false);
+  const effectiveView = canvasReady ? view : 'script';
+
   // Escape progressive zoom-out (#986):
   // 1) blur the focused editing field (exit typing)
   // 2) else yield to an open dialog/menu/popover
@@ -1325,15 +1336,16 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         <div className="flex flex-1 min-h-0 min-w-0 flex-col md:flex-row">
           <div className="flex flex-1 min-h-0 min-w-0 flex-col">
             <CanvasViewToggle
-              view={view}
+              view={effectiveView}
               onViewChange={setView}
+              canvasDisabled={!canvasReady}
               trailing={
-                view === 'script' ? (
+                effectiveView === 'script' ? (
                   <CopyScriptButton sequenceId={sequenceId} />
                 ) : null
               }
             />
-            {view === 'script' ? (
+            {effectiveView === 'script' ? (
               <SceneScriptDocument
                 sequenceId={sequenceId}
                 scenes={scenes}
