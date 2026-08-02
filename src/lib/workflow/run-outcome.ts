@@ -13,7 +13,10 @@
 
 import { getEnv } from '#env';
 import { disposeRpcStub } from '@/lib/workflow/rpc-dispose';
-import { getCfBindingForRunId } from '@/lib/workflow/trigger-bindings';
+import {
+  getCfBindingForRunId,
+  workflowNameFromRunId,
+} from '@/lib/workflow/trigger-bindings';
 import type { CloudflareEnv } from '@/lib/workflow/types';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -59,8 +62,12 @@ export async function terminateSingleArtifactRun(
   runId: string | null
 ): Promise<boolean> {
   if (!runId) return false;
-  const workflowName = runId.split('_')[1] ?? '';
-  if (!SINGLE_ARTIFACT_WORKFLOWS.has(workflowName)) return false;
+  // Handles both top-level and parent-spawned child id shapes — an Update-all
+  // chained image child IS a single-artifact run and must be terminable.
+  const workflowName = workflowNameFromRunId(runId);
+  if (!workflowName || !SINGLE_ARTIFACT_WORKFLOWS.has(workflowName)) {
+    return false;
+  }
 
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- getEnv()'s type is platform-dependent; CF runtime guarantees Cloudflare.Env shape with workflow bindings present
   const env = getEnv() as unknown as CloudflareEnv;

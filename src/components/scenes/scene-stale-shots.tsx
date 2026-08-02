@@ -72,9 +72,13 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   );
   if (staleShots.length === 0 && updatingShots.length === 0) return null;
 
-  // Nothing actionable left: everything in flight, clicking would no-op
-  // against the server-side dedup.
-  const busy = isUpdating || staleShots.length === 0;
+  const busy = isUpdating;
+
+  // Chip labels use the shot's position within the IN-SCOPE list, not
+  // `shotNumber`: shot numbers are per-scene, so at sequence scope every
+  // scene's first shot would read "Shot 1" (#1095 review). Positions match
+  // the rail's ordering because `shots` is documented as in-scope-in-order.
+  const numberByShotId = new Map(shots.map((s, index) => [s.id, index + 1]));
 
   return (
     <div
@@ -99,7 +103,7 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
       </span>
       <span aria-hidden="true">·</span>
       {[...staleShots, ...updatingShots].map((shot) => {
-        const number = shot.shotNumber ?? shot.orderIndex + 1;
+        const number = numberByShotId.get(shot.id) ?? shot.orderIndex + 1;
         const updating = updatingShots.includes(shot);
         return (
           <Button

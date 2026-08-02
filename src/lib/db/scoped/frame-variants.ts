@@ -223,6 +223,30 @@ export function createFrameVariantsMethods(db: Database) {
       return row ?? null;
     },
 
+    /**
+     * Status-guarded completion of an in-flight version (#1085 review): the
+     * unguarded `update` let a completion racing a user cancel silently
+     * resurrect the cancelled row to 'completed'. Returns null when the row
+     * went terminal meanwhile — the caller must discard the render result
+     * (the user was already told `cancelled: true`).
+     */
+    completeIfLive: async (
+      versionId: string,
+      data: Partial<NewFrameVariant>
+    ): Promise<FrameVariant | null> => {
+      const [row] = await db
+        .update(frameVariants)
+        .set({ ...data, status: 'completed', updatedAt: new Date() })
+        .where(
+          and(
+            eq(frameVariants.id, versionId),
+            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning();
+      return row ?? null;
+    },
+
     /** Terminal a live version row (cancel / zombie sweep); null when the row
      * was already terminal. */
     markTerminal: async (

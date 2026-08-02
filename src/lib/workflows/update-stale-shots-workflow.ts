@@ -224,7 +224,7 @@ type Plan = {
   skipped: SkippedShot[];
 };
 
-type ImageChildOutput = { imageUrl?: string };
+type ImageChildOutput = { imageUrl?: string; cancelled?: boolean };
 
 /** A prompt target's scenes, materialised per shot in `prepare-prompt-*`. */
 type PromptScenes = {
@@ -332,7 +332,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
       // though the value is plain JSON (same pattern as await-child.ts).
       const imageInputJson = await step.do(
         `prepare-image-${target.shotId}`,
-        async () => {
+        async (): Promise<string | null> => {
           const [shot, frame, sequence] = await Promise.all([
             scopedDb.shots.getById(target.shotId),
             scopedDb.frames.getAnchorByShot(target.shotId),
@@ -358,12 +358,18 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               // frame's current mirror.
               promptOverride = frame.imagePrompt ?? undefined;
             } else {
-              // Cancelled / failed upstream: never render from the prompt
-              // the run failed to produce.
-              throw new NonRetryableError(
-                `Upstream visual prompt for shot ${target.shotId} was cancelled`,
-                'WorkflowValidationError'
-              );
+              // The upstream prompt didn't land for this run: the user
+              // cancelled it, or a post-click edit superseded the mirror.
+              // Never render from it — but this is a stand-down, not a run
+              // failure (#1095 review). Release the image claim and skip.
+              if (claims.imageVariantId) {
+                await scopedDb.frameVariants.markTerminal(
+                  claims.imageVariantId,
+                  'cancelled',
+                  'Upstream visual prompt was cancelled or superseded by a newer edit'
+                );
+              }
+              return null;
             }
           }
           const scriptBySceneId = await loadSelectedScriptsBySequence(
@@ -401,6 +407,13 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
           }
         }
       );
+      if (imageInputJson === null) {
+        // Upstream prompt cancelled/superseded — stood down in prepare.
+        logger.info(
+          `[UpdateStaleShotsWorkflow] image for shot ${target.shotId} stood down (upstream prompt cancelled or superseded)`
+        );
+        return;
+      }
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- the step above serialized exactly this type
       const imageInput = JSON.parse(imageInputJson) as ImageWorkflowInput;
       const output = await spawnAndAwaitChild<
@@ -415,6 +428,14 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
         spawnStepName: `spawn-image-${target.shotId}`,
         awaitStepName: `await-image-${target.shotId}`,
       });
+      // A user cancel (before or during the render) is a stand-down, not a
+      // failure — and definitely not a render to count (#1095 review).
+      if (output.cancelled) {
+        logger.info(
+          `[UpdateStaleShotsWorkflow] image for shot ${target.shotId} was cancelled by the user; not counted`
+        );
+        return;
+      }
       // ImageWorkflow has a success path that renders nothing — it returns an
       // empty `imageUrl` when its anchor frame vanished mid-run. Counting that
       // as a render would report work the user never got.
@@ -737,35 +758,57 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
 
             const stages: Array<Promise<void>> = [];
 
-            if (doMotion && base && scenes) {
-              stages.push(
-                spawnAndAwaitChild<MotionPromptWorkflowInput, unknown>(step, {
-                  binding: this.env.MOTION_PROMPT_WORKFLOW,
-                  parentBindingName: PARENT_BINDING_NAME,
-                  parentInstanceId,
-                  childId: `motion-prompt:${sequenceId}:${target.shotId}`,
-                  childPayload: {
-                    ...base,
-                    sceneBefore: scenes.sceneBefore,
-                    sceneAfter: scenes.sceneAfter,
-                    startingFrameImageUrl: target.startingFrameImageUrl,
-                    targetVersionId: claims.motionVersionId ?? undefined,
-                  },
-                  spawnStepName: `spawn-motion-prompt-${target.shotId}`,
-                  awaitStepName: `await-motion-prompt-${target.shotId}`,
-                }).then(
-                  () => {
-                    counters.motionPrompts += 1;
-                  },
-                  async (error: unknown) => {
-                    upstream.motionOk = false;
-                    failures.push(
-                      toFailure(target.shotId, 'motion-prompt', error)
+            // The motion prompt is conditioned on the rendered still (#929),
+            // so when this run ALSO regenerates the image it must run after
+            // the image chain and read the fresh still — racing them stamps a
+            // hash the new still immediately invalidates, and the artifact
+            // reads stale again the moment the run finishes (#1095 review).
+            const runMotionPrompt = async (): Promise<void> => {
+              if (!(doMotion && base && scenes)) return;
+              let startingFrameImageUrl = target.startingFrameImageUrl;
+              if (doImage) {
+                startingFrameImageUrl = await step.do(
+                  `refresh-still-${target.shotId}`,
+                  async () => {
+                    const frameNow = await scopedDb.frames.getAnchorByShot(
+                      target.shotId
                     );
-                    await failClaims('motion-prompt');
+                    return (
+                      frameNow?.imageUrl ?? target.startingFrameImageUrl ?? null
+                    );
                   }
-                )
-              );
+                );
+              }
+              try {
+                await spawnAndAwaitChild<MotionPromptWorkflowInput, unknown>(
+                  step,
+                  {
+                    binding: this.env.MOTION_PROMPT_WORKFLOW,
+                    parentBindingName: PARENT_BINDING_NAME,
+                    parentInstanceId,
+                    childId: `motion-prompt:${sequenceId}:${target.shotId}`,
+                    childPayload: {
+                      ...base,
+                      sceneBefore: scenes.sceneBefore,
+                      sceneAfter: scenes.sceneAfter,
+                      startingFrameImageUrl: startingFrameImageUrl ?? undefined,
+                      targetVersionId: claims.motionVersionId ?? undefined,
+                    },
+                    spawnStepName: `spawn-motion-prompt-${target.shotId}`,
+                    awaitStepName: `await-motion-prompt-${target.shotId}`,
+                  }
+                );
+                counters.motionPrompts += 1;
+              } catch (error) {
+                upstream.motionOk = false;
+                failures.push(toFailure(target.shotId, 'motion-prompt', error));
+                await failClaims('motion-prompt');
+              }
+            };
+
+            if (!doImage) {
+              // No image regen — the still can't move, run alongside.
+              stages.push(runMotionPrompt());
             }
 
             if (doVisual && base) {
@@ -796,7 +839,10 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                       toFailure(target.shotId, 'visual-prompt', error)
                     );
                     await failClaims('visual-prompt');
-                    // The chained image claim was cancelled by the cascade above.
+                    // The chained image claim was cancelled by the cascade
+                    // above. The motion prompt still runs — the still didn't
+                    // change, so its claim hash remains valid.
+                    if (doImage) await runMotionPrompt();
                     return;
                   }
                   if (!doImage) return;
@@ -807,15 +853,24 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                     failures.push(toFailure(target.shotId, 'image', error));
                     await failClaims('image');
                   }
+                  // After the image settles either way: fresh still on
+                  // success, unchanged still on failure — both are safe
+                  // inputs for the motion prompt.
+                  await runMotionPrompt();
                 })()
               );
             } else if (doImage) {
               stages.push(
-                spawnImage(target, claims).catch(async (error: unknown) => {
-                  upstream.imageOk = false;
-                  failures.push(toFailure(target.shotId, 'image', error));
-                  await failClaims('image');
-                })
+                (async () => {
+                  try {
+                    await spawnImage(target, claims);
+                  } catch (error) {
+                    upstream.imageOk = false;
+                    failures.push(toFailure(target.shotId, 'image', error));
+                    await failClaims('image');
+                  }
+                  await runMotionPrompt();
+                })()
               );
             }
 

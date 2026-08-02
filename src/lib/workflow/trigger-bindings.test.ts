@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test, vi } from 'vitest';
-import { triggerCfWorkflow } from './trigger-bindings';
+import { triggerCfWorkflow, workflowNameFromRunId } from './trigger-bindings';
 import type { CloudflareEnv } from '@/lib/workflow/types';
 
 // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal env stub: triggerCfWorkflow only reads VITE_APP_URL (via buildInstanceId)
@@ -55,6 +55,43 @@ const alreadyExists = () =>
   Promise.reject(
     new Error('(instance.already_exists) Instance already exists')
   );
+
+describe('workflowNameFromRunId', () => {
+  test('resolves top-level ids (envSlug_workflowName_suffix)', () => {
+    expect(
+      workflowNameFromRunId('localhost-3000_image_1785655915935-abc')
+    ).toBe('image');
+    expect(
+      workflowNameFromRunId('openstory_update-stale-shots_1785-uuid')
+    ).toBe('update-stale-shots');
+  });
+
+  test('resolves child ids from spawnAndAwaitChild (workflowName first segment)', () => {
+    // Child ids are the sanitized `<trigger-key>:<...>` semantic id + run tag
+    // — the reconciler false-failed these before segment[0] was tried (#1095
+    // review H1).
+    expect(workflowNameFromRunId('image_01KVEQFF_01KVEQG7_rw1yxay')).toBe(
+      'image'
+    );
+    expect(
+      workflowNameFromRunId('motion_01KYH2HK_01KYH2K9_seedance_v2_ro0648u')
+    ).toBe('motion');
+    expect(
+      workflowNameFromRunId('frame-prompt_01KVEQFF_01KVEQG7_rw1yxay')
+    ).toBe('frame-prompt');
+  });
+
+  test('prefers segment[1] so top-level ids are never misread as child ids', () => {
+    // Pathological envSlug that is itself a trigger key: segment[1] wins.
+    expect(workflowNameFromRunId('image_motion_suffix')).toBe('motion');
+  });
+
+  test('returns null for legacy / mock ids', () => {
+    expect(workflowNameFromRunId('qstash-run-abc123')).toBeNull();
+    expect(workflowNameFromRunId('mock_e2e_run')).toBeNull();
+    expect(workflowNameFromRunId('')).toBeNull();
+  });
+});
 
 describe('triggerCfWorkflow', () => {
   test('returns the created instance id on success', async () => {

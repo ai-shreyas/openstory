@@ -7,6 +7,7 @@ import {
 import { estimateImageCost } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import { getWorkflowRunOutcome } from '@/lib/workflow/run-outcome';
+import { workflowNameFromRunId } from '@/lib/workflow/trigger-bindings';
 import type { ShotVariant, NewShot } from '@/lib/db/schema';
 import {
   computeShotStaleness,
@@ -698,12 +699,14 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
   });
 
 /**
- * "Update all" (#1077): enqueue the durable `UpdateStaleShotsWorkflow` for a
- * shot / scene / the whole sequence. The workflow recomputes staleness
- * server-side and regenerates only the artifacts that read stale right now —
- * no cascade into artifacts a regeneration outdates, and video never
- * auto-renders — so the payload is just the scope. Returns the run id;
- * progress surfaces through the staleness indicators as artifacts land.
+ * "Update all" (#1077, depth picker #1085): enqueue the durable
+ * `UpdateStaleShotsWorkflow` for a shot / scene / the whole sequence. The
+ * workflow recomputes staleness server-side and regenerates what reads stale
+ * up to the chosen `depth` cascade — at 'images' and above a regenerated
+ * prompt cascades into its still; at 'video'/'music' existing videos and
+ * music re-render behind their regenerated upstreams (never a FIRST render).
+ * Returns the run id; progress surfaces through the staleness indicators as
+ * artifacts land.
  *
  * Preflights credits before enqueuing. Inside the workflow an out-of-credits
  * failure can only land in the run result, where it reads as "nothing
@@ -750,7 +753,14 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
         shotId: data.shotId,
         depth,
       },
-      { label: buildWorkflowLabel(sequence.id) }
+      {
+        label: buildWorkflowLabel(sequence.id),
+        // Embed the sequence id in the instance id (the timestamp+uuid tail
+        // keeps it unique per click) so `getUpdateStaleShotsRunFn` can verify
+        // a polled run id actually belongs to the sequence being authorized —
+        // without this, any authenticated user could read any run's output.
+        deduplicationId: `${sequence.id}-${Date.now()}-${crypto.randomUUID()}`,
+      }
     );
     return { workflowRunId };
   });
@@ -792,7 +802,17 @@ export const getUpdateStaleShotsRunFn = createServerFn({ method: 'GET' })
       z.object({ sequenceId: ulidSchema, workflowRunId: z.string().min(1) })
     )
   )
-  .handler(async ({ data }) => {
+  .handler(async ({ data, context }) => {
+    // The middleware authorizes the SEQUENCE; the run id is caller-supplied
+    // and would otherwise let any authenticated user read any run's output.
+    // `updateStaleShotsFn` embeds the sequence id in the instance id — require
+    // both the right workflow and the right sequence before reading anything.
+    if (
+      workflowNameFromRunId(data.workflowRunId) !== 'update-stale-shots' ||
+      !data.workflowRunId.includes(context.sequence.id)
+    ) {
+      return { state: 'unknown' as const };
+    }
     const outcome = await getWorkflowRunOutcome(data.workflowRunId);
     if (outcome.state !== 'complete') return outcome;
     const parsed = updateStaleShotsResultSchema.safeParse(outcome.output);

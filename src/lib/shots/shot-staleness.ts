@@ -76,9 +76,12 @@ export type ShotStalenessRefs = {
 };
 
 /**
- * Four states per artifact:
+ * Five states per artifact:
  *   - `'stale'`     — stored hash diverges from the freshly computed one.
  *   - `'fresh'`     — stored hash matches.
+ *   - `'updating'`  — stored hash diverges, but a live pending claim matches
+ *                     the live hash — a job is already fixing exactly this
+ *                     (see the overlay at the end of this function, #1085).
  *   - `'untracked'` — no stored hash (legacy artifact, or never generated).
  *                     Distinct from `'fresh'` so the UI can suppress the
  *                     regenerate prompt without lying about the artifact's

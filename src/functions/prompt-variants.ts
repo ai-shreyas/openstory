@@ -22,6 +22,7 @@ import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { terminateSingleArtifactRun } from '@/lib/workflow/run-outcome';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import type { ScopedDb } from '@/lib/db/scoped';
 import type {
   MotionPromptWorkflowInput,
   MusicPromptWorkflowInput,
@@ -367,6 +368,39 @@ const cancelPendingInput = z.object({
   artifact: z.enum(['visual-prompt', 'motion-prompt', 'image']),
 });
 
+/**
+ * Settle the frame's primary in-flight state after an image claim cancel
+ * (#1095 review): the producing run may be terminated (or abandon the claim
+ * before its own settle path runs), which would leave `image_status` stuck
+ * 'generating' with nothing in flight. Only touches the frame when THIS
+ * cancelled row is what holds it — a newer kickoff's state is left alone.
+ */
+async function settleFrameAfterImageCancel(
+  scopedDb: ScopedDb,
+  frameId: string,
+  row: { id: string; workflowRunId: string | null }
+): Promise<void> {
+  const frameNow = await scopedDb.frames.getById(frameId);
+  if (!frameNow) return;
+  const heldByThisRow =
+    frameNow.pendingPromoteVersionId === row.id ||
+    (row.workflowRunId !== null &&
+      frameNow.imageWorkflowRunId === row.workflowRunId);
+  if (!heldByThisRow) return;
+  await scopedDb.frames.clearPendingPromoteVersionIdIf(frameId, row.id);
+  if (frameNow.imageStatus === 'generating') {
+    await scopedDb.frames.setImageGenerationStatus(
+      frameId,
+      {
+        imageStatus: frameNow.selectedImageVersionId ? 'completed' : 'pending',
+        imageWorkflowRunId: null,
+        imageError: null,
+      },
+      { throwOnMissing: false }
+    );
+  }
+}
+
 export const cancelPendingArtifactFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(cancelPendingInput))
@@ -384,10 +418,13 @@ export const cancelPendingArtifactFn = createServerFn({ method: 'POST' })
         'cancelled'
       );
       if (!cancelled) return { cancelled: false } as const;
-      await scopedDb.frameVariants.cancelByDependency(
+      const cascaded = await scopedDb.frameVariants.cancelByDependency(
         row.id,
         'Upstream visual prompt was cancelled'
       );
+      for (const dep of cascaded) {
+        await settleFrameAfterImageCancel(scopedDb, dep.frameId, dep);
+      }
       await terminateSingleArtifactRun(row.workflowRunId);
       return { cancelled: true } as const;
     }
@@ -418,6 +455,7 @@ export const cancelPendingArtifactFn = createServerFn({ method: 'POST' })
     );
     if (!cancelled) return { cancelled: false } as const;
     await terminateSingleArtifactRun(row.workflowRunId);
+    await settleFrameAfterImageCancel(scopedDb, row.frameId, row);
     return { cancelled: true } as const;
   });
 

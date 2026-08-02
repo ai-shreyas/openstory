@@ -13,7 +13,10 @@ const RUN_POLL_MS = 5_000;
 /**
  * Backstop for a run we can never get a verdict on (an id that doesn't resolve
  * to a binding, or a status lookup that keeps failing). The workflow itself is
- * unaffected — this only stops the client polling forever.
+ * unaffected — this only stops the client polling forever. A verifiably
+ * `running` run RESETS this deadline on every tick, so a genuinely
+ * long-running one (sequence-scope at depth video/music) keeps its spinner
+ * and still gets its terminal report.
  */
 const RUN_DEADLINE_MS = 15 * 60_000;
 
@@ -24,8 +27,8 @@ const RUN_DEADLINE_MS = 15 * 60_000;
  * All orchestration is server-side. This hook:
  *
  *   1. fires the trigger mutation (a credits preflight there means an
- *      out-of-credits user gets the billing dialog rather than a run that
- *      silently regenerates nothing), then
+ *      out-of-credits user gets an immediate failure toast at click time
+ *      rather than a run that silently regenerates nothing), then
  *   2. polls the run's terminal outcome, refreshing the staleness namespace
  *      each tick so indicators clear progressively, and
  *   3. on completion reports the result — including partial failures.
@@ -73,7 +76,7 @@ export function useUpdateStaleShots(args: { sequenceId: string }) {
     [triggerPending, runId, triggerMutate]
   );
 
-  const { data: outcome } = useQuery({
+  const { data: outcome, dataUpdatedAt } = useQuery({
     queryKey: ['update-stale-shots-run', runId],
     queryFn: () => {
       if (!runId) throw new Error('runId required');
@@ -87,25 +90,24 @@ export function useUpdateStaleShots(args: { sequenceId: string }) {
   });
 
   // Refresh indicators on each tick so artifacts clear as they land, rather
-  // than all at once when the run finishes.
+  // than all at once when the run finishes. Keyed on `dataUpdatedAt`, not
+  // `outcome`: structural sharing keeps `outcome` referentially identical
+  // while the run reports `running`, so an outcome-keyed effect fires once
+  // and never again (#1095 review).
   useEffect(() => {
-    if (!runId) return;
+    if (!runId || !dataUpdatedAt) return;
     void queryClient.invalidateQueries({ queryKey: shotStalenessNamespace });
-  }, [outcome, runId, queryClient]);
+  }, [dataUpdatedAt, runId, queryClient]);
 
   useEffect(() => {
     if (!runId || !outcome) return;
 
     if (outcome.state === 'running') {
-      // Only give up on a run we can't get a verdict on; a genuinely
-      // long-running one keeps its spinner.
-      if (Date.now() > deadlineRef.current) {
-        setRunId(null);
-        toast.warning('Update is taking longer than expected', {
-          description:
-            'It may still be running. Check the indicators, or try again.',
-        });
-      }
+      // A verified 'running' verdict means the workflow engine can see the
+      // instance making progress — keep the spinner and push the deadline
+      // out. The deadline only ever fires after RUN_DEADLINE_MS of
+      // consecutive no-verdict ('unknown') ticks.
+      deadlineRef.current = Date.now() + RUN_DEADLINE_MS;
       return;
     }
 
@@ -147,6 +149,26 @@ export function useUpdateStaleShots(args: { sequenceId: string }) {
       musicPrompts +
       musicTracks;
     const touchedMusic = musicPrompts + musicTracks > 0;
+
+    // Dedup working as intended is not an error (#1095 review): when the only
+    // "problems" are shots another run already claims, say that plainly
+    // instead of alarming with "Could not update".
+    if (
+      failures.length === 0 &&
+      skipped.length > 0 &&
+      skipped.every((s) => s.reason === 'already-in-flight')
+    ) {
+      toast.info(
+        regenerated > 0
+          ? `Updated ${regenerated} item${regenerated === 1 ? '' : 's'} — the rest are already being updated`
+          : 'These shots are already being updated',
+        {
+          description:
+            'Another update run is regenerating the remaining artifacts.',
+        }
+      );
+      return;
+    }
 
     if (failures.length > 0 || skipped.length > 0) {
       const problems = failures.length + skipped.length;
