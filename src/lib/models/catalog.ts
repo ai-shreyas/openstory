@@ -121,10 +121,10 @@ export type ModelDetail = {
 };
 
 /**
- * @public Typed upstream failure. `status`/`code` are branched on INSIDE this
- * module (e.g. `fetchSchema` maps 404 → null); they do NOT survive server-fn
- * serialization, so client code matches on `message` instead (see
- * `isNoSchemaError` in model-detail-view.tsx).
+ * @public Typed upstream failure. Own props (`status`/`code`) survive the
+ * server-fn boundary via seroval (#1087), so client code can branch on them
+ * (see `isNoSchemaError` in model-detail-view.tsx). Inside this module,
+ * `fetchSchema` still maps 404 → null before rethrowing a richer error.
  */
 export class CatalogApiError extends Error {
   readonly status: number;

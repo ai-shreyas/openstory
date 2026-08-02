@@ -5,6 +5,7 @@ import { useRouter } from '@tanstack/react-router';
 import type { ErrorComponentProps } from '@tanstack/react-router';
 import { AlertCircle } from 'lucide-react';
 
+import { errorCode } from '@/lib/errors';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'ui', 'error', 'route-error-fallback']);
@@ -14,6 +15,9 @@ type RouteErrorFallbackProps = ErrorComponentProps & {
 };
 
 function isNotFoundError(error: unknown): boolean {
+  // Prefer the stable code that survives the server-fn boundary (#1087).
+  if (errorCode(error) === 'NOT_FOUND') return true;
+  // Router `notFound()` / residual plain Errors without a code.
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
     return (
