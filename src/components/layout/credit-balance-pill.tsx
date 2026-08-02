@@ -7,7 +7,7 @@
  * 2. Balance topped up — brief green flash
  * 3. User toggled "always show" on the credits page (muted)
  *
- * Expanded: wallet + $amount as muted text (no badge chrome).
+ * Expanded: wallet + $amount at normal sidebar foreground weight.
  * Collapsed (icon rail): wallet icon only + tooltip with amount — never the
  * dollar string, so it cannot overlap the avatar.
  *
@@ -45,12 +45,12 @@ export const CreditBalancePill: React.FC = () => {
 
   if (!isVisible) return null;
 
-  // Flash (green) > low (amber) > muted account chrome.
+  // Flash / low only — default inherits sidebar menu foreground (not muted).
   const toneClass = isFlashing
-    ? 'text-emerald-600 dark:text-emerald-400'
+    ? 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-600 dark:hover:text-emerald-400'
     : isLowBalanceVisible
-      ? 'text-amber-600 dark:text-amber-400'
-      : 'text-muted-foreground';
+      ? 'text-amber-600 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
+      : undefined;
 
   const amount = `$${balance?.toFixed(2) ?? '0.00'}`;
   const tooltip = `Credits · ${amount}`;
@@ -63,9 +63,7 @@ export const CreditBalancePill: React.FC = () => {
           tooltip={tooltip}
           className={cn(
             'animate-[balance-flash-in_300ms_ease-out_both]',
-            toneClass,
-            // Keep hover/active readable without fighting the tone tint.
-            'hover:text-sidebar-accent-foreground data-active:text-sidebar-accent-foreground'
+            toneClass
           )}
         >
           <Link
