@@ -111,6 +111,14 @@ export interface ImageWorkflowInput extends SequenceWorkflowContext {
    * (there is no primary to protect).
    */
   variantOnly?: boolean;
+  /**
+   * Pre-created pending `frame_variants` claim row to complete in place
+   * (#1085). When set, `set-generating-status` transitions THIS row to
+   * 'generating' instead of appending a fresh one, and `persist-result`
+   * completes it. Absent on legacy paths (variant adds, storyboard, preview),
+   * which keep the append-in-workflow behaviour.
+   */
+  targetVariantId?: string;
 }
 
 /**
@@ -538,6 +546,13 @@ export interface FramePromptWorkflowInput extends SequenceWorkflowContext {
    * publishes on workflows nobody is watching.
    */
   emitStreaming?: boolean;
+  /**
+   * Pre-created pending `frame_prompt_versions` row to complete in place
+   * (#1085). Set by enqueue points that claim their targets up front
+   * (regenerateShotPromptFn, UpdateStaleShotsWorkflow); absent on the
+   * analysis-pipeline path, which still appends on completion.
+   */
+  targetVersionId?: string;
 }
 
 export interface MotionPromptBatchWorkflowInput extends SequenceWorkflowContext {
@@ -579,6 +594,11 @@ export interface MotionPromptWorkflowInput extends SequenceWorkflowContext {
   startingFrameImageUrl?: string | null;
   /** See {@link FramePromptWorkflowInput.emitStreaming}. */
   emitStreaming?: boolean;
+  /**
+   * Pre-created pending `shot_prompt_versions` row (motion) to complete in
+   * place (#1085). See {@link FramePromptWorkflowInput.targetVersionId}.
+   */
+  targetVersionId?: string;
 }
 /**
  * Workflow result types

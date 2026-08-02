@@ -28,7 +28,8 @@ import type {
   ShotPromptVersionComponents,
 } from '@/lib/db/schema';
 import { getLogger } from '@/lib/observability/logger';
-import { and, desc, eq, inArray, isNotNull, lte } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, lte, ne } from 'drizzle-orm';
+import { LIVE_PENDING_STATUSES } from './frame-prompt-versions';
 import { buildEventInsert } from './sequence-events';
 
 const logger = getLogger(['openstory', 'db', 'shot-prompt-versions']);
@@ -134,6 +135,24 @@ export function createShotPromptVersionsMethods(db: Database) {
       inputHash: version.inputHash,
       versionId: version.id,
     });
+
+  /**
+   * Revoke the mirror right of every live motion claim on this shot (#1085)
+   * — see `framePromptVersions`' demote helper for the contract: an explicit
+   * user repoint wins over any in-flight regeneration, whose output then
+   * lands in history only.
+   */
+  const demoteLiveClaims = (shotId: string) =>
+    db
+      .update(shotPromptVersions)
+      .set({ pendingInputHash: null })
+      .where(
+        and(
+          eq(shotPromptVersions.shotId, shotId),
+          eq(shotPromptVersions.promptType, 'motion'),
+          inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
+        )
+      );
 
   const methods = {
     /**
@@ -277,6 +296,214 @@ export function createShotPromptVersionsMethods(db: Database) {
     },
 
     /**
+     * Create an in-flight placeholder motion row for an enqueued regeneration
+     * (#1085). Does NOT mirror or repoint — only completion does — so the
+     * selection pointer keeps its "completed rows only" invariant. Mirrors
+     * `framePromptVersions.createPending`.
+     */
+    createPending: async (input: {
+      shotId: string;
+      pendingInputHash: string;
+      workflowRunId?: string | null;
+      createdBy?: string | null;
+    }): Promise<ShotPromptVersion> => {
+      const [row] = await db
+        .insert(shotPromptVersions)
+        .values({
+          shotId: input.shotId,
+          promptType: 'motion',
+          text: '',
+          source: 'regenerated',
+          inputHash: null,
+          analysisModel: null,
+          status: 'pending',
+          pendingInputHash: input.pendingInputHash,
+          workflowRunId: input.workflowRunId ?? null,
+          createdBy: input.createdBy ?? null,
+        })
+        .returning();
+      if (!row) throw new Error('Failed to insert pending motion prompt row');
+      return row;
+    },
+
+    /**
+     * Newest live (pending/generating) motion claim satisfying
+     * `pendingInputHash` — the dedup + "updating" staleness probe.
+     */
+    getLivePending: async (
+      shotId: string,
+      pendingInputHash: string
+    ): Promise<ShotPromptVersion | null> => {
+      const [row] = await db
+        .select()
+        .from(shotPromptVersions)
+        .where(
+          and(
+            eq(shotPromptVersions.shotId, shotId),
+            eq(shotPromptVersions.promptType, 'motion'),
+            eq(shotPromptVersions.pendingInputHash, pendingInputHash),
+            inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .orderBy(desc(shotPromptVersions.createdAt))
+        .limit(1);
+      return row ?? null;
+    },
+
+    /** Claim → 'generating' + stamp the working instance; false if the claim
+     * went terminal meanwhile (caller must abandon the generation). */
+    markGenerating: async (
+      versionId: string,
+      workflowRunId: string
+    ): Promise<boolean> => {
+      const updated = await db
+        .update(shotPromptVersions)
+        .set({ status: 'generating', workflowRunId })
+        .where(
+          and(
+            eq(shotPromptVersions.id, versionId),
+            inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning({ id: shotPromptVersions.id });
+      return updated.length > 0;
+    },
+
+    /** Terminal-fail a live claim; null when it was already terminal. */
+    markTerminal: async (
+      versionId: string,
+      status: 'failed' | 'cancelled'
+    ): Promise<ShotPromptVersion | null> => {
+      const [row] = await db
+        .update(shotPromptVersions)
+        .set({ status })
+        .where(
+          and(
+            eq(shotPromptVersions.id, versionId),
+            inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning();
+      return row ?? null;
+    },
+
+    /**
+     * Complete a pending motion claim in place. Same contract as
+     * `framePromptVersions.completePendingAiVersion`: mirrors onto the shot
+     * only when no newer completed row landed meanwhile (post-click edits are
+     * never clobbered); returns null when the claim was cancelled mid-flight;
+     * handles the partial-unique-index collision like `write`.
+     */
+    completePendingAiVersion: async (input: {
+      versionId: string;
+      shotId: string;
+      text: string;
+      components?: ShotPromptVersionComponents | null;
+      parameters?: MotionPromptParameters | null;
+      dialogue?: MotionDialogue | null;
+      audio?: MotionAudio | null;
+      inputHash: string;
+      analysisModel: string;
+    }): Promise<ShotPromptVersion | null> => {
+      const [claim] = await db
+        .select()
+        .from(shotPromptVersions)
+        .where(
+          and(
+            eq(shotPromptVersions.id, input.versionId),
+            eq(shotPromptVersions.shotId, input.shotId)
+          )
+        )
+        .limit(1);
+      if (!claim) {
+        throw new Error(
+          `ShotPromptVersion ${input.versionId} not found for shot ${input.shotId}`
+        );
+      }
+
+      const [conflicting] = await db
+        .select()
+        .from(shotPromptVersions)
+        .where(
+          and(
+            eq(shotPromptVersions.shotId, input.shotId),
+            eq(shotPromptVersions.promptType, 'motion'),
+            eq(shotPromptVersions.inputHash, input.inputHash),
+            ne(shotPromptVersions.id, input.versionId),
+            ne(shotPromptVersions.source, 'restored')
+          )
+        )
+        .limit(1);
+
+      // ULID ids order by creation time — a newer completed row is a
+      // post-click edit (or later run) whose mirror must be preserved.
+      const [newer] = await db
+        .select({ id: shotPromptVersions.id })
+        .from(shotPromptVersions)
+        .where(
+          and(
+            eq(shotPromptVersions.shotId, input.shotId),
+            eq(shotPromptVersions.promptType, 'motion'),
+            eq(shotPromptVersions.status, 'completed'),
+            gt(shotPromptVersions.id, claim.id)
+          )
+        )
+        .limit(1);
+
+      // Mirror right (#1085): revoked by a newer completed row (post-click
+      // edit) or by an explicit repoint that demoted the claim.
+      const mayMirror = !newer && claim.pendingInputHash !== null;
+
+      if (conflicting && conflicting.text === input.text) {
+        // Guarded retire — a no-op means a cancel already won the race, and
+        // cancelled work must not mirror (same contract as the main branch).
+        const retired = await db
+          .update(shotPromptVersions)
+          .set({ status: 'cancelled' })
+          .where(
+            and(
+              eq(shotPromptVersions.id, input.versionId),
+              inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
+            )
+          )
+          .returning({ id: shotPromptVersions.id });
+        if (retired.length === 0) return null;
+        if (mayMirror) await mirrorOntoShot(input.shotId, conflicting);
+        return conflicting;
+      }
+
+      const [updated] = await db
+        .update(shotPromptVersions)
+        .set({
+          text: input.text,
+          components: input.components ?? null,
+          parameters: input.parameters ?? null,
+          dialogue: input.dialogue ?? null,
+          audio: input.audio ?? null,
+          inputHash: conflicting ? null : input.inputHash,
+          analysisModel: input.analysisModel,
+          status: 'completed',
+        })
+        .where(
+          and(
+            eq(shotPromptVersions.id, input.versionId),
+            inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning();
+      if (!updated) return null; // cancelled mid-flight — discard the output
+
+      if (mayMirror) {
+        await mirrorSelection(input.shotId, {
+          text: input.text,
+          inputHash: input.inputHash,
+          versionId: updated.id,
+        });
+      }
+      return updated;
+    },
+
+    /**
      * The motion prompt version the shot currently points at via
      * `shots.selectedMotionPromptVersionId`, or null. This is the resolution
      * source of truth (#713): the render path reconstructs the `MotionPrompt`
@@ -364,6 +591,13 @@ export function createShotPromptVersionsMethods(db: Database) {
           `Motion ShotPromptVersion ${versionId} not found for shot ${shotId}`
         );
       }
+      if (version.status !== 'completed') {
+        // The selection pointer may only reference completed rows — same
+        // invariant as frameVariants.select / framePromptVersions.select.
+        throw new Error(
+          `Motion ShotPromptVersion ${versionId} is ${version.status}, not completed`
+        );
+      }
       const [shot] = await db
         .select({
           sequenceId: shots.sequenceId,
@@ -377,6 +611,8 @@ export function createShotPromptVersionsMethods(db: Database) {
 
       await db.batch([
         mirrorOntoShot(shotId, version),
+        // An explicit repoint revokes in-flight claims' mirror rights (#1085).
+        demoteLiveClaims(shotId),
         buildEventInsert(db, {
           sequenceId: shot.sequenceId,
           actorId: opts.actorId,
@@ -467,14 +703,18 @@ export function createShotPromptVersionsMethods(db: Database) {
           and(
             eq(shotPromptVersions.shotId, shotId),
             eq(shotPromptVersions.promptType, promptType),
-            lte(shotPromptVersions.createdAt, cutoff)
+            lte(shotPromptVersions.createdAt, cutoff),
+            // In-flight/failed placeholders can't match a render's promptHash
+            // and would waste candidate slots in the limited window.
+            eq(shotPromptVersions.status, 'completed')
           )
         )
         .orderBy(desc(shotPromptVersions.createdAt))
         .limit(limit);
     },
 
-    /** Most recent version of a given type, or null if none exists. */
+    /** Most recent completed version of a given type, or null. In-flight and
+     * failed rows are placeholders, not content. */
     getLatest: async (
       shotId: string,
       promptType: ShotPromptType
@@ -485,7 +725,8 @@ export function createShotPromptVersionsMethods(db: Database) {
         .where(
           and(
             eq(shotPromptVersions.shotId, shotId),
-            eq(shotPromptVersions.promptType, promptType)
+            eq(shotPromptVersions.promptType, promptType),
+            eq(shotPromptVersions.status, 'completed')
           )
         )
         .orderBy(desc(shotPromptVersions.createdAt))
@@ -511,7 +752,8 @@ export function createShotPromptVersionsMethods(db: Database) {
           and(
             eq(shotPromptVersions.shotId, shotId),
             eq(shotPromptVersions.promptType, promptType),
-            isNotNull(shotPromptVersions.inputHash)
+            isNotNull(shotPromptVersions.inputHash),
+            eq(shotPromptVersions.status, 'completed')
           )
         )
         .orderBy(desc(shotPromptVersions.createdAt))

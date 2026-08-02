@@ -19,14 +19,27 @@
  * docs/architecture/scene-shot-frame-redesign.md.
  */
 
-import { type InferInsertModel, type InferSelectModel } from 'drizzle-orm';
-import { index, integer, snakeCase, text } from 'drizzle-orm/sqlite-core';
+import { type InferInsertModel, type InferSelectModel, sql } from 'drizzle-orm';
+import {
+  index,
+  integer,
+  snakeCase,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 import { generateId } from '../id';
 import { frames } from './frames';
 import { sequences } from './sequences';
 import { SHOT_GENERATION_STATUSES } from './shots';
 
-type FrameGenerationStatus = (typeof SHOT_GENERATION_STATUSES)[number];
+// Frame-variant rows extend the shared generation statuses with 'cancelled'
+// (#1085): a chained image whose upstream pending prompt version failed or was
+// cancelled is cancelled itself — never attempted, distinct from 'failed'.
+const FRAME_VARIANT_STATUSES = [
+  ...SHOT_GENERATION_STATUSES,
+  'cancelled',
+] as const;
+type FrameGenerationStatus = (typeof FRAME_VARIANT_STATUSES)[number];
 
 /** @public consumed from #988+ */
 export const FRAME_VARIANT_KINDS = ['model', 'framing'] as const;
@@ -69,6 +82,15 @@ export const frameVariants = snakeCase.table(
     // Staleness of THIS version.
     promptHash: text(),
     inputHash: text(),
+    // In-flight claim for direct image regens (#1085): the live input hash
+    // this render was enqueued to satisfy. Chained renders (image waiting on
+    // a pending prompt version) leave it null — their validity derives from
+    // the dependency below.
+    pendingInputHash: text(),
+    // App-managed soft pointer (NO FK — D1 cascade trap) to the pending
+    // `frame_prompt_versions` row this chained render will consume. Failure/
+    // cancellation of that row cancels this one; chain depth is 2 today.
+    dependsOnVersionId: text(),
     // Soft pointer to the `frame_prompt_versions` row that was selected when
     // this still was generated (#1070). No FK (same cycle-avoidance pattern as
     // `sourceVariantId` / frames' selection pointers). Selecting this image
@@ -96,6 +118,15 @@ export const frameVariants = snakeCase.table(
       table.model
     ),
     index('idx_frame_variants_sequence').on(table.sequenceId),
+    // At most ONE live direct-regen claim per (frame, live-hash) (#1085).
+    // Chained claims carry a null pendingInputHash and are excluded — their
+    // uniqueness derives from the (already unique) prompt claim they depend
+    // on.
+    uniqueIndex('uq_frame_variants_live_claim')
+      .on(table.frameId, table.pendingInputHash)
+      .where(
+        sql`${table.pendingInputHash} IS NOT NULL AND ${table.status} IN ('pending', 'generating')`
+      ),
   ]
 );
 

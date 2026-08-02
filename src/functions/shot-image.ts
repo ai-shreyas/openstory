@@ -147,12 +147,73 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
       userEditedPrompt,
     });
 
-    const workflowRunId = await triggerWorkflow('/image', workflowInput, {
-      deduplicationId: `image-${shot.id}-${Date.now()}`,
-      label: buildWorkflowLabel(sequence.id),
-    });
+    // Server-side dedup (#1085): a live claim for exactly this snapshot hash
+    // means a run is already producing this render — a second click, second
+    // tab, or teammate must no-op instead of double-spending credits.
+    const liveClaims = await context.scopedDb.frameVariants.listLiveClaims(
+      frame.id
+    );
+    const existingClaim = liveClaims.find(
+      (c) => c.pendingInputHash === workflowInput.snapshotInputHash
+    );
+    if (existingClaim) {
+      return {
+        workflowRunId: existingClaim.workflowRunId,
+        shotId: shot.id,
+        alreadyInFlight: true,
+      } as const;
+    }
 
-    return { workflowRunId, shotId: shot.id };
+    // Pre-create the claim row (#1085): in-flight work is representable
+    // (staleness reads 'updating'), and the workflow completes this row in
+    // place instead of appending its own. The partial unique index on live
+    // claims closes the check-then-insert race above — the loser lands in
+    // the catch and reports in-flight instead of double-billing.
+    let claim;
+    try {
+      claim = await context.scopedDb.frameVariants.createPendingClaim({
+        frameId: frame.id,
+        sequenceId: sequence.id,
+        model: workflowInput.model ?? DEFAULT_IMAGE_MODEL,
+        pendingInputHash: workflowInput.snapshotInputHash,
+      });
+    } catch (error) {
+      const raced = (
+        await context.scopedDb.frameVariants.listLiveClaims(frame.id)
+      ).find((c) => c.pendingInputHash === workflowInput.snapshotInputHash);
+      if (!raced) throw error;
+      return {
+        workflowRunId: raced.workflowRunId,
+        shotId: shot.id,
+        alreadyInFlight: true,
+      } as const;
+    }
+
+    let workflowRunId: string;
+    try {
+      workflowRunId = await triggerWorkflow(
+        '/image',
+        { ...workflowInput, targetVariantId: claim.id },
+        {
+          // Claim-scoped: stable across retries of THIS enqueue (CF collapses
+          // duplicate create()s), fresh per claim so a deliberate re-roll
+          // after completion still gets a new run.
+          deduplicationId: `image-${shot.id}-${claim.id}`,
+          label: buildWorkflowLabel(sequence.id),
+        }
+      );
+    } catch (error) {
+      // The claim must not outlive a trigger that never happened.
+      await context.scopedDb.frameVariants.markTerminal(
+        claim.id,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      );
+      throw error;
+    }
+    await context.scopedDb.frameVariants.update(claim.id, { workflowRunId });
+
+    return { workflowRunId, shotId: shot.id, alreadyInFlight: false } as const;
   });
 
 // ---------------------------------------------------------------------------

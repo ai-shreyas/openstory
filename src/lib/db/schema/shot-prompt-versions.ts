@@ -33,6 +33,7 @@ import {
 } from 'drizzle-orm/sqlite-core';
 import { generateId } from '../id';
 import { user } from './auth';
+import type { PromptVersionStatus } from './frame-prompt-versions';
 import { shots } from './shots';
 
 /**
@@ -103,6 +104,12 @@ export const shotPromptVersions = snakeCase.table(
     // Analysis model that produced the prompt (null for user-edits).
     analysisModel: text({ length: 100 }),
 
+    // Lifecycle + in-flight claim + producing instance (#1085) — see
+    // `frame_prompt_versions` for the full contract; identical semantics.
+    status: text().$type<PromptVersionStatus>().notNull().default('completed'),
+    pendingInputHash: text(),
+    workflowRunId: text(),
+
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())
       .notNull(),
@@ -130,6 +137,13 @@ export const shotPromptVersions = snakeCase.table(
       .on(table.shotId, table.promptType, table.inputHash)
       .where(
         sql`${table.inputHash} IS NOT NULL AND ${table.source} != 'restored'`
+      ),
+    // At most ONE live claim per (shot, type, live-hash) (#1085) — see the
+    // frame-side twin for the race this closes.
+    uniqueIndex('uq_shot_prompt_versions_live_claim')
+      .on(table.shotId, table.promptType, table.pendingInputHash)
+      .where(
+        sql`${table.pendingInputHash} IS NOT NULL AND ${table.status} IN ('pending', 'generating')`
       ),
   ]
 );

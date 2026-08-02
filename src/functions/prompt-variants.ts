@@ -20,6 +20,7 @@ import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { simpleHash } from '@/lib/utils/hash';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
+import { terminateSingleArtifactRun } from '@/lib/workflow/run-outcome';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type {
   MotionPromptWorkflowInput,
@@ -86,7 +87,7 @@ export function isPromptUpToDate(
 // store-agnostic row so `listShotPromptVariantsFn` returns one shape.
 export type ShotPromptVariantWithAuthor = Pick<
   ShotPromptVersion,
-  'id' | 'source' | 'text' | 'inputHash' | 'createdAt'
+  'id' | 'source' | 'text' | 'inputHash' | 'createdAt' | 'status'
 > & {
   createdByName: string | null;
 };
@@ -120,6 +121,7 @@ export const listShotPromptVariantsFn = createServerFn({ method: 'GET' })
           inputHash: r.inputHash,
           createdAt: r.createdAt,
           createdByName: r.createdByName,
+          status: r.status,
         }));
       }
       const rows =
@@ -134,6 +136,7 @@ export const listShotPromptVariantsFn = createServerFn({ method: 'GET' })
         inputHash: r.inputHash,
         createdAt: r.createdAt,
         createdByName: r.createdByName,
+        status: r.status,
       }));
     }
   );
@@ -179,6 +182,10 @@ export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
         context.frame.id
       );
     if (frameChosen) {
+      if (frameChosen.status !== 'completed') {
+        // In-flight/failed placeholders have no content to restore (#1085).
+        throw new Error('Cannot restore a prompt version that never completed');
+      }
       const inserted = await context.scopedDb.framePromptVersions.write({
         frameId: context.frame.id,
         text: frameChosen.text,
@@ -197,6 +204,9 @@ export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
     );
     if (!chosen) {
       throw new Error('Prompt variant not found for this shot');
+    }
+    if (chosen.status !== 'completed') {
+      throw new Error('Cannot restore a prompt version that never completed');
     }
 
     const inserted = await context.scopedDb.shotPromptVersions.write({
@@ -343,6 +353,74 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
     return { unchanged: false, versionId: inserted.id } as const;
   });
 
+/**
+ * Cancel an in-flight pending artifact claim (#1085): flip the row to
+ * 'cancelled' (a completion that races in afterwards is discarded against the
+ * status guard), cascade to dependent image claims, and best-effort terminate
+ * the producing workflow when it's a single-artifact run. Idempotent — a row
+ * that already went terminal reports `cancelled: false`.
+ */
+const cancelPendingInput = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  versionId: ulidSchema,
+  artifact: z.enum(['visual-prompt', 'motion-prompt', 'image']),
+});
+
+export const cancelPendingArtifactFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(cancelPendingInput))
+  .handler(async ({ context, data }) => {
+    const { scopedDb, frame, shot } = context;
+
+    if (data.artifact === 'visual-prompt') {
+      const row = await scopedDb.framePromptVersions.getByIdForFrame(
+        data.versionId,
+        frame.id
+      );
+      if (!row) throw new Error('Prompt version not found for this shot');
+      const cancelled = await scopedDb.framePromptVersions.markTerminal(
+        row.id,
+        'cancelled'
+      );
+      if (!cancelled) return { cancelled: false } as const;
+      await scopedDb.frameVariants.cancelByDependency(
+        row.id,
+        'Upstream visual prompt was cancelled'
+      );
+      await terminateSingleArtifactRun(row.workflowRunId);
+      return { cancelled: true } as const;
+    }
+
+    if (data.artifact === 'motion-prompt') {
+      const row = await scopedDb.shotPromptVersions.getByIdForShot(
+        data.versionId,
+        shot.id
+      );
+      if (!row) throw new Error('Prompt version not found for this shot');
+      const cancelled = await scopedDb.shotPromptVersions.markTerminal(
+        row.id,
+        'cancelled'
+      );
+      if (!cancelled) return { cancelled: false } as const;
+      await terminateSingleArtifactRun(row.workflowRunId);
+      return { cancelled: true } as const;
+    }
+
+    const row = await scopedDb.frameVariants.getById(data.versionId);
+    if (!row || row.frameId !== frame.id) {
+      throw new Error('Image version not found for this shot');
+    }
+    const cancelled = await scopedDb.frameVariants.markTerminal(
+      row.id,
+      'cancelled',
+      'Cancelled by user'
+    );
+    if (!cancelled) return { cancelled: false } as const;
+    await terminateSingleArtifactRun(row.workflowRunId);
+    return { cancelled: true } as const;
+  });
+
 const shotRegenerateInput = z.object({
   sequenceId: ulidSchema,
   shotId: ulidSchema,
@@ -393,7 +471,63 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
         ? frame.visualPromptInputHash
         : shot.motionPromptInputHash;
     if (!data.force && isPromptUpToDate(storedHash, liveHash)) {
-      return { workflowRunId: null, alreadyUpToDate: true } as const;
+      return {
+        workflowRunId: null,
+        alreadyUpToDate: true,
+        alreadyInFlight: false,
+      } as const;
+    }
+
+    // Server-side dedup (#1085): a live pending claim for exactly these
+    // inputs means a run is already producing this prompt — a second click,
+    // a second tab, or a teammate must no-op instead of double-spending.
+    // Applies to `force` too: force bypasses the up-to-date bail, not an
+    // in-flight run.
+    const existingClaim =
+      data.promptType === 'visual'
+        ? await scopedDb.framePromptVersions.getLivePending(frame.id, liveHash)
+        : await scopedDb.shotPromptVersions.getLivePending(shot.id, liveHash);
+    if (existingClaim) {
+      return {
+        workflowRunId: existingClaim.workflowRunId,
+        alreadyUpToDate: false,
+        alreadyInFlight: true,
+      } as const;
+    }
+
+    // Pre-create the pending version row (#1085) so in-flight work is
+    // representable: staleness reads 'updating', duplicate enqueues no-op,
+    // and the run completes this row in place. The partial unique index on
+    // live claims closes the check-then-insert race above — the loser lands
+    // here and reports in-flight instead of double-spending.
+    let claim;
+    try {
+      claim =
+        data.promptType === 'visual'
+          ? await scopedDb.framePromptVersions.createPending({
+              frameId: frame.id,
+              pendingInputHash: liveHash,
+              createdBy: user.id,
+            })
+          : await scopedDb.shotPromptVersions.createPending({
+              shotId: shot.id,
+              pendingInputHash: liveHash,
+              createdBy: user.id,
+            });
+    } catch (error) {
+      const racedClaim =
+        data.promptType === 'visual'
+          ? await scopedDb.framePromptVersions.getLivePending(
+              frame.id,
+              liveHash
+            )
+          : await scopedDb.shotPromptVersions.getLivePending(shot.id, liveHash);
+      if (!racedClaim) throw error;
+      return {
+        workflowRunId: racedClaim.workflowRunId,
+        alreadyUpToDate: false,
+        alreadyInFlight: true,
+      } as const;
     }
 
     // Always stream deltas for this endpoint — it's only invoked from the
@@ -454,32 +588,64 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
       sceneAfter = nextShot?.metadata ?? undefined;
     }
 
-    const workflowRunId =
-      data.promptType === 'visual'
-        ? // `frameId` is REQUIRED on FramePromptWorkflowInput — the workflow
-          // never reads the DB (#991) and persists the visual prompt only when
-          // it's present, so resolving the anchor frame here (from the access
-          // middleware's `frame`) is mandatory, not optional.
-          await triggerWorkflow<FramePromptWorkflowInput>(
-            '/frame-prompt',
-            { ...commonInput, frameId: frame.id },
-            triggerOpts
-          )
-        : // Snapshot the rendered still at trigger time (#929) so the motion
-          // workflow never looks it up mid-run (a concurrent re-render could
-          // swap it). The still lives on the anchor frame now (#989).
-          await triggerWorkflow<MotionPromptWorkflowInput>(
-            '/motion-prompt',
-            {
-              ...commonInput,
-              startingFrameImageUrl: frame.imageUrl,
-              sceneBefore,
-              sceneAfter,
-            },
-            triggerOpts
-          );
+    let workflowRunId: string;
+    try {
+      workflowRunId =
+        data.promptType === 'visual'
+          ? // `frameId` is REQUIRED on FramePromptWorkflowInput — the workflow
+            // never reads the DB (#991) and persists the visual prompt only
+            // when it's present, so resolving the anchor frame here (from the
+            // access middleware's `frame`) is mandatory, not optional.
+            await triggerWorkflow<FramePromptWorkflowInput>(
+              '/frame-prompt',
+              {
+                ...commonInput,
+                frameId: frame.id,
+                targetVersionId: claim.id,
+              },
+              triggerOpts
+            )
+          : // Snapshot the rendered still at trigger time (#929) so the motion
+            // workflow never looks it up mid-run (a concurrent re-render could
+            // swap it). The still lives on the anchor frame now (#989).
+            await triggerWorkflow<MotionPromptWorkflowInput>(
+              '/motion-prompt',
+              {
+                ...commonInput,
+                startingFrameImageUrl: frame.imageUrl,
+                sceneBefore,
+                sceneAfter,
+                targetVersionId: claim.id,
+              },
+              triggerOpts
+            );
+    } catch (error) {
+      // The claim must not outlive a trigger that never happened.
+      if (data.promptType === 'visual') {
+        await scopedDb.framePromptVersions.markTerminal(claim.id, 'failed');
+      } else {
+        await scopedDb.shotPromptVersions.markTerminal(claim.id, 'failed');
+      }
+      throw error;
+    }
 
-    return { workflowRunId, alreadyUpToDate: false } as const;
+    // Stamp the producing instance so cancel + zombie reconciliation can
+    // verify the run. 'generating' from here on — the instance starts
+    // immediately.
+    if (data.promptType === 'visual') {
+      await scopedDb.framePromptVersions.markGenerating(
+        claim.id,
+        workflowRunId
+      );
+    } else {
+      await scopedDb.shotPromptVersions.markGenerating(claim.id, workflowRunId);
+    }
+
+    return {
+      workflowRunId,
+      alreadyUpToDate: false,
+      alreadyInFlight: false,
+    } as const;
   });
 
 const sequenceRegenerateInput = z.object({ sequenceId: ulidSchema });

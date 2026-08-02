@@ -24,7 +24,17 @@ import type { Database } from '@/lib/db/client';
 import { framePromptVersions, frameVariants, frames } from '@/lib/db/schema';
 import type { FrameVariant, NewFrameVariant } from '@/lib/db/schema';
 import type { FrameVariantKind } from '@/lib/db/schema/frame-variants';
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+} from 'drizzle-orm';
+import { LIVE_PENDING_STATUSES } from './frame-prompt-versions';
 import { buildFrameImageMirror, type CompletedFrameVariant } from './frames';
 import { buildEventInsert } from './sequence-events';
 
@@ -100,15 +110,159 @@ export function createFrameVariantsMethods(db: Database) {
       workflowRunId: string,
       error: string
     ): Promise<void> => {
+      // 'pending' included since #1085: a pre-created claim row whose run died
+      // before reaching `set-generating-status` must not stay live forever.
       await db
         .update(frameVariants)
         .set({ status: 'failed', error, updatedAt: new Date() })
         .where(
           and(
             eq(frameVariants.workflowRunId, workflowRunId),
-            eq(frameVariants.status, 'generating')
+            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
           )
         );
+    },
+
+    /**
+     * Pre-create a claim row for an enqueued image regeneration (#1085).
+     * Direct regens carry `pendingInputHash` (the live hash the render will
+     * satisfy); chained regens (image waiting on a pending visual-prompt row)
+     * carry `dependsOnVersionId` instead — their validity derives from the
+     * dependency. The producing workflow completes this row in place.
+     */
+    createPendingClaim: async (input: {
+      frameId: string;
+      sequenceId: string;
+      model: string;
+      pendingInputHash?: string | null;
+      dependsOnVersionId?: string | null;
+      workflowRunId?: string | null;
+      promptVersionId?: string | null;
+    }): Promise<FrameVariant> => {
+      const [row] = await db
+        .insert(frameVariants)
+        .values({
+          frameId: input.frameId,
+          sequenceId: input.sequenceId,
+          kind: 'model',
+          model: input.model,
+          status: 'pending',
+          pendingInputHash: input.pendingInputHash ?? null,
+          dependsOnVersionId: input.dependsOnVersionId ?? null,
+          workflowRunId: input.workflowRunId ?? null,
+          promptVersionId: input.promptVersionId ?? null,
+        })
+        .returning();
+      if (!row) {
+        throw new Error(
+          `Failed to insert pending image claim for frame ${input.frameId}`
+        );
+      }
+      return row;
+    },
+
+    /**
+     * Live (pending/generating) CLAIM rows for a frame — rows enqueued with a
+     * pending hash or a dependency edge. Ordinary in-flight renders without a
+     * claim (e.g. variant-only adds) are excluded: they don't participate in
+     * staleness. Newest first.
+     */
+    listLiveClaims: async (frameId: string): Promise<FrameVariant[]> => {
+      return await db
+        .select()
+        .from(frameVariants)
+        .where(
+          and(
+            eq(frameVariants.frameId, frameId),
+            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES]),
+            isNull(frameVariants.discardedAt),
+            or(
+              isNotNull(frameVariants.pendingInputHash),
+              isNotNull(frameVariants.dependsOnVersionId)
+            )
+          )
+        )
+        .orderBy(desc(frameVariants.id));
+    },
+
+    /**
+     * Guarded claim → 'generating' transition for a pre-created row (#1085):
+     * stamps the working instance, the resolved model, the prompt-version
+     * pairing, and (when known) the snapshot hash the render satisfies.
+     * Returns null when the claim went terminal meanwhile (user cancel won
+     * the race) — the caller must abandon the render.
+     */
+    claimForGeneration: async (
+      versionId: string,
+      data: {
+        workflowRunId: string;
+        model: string;
+        promptVersionId?: string | null;
+        pendingInputHash?: string | null;
+      }
+    ): Promise<FrameVariant | null> => {
+      const [row] = await db
+        .update(frameVariants)
+        .set({
+          status: 'generating',
+          workflowRunId: data.workflowRunId,
+          model: data.model,
+          promptVersionId: data.promptVersionId ?? null,
+          ...(data.pendingInputHash !== undefined
+            ? { pendingInputHash: data.pendingInputHash }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(frameVariants.id, versionId),
+            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning();
+      return row ?? null;
+    },
+
+    /** Terminal a live version row (cancel / zombie sweep); null when the row
+     * was already terminal. */
+    markTerminal: async (
+      versionId: string,
+      status: 'failed' | 'cancelled',
+      error?: string
+    ): Promise<FrameVariant | null> => {
+      const [row] = await db
+        .update(frameVariants)
+        .set({ status, error: error ?? null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(frameVariants.id, versionId),
+            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning();
+      return row ?? null;
+    },
+
+    /**
+     * Cascade a failed/cancelled prompt-version row onto its dependent image
+     * claims: a chained render whose upstream prompt died is 'cancelled' (it
+     * was never attempted — distinct from 'failed'). Chain depth is 2 today,
+     * so a single sweep is the whole walk.
+     */
+    cancelByDependency: async (
+      promptVersionId: string,
+      reason: string
+    ): Promise<FrameVariant[]> => {
+      return await db
+        .update(frameVariants)
+        .set({ status: 'cancelled', error: reason, updatedAt: new Date() })
+        .where(
+          and(
+            eq(frameVariants.dependsOnVersionId, promptVersionId),
+            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
+          )
+        )
+        .returning();
     },
 
     /** Update generation tracking on an in-flight version (status/url/error/…). */
@@ -463,10 +617,17 @@ export function createFrameVariantsMethods(db: Database) {
             text: framePromptVersions.text,
             inputHash: framePromptVersions.inputHash,
             frameId: framePromptVersions.frameId,
+            status: framePromptVersions.status,
           })
           .from(framePromptVersions)
           .where(eq(framePromptVersions.id, version.promptVersionId));
-        if (promptRow && promptRow.frameId === frameId) {
+        // A non-completed row is a placeholder — mirroring it would blank the
+        // frame's prompt with empty text (#1085).
+        if (
+          promptRow &&
+          promptRow.frameId === frameId &&
+          promptRow.status === 'completed'
+        ) {
           linkedPrompt = promptRow;
         }
       }
@@ -487,10 +648,25 @@ export function createFrameVariantsMethods(db: Database) {
         },
       });
 
+      // Repointing the prompt is an explicit user choice (#1085): revoke the
+      // mirror rights of any in-flight prompt claims on this frame so a
+      // completing regeneration lands in history without clobbering it.
+      const demotePromptClaims = () =>
+        db
+          .update(framePromptVersions)
+          .set({ pendingInputHash: null })
+          .where(
+            and(
+              eq(framePromptVersions.frameId, frameId),
+              inArray(framePromptVersions.status, [...LIVE_PENDING_STATUSES])
+            )
+          );
+
       if (linkedPrompt && shouldClearPending) {
         await db.batch([
           mirrorUpdate,
           imageSelectedEvent,
+          demotePromptClaims(),
           db
             .update(frames)
             .set({
@@ -519,6 +695,7 @@ export function createFrameVariantsMethods(db: Database) {
         await db.batch([
           mirrorUpdate,
           imageSelectedEvent,
+          demotePromptClaims(),
           db
             .update(frames)
             .set({

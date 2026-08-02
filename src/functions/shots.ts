@@ -10,7 +10,7 @@ import { getWorkflowRunOutcome } from '@/lib/workflow/run-outcome';
 import type { ShotVariant, NewShot } from '@/lib/db/schema';
 import {
   computeShotStaleness,
-  UNKNOWN_STALENESS,
+  UNTRACKED_STALENESS,
   type ShotStalenessRefs,
   type ShotStalenessResult,
 } from '@/lib/shots/shot-staleness';
@@ -600,8 +600,20 @@ export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .inputValidator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
     const { shot, frame, sequence, scopedDb, scene } = context;
-    return computeShotStaleness({ scopedDb, sequence, shot, frame, scene });
+    return toWireStaleness(
+      await computeShotStaleness({ scopedDb, sequence, shot, frame, scene })
+    );
   });
+
+/**
+ * The client-facing slice of a staleness result. `liveHashes` is a server-side
+ * convenience for the enqueue paths (#1085) and stays off the wire.
+ */
+const toWireStaleness = ({
+  thumbnail,
+  visualPrompt,
+  motionPrompt,
+}: ShotStalenessResult) => ({ thumbnail, visualPrompt, motionPrompt });
 
 /**
  * Batched `getShotStalenessFn` (#1077): staleness for every shot in one scene
@@ -630,62 +642,56 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
     await scopedDb.shots.ensureAnchorFrames(targetShots);
     // Loaded once here and threaded into every shot's comparison as `refs`;
     // without that each shot would re-read all four for both prompt branches.
-    const [
-      anchorRows,
-      scriptBySceneId,
-      characters,
-      locations,
-      elements,
-      style,
-    ] = await Promise.all([
-      scopedDb.frames.listAnchorsBySequence(sequence.id),
-      loadSelectedScriptsBySequence(scopedDb, sequence.id),
-      scopedDb.characters.listWithSheets(sequence.id),
-      scopedDb.sequenceLocations.listWithReferences(sequence.id),
-      scopedDb.sequenceElements.list(sequence.id),
-      sequence.styleId
-        ? scopedDb.styles.getById(sequence.styleId)
-        : Promise.resolve(null),
-    ]);
+    const [anchorRows, scriptBySceneId, characters, locations, elements] =
+      await Promise.all([
+        scopedDb.frames.listAnchorsBySequence(sequence.id),
+        loadSelectedScriptsBySequence(scopedDb, sequence.id),
+        scopedDb.characters.listWithSheets(sequence.id),
+        scopedDb.sequenceLocations.listWithReferences(sequence.id),
+        scopedDb.sequenceElements.list(sequence.id),
+      ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-    const refs: ShotStalenessRefs = { characters, locations, elements, style };
+    const refs: ShotStalenessRefs = { characters, locations, elements };
 
     const entries = await Promise.all(
-      targetShots.map(async (shot): Promise<[string, ShotStalenessResult]> => {
-        const frame = anchorsByShot.get(shot.id);
-        if (!frame) {
-          // ensureAnchorFrames guarantees an anchor; if it's somehow absent we
-          // can't compare anything, so report the shot unknown rather than
-          // dropping it from the result or claiming it's up to date.
-          logger.error(
-            `getShotStalenessBatchFn: shot ${shot.id} has no anchor frame`
-          );
-          return [shot.id, { ...UNKNOWN_STALENESS }];
+      targetShots.map(
+        async (shot): Promise<[string, ReturnType<typeof toWireStaleness>]> => {
+          const frame = anchorsByShot.get(shot.id);
+          if (!frame) {
+            // ensureAnchorFrames guarantees an anchor; if it's somehow absent
+            // we have no image surface to compare, so report the shot
+            // untracked rather than dropping it from the result.
+            logger.error(
+              `getShotStalenessBatchFn: shot ${shot.id} has no anchor frame`
+            );
+            return [shot.id, toWireStaleness(UNTRACKED_STALENESS)];
+          }
+          const { scene } = resolveSceneForShot(shot, scriptBySceneId);
+          try {
+            return [
+              shot.id,
+              toWireStaleness(
+                await computeShotStaleness({
+                  scopedDb,
+                  sequence,
+                  shot,
+                  frame,
+                  scene,
+                  refs,
+                })
+              ),
+            ];
+          } catch (error) {
+            // Per-shot boundary: anything escaping computeShotStaleness must
+            // not reject the whole batch and blank the scene.
+            logger.error(
+              `getShotStalenessBatchFn: shot ${shot.id} staleness failed`,
+              { err: error }
+            );
+            return [shot.id, toWireStaleness(UNTRACKED_STALENESS)];
+          }
         }
-        const { scene } = resolveSceneForShot(shot, scriptBySceneId);
-        try {
-          return [
-            shot.id,
-            await computeShotStaleness({
-              scopedDb,
-              sequence,
-              shot,
-              frame,
-              scene,
-              refs,
-            }),
-          ];
-        } catch (error) {
-          // Per-shot boundary: computeShotStaleness catches its own artifact
-          // branches, but anything escaping it would otherwise reject the whole
-          // batch and blank the scene.
-          logger.error(
-            `getShotStalenessBatchFn: shot ${shot.id} staleness failed`,
-            { err: error }
-          );
-          return [shot.id, { ...UNKNOWN_STALENESS }];
-        }
-      })
+      )
     );
     return typedFromEntries(entries);
   });

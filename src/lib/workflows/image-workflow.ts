@@ -202,18 +202,45 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         // is actually selected for this gen (#1070). Selecting this still later
         // restores that prompt so still + text stay paired.
         const frameForStamp = await scopedDb.frames.getById(frame.id);
-        const version = await scopedDb.frameVariants.appendVersion({
-          frameId: frame.id,
-          sequenceId: input.sequenceId,
-          kind: 'model',
-          model,
-          status: 'generating',
-          workflowRunId,
-          promptVersionId:
-            frameForStamp?.selectedImagePromptVersionId ??
-            frame.selectedImagePromptVersionId ??
-            null,
-        });
+        const promptVersionId =
+          frameForStamp?.selectedImagePromptVersionId ??
+          frame.selectedImagePromptVersionId ??
+          null;
+        let version;
+        if (input.targetVariantId) {
+          // #1085: a pre-created claim row exists — transition IT rather than
+          // appending. Null = the claim was cancelled before the render
+          // started; abandon the run without spending credits.
+          version = await scopedDb.frameVariants.claimForGeneration(
+            input.targetVariantId,
+            {
+              workflowRunId,
+              model,
+              promptVersionId,
+              // Direct-regen claims already carry the hash from enqueue;
+              // chained claims get it stamped here (the render's snapshot
+              // hash), so "updating" detection survives the upstream prompt
+              // completing.
+              pendingInputHash: input.snapshotInputHash ?? null,
+            }
+          );
+          if (!version) {
+            logger.info(
+              `[ImageWorkflow] claim ${input.targetVariantId} was cancelled before generation; skipping`
+            );
+            return null;
+          }
+        } else {
+          version = await scopedDb.frameVariants.appendVersion({
+            frameId: frame.id,
+            sequenceId: input.sequenceId,
+            kind: 'model',
+            model,
+            status: 'generating',
+            workflowRunId,
+            promptVersionId,
+          });
+        }
 
         // Primary regen claims auto-promote; last kickoff wins (#1070).
         // variantOnly add-model never claims the primary.
@@ -325,6 +352,18 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
             `[ImageWorkflow] Shot ${shotId} lost its anchor frame before select; skipping`
           );
           return { imageUrl: upload.url };
+        }
+
+        // A user cancel that raced the render wins: the completed image must
+        // not resurrect a cancelled claim row or repoint the selection (#1085).
+        if (input.targetVariantId) {
+          const claimNow = await scopedDb.frameVariants.getById(versionId);
+          if (claimNow && claimNow.status === 'cancelled') {
+            logger.info(
+              `[ImageWorkflow] claim ${versionId} was cancelled mid-render; discarding result`
+            );
+            return { imageUrl: upload.url };
+          }
         }
 
         // Complete the in-flight version. Its inputHash IS the snapshot hash —

@@ -22,9 +22,15 @@ export type ShotStaleness = ShotStalenessResult;
 const staleArtifacts = (staleness: ShotStaleness | undefined): ShotArtifact[] =>
   SHOT_ARTIFACTS.filter((artifact) => staleness?.[artifact] === 'stale');
 
-/** Any artifact on the shot out of date? */
+/** Any artifact on the shot out of date? ('updating' is NOT stale — a job is
+ * already fixing it, so it must not re-arm Update all.) */
 export const shotIsStale = (staleness: ShotStaleness | undefined): boolean =>
   staleArtifacts(staleness).length > 0;
+
+/** Any artifact with a live pending claim — a regeneration is in flight
+ * server-side (#1085). Drives the spinner form of the indicators. */
+export const shotIsUpdating = (staleness: ShotStaleness | undefined): boolean =>
+  SHOT_ARTIFACTS.some((artifact) => staleness?.[artifact] === 'updating');
 
 /**
  * Any artifact whose comparison failed. Surfaced separately from `shotIsStale`

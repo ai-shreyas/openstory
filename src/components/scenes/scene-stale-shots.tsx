@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import {
   type ShotStaleness,
   shotIsStale,
+  shotIsUpdating,
   shotStalenessUnknown,
 } from '@/hooks/use-shot-staleness';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
@@ -58,18 +59,33 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   }
 
   const staleShots = shots.filter((shot) => shotIsStale(staleness?.[shot.id]));
-  if (staleShots.length === 0) return null;
+  // Shots whose stale artifacts are all already covered by a live server-side
+  // claim (#1085) — a run (this tab's or someone else's) is fixing them now.
+  const updatingShots = shots.filter(
+    (shot) =>
+      !shotIsStale(staleness?.[shot.id]) && shotIsUpdating(staleness?.[shot.id])
+  );
+  if (staleShots.length === 0 && updatingShots.length === 0) return null;
+
+  // Nothing actionable left: everything in flight, clicking would no-op
+  // against the server-side dedup.
+  const busy = isUpdating || staleShots.length === 0;
 
   return (
     <StalenessIndicator
       entityType="sequence"
       density="status-line"
-      message="Out of date since your edit"
-      isRegenerating={isUpdating}
-      onRegenerate={onUpdateAll}
+      message={
+        staleShots.length > 0
+          ? 'Out of date since your edit'
+          : 'Updating out-of-date shots…'
+      }
+      isRegenerating={busy}
+      onRegenerate={staleShots.length > 0 ? onUpdateAll : undefined}
     >
-      {staleShots.map((shot) => {
+      {[...staleShots, ...updatingShots].map((shot) => {
         const number = shot.shotNumber ?? shot.orderIndex + 1;
+        const updating = updatingShots.includes(shot);
         return (
           <Button
             key={shot.id}
@@ -78,18 +94,22 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
             size="sm"
             className="h-6 rounded-full px-2 text-xs font-normal"
             onClick={() => onSelectShot(shot.id)}
-            aria-label={`Open shot ${number} — out of date`}
+            aria-label={
+              updating
+                ? `Open shot ${number} — updating`
+                : `Open shot ${number} — out of date`
+            }
           >
+            {updating && (
+              <Loader2
+                aria-hidden="true"
+                className="mr-1 h-2.5 w-2.5 animate-spin motion-reduce:animate-none"
+              />
+            )}
             Shot {number}
           </Button>
         );
       })}
-      {isUpdating && (
-        <Loader2
-          aria-hidden="true"
-          className="h-3 w-3 animate-spin motion-reduce:animate-none"
-        />
-      )}
     </StalenessIndicator>
   );
 };

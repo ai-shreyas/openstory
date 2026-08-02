@@ -19,10 +19,12 @@
 
 import { getDb } from '#db-client';
 import {
+  framePromptVersions,
   frameVariants,
   frames,
   generatedAssets,
   renderSegments,
+  shotPromptVersions,
   shots,
   shotVariants,
   sequenceElements,
@@ -65,6 +67,17 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
     ['frames.image', () => reconcileFramesImagePass(db)],
     ['shots.video', () => reconcileShotsPass(db, 'video')],
     ['frame_variants.status', () => reconcileFrameVariantsPass(db)],
+    // Pending artifact claims (#1085): a dead run must not leave rows that
+    // read as "a job is fixing this" forever.
+    [
+      'frame_prompt_versions.claims',
+      () => reconcilePromptClaimsPass(db, 'frame'),
+    ],
+    [
+      'shot_prompt_versions.claims',
+      () => reconcilePromptClaimsPass(db, 'shot'),
+    ],
+    ['frame_variants.claims', () => reconcileImageClaimsPass(db)],
     // Video versions live on video_variants now (#990) — without this pass a
     // dead motion run leaves a permanent "generating" chip on the Video tab
     // (#1076).
@@ -242,6 +255,132 @@ async function reconcileVideoVariantsPass(db: Database): Promise<number> {
     updated++;
   }
   return updated;
+}
+
+/**
+ * Sweep zombie pending prompt claims (#1085) — `frame_prompt_versions` /
+ * `shot_prompt_versions` rows still 'pending'/'generating' whose producing
+ * instance is dead. The honest terminal state is always 'failed' (never
+ * 'completed': a live claim on a terminal instance means the completion write
+ * never landed, so there is no content). Failed frame-side claims cascade to
+ * their dependent image claims. Rows with no run id (trigger died between
+ * insert and the run-id stamp) blind-fail after the longer threshold.
+ *
+ * Cutoffs use `createdAt` — these tables have no `updatedAt`, and a claim's
+ * whole lifecycle is minutes, so enqueue age is the right staleness signal.
+ */
+async function reconcilePromptClaimsPass(
+  db: Database,
+  side: 'frame' | 'shot'
+): Promise<number> {
+  const table = side === 'frame' ? framePromptVersions : shotPromptVersions;
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const blindCutoff = new Date(Date.now() - BLIND_FAIL_THRESHOLD_MS);
+  let updated = 0;
+
+  const cascade = async (versionId: string) => {
+    if (side !== 'frame') return;
+    // No updatedAt bump — see the file-wide rule above `SHOTS_PIPELINE_COLUMNS`.
+    await db
+      .update(frameVariants)
+      .set({
+        status: 'cancelled',
+        error: 'Upstream visual prompt generation died',
+      })
+      .where(
+        and(
+          eq(frameVariants.dependsOnVersionId, versionId),
+          inArray(frameVariants.status, ['pending', 'generating'])
+        )
+      );
+  };
+
+  const stuck = await db
+    .select({ id: table.id, runId: table.workflowRunId })
+    .from(table)
+    .where(
+      and(
+        inArray(table.status, ['pending', 'generating']),
+        isNotNull(table.workflowRunId),
+        lt(table.createdAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    await db
+      .update(table)
+      .set({ status: 'failed' })
+      .where(eq(table.id, row.id));
+    await cascade(row.id);
+    updated++;
+  }
+
+  const orphaned = await db
+    .update(table)
+    .set({ status: 'failed' })
+    .where(
+      and(
+        inArray(table.status, ['pending', 'generating']),
+        isNull(table.workflowRunId),
+        lt(table.createdAt, blindCutoff)
+      )
+    )
+    .returning({ id: table.id });
+  for (const row of orphaned) await cascade(row.id);
+
+  return updated + orphaned.length;
+}
+
+/**
+ * Sweep zombie 'pending' image claims (#1085). The existing
+ * `frame_variants.status` pass covers 'generating' rows; claim rows that
+ * never reached `set-generating-status` stay 'pending' with the enqueue-time
+ * run id (or none, if the trigger died first). Terminal instance → 'failed';
+ * no run id → blind-fail after the longer threshold.
+ */
+async function reconcileImageClaimsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const blindCutoff = new Date(Date.now() - BLIND_FAIL_THRESHOLD_MS);
+  let updated = 0;
+
+  const stuck = await db
+    .select({ id: frameVariants.id, runId: frameVariants.workflowRunId })
+    .from(frameVariants)
+    .where(
+      and(
+        eq(frameVariants.status, 'pending'),
+        isNotNull(frameVariants.workflowRunId),
+        lt(frameVariants.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    // 'failed' regardless of the instance verdict: a still-pending claim on a
+    // terminal instance means no render ever landed on this row.
+    await db
+      .update(frameVariants)
+      .set({ status: 'failed', error: 'Generation died before starting' })
+      .where(eq(frameVariants.id, row.id));
+    updated++;
+  }
+
+  const orphaned = await db
+    .update(frameVariants)
+    .set({ status: 'failed', error: 'Generation could not be started' })
+    .where(
+      and(
+        eq(frameVariants.status, 'pending'),
+        isNull(frameVariants.workflowRunId),
+        lt(frameVariants.updatedAt, blindCutoff)
+      )
+    )
+    .returning({ id: frameVariants.id });
+
+  return updated + orphaned.length;
 }
 
 async function reconcileShotsPass(

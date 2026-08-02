@@ -17,6 +17,11 @@ const FRESH: ShotStalenessResult = {
   thumbnail: 'fresh',
   visualPrompt: 'fresh',
   motionPrompt: 'fresh',
+  liveHashes: {
+    thumbnail: 'live-thumb',
+    visualPrompt: 'live-visual',
+    motionPrompt: 'live-motion',
+  },
 };
 
 // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- test stub; computePlan only reads sceneId off the scene
@@ -69,7 +74,8 @@ vi.doMock('@/lib/ai/prompt-context', () => ({
   ),
 }));
 
-const { computePlan } = await import('./update-stale-shots-workflow');
+const { computePlan, claimTargets } =
+  await import('./update-stale-shots-workflow');
 
 function buildScopedDb(shots: Shot[], frames: Frame[]): ScopedDb {
   return asScopedDb({
@@ -161,6 +167,176 @@ describe('computePlan — what gets regenerated', () => {
   it('reports a shot still awaiting script analysis', async () => {
     const result = await plan([makeShot({ metadata: null })], [makeFrame()]);
     expect(result.skipped).toEqual([{ shotId: 'shot-1', reason: 'no-scene' }]);
+  });
+});
+
+describe("computePlan — 'updating' dedup (#1085)", () => {
+  it('does not target an artifact already covered by a live claim', async () => {
+    stalenessByShot.set('shot-1', {
+      ...FRESH,
+      visualPrompt: 'updating',
+      motionPrompt: 'stale',
+    });
+    const result = await plan([makeShot()], [makeFrame()]);
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0]).toMatchObject({
+      regenVisual: false,
+      regenMotion: true,
+    });
+  });
+
+  it('carries the live hashes the claim rows will be stamped with', async () => {
+    stalenessByShot.set('shot-1', { ...FRESH, visualPrompt: 'stale' });
+    const result = await plan([makeShot()], [makeFrame()]);
+    expect(result.targets[0]).toMatchObject({
+      visualLiveHash: 'live-visual',
+      motionLiveHash: 'live-motion',
+      imageLiveHash: 'live-thumb',
+    });
+  });
+});
+
+describe('claimTargets (#1085)', () => {
+  type PendingRow = { id: string; workflowRunId: string | null };
+
+  function makeTarget(
+    overrides: Partial<Parameters<typeof claimTargets>[0]['targets'][number]>
+  ) {
+    return {
+      shotId: 'shot-1',
+      frameId: 'frame-1',
+      beforeShotId: null,
+      afterShotId: null,
+      startingFrameImageUrl: null,
+      regenVisual: false,
+      regenMotion: false,
+      regenImage: false,
+      visualLiveHash: 'vh',
+      motionLiveHash: 'mh',
+      imageLiveHash: 'ih',
+      imageModel: 'nano_banana_2',
+      ...overrides,
+    };
+  }
+
+  function buildClaimDb(opts: {
+    existingVisual?: PendingRow | null;
+    existingMotion?: PendingRow | null;
+    liveImageClaims?: Array<{
+      id: string;
+      workflowRunId: string | null;
+      pendingInputHash: string | null;
+      dependsOnVersionId: string | null;
+    }>;
+  }) {
+    const created = {
+      visual: [] as unknown[],
+      motion: [] as unknown[],
+      image: [] as unknown[],
+    };
+    let seq = 0;
+    const db = asScopedDb({
+      framePromptVersions: {
+        getLivePending: () => Promise.resolve(opts.existingVisual ?? null),
+        createPending: (input: unknown) => {
+          created.visual.push(input);
+          return Promise.resolve({ id: `fpv-${++seq}` });
+        },
+      },
+      shotPromptVersions: {
+        getLivePending: () => Promise.resolve(opts.existingMotion ?? null),
+        createPending: (input: unknown) => {
+          created.motion.push(input);
+          return Promise.resolve({ id: `spv-${++seq}` });
+        },
+      },
+      frameVariants: {
+        listLiveClaims: () => Promise.resolve(opts.liveImageClaims ?? []),
+        createPendingClaim: (input: unknown) => {
+          created.image.push(input);
+          return Promise.resolve({ id: `fv-${++seq}` });
+        },
+      },
+    });
+    return { db, created };
+  }
+
+  it('creates one pending row per artifact and chains the image onto the visual claim', async () => {
+    const { db, created } = buildClaimDb({});
+    const result = await claimTargets({
+      scopedDb: db,
+      targets: [
+        makeTarget({ regenVisual: true, regenMotion: true, regenImage: true }),
+      ],
+      sequenceId: 'seq-1',
+      parentInstanceId: 'run-1',
+    });
+
+    expect(created.visual).toHaveLength(1);
+    expect(created.motion).toHaveLength(1);
+    expect(created.image).toHaveLength(1);
+    expect(created.visual[0]).toMatchObject({
+      frameId: 'frame-1',
+      pendingInputHash: 'vh',
+      workflowRunId: 'run-1',
+    });
+    // Chained image: dependency edge, no direct hash claim.
+    expect(created.image[0]).toMatchObject({
+      dependsOnVersionId: result.claimsByShot['shot-1']?.visualVersionId,
+    });
+    expect(created.image[0]).not.toHaveProperty('pendingInputHash', 'ih');
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('direct image regen (prompt fresh) claims with the image live hash', async () => {
+    const { db, created } = buildClaimDb({});
+    await claimTargets({
+      scopedDb: db,
+      targets: [makeTarget({ regenImage: true })],
+      sequenceId: 'seq-1',
+      parentInstanceId: 'run-1',
+    });
+    expect(created.image[0]).toMatchObject({
+      pendingInputHash: 'ih',
+      workflowRunId: 'run-1',
+    });
+  });
+
+  it('reuses its OWN existing claim on a step retry instead of duplicating', async () => {
+    const { db, created } = buildClaimDb({
+      existingVisual: { id: 'fpv-prior', workflowRunId: 'run-1' },
+    });
+    const result = await claimTargets({
+      scopedDb: db,
+      targets: [makeTarget({ regenVisual: true })],
+      sequenceId: 'seq-1',
+      parentInstanceId: 'run-1',
+    });
+    expect(created.visual).toHaveLength(0);
+    expect(result.claimsByShot['shot-1']?.visualVersionId).toBe('fpv-prior');
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("skips an artifact claimed by ANOTHER run and reports 'already-in-flight'", async () => {
+    const { db, created } = buildClaimDb({
+      existingVisual: { id: 'fpv-foreign', workflowRunId: 'other-run' },
+    });
+    const result = await claimTargets({
+      scopedDb: db,
+      targets: [makeTarget({ regenVisual: true, regenImage: true })],
+      sequenceId: 'seq-1',
+      parentInstanceId: 'run-1',
+    });
+    expect(created.visual).toHaveLength(0);
+    // Chained image must not chain onto a foreign claim.
+    expect(created.image).toHaveLength(0);
+    expect(result.claimsByShot['shot-1']).toMatchObject({
+      visualVersionId: null,
+      imageVariantId: null,
+    });
+    expect(result.skipped).toEqual([
+      { shotId: 'shot-1', reason: 'already-in-flight' },
+    ]);
   });
 });
 

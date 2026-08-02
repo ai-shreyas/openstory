@@ -1,5 +1,5 @@
 import type { ModelGenerationStatus } from '@/components/model/base-model-selector';
-import type { ShotVariant } from '@/lib/db/schema';
+import type { FrameVariant } from '@/lib/db/schema';
 import type { VariantType } from '@/lib/db/schema/shot-variants';
 
 /**
@@ -36,7 +36,9 @@ export type ModelCoverage = {
  */
 export type CoverageVariant = {
   model: string;
-  status: ShotVariant['status'];
+  // FrameVariant's status is the wider union (adds 'cancelled', #1085);
+  // shot-variant rows assign into it unchanged.
+  status: FrameVariant['status'];
   url: string | null;
   shotId: string;
   discardedAt: Date | null;

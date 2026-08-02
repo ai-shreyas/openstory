@@ -176,6 +176,7 @@ export type {
 export type {
   FramePromptVersion,
   PromptVersionSource,
+  PromptVersionStatus,
 } from './frame-prompt-versions';
 
 /** @public used by #988+ (append-only cross-sequence activity log) */

@@ -44,6 +44,7 @@ import {
   DEFAULT_ANALYSIS_MODEL,
   getAnalysisModelById,
 } from '@/lib/ai/models.config';
+import { DEFAULT_IMAGE_MODEL, safeTextToImageModel } from '@/lib/ai/models';
 import { loadShotPromptContext } from '@/lib/ai/prompt-context';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -120,6 +121,29 @@ type PlanTarget = {
    * still.
    */
   regenImage: boolean;
+  /**
+   * Live input hashes captured at plan time (#1085) — stamped onto the
+   * pending claim rows in `claim-targets` so in-flight work reads as
+   * 'updating' and duplicate enqueues no-op. Non-null whenever the matching
+   * regen flag is set.
+   */
+  visualLiveHash: string | null;
+  motionLiveHash: string | null;
+  imageLiveHash: string | null;
+  /** Model to stamp on the image claim row; the render's own resolution in
+   * `prepare-image-*` overwrites it via `claimForGeneration`. */
+  imageModel: string;
+};
+
+/**
+ * The pending rows claimed for one shot (#1085). A null slot for a set regen
+ * flag means another run already holds a live claim for that artifact — this
+ * run skips it rather than double-generating.
+ */
+type ShotClaims = {
+  visualVersionId: string | null;
+  motionVersionId: string | null;
+  imageVariantId: string | null;
 };
 
 /**
@@ -129,7 +153,11 @@ type PlanTarget = {
  */
 type SkippedShot = {
   shotId: string;
-  reason: 'no-anchor-frame' | 'no-scene' | 'staleness-unknown';
+  reason:
+    | 'no-anchor-frame'
+    | 'no-scene'
+    | 'staleness-unknown'
+    | 'already-in-flight';
 };
 
 type Plan = {
@@ -200,10 +228,32 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
       );
     }
 
-    const spawnImage = async (target: PlanTarget): Promise<void> => {
-      // Deliberately reads CURRENT state (not the plan snapshot): the prompt
-      // this render uses is whatever is stored right now — the prompt child's
-      // freshly persisted text, or a user's even-newer mid-run edit.
+    // ============================================================
+    // PHASE 1b: claim the targets (#1085) — one pending version row per
+    // artifact this run will produce. From here on the run is visible as
+    // 'updating' and duplicate enqueues (second click / tab / teammate)
+    // no-op server-side.
+    // ============================================================
+    const claimed = await step.do('claim-targets', () =>
+      claimTargets({
+        scopedDb,
+        targets: plan.targets,
+        sequenceId,
+        parentInstanceId,
+      })
+    );
+    const allSkipped = [...plan.skipped, ...claimed.skipped];
+
+    const spawnImage = async (
+      target: PlanTarget,
+      claims: ShotClaims
+    ): Promise<void> => {
+      // The prompt source is deterministic (#1085): a chained render consumes
+      // the prompt its OWN dependency row produced — never a re-read of
+      // whatever is stored at spawn time — so a post-click edit cannot leak
+      // into this run (it re-stales the artifact instead). Direct renders
+      // (image stale, prompt not) still read current state; their claim hash
+      // self-invalidates on edit.
       // JSON round-trip at the step boundary: `ImageWorkflowInput.style` is
       // typed `Json`, which the step's Serializable constraint rejects even
       // though the value is plain JSON (same pattern as await-child.ts).
@@ -221,23 +271,48 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               'WorkflowValidationError'
             );
           }
+          let promptOverride: string | undefined;
+          if (target.regenVisual && claims.visualVersionId) {
+            const dep = await scopedDb.framePromptVersions.getByIdForFrame(
+              claims.visualVersionId,
+              frame.id
+            );
+            if (dep?.status === 'completed') {
+              promptOverride = dep.text;
+            } else if (frame.visualPromptInputHash === target.visualLiveHash) {
+              // The claim retired in favour of an identical existing row
+              // (unique-index collision path) — the intended prompt is the
+              // frame's current mirror.
+              promptOverride = frame.imagePrompt ?? undefined;
+            } else {
+              // Cancelled / failed upstream: never render from the prompt
+              // the run failed to produce.
+              throw new NonRetryableError(
+                `Upstream visual prompt for shot ${target.shotId} was cancelled`,
+                'WorkflowValidationError'
+              );
+            }
+          }
           const scriptBySceneId = await loadSelectedScriptsBySequence(
             scopedDb,
             sequenceId
           );
           const { scene, script } = resolveSceneForShot(shot, scriptBySceneId);
           try {
-            return JSON.stringify(
-              await prepareShotImageWorkflowInput({
-                scopedDb,
-                sequence,
-                shot,
-                frame,
-                scriptExtract:
-                  script?.extract ?? scene?.originalScript.extract ?? '',
-                userId,
-              })
-            );
+            const prepared = await prepareShotImageWorkflowInput({
+              scopedDb,
+              sequence,
+              shot,
+              frame,
+              scriptExtract:
+                script?.extract ?? scene?.originalScript.extract ?? '',
+              userId,
+              promptOverride,
+            });
+            return JSON.stringify({
+              ...prepared,
+              targetVariantId: claims.imageVariantId ?? undefined,
+            });
           } catch (error) {
             // Running out of credits is terminal, not transient: retrying
             // burns the step's whole budget on a call that cannot succeed and
@@ -329,17 +404,69 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
     // ============================================================
     const jobs = plan.targets.map((target) =>
       (async (): Promise<void> => {
-        const needsPrompt = target.regenVisual || target.regenMotion;
+        const claims = claimed.claimsByShot[target.shotId] ?? {
+          visualVersionId: null,
+          motionVersionId: null,
+          imageVariantId: null,
+        };
+        // A regen flag without a claim means another run already owns that
+        // artifact ('already-in-flight' in `skipped`) — this run stands down.
+        const doVisual = target.regenVisual && claims.visualVersionId !== null;
+        const doMotion = target.regenMotion && claims.motionVersionId !== null;
+        const doImage = target.regenImage && claims.imageVariantId !== null;
+
+        // Best-effort claim cleanup on a stage failure — a claim must never
+        // outlive its run's ability to complete it (the reconciler is the
+        // backstop for anything this misses).
+        const failClaims = async (stage: UpdateStage): Promise<void> => {
+          try {
+            if (stage === 'visual-prompt' && claims.visualVersionId) {
+              await scopedDb.framePromptVersions.markTerminal(
+                claims.visualVersionId,
+                'failed'
+              );
+              await scopedDb.frameVariants.cancelByDependency(
+                claims.visualVersionId,
+                'Upstream visual prompt generation failed'
+              );
+            }
+            if (stage === 'motion-prompt' && claims.motionVersionId) {
+              await scopedDb.shotPromptVersions.markTerminal(
+                claims.motionVersionId,
+                'failed'
+              );
+            }
+            if (stage === 'image' && claims.imageVariantId) {
+              await scopedDb.frameVariants.markTerminal(
+                claims.imageVariantId,
+                'failed',
+                'Image stage failed in Update all'
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              `[UpdateStaleShotsWorkflow] failed to clean up claim for shot ${target.shotId}`,
+              { err }
+            );
+          }
+        };
+
+        const needsPrompt = doVisual || doMotion;
         let scenes: PromptScenes | null = null;
         if (needsPrompt) {
           try {
             scenes = await loadPromptScenes(target);
           } catch (error) {
             // Both prompt stages depend on this; neither can proceed.
-            if (target.regenVisual)
+            if (doVisual) {
               failures.push(toFailure(target.shotId, 'visual-prompt', error));
-            if (target.regenMotion)
+              await failClaims('visual-prompt');
+            }
+            if (doMotion) {
               failures.push(toFailure(target.shotId, 'motion-prompt', error));
+              await failClaims('motion-prompt');
+            }
+            if (doImage) await failClaims('image');
             return;
           }
         }
@@ -359,7 +486,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
 
         const stages: Array<Promise<void>> = [];
 
-        if (target.regenMotion && base && scenes) {
+        if (doMotion && base && scenes) {
           stages.push(
             spawnAndAwaitChild<MotionPromptWorkflowInput, unknown>(step, {
               binding: this.env.MOTION_PROMPT_WORKFLOW,
@@ -371,6 +498,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                 sceneBefore: scenes.sceneBefore,
                 sceneAfter: scenes.sceneAfter,
                 startingFrameImageUrl: target.startingFrameImageUrl,
+                targetVersionId: claims.motionVersionId ?? undefined,
               },
               spawnStepName: `spawn-motion-prompt-${target.shotId}`,
               awaitStepName: `await-motion-prompt-${target.shotId}`,
@@ -378,14 +506,15 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               () => {
                 counters.motionPrompts += 1;
               },
-              (error: unknown) => {
+              async (error: unknown) => {
                 failures.push(toFailure(target.shotId, 'motion-prompt', error));
+                await failClaims('motion-prompt');
               }
             )
           );
         }
 
-        if (target.regenVisual && base) {
+        if (doVisual && base) {
           stages.push(
             (async () => {
               try {
@@ -396,7 +525,11 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                     parentBindingName: PARENT_BINDING_NAME,
                     parentInstanceId,
                     childId: `frame-prompt:${sequenceId}:${target.shotId}`,
-                    childPayload: { ...base, frameId: target.frameId },
+                    childPayload: {
+                      ...base,
+                      frameId: target.frameId,
+                      targetVersionId: claims.visualVersionId ?? undefined,
+                    },
                     spawnStepName: `spawn-frame-prompt-${target.shotId}`,
                     awaitStepName: `await-frame-prompt-${target.shotId}`,
                   }
@@ -405,20 +538,24 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               } catch (error) {
                 // Never render from the prompt the regen failed to replace.
                 failures.push(toFailure(target.shotId, 'visual-prompt', error));
+                await failClaims('visual-prompt');
+                // The chained image claim was cancelled by the cascade above.
                 return;
               }
-              if (!target.regenImage) return;
+              if (!doImage) return;
               try {
-                await spawnImage(target);
+                await spawnImage(target, claims);
               } catch (error) {
                 failures.push(toFailure(target.shotId, 'image', error));
+                await failClaims('image');
               }
             })()
           );
-        } else if (target.regenImage) {
+        } else if (doImage) {
           stages.push(
-            spawnImage(target).catch((error: unknown) => {
+            spawnImage(target, claims).catch(async (error: unknown) => {
               failures.push(toFailure(target.shotId, 'image', error));
+              await failClaims('image');
             })
           );
         }
@@ -436,10 +573,10 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
         { failures }
       );
     }
-    if (plan.skipped.length > 0) {
+    if (allSkipped.length > 0) {
       logger.error(
-        `[UpdateStaleShotsWorkflow] ${plan.skipped.length} shot(s) skipped by the plan`,
-        { skipped: plan.skipped }
+        `[UpdateStaleShotsWorkflow] ${allSkipped.length} shot(s) skipped by the plan`,
+        { skipped: allSkipped }
       );
     }
 
@@ -447,7 +584,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
       totalShots: plan.targets.length,
       ...counters,
       failures,
-      skipped: plan.skipped,
+      skipped: allSkipped,
     };
   }
 }
@@ -550,6 +687,8 @@ export async function computePlan(args: {
       skipped.push({ shotId: shot.id, reason: 'staleness-unknown' });
       continue;
     }
+    // 'stale' only — 'updating' means a live claim already covers the
+    // artifact (this run's dedup, #1085), 'fresh'/'untracked' need nothing.
     const regenVisual = staleness.visualPrompt === 'stale';
     const regenMotion = staleness.motionPrompt === 'stale';
     // Only what reads stale right now. Regenerating the visual prompt
@@ -573,6 +712,10 @@ export async function computePlan(args: {
       regenVisual,
       regenMotion,
       regenImage,
+      visualLiveHash: staleness.liveHashes.visualPrompt,
+      motionLiveHash: staleness.liveHashes.motionPrompt,
+      imageLiveHash: staleness.liveHashes.thumbnail,
+      imageModel: safeTextToImageModel(frame.imageModel, DEFAULT_IMAGE_MODEL),
     });
   }
   if (targets.length === 0 || !anyScene) return planBase;
@@ -596,4 +739,151 @@ export async function computePlan(args: {
     },
     targets,
   };
+}
+
+/**
+ * Claim the plan's targets (#1085): pre-create a pending version row per
+ * artifact this run will produce, so in-flight work reads as 'updating',
+ * duplicate enqueues no-op, and the children complete these rows in place.
+ *
+ * Runs inside `step.do('claim-targets')` and is idempotent across step
+ * retries: an existing live claim stamped with THIS run's instance id is
+ * reused; one stamped by anyone else means the artifact is already being
+ * produced elsewhere, so this run skips it (reported as `already-in-flight`
+ * rather than silently narrowing the run). Exported for testing.
+ */
+export async function claimTargets(args: {
+  scopedDb: ScopedDb;
+  targets: PlanTarget[];
+  sequenceId: string;
+  parentInstanceId: string;
+}): Promise<{
+  claimsByShot: Record<string, ShotClaims>;
+  skipped: SkippedShot[];
+}> {
+  const { scopedDb, targets, sequenceId, parentInstanceId } = args;
+  const claimsByShot: Record<string, ShotClaims> = {};
+  const skipped: SkippedShot[] = [];
+
+  for (const target of targets) {
+    const claims: ShotClaims = {
+      visualVersionId: null,
+      motionVersionId: null,
+      imageVariantId: null,
+    };
+    let foreignClaim = false;
+
+    if (target.regenVisual && target.visualLiveHash) {
+      const existing = await scopedDb.framePromptVersions.getLivePending(
+        target.frameId,
+        target.visualLiveHash
+      );
+      if (existing) {
+        if (existing.workflowRunId === parentInstanceId) {
+          claims.visualVersionId = existing.id;
+        } else {
+          foreignClaim = true;
+        }
+      } else {
+        try {
+          const row = await scopedDb.framePromptVersions.createPending({
+            frameId: target.frameId,
+            pendingInputHash: target.visualLiveHash,
+            workflowRunId: parentInstanceId,
+          });
+          claims.visualVersionId = row.id;
+        } catch {
+          // Lost the insert race to a concurrent enqueue (partial unique
+          // index on live claims) — the artifact is already being produced.
+          foreignClaim = true;
+        }
+      }
+    }
+
+    if (target.regenMotion && target.motionLiveHash) {
+      const existing = await scopedDb.shotPromptVersions.getLivePending(
+        target.shotId,
+        target.motionLiveHash
+      );
+      if (existing) {
+        if (existing.workflowRunId === parentInstanceId) {
+          claims.motionVersionId = existing.id;
+        } else {
+          foreignClaim = true;
+        }
+      } else {
+        try {
+          const row = await scopedDb.shotPromptVersions.createPending({
+            shotId: target.shotId,
+            pendingInputHash: target.motionLiveHash,
+            workflowRunId: parentInstanceId,
+          });
+          claims.motionVersionId = row.id;
+        } catch {
+          foreignClaim = true; // lost the insert race — see the visual twin
+        }
+      }
+    }
+
+    if (target.regenImage) {
+      const liveClaims = await scopedDb.frameVariants.listLiveClaims(
+        target.frameId
+      );
+      if (target.regenVisual) {
+        // Chained render: valid only behind OUR visual claim. A foreign
+        // visual claim means someone else owns the prompt regen — chaining
+        // onto their run is not this run's call, so skip the image too.
+        if (claims.visualVersionId) {
+          const visualVersionId = claims.visualVersionId;
+          const ours = liveClaims.find(
+            (c) => c.dependsOnVersionId === visualVersionId
+          );
+          claims.imageVariantId =
+            ours?.id ??
+            (
+              await scopedDb.frameVariants.createPendingClaim({
+                frameId: target.frameId,
+                sequenceId,
+                model: target.imageModel,
+                dependsOnVersionId: visualVersionId,
+                workflowRunId: parentInstanceId,
+              })
+            ).id;
+        } else {
+          foreignClaim = true;
+        }
+      } else if (target.imageLiveHash) {
+        const existing = liveClaims.find(
+          (c) => c.pendingInputHash === target.imageLiveHash
+        );
+        if (existing) {
+          if (existing.workflowRunId === parentInstanceId) {
+            claims.imageVariantId = existing.id;
+          } else {
+            foreignClaim = true;
+          }
+        } else {
+          try {
+            const row = await scopedDb.frameVariants.createPendingClaim({
+              frameId: target.frameId,
+              sequenceId,
+              model: target.imageModel,
+              pendingInputHash: target.imageLiveHash,
+              workflowRunId: parentInstanceId,
+            });
+            claims.imageVariantId = row.id;
+          } catch {
+            foreignClaim = true; // lost the insert race — see the visual twin
+          }
+        }
+      }
+    }
+
+    if (foreignClaim) {
+      skipped.push({ shotId: target.shotId, reason: 'already-in-flight' });
+    }
+    claimsByShot[target.shotId] = claims;
+  }
+
+  return { claimsByShot, skipped };
 }

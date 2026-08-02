@@ -35,6 +35,53 @@ export type WorkflowRunOutcome =
    */
   | { state: 'unknown' };
 
+/**
+ * Workflows that produce exactly ONE artifact — safe to terminate when that
+ * artifact's pending claim is cancelled (#1085). Parent orchestrators
+ * (update-stale-shots) are deliberately excluded: their run id is stamped on
+ * every claim they own, and terminating the parent would kill sibling shots'
+ * work. For parent-owned claims, cancellation is data-only — the running
+ * child discards its output against the cancelled row's status guard.
+ */
+const SINGLE_ARTIFACT_WORKFLOWS = new Set([
+  'frame-prompt',
+  'motion-prompt',
+  'image',
+]);
+
+/**
+ * Best-effort terminate of a single-artifact workflow run. Returns false —
+ * never throws — when the id is empty, unknown, not a single-artifact
+ * workflow, or the RPC fails; cancellation stays valid as a data-only state
+ * in all of those cases.
+ */
+export async function terminateSingleArtifactRun(
+  runId: string | null
+): Promise<boolean> {
+  if (!runId) return false;
+  const workflowName = runId.split('_')[1] ?? '';
+  if (!SINGLE_ARTIFACT_WORKFLOWS.has(workflowName)) return false;
+
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- getEnv()'s type is platform-dependent; CF runtime guarantees Cloudflare.Env shape with workflow bindings present
+  const env = getEnv() as unknown as CloudflareEnv;
+  const binding = getCfBindingForRunId(runId, env);
+  if (!binding) return false;
+  try {
+    const instance = await binding.get(runId);
+    try {
+      await instance.terminate();
+      return true;
+    } finally {
+      disposeRpcStub(instance);
+    }
+  } catch (error) {
+    logger.warn(`Failed to terminate workflow run ${runId}:`, {
+      data: error instanceof Error ? error.message : error,
+    });
+    return false;
+  }
+}
+
 export async function getWorkflowRunOutcome(
   runId: string
 ): Promise<WorkflowRunOutcome> {
