@@ -2,6 +2,7 @@ import {
   getUpdateStaleShotsRunFn,
   updateStaleShotsFn,
 } from '@/functions/shots';
+import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -42,16 +43,19 @@ export function useUpdateStaleShots(args: { sequenceId: string }) {
   const deadlineRef = useRef(0);
 
   const trigger = useMutation({
-    mutationFn: (vars: { sceneId?: string; shotId?: string }) =>
-      updateStaleShotsFn({ data: { sequenceId, ...vars } }),
+    mutationFn: (vars: {
+      sceneId?: string;
+      shotId?: string;
+      depth?: UpdateStaleDepth;
+    }) => updateStaleShotsFn({ data: { sequenceId, ...vars } }),
   });
   const { mutate: triggerMutate, isPending: triggerPending } = trigger;
 
   const run = useCallback(
-    (vars: { sceneId?: string; shotId?: string }) => {
+    (vars: { sceneId?: string; shotId?: string; depth?: UpdateStaleDepth }) => {
       if (triggerPending || runId) return;
       triggerMutate(
-        { sceneId: vars.sceneId, shotId: vars.shotId },
+        { sceneId: vars.sceneId, shotId: vars.shotId, depth: vars.depth },
         {
           onSuccess: ({ workflowRunId }) => {
             deadlineRef.current = Date.now() + RUN_DEADLINE_MS;
@@ -129,10 +133,20 @@ export function useUpdateStaleShots(args: { sequenceId: string }) {
       visualPrompts,
       motionPrompts,
       images,
+      videos,
+      musicPrompts,
+      musicTracks,
       failures,
       skipped,
     } = outcome.result;
-    const regenerated = visualPrompts + motionPrompts + images;
+    const regenerated =
+      visualPrompts +
+      motionPrompts +
+      images +
+      videos +
+      musicPrompts +
+      musicTracks;
+    const touchedMusic = musicPrompts + musicTracks > 0;
 
     if (failures.length > 0 || skipped.length > 0) {
       const problems = failures.length + skipped.length;
@@ -149,12 +163,14 @@ export function useUpdateStaleShots(args: { sequenceId: string }) {
       return;
     }
 
-    if (totalShots === 0) {
+    if (regenerated === 0) {
       toast.success('Everything is already up to date');
       return;
     }
     toast.success(
-      `Updated ${regenerated} item${regenerated === 1 ? '' : 's'} across ${totalShots} shot${totalShots === 1 ? '' : 's'}`
+      totalShots > 0
+        ? `Updated ${regenerated} item${regenerated === 1 ? '' : 's'} across ${totalShots} shot${totalShots === 1 ? '' : 's'}${touchedMusic ? ' + music' : ''}`
+        : 'Updated the sequence music'
     );
   }, [outcome, runId]);
 

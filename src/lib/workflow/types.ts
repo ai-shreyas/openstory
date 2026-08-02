@@ -44,6 +44,7 @@ import type {
   StyleConfig,
 } from '@/lib/db/schema';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
+import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import type { Json } from '@/types/database';
 import { z } from 'zod';
 import type { musicDesignResultSchema } from '../ai/response-schemas';
@@ -374,6 +375,13 @@ export interface UpdateStaleShotsWorkflowInput extends SequenceWorkflowContext {
   sceneId?: string;
   /** Limit to a single shot (shot-scope Update all). */
   shotId?: string;
+  /**
+   * Cascade depth (#1085): 'prompts' | 'images' | 'video' | 'music',
+   * cumulative — see src/lib/shots/update-stale-depth.ts. Absent on runs
+   * enqueued before the picker existed; treated as 'images' (the closest
+   * match to the original stale-only behaviour).
+   */
+  depth?: UpdateStaleDepth;
 }
 
 export interface RegenerateShotsWorkflowInput extends SequenceWorkflowContext {

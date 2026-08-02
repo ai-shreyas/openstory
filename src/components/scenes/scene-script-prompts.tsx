@@ -36,6 +36,7 @@ import {
   segmentPanelIsInformative,
 } from '@/components/scenes/segment-video-panel';
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
+import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import {
   type ShotStaleness,
   markArtifactFresh,
@@ -472,32 +473,39 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // stale then. This component only picks the scope; the hook polls the run
   // and reports what it did.
   const updateStaleShots = useUpdateStaleShots({ sequenceId });
-  const handleUpdateAll = useCallback(() => {
-    if (!shot?.id) return;
-    if (falNeedsBillingSetup) {
-      showFalGate();
-      return;
-    }
-    updateStaleShots.run({ shotId: shot.id });
-  }, [shot?.id, falNeedsBillingSetup, showFalGate, updateStaleShots]);
-  const handleScopeUpdateAll = useCallback(() => {
-    if (!scopeShots || !scopeStaleness) return;
-    if (falNeedsBillingSetup) {
-      showFalGate();
-      return;
-    }
-    updateStaleShots.run({
-      // Undefined at sequence scope → the workflow covers the whole sequence.
-      sceneId: scriptSceneId,
-    });
-  }, [
-    scopeShots,
-    scopeStaleness,
-    scriptSceneId,
-    falNeedsBillingSetup,
-    showFalGate,
-    updateStaleShots,
-  ]);
+  const handleUpdateAll = useCallback(
+    (depth: UpdateStaleDepth) => {
+      if (!shot?.id) return;
+      if (falNeedsBillingSetup) {
+        showFalGate();
+        return;
+      }
+      updateStaleShots.run({ shotId: shot.id, depth });
+    },
+    [shot?.id, falNeedsBillingSetup, showFalGate, updateStaleShots]
+  );
+  const handleScopeUpdateAll = useCallback(
+    (depth: UpdateStaleDepth) => {
+      if (!scopeShots || !scopeStaleness) return;
+      if (falNeedsBillingSetup) {
+        showFalGate();
+        return;
+      }
+      updateStaleShots.run({
+        // Undefined at sequence scope → the workflow covers the whole sequence.
+        sceneId: scriptSceneId,
+        depth,
+      });
+    },
+    [
+      scopeShots,
+      scopeStaleness,
+      scriptSceneId,
+      falNeedsBillingSetup,
+      showFalGate,
+      updateStaleShots,
+    ]
+  );
 
   const {
     items: mentionItems,
@@ -1350,10 +1358,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           // already covered by a server-side claim (#1085) — clicking again
           // would just no-op against the dedup.
           isRegenerating={isUpdatingAll || !shotHasStale}
-          onRegenerate={shotHasStale ? handleUpdateAll : undefined}
+          onRegenerateDepth={shotHasStale ? handleUpdateAll : undefined}
         />
       )}
-      {shotStaleUnknown && !shotHasStale && (
+      {shotStaleUnknown && !shotHasStale && !shotHasUpdating && (
         <StalenessIndicator
           entityType="shot"
           density="status-line"

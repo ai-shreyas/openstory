@@ -14,6 +14,7 @@ import {
   type ShotStalenessRefs,
   type ShotStalenessResult,
 } from '@/lib/shots/shot-staleness';
+import { UPDATE_STALE_DEPTHS } from '@/lib/shots/update-stale-depth';
 import {
   projectShotWithImage,
   projectShotMissingFrame,
@@ -717,22 +718,28 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
         sequenceId: ulidSchema,
         sceneId: ulidSchema.optional(),
         shotId: ulidSchema.optional(),
+        depth: z.enum(UPDATE_STALE_DEPTHS).optional(),
       })
     )
   )
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user, scopedDb } = context;
+    const depth = data.depth ?? 'images';
     // The plan isn't known yet, so this can't be the exact cost — it's a
-    // floor: a run that can't afford even one image should never start.
-    await requireCredits(
-      scopedDb,
-      estimateImageCost(
-        safeTextToImageModel(sequence.imageModel, DEFAULT_IMAGE_MODEL),
-        sequence.aspectRatio,
-        1
-      ),
-      { errorMessage: 'Insufficient credits to update out-of-date shots' }
-    );
+    // floor: a run that can't afford even one artifact of its most expensive
+    // level should never start. 'prompts' has no render cost; LLM spend is
+    // deducted inside the workflow as always.
+    if (depth !== 'prompts') {
+      await requireCredits(
+        scopedDb,
+        estimateImageCost(
+          safeTextToImageModel(sequence.imageModel, DEFAULT_IMAGE_MODEL),
+          sequence.aspectRatio,
+          1
+        ),
+        { errorMessage: 'Insufficient credits to update out-of-date shots' }
+      );
+    }
     const workflowRunId = await triggerWorkflow<UpdateStaleShotsWorkflowInput>(
       '/update-stale-shots',
       {
@@ -741,6 +748,7 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
         sequenceId: sequence.id,
         sceneId: data.sceneId,
         shotId: data.shotId,
+        depth,
       },
       { label: buildWorkflowLabel(sequence.id) }
     );
@@ -757,6 +765,11 @@ const updateStaleShotsResultSchema = z.object({
   visualPrompts: z.number(),
   motionPrompts: z.number(),
   images: z.number(),
+  // Depth-picker levels (#1085). Defaulted so a run from a pre-picker
+  // deployment still parses during version skew.
+  videos: z.number().default(0),
+  musicPrompts: z.number().default(0),
+  musicTracks: z.number().default(0),
   failures: z.array(
     z.object({ shotId: z.string(), stage: z.string(), error: z.string() })
   ),

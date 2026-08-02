@@ -1,13 +1,14 @@
-import { StalenessIndicator } from '@/components/staleness/staleness-indicator';
+import { UpdateAllDialog } from '@/components/staleness/update-all-dialog';
 import { Button } from '@/components/ui/button';
 import {
   type ShotStaleness,
   shotIsStale,
   shotIsUpdating,
-  shotStalenessUnknown,
 } from '@/hooks/use-shot-staleness';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import { Loader2 } from 'lucide-react';
+import { useState } from 'react';
 
 type SceneStaleShotsProps = {
   /** The in-scope shots (a scene's, or the whole sequence's), in order. */
@@ -15,14 +16,17 @@ type SceneStaleShotsProps = {
   /** Batched staleness for those shots, keyed by shot id (#1077). */
   staleness: Record<string, ShotStaleness> | undefined;
   /**
-   * The staleness request failed. Without this, an errored request is
+   * The staleness check failed. Without this, an errored request is
    * indistinguishable from a clean scene — both render nothing.
    */
   stalenessFailed?: boolean;
   /** Same handler the left rail uses — lands at shot scope. */
   onSelectShot: (shotId: string) => void;
-  /** Regenerate every artifact that is stale right now across these shots. */
-  onUpdateAll?: () => void;
+  /**
+   * Regenerate out-of-date artifacts across these shots at the chosen
+   * cascade depth (#1085) — rendered as a depth menu on the action.
+   */
+  onUpdateAll?: (depth: UpdateStaleDepth) => void;
   isUpdating?: boolean;
 };
 
@@ -41,20 +45,21 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   onUpdateAll,
   isUpdating = false,
 }) => {
-  // A shot whose comparison failed is reported the same way a failed request
-  // is: we don't know, and saying nothing would read as "up to date".
-  const uncheckable =
-    stalenessFailed ||
-    shots.some((shot) => shotStalenessUnknown(staleness?.[shot.id]));
-
-  if (uncheckable) {
+  // "Update all" opens the depth confirm dialog (#1085).
+  const [updateAllOpen, setUpdateAllOpen] = useState(false);
+  if (stalenessFailed) {
     return (
-      <StalenessIndicator
-        entityType="sequence"
-        density="status-line"
-        tone="unknown"
-        message="Couldn’t check whether these shots are up to date"
-      />
+      <div
+        data-testid="scene-stale-shots-error"
+        aria-live="polite"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+      >
+        <span
+          aria-hidden="true"
+          className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/50"
+        />
+        <span>Couldn’t check whether these shots are up to date</span>
+      </div>
     );
   }
 
@@ -72,17 +77,27 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
   const busy = isUpdating || staleShots.length === 0;
 
   return (
-    <StalenessIndicator
-      entityType="sequence"
-      density="status-line"
-      message={
-        staleShots.length > 0
-          ? 'Out of date since your edit'
-          : 'Updating out-of-date shots…'
-      }
-      isRegenerating={busy}
-      onRegenerate={staleShots.length > 0 ? onUpdateAll : undefined}
+    <div
+      data-testid="scene-stale-shots"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
     >
+      {staleShots.length > 0 ? (
+        <span
+          aria-hidden="true"
+          className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
+        />
+      ) : (
+        <Loader2
+          aria-hidden="true"
+          className="h-3 w-3 shrink-0 animate-spin text-amber-600 motion-reduce:animate-none"
+        />
+      )}
+      <span>
+        {staleShots.length > 0
+          ? 'Out of date since your edit'
+          : 'Updating out-of-date shots…'}
+      </span>
+      <span aria-hidden="true">·</span>
       {[...staleShots, ...updatingShots].map((shot) => {
         const number = shot.shotNumber ?? shot.orderIndex + 1;
         const updating = updatingShots.includes(shot);
@@ -92,7 +107,7 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
             type="button"
             variant="outline"
             size="sm"
-            className="h-6 rounded-full px-2 text-xs font-normal"
+            className="h-5 rounded-full px-2 text-xs font-normal"
             onClick={() => onSelectShot(shot.id)}
             aria-label={
               updating
@@ -110,6 +125,37 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
           </Button>
         );
       })}
-    </StalenessIndicator>
+      {onUpdateAll && staleShots.length > 0 && (
+        <>
+          <span aria-hidden="true">·</span>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs"
+            onClick={() => setUpdateAllOpen(true)}
+            disabled={busy}
+            aria-busy={busy}
+            aria-label="Update all out-of-date shots"
+          >
+            {isUpdating && (
+              <Loader2
+                aria-hidden="true"
+                className="mr-1 h-3 w-3 animate-spin motion-reduce:animate-none"
+              />
+            )}
+            {isUpdating ? 'Updating…' : 'Update all'}
+          </Button>
+          <UpdateAllDialog
+            open={updateAllOpen}
+            onOpenChange={setUpdateAllOpen}
+            onConfirm={(depth: UpdateStaleDepth) => {
+              setUpdateAllOpen(false);
+              onUpdateAll(depth);
+            }}
+          />
+        </>
+      )}
+    </div>
   );
 };
