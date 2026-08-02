@@ -14,7 +14,8 @@ const logger = getLogger(['openstory', 'observability', 'product-events']);
 type ProductEventName =
   | 'user_signed_up'
   | 'user_signed_in'
-  | 'sequence_generated';
+  | 'sequence_generated'
+  | 'founder_credits_requested';
 
 export type CaptureProductEventArgs = {
   distinctId: string;

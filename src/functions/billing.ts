@@ -6,9 +6,17 @@
 import { requireTeamAdminAccess } from '@/lib/auth/action-utils';
 import { createCheckoutSession } from '@/lib/billing/checkout';
 import { isStripeEnabled, MIN_TOPUP_AMOUNT_USD } from '@/lib/billing/constants';
-import { micros, microsToUsd, usdToMicros } from '@/lib/billing/money';
+import {
+  micros,
+  microsToDisplayUsd,
+  microsToUsd,
+  usdToMicros,
+} from '@/lib/billing/money';
 import type { TransactionType } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
+import { FOUNDER_EMAIL } from '@/lib/marketing/constants';
+import { captureProductEvent } from '@/lib/observability/product-events';
+import { sendFounderCreditRequestEmail } from '@/lib/services/email-service';
 import { getServerAppUrl } from '@/lib/utils/environment';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
@@ -73,6 +81,46 @@ export const getBillingBalanceFn = createServerFn({ method: 'GET' })
       },
       hasPaymentMethod: !!settings.stripeCustomerId,
     };
+  });
+
+// ============================================================================
+// Founder credit request ("Ask Tom for Credits", #1096)
+// ============================================================================
+
+export const requestFounderCreditsFn = createServerFn({ method: 'POST' })
+  .middleware([authWithTeamMiddleware])
+  .handler(async ({ context }) => {
+    const balance = await context.scopedDb.billing.getBalance();
+    const balanceDisplay = microsToDisplayUsd(balance);
+
+    const result = await sendFounderCreditRequestEmail({
+      to: FOUNDER_EMAIL,
+      userName: context.user.name,
+      userEmail: context.user.email,
+      teamId: context.teamId,
+      balanceDisplay,
+    });
+
+    // Fired regardless of email outcome — the PostHog → Slack alert (#1088)
+    // is the backup channel when email delivery fails.
+    captureProductEvent({
+      distinctId: context.user.id,
+      event: 'founder_credits_requested',
+      properties: {
+        teamId: context.teamId,
+        userEmail: context.user.email,
+        balance: balanceDisplay,
+        emailSent: result.success,
+      },
+    });
+
+    if (!result.success) {
+      throw new ValidationError(
+        `Couldn't send your request — email ${FOUNDER_EMAIL} directly.`
+      );
+    }
+
+    return { success: true };
   });
 
 // ============================================================================

@@ -24,9 +24,11 @@ import { SITE_CONFIG } from '@/lib/marketing/constants';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import {
+  BadgeDollarSign,
   Boxes,
   Clapperboard,
   LifeBuoy,
+  Mail,
   MapPin,
   Palette,
   Plus,
@@ -112,6 +114,22 @@ export function AppSidebar() {
                 <LifeBuoy />
                 <span>Help</span>
               </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Pricing">
+              <Link to="/pricing">
+                <BadgeDollarSign />
+                <span>Pricing</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Contact us">
+              <a href={`mailto:${SITE_CONFIG.contactEmail}`}>
+                <Mail />
+                <span>Contact us</span>
+              </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>

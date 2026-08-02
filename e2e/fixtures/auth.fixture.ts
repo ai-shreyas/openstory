@@ -93,6 +93,14 @@ export async function authenticateUser(
 ): Promise<void> {
   const testOtp = '123456';
 
+  // The welcome-credits dialog (#1096) fires once for accounts younger than
+  // 7 days — i.e. every freshly-created e2e user. Pre-seed its seen-flag so
+  // the modal never overlays the UI under test; auth.setup's storageState
+  // snapshot carries it into every spec that reuses the shared session.
+  await page.addInitScript(() => {
+    localStorage.setItem('openstory:welcome-credits-seen', 'true');
+  });
+
   // Create OTP via test API (the route normalizes to the identifier
   // Better Auth's signIn.emailOtp will actually look up).
   await fetch('http://localhost:3001/api/test/verify', {

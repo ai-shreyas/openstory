@@ -13,6 +13,9 @@ const APP_DOMAIN = (() => {
 
 export const CONTACT_EMAIL = `hello@${APP_DOMAIN}`;
 export const PRIVACY_EMAIL = `privacy@${APP_DOMAIN}`;
+/** Where "Ask Tom for Credits" requests land (#1096). Deliberately a person,
+ * not an alias — the pitch is that the founder replies. */
+export const FOUNDER_EMAIL = 'tom@openstory.so';
 
 export const SITE_CONFIG = {
   name: APP_NAME,

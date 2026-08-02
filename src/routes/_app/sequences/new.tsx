@@ -158,8 +158,7 @@ function NewSequencePage() {
     [styles, navigate]
   );
 
-  const { needsBillingSetup, hasFalKey, hasOpenRouterKey, stripeEnabled } =
-    useBillingGate();
+  const { needsBillingSetup, hasFalKey, stripeEnabled } = useBillingGate();
   const [billingOpen, setBillingOpen] = useState(false);
 
   // Clear billing return flag when user is back on this page
@@ -203,7 +202,6 @@ function NewSequencePage() {
         if (!open) dismissBillingPrompt();
       }}
       hasFalKey={hasFalKey}
-      hasOpenRouterKey={hasOpenRouterKey}
       stripeEnabled={stripeEnabled}
       context="onboarding"
     />

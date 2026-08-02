@@ -7,6 +7,7 @@
 
 import { getEnv } from '#env';
 import { env as workerEnv } from 'cloudflare:workers';
+import { FounderCreditRequestEmail } from '@/lib/emails/founder-credit-request-email';
 import { OtpEmail } from '@/lib/emails/otp-email';
 import { renderEmail } from '@/lib/emails/render-email';
 import { getLogger } from '@/lib/observability/logger';
@@ -106,5 +107,31 @@ export async function sendOtpEmail(
     to: email,
     subject: 'Your sign-in code',
     body: <OtpEmail appName={getAppName()} otp={otp} />,
+  });
+}
+
+/**
+ * Notify the founder that a user asked for credits from the billing gate
+ * ("Ask Tom for Credits", #1096).
+ */
+export async function sendFounderCreditRequestEmail(params: {
+  to: string;
+  userName: string;
+  userEmail: string;
+  teamId: string;
+  balanceDisplay: string;
+}): Promise<{ success: boolean; error?: string }> {
+  return sendEmail({
+    to: params.to,
+    subject: `Credit request from ${params.userEmail}`,
+    body: (
+      <FounderCreditRequestEmail
+        appName={getAppName()}
+        userName={params.userName}
+        userEmail={params.userEmail}
+        teamId={params.teamId}
+        balanceDisplay={params.balanceDisplay}
+      />
+    ),
   });
 }
