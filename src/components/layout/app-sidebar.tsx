@@ -100,7 +100,6 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
-              <CreditBalancePill />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -145,6 +144,8 @@ export function AppSidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
         <SidebarSeparator />
+        {/* Quiet status chip — not a nav peer of Sequences/Gallery (#1090). */}
+        <CreditBalancePill />
         <SidebarMenu>
           <UserSidebarFooter />
         </SidebarMenu>

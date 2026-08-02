@@ -33,6 +33,8 @@ import {
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { enhanceScriptStreamFn } from '@/functions/ai';
 import { useAutoScroll } from '@/hooks/use-auto-scroll';
+import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
+import { BILLING_TRANSACTIONS_KEY } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGate } from '@/hooks/use-billing-gate';
 import { useGenerationSettings } from '@/hooks/use-generation-settings';
 import { useComposedScript } from '@/hooks/use-scenes';
@@ -46,6 +48,7 @@ import { useSequenceLocations } from '@/hooks/use-sequence-locations';
 import { useCreateSequence } from '@/hooks/use-sequences';
 import { useRecommendedStyles, useStyles } from '@/hooks/use-styles';
 import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_MUSIC_MODEL,
@@ -141,6 +144,7 @@ export const ScriptView: FC<{
   onStyleChange,
   allowScriptEdit = false,
 }) => {
+  const queryClient = useQueryClient();
   const isEditing = !!sequence?.id;
   const { data: composedScriptData } = useComposedScript(sequence?.id);
   const composedScript = composedScriptData?.script;
@@ -808,6 +812,14 @@ export const ScriptView: FC<{
         setScript(accumulated);
       }
       setEnhance('canUndoEnhance', true);
+      // Charge lands when the stream finishes — keep the credit chip in sync
+      // even if the billing SSE is delayed or dropped on this request path.
+      void queryClient.invalidateQueries({
+        queryKey: [...BILLING_BALANCE_KEY],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...BILLING_TRANSACTIONS_KEY],
+      });
       // Pre-warm the style shortlist off the freshly enhanced script so the
       // picker is ready the moment the user looks for it.
       // Billing is already gated above (handleEnhance returns early when
