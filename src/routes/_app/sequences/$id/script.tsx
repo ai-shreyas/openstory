@@ -43,6 +43,8 @@ function ScriptPage() {
   const handleSuccess = (sequenceIds: string[]) => {
     const [firstId] = sequenceIds;
     if (firstId) {
+      // No explicit view: ScenesView forces the script view while the split
+      // streams, then auto-reveals the canvas at the first preview (#1091).
       void navigate({
         to: '/sequences/$id/scenes',
         params: { id: firstId },
