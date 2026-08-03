@@ -66,8 +66,10 @@ type OptionCardProps = {
 const cardClassName = (variant: 'primary' | 'muted') =>
   cn(
     'group relative flex items-center gap-3.5 rounded-xl border p-3.5 transition-all duration-200',
+    // The primary card is THE action — it must read as highlighted next to
+    // the muted fallbacks, not as a sibling (#1099).
     variant === 'primary' &&
-      'border-primary/20 bg-primary/[0.03] hover:border-primary/40 hover:bg-primary/[0.06]',
+      'border-primary/50 bg-primary/10 hover:border-primary hover:bg-primary/15',
     variant === 'muted' &&
       'border-border/60 bg-transparent hover:border-border hover:bg-accent/50'
   );
@@ -86,8 +88,7 @@ const OptionCard: React.FC<OptionCardProps> = ({
       <div
         className={cn(
           'flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors duration-200',
-          variant === 'primary' &&
-            'bg-primary/10 text-primary group-hover:bg-primary/15',
+          variant === 'primary' && 'bg-primary text-primary-foreground',
           variant === 'muted' &&
             'bg-muted text-muted-foreground group-hover:bg-muted/80'
         )}
@@ -101,7 +102,7 @@ const OptionCard: React.FC<OptionCardProps> = ({
       <ArrowRight
         className={cn(
           'size-3.5 shrink-0 -translate-x-1 opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-60',
-          variant === 'muted' && 'text-muted-foreground'
+          variant === 'primary' ? 'text-primary' : 'text-muted-foreground'
         )}
       />
     </div>
