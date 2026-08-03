@@ -22,7 +22,9 @@ import { getDivergentVariantPromptDiffFn } from '@/functions/prompt-variants';
 import { smartRetryFn } from '@/functions/smart-retry';
 import { useActiveImageModel } from '@/hooks/use-active-image-model';
 import { useActiveVideoModel } from '@/hooks/use-active-video-model';
+import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
+import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useSceneSelection } from '@/hooks/use-scene-selection';
 import { useSequenceSegments } from '@/hooks/use-segments';
 import { useScenesBySequence } from '@/hooks/use-scenes';
@@ -216,6 +218,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const posthog = usePostHog();
+
+  const {
+    showGate: showBillingGate,
+    gateProps: billingGateProps,
+    hasFalKey,
+    stripeEnabled,
+  } = useFalBillingGate();
 
   const {
     selection,
@@ -1113,15 +1122,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       void queryClient.invalidateQueries({ queryKey: ['shots', sequenceId] });
     } catch (error) {
       if (isInsufficientCreditsError(error)) {
-        toast.error('Insufficient credits', {
-          description: 'Add credits to retry.',
-          action: {
-            label: 'Add Credits',
-            onClick: () => {
-              window.location.href = '/credits';
-            },
-          },
-        });
+        showBillingGate();
         void queryClient.invalidateQueries({
           queryKey: BILLING_BALANCE_KEY,
         });
@@ -1133,7 +1134,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     } finally {
       setIsRetrying(false);
     }
-  }, [sequenceId, queryClient]);
+  }, [sequenceId, queryClient, showBillingGate]);
 
   // Handler for batch motion generation (server determines eligible shots)
   const handleBatchMotionGeneration = useCallback(
@@ -1217,15 +1218,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         }
 
         if (isInsufficientCreditsError(error)) {
-          toast.error('Insufficient credits', {
-            description: 'Add credits to generate motion for all shots.',
-            action: {
-              label: 'Add Credits',
-              onClick: () => {
-                window.location.href = '/credits';
-              },
-            },
-          });
+          showBillingGate();
           void queryClient.invalidateQueries({
             queryKey: BILLING_BALANCE_KEY,
           });
@@ -1234,7 +1227,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         }
       }
     },
-    [sequenceId, shots, queryClient, posthog]
+    [sequenceId, shots, queryClient, posthog, showBillingGate]
   );
 
   const musicPromptsReady = !!(sequence?.musicPrompt && sequence.musicTags);
@@ -1527,6 +1520,12 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             />
           );
         })()}
+
+      <BillingGateDialog
+        {...billingGateProps}
+        hasFalKey={hasFalKey}
+        stripeEnabled={stripeEnabled}
+      />
     </div>
   );
 };

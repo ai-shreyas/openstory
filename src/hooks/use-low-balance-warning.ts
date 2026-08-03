@@ -5,6 +5,7 @@
 
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { openAddCreditsDialog } from './use-add-credits-dialog';
 import { useBillingBalance } from './use-billing-balance';
 
 export function useLowBalanceWarning() {
@@ -38,9 +39,7 @@ export function useLowBalanceWarning() {
         description: 'Generation is disabled until you add credits.',
         action: {
           label: 'Add Credits',
-          onClick: () => {
-            window.location.href = '/credits';
-          },
+          onClick: openAddCreditsDialog,
         },
         duration: 10_000,
       });
@@ -50,9 +49,7 @@ export function useLowBalanceWarning() {
         description: `Your balance is $${balance.toFixed(2)}.`,
         action: {
           label: 'Add Credits',
-          onClick: () => {
-            window.location.href = '/credits';
-          },
+          onClick: openAddCreditsDialog,
         },
         duration: 8_000,
       });

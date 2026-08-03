@@ -5,13 +5,19 @@
 
 import { requireTeamAdminAccess } from '@/lib/auth/action-utils';
 import { createCheckoutSession } from '@/lib/billing/checkout';
-import { isStripeEnabled, MIN_TOPUP_AMOUNT_USD } from '@/lib/billing/constants';
+import {
+  isStripeEnabled,
+  MAX_TOPUP_AMOUNT_USD,
+  MIN_TOPUP_AMOUNT_USD,
+  totalCheckoutCents,
+} from '@/lib/billing/constants';
 import {
   micros,
   microsToDisplayUsd,
   microsToUsd,
   usdToMicros,
 } from '@/lib/billing/money';
+import { getStripeOrThrow } from '@/lib/billing/stripe';
 import type { TransactionType } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
 import { FOUNDER_EMAIL } from '@/lib/marketing/constants';
@@ -25,7 +31,7 @@ import { z } from 'zod';
 import { authWithTeamMiddleware } from './middleware';
 
 const checkoutInputSchema = z.object({
-  amountUsd: z.number().min(MIN_TOPUP_AMOUNT_USD),
+  amountUsd: z.number().min(MIN_TOPUP_AMOUNT_USD).max(MAX_TOPUP_AMOUNT_USD),
 });
 
 export const createCheckoutSessionFn = createServerFn({ method: 'POST' })
@@ -50,6 +56,161 @@ export const createCheckoutSessionFn = createServerFn({ method: 'POST' })
     });
 
     return { url };
+  });
+
+// ============================================================================
+// Payment methods + direct purchase (#1099)
+// ============================================================================
+
+export type SavedPaymentMethod = {
+  id: string;
+  brand: string;
+  last4: string;
+  isDefault: boolean;
+};
+
+/**
+ * Saved cards for the team's Stripe customer. Cards get saved during
+ * Stripe Checkout (`setup_future_usage: 'off_session'`), so a team that has
+ * never checked out has none — the add-credits dialog then falls back to a
+ * Checkout redirect.
+ */
+export const listPaymentMethodsFn = createServerFn({ method: 'GET' })
+  .middleware([authWithTeamMiddleware])
+  .handler(
+    async ({ context }): Promise<{ paymentMethods: SavedPaymentMethod[] }> => {
+      if (!isStripeEnabled()) return { paymentMethods: [] };
+
+      const settings = await context.scopedDb.billing.getBillingSettings();
+      if (!settings.stripeCustomerId) return { paymentMethods: [] };
+
+      const stripe = getStripeOrThrow();
+      const [customer, methods] = await Promise.all([
+        stripe.customers.retrieve(settings.stripeCustomerId),
+        stripe.paymentMethods.list({
+          customer: settings.stripeCustomerId,
+          type: 'card',
+          limit: 10,
+        }),
+      ]);
+
+      const defaultPm = customer.deleted
+        ? null
+        : customer.invoice_settings.default_payment_method;
+      const defaultPmId =
+        typeof defaultPm === 'string' ? defaultPm : defaultPm?.id;
+
+      const paymentMethods = methods.data
+        .map((pm) => ({
+          id: pm.id,
+          brand: pm.card?.brand ?? 'card',
+          last4: pm.card?.last4 ?? '',
+          isDefault: pm.id === defaultPmId,
+        }))
+        .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+
+      return { paymentMethods };
+    }
+  );
+
+const purchaseInputSchema = z.object({
+  amountUsd: z.number().min(MIN_TOPUP_AMOUNT_USD).max(MAX_TOPUP_AMOUNT_USD),
+  paymentMethodId: z.string().min(1),
+});
+
+/**
+ * Charge a saved card off-session and credit the wallet immediately —
+ * the in-app "Continue" path of the add-credits dialog (#1099). New cards
+ * still go through Stripe Checkout (which saves them for next time).
+ */
+export const purchaseCreditsFn = createServerFn({ method: 'POST' })
+  .middleware([authWithTeamMiddleware])
+  .inputValidator(zodValidator(purchaseInputSchema))
+  .handler(async ({ data, context }) => {
+    if (!isStripeEnabled()) {
+      throw new ValidationError('Stripe is not configured');
+    }
+
+    const settings = await context.scopedDb.billing.getBillingSettings();
+    if (!settings.stripeCustomerId) {
+      throw new ValidationError(
+        'No saved payment method — add one to continue'
+      );
+    }
+
+    const stripe = getStripeOrThrow();
+    const paymentMethod = await stripe.paymentMethods.retrieve(
+      data.paymentMethodId
+    );
+    const pmCustomerId =
+      typeof paymentMethod.customer === 'string'
+        ? paymentMethod.customer
+        : paymentMethod.customer?.id;
+    if (pmCustomerId !== settings.stripeCustomerId) {
+      throw new ValidationError('Payment method not found');
+    }
+
+    const amountMicros = usdToMicros(data.amountUsd);
+
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: totalCheckoutCents(amountMicros),
+        currency: 'usd',
+        customer: settings.stripeCustomerId,
+        payment_method: data.paymentMethodId,
+        off_session: true,
+        confirm: true,
+        expand: ['latest_charge'],
+        metadata: {
+          teamId: context.teamId,
+          type: 'credit_top_up_direct',
+          amountUsd: String(data.amountUsd),
+        },
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Your card was declined';
+      throw new ValidationError(message);
+    }
+
+    if (paymentIntent.status !== 'succeeded') {
+      throw new ValidationError(
+        'Your card requires additional verification — use "Add payment method" to pay via checkout instead'
+      );
+    }
+
+    const charge = paymentIntent.latest_charge;
+    const receiptUrl =
+      charge && typeof charge === 'object'
+        ? (charge.receipt_url ?? undefined)
+        : undefined;
+
+    const result = await context.scopedDb.billing.addCredits(amountMicros, {
+      description: `Top-up: ${microsToDisplayUsd(amountMicros)}`,
+      metadata: {
+        stripePaymentIntentId: paymentIntent.id,
+        ...(receiptUrl && { receiptUrl }),
+      },
+    });
+
+    captureProductEvent({
+      distinctId: context.user.id,
+      event: 'credits_added',
+      properties: {
+        teamId: context.teamId,
+        amount_usd: data.amountUsd,
+        stripe_payment_intent_id: paymentIntent.id,
+        source: 'direct_purchase',
+      },
+    });
+
+    return {
+      success: true,
+      balance: result ? microsToUsd(result.newBalance) : null,
+    };
   });
 
 // ============================================================================

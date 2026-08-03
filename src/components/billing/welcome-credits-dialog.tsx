@@ -20,12 +20,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
+import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
 import { useShowBalance } from '@/hooks/use-show-balance';
 import { useUser } from '@/hooks/use-user';
 import { SIGNUP_GRANT_MICROS } from '@/lib/billing/constants';
 import { microsToDisplayUsd } from '@/lib/billing/money';
-import { Link } from '@tanstack/react-router';
 import { Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
@@ -150,10 +150,15 @@ export const WelcomeCreditsDialog: React.FC = () => {
 
           <DialogFooter className="gap-2 sm:justify-stretch">
             {stripeEnabled ? (
-              <Button variant="outline" className="sm:flex-1" asChild>
-                <Link to="/credits" onClick={() => handleOpenChange(false)}>
-                  Buy more
-                </Link>
+              <Button
+                variant="outline"
+                className="sm:flex-1"
+                onClick={() => {
+                  handleOpenChange(false);
+                  openAddCreditsDialog();
+                }}
+              >
+                Buy more
               </Button>
             ) : null}
             <Button

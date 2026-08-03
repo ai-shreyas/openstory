@@ -93,6 +93,7 @@ export const teamBillingSettings = snakeCase.table('team_billing_settings', {
   stripeCustomerId: text(),
   autoTopUpEnabled: integer({ mode: 'boolean' }).default(false).notNull(),
   autoTopUpThresholdMicros: integer().default(5_000_000),
+  /** "Top up to" target (#1099) — the balance auto-top-up restores to. */
   autoTopUpAmountMicros: integer().default(100_000_000),
   updatedAt: integer({ mode: 'timestamp' })
     .$defaultFn(() => new Date())

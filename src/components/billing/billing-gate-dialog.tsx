@@ -20,6 +20,7 @@ import { FalLogo } from '@/components/icons/fal-logo';
 import { saveApiKeyFn } from '@/functions/api-keys';
 import { requestFounderCreditsFn } from '@/functions/billing';
 import { getCurrentUserProfileFn } from '@/functions/user';
+import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
 import { cn } from '@/lib/utils';
 import { usePostHog } from '@posthog/react';
@@ -71,8 +72,8 @@ const OptionCard: React.FC<OptionCardProps> = ({
   description,
   variant = 'muted',
   onClick,
-}) => (
-  <Link to={to ?? '/'} search={search} onClick={onClick}>
+}) => {
+  const card = (
     <div className={cardClassName(variant)}>
       <div
         className={cn(
@@ -96,8 +97,22 @@ const OptionCard: React.FC<OptionCardProps> = ({
         )}
       />
     </div>
-  </Link>
-);
+  );
+
+  if (!to) {
+    return (
+      <button type="button" onClick={onClick} className="w-full text-left">
+        {card}
+      </button>
+    );
+  }
+
+  return (
+    <Link to={to} search={search} onClick={onClick}>
+      {card}
+    </Link>
+  );
+};
 
 /**
  * "Ask Tom for Credits" (#1096) — one click emails the founder (and fires a
@@ -284,13 +299,13 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
         <div className="flex flex-col gap-2 pt-1">
           {stripeEnabled && (
             <>
+              {/* Opens the add-credits modal on top of the gate (#1099) */}
               <OptionCard
-                to="/credits"
                 icon={<CreditCard className="size-4" />}
-                title="Buy Credits"
-                description="Pay as you go. Auto top-up keeps you generating."
+                title="Add credits"
+                description="Pay as you go. Auto-reload keeps you generating."
                 variant="primary"
-                onClick={handleNav}
+                onClick={openAddCreditsDialog}
               />
 
               <AskFounderCard />

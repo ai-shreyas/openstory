@@ -8,6 +8,7 @@ import {
   AUTO_TOPUP_COOLDOWN_MS,
   calculateExpiryDate,
   isStripeEnabled,
+  MIN_AUTO_TOPUP_GAP_USD,
   MIN_TOPUP_AMOUNT_MICROS,
   totalCheckoutCents,
 } from '@/lib/billing/constants';
@@ -494,10 +495,11 @@ export function createBillingMethods(
       settings.enabled &&
       settings.thresholdMicros !== undefined &&
       settings.amountMicros !== undefined &&
-      settings.amountMicros <= settings.thresholdMicros
+      microsToUsd(settings.amountMicros) <
+        microsToUsd(settings.thresholdMicros) + MIN_AUTO_TOPUP_GAP_USD
     ) {
       throw new ValidationError(
-        'Auto top-up amount must be greater than the threshold'
+        `Top-up target must be at least $${MIN_AUTO_TOPUP_GAP_USD} above the threshold`
       );
     }
 
@@ -564,10 +566,14 @@ export function createBillingMethods(
       }
     }
 
+    // "Top up to" semantics (#1099): charge whatever brings the balance up
+    // to the configured target, mirroring OpenAI's auto-reload.
+    const targetMicros = micros(settings.autoTopUpAmountMicros);
+    const chargeMicros = micros(targetMicros - currentBalance);
+    if (chargeMicros <= 0) return;
+
     const stripe = getStripeOrThrow();
-    const amountCents = totalCheckoutCents(
-      micros(settings.autoTopUpAmountMicros)
-    );
+    const amountCents = totalCheckoutCents(chargeMicros);
 
     const customer = await stripe.customers.retrieve(settings.stripeCustomerId);
     if (customer.deleted) return;
@@ -601,9 +607,8 @@ export function createBillingMethods(
       const receiptUrl =
         charge && typeof charge === 'object' ? charge.receipt_url : undefined;
 
-      const topUpMicros = micros(settings.autoTopUpAmountMicros);
-      await addCredits(topUpMicros, {
-        description: `Auto top-up: ${microsToDisplayUsd(topUpMicros)}`,
+      await addCredits(chargeMicros, {
+        description: `Auto top-up to ${microsToDisplayUsd(targetMicros)}`,
         metadata: {
           stripePaymentIntentId: paymentIntent.id,
           autoTopUp: true,

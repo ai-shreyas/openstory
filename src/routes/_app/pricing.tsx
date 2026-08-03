@@ -11,6 +11,7 @@ import {
   PLATFORM_FEE_PERCENT,
 } from '@/lib/billing/constants';
 import { getPricingCatalogFn } from '@/functions/pricing';
+import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
 import { ArrowRight, ArrowUpRight, KeyRound } from 'lucide-react';
 
@@ -162,8 +163,8 @@ function PricingPage() {
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
           </Button>
-          <Button asChild variant="outline" size="lg">
-            <Link to="/credits">Add credits</Link>
+          <Button variant="outline" size="lg" onClick={openAddCreditsDialog}>
+            Add credits
           </Button>
         </div>
       </div>

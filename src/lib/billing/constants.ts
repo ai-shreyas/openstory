@@ -39,8 +39,15 @@ export const MIN_TOPUP_AMOUNT_USD = 10;
 export const MIN_TOPUP_AMOUNT_MICROS: Microdollars =
   usdToMicros(MIN_TOPUP_AMOUNT_USD);
 
-/** Preset top-up amounts shown on the billing page */
-export const PRESET_TOPUP_AMOUNTS_USD = [10, 100, 1000] as const;
+/** Maximum top-up amount in USD (single purchase / auto-top-up target) */
+export const MAX_TOPUP_AMOUNT_USD = 1000;
+
+/**
+ * Minimum gap between the auto-top-up threshold and target, in USD.
+ * Keeps the off-session charge (target − balance) comfortably above
+ * Stripe's minimum chargeable amount.
+ */
+export const MIN_AUTO_TOPUP_GAP_USD = 5;
 
 /** Low balance warning threshold in USD (used when auto-top-up is disabled) */
 export const LOW_BALANCE_THRESHOLD_USD = 5;
