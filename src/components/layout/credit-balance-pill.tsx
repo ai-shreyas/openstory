@@ -20,12 +20,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { useBalanceFlash } from '@/hooks/use-balance-flash';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
 import { useBillingBalanceRealtime } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGateQuery } from '@/hooks/use-billing-gate';
 import { useShowBalance } from '@/hooks/use-show-balance';
-import { Link } from '@tanstack/react-router';
 import { Wallet } from 'lucide-react';
 
 export const CreditBalancePill: React.FC = () => {
@@ -58,26 +58,22 @@ export const CreditBalancePill: React.FC = () => {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
+        {/* Opens the add-credits modal, not the credits page (#1099) */}
         <SidebarMenuButton
-          asChild
           tooltip={tooltip}
+          onClick={openAddCreditsDialog}
+          aria-label={`Credit balance ${amount}. Add credits.`}
           className={cn(
             'animate-[balance-flash-in_300ms_ease-out_both]',
             toneClass
           )}
         >
-          <Link
-            to="/credits"
-            search={{ tab: 'balance' }}
-            aria-label={`Credit balance ${amount}. Open credits.`}
-          >
-            <Wallet />
-            {/* Amount hides in icon mode via SidebarMenuButton truncation
-                (span:last-child); tooltip carries the full amount. */}
-            <span className="tabular-nums" aria-live="polite">
-              {amount}
-            </span>
-          </Link>
+          <Wallet />
+          {/* Amount hides in icon mode via SidebarMenuButton truncation
+              (span:last-child); tooltip carries the full amount. */}
+          <span className="tabular-nums" aria-live="polite">
+            {amount}
+          </span>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>

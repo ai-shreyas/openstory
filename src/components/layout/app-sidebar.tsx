@@ -19,8 +19,6 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { FeedbackDialog } from '@/components/feedback/feedback-dialog';
-import { useAuthGate } from '@/components/auth/auth-gate-provider';
-import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { useLowBalanceWarning } from '@/hooks/use-low-balance-warning';
 import { MODELS_ENABLED } from '@/lib/flags';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
@@ -56,7 +54,6 @@ export function AppSidebar() {
   useLowBalanceWarning();
 
   const { isMobile, setOpenMobile } = useSidebar();
-  const { requireAuth } = useAuthGate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
@@ -122,13 +119,11 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            {/* Opens the add-credits modal, not the pricing page (#1099) */}
-            <SidebarMenuButton
-              tooltip="Pricing"
-              onClick={() => requireAuth(openAddCreditsDialog)}
-            >
-              <BadgeDollarSign />
-              <span>Pricing</span>
+            <SidebarMenuButton asChild tooltip="Pricing">
+              <Link to="/pricing">
+                <BadgeDollarSign />
+                <span>Pricing</span>
+              </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
