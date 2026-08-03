@@ -7,6 +7,8 @@
 
 import { getEnv } from '#env';
 import { env as workerEnv } from 'cloudflare:workers';
+import { FeedbackEmail } from '@/lib/emails/feedback-email';
+import { FounderCreditRequestEmail } from '@/lib/emails/founder-credit-request-email';
 import { OtpEmail } from '@/lib/emails/otp-email';
 import { renderEmail } from '@/lib/emails/render-email';
 import { getLogger } from '@/lib/observability/logger';
@@ -106,5 +108,54 @@ export async function sendOtpEmail(
     to: email,
     subject: 'Your sign-in code',
     body: <OtpEmail appName={getAppName()} otp={otp} />,
+  });
+}
+
+/**
+ * Notify the founder that a user asked for credits from the billing gate
+ * ("Ask Tom for Credits", #1096).
+ */
+export async function sendFounderCreditRequestEmail(params: {
+  to: string;
+  userName: string;
+  userEmail: string;
+  teamId: string;
+  balanceDisplay: string;
+}): Promise<{ success: boolean; error?: string }> {
+  return sendEmail({
+    to: params.to,
+    subject: `Credit request from ${params.userEmail}`,
+    body: (
+      <FounderCreditRequestEmail
+        appName={getAppName()}
+        userName={params.userName}
+        userEmail={params.userEmail}
+        teamId={params.teamId}
+        balanceDisplay={params.balanceDisplay}
+      />
+    ),
+  });
+}
+
+/** In-app Feedback sidebar dialog — lands on CONTACT_EMAIL. */
+export async function sendFeedbackEmail(params: {
+  to: string;
+  userName: string;
+  userEmail: string;
+  teamId: string;
+  message: string;
+}): Promise<{ success: boolean; error?: string }> {
+  return sendEmail({
+    to: params.to,
+    subject: `Feedback from ${params.userEmail}`,
+    body: (
+      <FeedbackEmail
+        appName={getAppName()}
+        userName={params.userName}
+        userEmail={params.userEmail}
+        teamId={params.teamId}
+        message={params.message}
+      />
+    ),
   });
 }

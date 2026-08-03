@@ -42,7 +42,7 @@ import {
 import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
 import { useShowBalance } from '@/hooks/use-show-balance';
 import {
-  formatProcessingFeePercent,
+  formatPlatformFeePercent,
   MIN_TOPUP_AMOUNT_USD,
   PRESET_TOPUP_AMOUNTS_USD,
   splitCheckoutAmounts,
@@ -108,7 +108,7 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
   const posthog = usePostHog();
   const [error, setError] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState('');
-  const [selectedAmount, setSelectedAmount] = useState<number | null>(100);
+  const [selectedAmount, setSelectedAmount] = useState<number | null>(10);
   const [autoTopUpPrompt, setAutoTopUpPrompt] = useState<number | null>(null);
   const navigate = useNavigate();
 
@@ -224,7 +224,7 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
   const checkoutBreakdown = isValidAmount
     ? splitCheckoutAmounts(effectiveAmount)
     : null;
-  const feePercent = formatProcessingFeePercent();
+  const feePercent = formatPlatformFeePercent();
   const autoTopUpThreshold =
     autoTopUpPrompt !== null ? Math.ceil((autoTopUpPrompt * 0.1) / 5) * 5 : 5;
 
@@ -348,7 +348,7 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
               <SectionHeader
                 icon={DollarSign}
                 title="Add Credits"
-                description={`Credits are billed at provider cost. A ${feePercent} processing fee applies at purchase — not on usage.`}
+                description={`Generations use credits at lab rates. A ${feePercent} platform fee applies when you buy credits — not on each generation.`}
               />
             </CardHeader>
             <CardContent className="space-y-4">
@@ -400,7 +400,7 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
                   </div>
                   <div className="flex justify-between tabular-nums">
                     <span className="text-muted-foreground">
-                      Processing fee ({feePercent})
+                      Platform fee ({feePercent})
                     </span>
                     <span>${checkoutBreakdown.feeUsd.toFixed(2)}</span>
                   </div>

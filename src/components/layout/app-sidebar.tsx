@@ -18,15 +18,18 @@ import {
   SidebarSeparator,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { FeedbackDialog } from '@/components/feedback/feedback-dialog';
 import { useLowBalanceWarning } from '@/hooks/use-low-balance-warning';
 import { MODELS_ENABLED } from '@/lib/flags';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  BadgeDollarSign,
   Boxes,
   Clapperboard,
   LifeBuoy,
+  Mail,
   MapPin,
   Palette,
   Plus,
@@ -52,6 +55,7 @@ export function AppSidebar() {
 
   const { isMobile, setOpenMobile } = useSidebar();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -107,11 +111,28 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Help">
+            <SidebarMenuButton asChild tooltip="Guide">
               <Link to="/docs">
                 <LifeBuoy />
-                <span>Help</span>
+                <span>Guide</span>
               </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Pricing">
+              <Link to="/pricing">
+                <BadgeDollarSign />
+                <span>Pricing</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Feedback"
+              onClick={() => setFeedbackOpen(true)}
+            >
+              <Mail />
+              <span>Feedback</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -150,6 +171,7 @@ export function AppSidebar() {
           <UserSidebarFooter />
         </SidebarMenu>
       </SidebarFooter>
+      <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </Sidebar>
   );
 }

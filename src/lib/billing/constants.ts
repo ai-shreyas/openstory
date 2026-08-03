@@ -11,8 +11,12 @@ export function isStripeEnabled(): boolean {
   return !!getEnv().STRIPE_SECRET_KEY;
 }
 
-/** Processing fee applied when purchasing credits (e.g., 0.05 = 5%). Not charged on usage. */
-export const PROCESSING_FEE_PERCENT = 0.05;
+/**
+ * Platform fee applied when purchasing credits (e.g., 0.07 = 7%).
+ * Charged only on credit top-ups (Stripe checkout / auto top-up) — not on
+ * each generation. Generations deduct wallet balance at lab rates.
+ */
+export const PLATFORM_FEE_PERCENT = 0.07;
 
 /**
  * Free credit granted to every new team on signup, in USD.
@@ -54,19 +58,19 @@ export function calculateExpiryDate(from?: Date): Date {
   return date;
 }
 
-/** Processing fee in USD for a credit purchase amount */
-export function processingFeeUsd(creditAmountUsd: number): number {
-  return creditAmountUsd * PROCESSING_FEE_PERCENT;
+/** Platform fee in USD for a credit purchase amount */
+export function platformFeeUsd(creditAmountUsd: number): number {
+  return creditAmountUsd * PLATFORM_FEE_PERCENT;
 }
 
-/** Total charged at checkout (credits + processing fee) */
+/** Total charged at checkout (credits + platform fee) */
 export function totalCheckoutUsd(creditAmountUsd: number): number {
-  return creditAmountUsd * (1 + PROCESSING_FEE_PERCENT);
+  return creditAmountUsd * (1 + PLATFORM_FEE_PERCENT);
 }
 
-/** Format processing fee percent for display (e.g. "5%") */
-export function formatProcessingFeePercent(): string {
-  return `${Math.round(PROCESSING_FEE_PERCENT * 100)}%`;
+/** Format platform fee percent for display (e.g. "7%") */
+export function formatPlatformFeePercent(): string {
+  return `${Math.round(PLATFORM_FEE_PERCENT * 100)}%`;
 }
 
 /** Split a credit purchase into credit + fee line items (USD, cents-rounded) */
@@ -76,7 +80,7 @@ export function splitCheckoutAmounts(creditAmountUsd: number): {
   totalUsd: number;
 } {
   const creditCents = Math.round(creditAmountUsd * 100);
-  const feeCents = Math.round(creditCents * PROCESSING_FEE_PERCENT);
+  const feeCents = Math.round(creditCents * PLATFORM_FEE_PERCENT);
   return {
     creditUsd: creditCents / 100,
     feeUsd: feeCents / 100,

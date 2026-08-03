@@ -618,14 +618,8 @@ export const ScriptView: FC<{
 
   const createSequenceMutation = useCreateSequence();
   const { requireAuth } = useAuthGate();
-  const {
-    needsBillingSetup,
-    showGate,
-    gateProps,
-    hasFalKey,
-    hasOpenRouterKey,
-    stripeEnabled,
-  } = useBillingGate();
+  const { needsBillingSetup, showGate, gateProps, hasFalKey, stripeEnabled } =
+    useBillingGate();
 
   // Style recommendations. We rank a *snapshot* of the script (not the live
   // value) so the LLM call only fires on an explicit trigger — the "Recommend
@@ -1187,7 +1181,6 @@ export const ScriptView: FC<{
       <BillingGateDialog
         {...gateProps}
         hasFalKey={hasFalKey}
-        hasOpenRouterKey={hasOpenRouterKey}
         stripeEnabled={stripeEnabled}
       />
       <AlertDialog

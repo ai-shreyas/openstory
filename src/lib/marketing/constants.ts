@@ -13,6 +13,9 @@ const APP_DOMAIN = (() => {
 
 export const CONTACT_EMAIL = `hello@${APP_DOMAIN}`;
 export const PRIVACY_EMAIL = `privacy@${APP_DOMAIN}`;
+/** Where "Ask Tom for Credits" requests land (#1096). Deliberately a person,
+ * not an alias — the pitch is that the founder replies. */
+export const FOUNDER_EMAIL = 'tom@openstory.so';
 
 export const SITE_CONFIG = {
   name: APP_NAME,
@@ -122,7 +125,7 @@ export const FAQ_ITEMS = [
   {
     question: 'How does pricing work?',
     answer:
-      'No subscriptions. AI usage is billed at exact provider cost — the same rates as OpenRouter and fal.ai. A small processing fee applies only when you buy credits, not on each generation. See openstory.so/pricing for the full model price list. Bring your own API keys to pay providers directly.',
+      'No subscriptions. Generations are billed at the rates of the labs and platforms that run them (fal.ai, OpenRouter, and more soon). A platform fee applies only when you buy credits, not on each generation. See openstory.so/pricing for the full model price list. Bring your own API keys to skip credits entirely.',
   },
   {
     question: 'Can I use my own API keys?',

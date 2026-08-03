@@ -1,8 +1,8 @@
 /**
  * Billing Gate Dialog
- * Promotes BYOK first: enter a fal.ai key inline or connect OpenRouter via
- * OAuth, with credits below and gift codes at the bottom. A fal key alone
- * covers everything — LLM calls route through fal's OpenRouter endpoint.
+ * Promotes credits first (#1096): buy credits, or ask the founder for some,
+ * with BYOK below — a fal.ai key alone covers everything, since LLM calls
+ * route through fal's OpenRouter endpoint. Gift codes at the bottom.
  */
 
 import { Badge } from '@/components/ui/badge';
@@ -17,9 +17,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { FalLogo } from '@/components/icons/fal-logo';
-import { OpenRouterLogo } from '@/components/icons/openrouter-logo';
 import { saveApiKeyFn } from '@/functions/api-keys';
-import { initiateOpenRouterOAuthFn } from '@/functions/openrouter-oauth';
+import { requestFounderCreditsFn } from '@/functions/billing';
 import { getCurrentUserProfileFn } from '@/functions/user';
 import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
 import { cn } from '@/lib/utils';
@@ -32,6 +31,7 @@ import {
   CreditCard,
   ExternalLink,
   Gift,
+  HeartHandshake,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -99,6 +99,64 @@ const OptionCard: React.FC<OptionCardProps> = ({
   </Link>
 );
 
+/**
+ * "Ask Tom for Credits" (#1096) — one click emails the founder (and fires a
+ * PostHog product event server-side). Success collapses into a confirmation
+ * card so it can't be re-sent from the same dialog.
+ */
+const AskFounderCard: React.FC = () => {
+  const mutation = useMutation({
+    mutationFn: () => requestFounderCreditsFn(),
+  });
+
+  if (mutation.isSuccess) {
+    return (
+      <div className={cardClassName('muted')}>
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-emerald-600 dark:text-emerald-400">
+          <Check className="size-4" />
+        </div>
+        <div className="flex-1 space-y-0.5">
+          <span className="text-sm font-medium">Request sent</span>
+          <p className="text-xs text-muted-foreground">
+            Tom will reply to your account email soon.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+        className={cn(cardClassName('muted'), 'w-full text-left')}
+      >
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground group-hover:bg-muted/80">
+          <HeartHandshake className="size-4" />
+        </div>
+        <div className="flex-1 space-y-0.5">
+          <span className="text-sm font-medium">
+            {mutation.isPending ? 'Sending…' : 'Ask Tom for Credits'}
+          </span>
+          <p className="text-xs text-muted-foreground">
+            Ask the founder for credits. Seriously, Tom replies.
+          </p>
+        </div>
+        <ArrowRight className="size-3.5 shrink-0 -translate-x-1 text-muted-foreground opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-60" />
+      </button>
+      {mutation.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {mutation.error instanceof Error
+            ? mutation.error.message
+            : 'Failed to send request'}
+        </p>
+      )}
+    </>
+  );
+};
+
 const ConnectedBadge: React.FC = () => (
   <Badge variant="default" className="gap-1 px-1.5 py-0 text-[10px]">
     <Check className="size-2.5" />
@@ -142,7 +200,6 @@ type BillingGateDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   hasFalKey?: boolean;
-  hasOpenRouterKey?: boolean;
   stripeEnabled?: boolean;
   returnTo?: string;
   context?: 'generation' | 'onboarding';
@@ -152,7 +209,6 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
   open,
   onOpenChange,
   hasFalKey = false,
-  hasOpenRouterKey = false,
   stripeEnabled = true,
   returnTo,
   context = 'generation',
@@ -193,22 +249,6 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
     },
   });
 
-  const oauthMutation = useMutation({
-    mutationFn: () => {
-      if (!teamId) throw new Error('No team found');
-      return initiateOpenRouterOAuthFn({ data: { teamId } });
-    },
-    onSuccess: (data) => {
-      // OAuth leaves the page — remember where to send the user afterwards.
-      setReturnPath(returnTo);
-      posthog.capture('openrouter_oauth_started', { source: 'billing_gate' });
-      window.location.href = data.authUrl;
-    },
-    onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Failed to start OAuth');
-    },
-  });
-
   const handleSaveFalKey = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!falKeyInput.trim()) return;
@@ -236,12 +276,35 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
           </DialogTitle>
           <DialogDescription>
             {context === 'onboarding'
-              ? 'Connect your own API keys or add credits to start creating.'
-              : 'This action uses AI credits. Connect your own keys or add credits.'}
+              ? 'Add credits or connect your own API key to start creating.'
+              : 'This action uses AI credits. Add credits or connect your own key.'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-2 pt-1">
+          {stripeEnabled && (
+            <>
+              <OptionCard
+                to="/credits"
+                icon={<CreditCard className="size-4" />}
+                title="Buy Credits"
+                description="Pay as you go. Auto top-up keeps you generating."
+                variant="primary"
+                onClick={handleNav}
+              />
+
+              <AskFounderCard />
+
+              <div className="flex items-center gap-3 py-1">
+                <Separator className="flex-1" />
+                <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground/50">
+                  or
+                </span>
+                <Separator className="flex-1" />
+              </div>
+            </>
+          )}
+
           <ProviderCard
             logo={<FalLogo className="size-5" />}
             title="fal.ai"
@@ -278,50 +341,10 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
             </a>
           </ProviderCard>
 
-          <ProviderCard
-            logo={<OpenRouterLogo className="size-5" />}
-            title="OpenRouter"
-            description="Optional — use your own OpenRouter account for script analysis."
-            connected={hasOpenRouterKey}
-          >
-            <Button
-              variant="outline"
-              onClick={() => oauthMutation.mutate()}
-              disabled={oauthMutation.isPending}
-              className="w-full"
-            >
-              <ExternalLink className="mr-2 size-4" />
-              {oauthMutation.isPending
-                ? 'Connecting…'
-                : 'Connect with OpenRouter'}
-            </Button>
-          </ProviderCard>
-
           {error && (
             <p role="alert" className="text-xs text-destructive">
               {error}
             </p>
-          )}
-
-          {stripeEnabled && (
-            <>
-              <div className="flex items-center gap-3 py-1">
-                <Separator className="flex-1" />
-                <span className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground/50">
-                  or
-                </span>
-                <Separator className="flex-1" />
-              </div>
-
-              <OptionCard
-                to="/credits"
-                icon={<CreditCard className="size-4" />}
-                title="Buy Credits"
-                description="Pay as you go. Auto top-up keeps you generating."
-                variant="primary"
-                onClick={handleNav}
-              />
-            </>
           )}
         </div>
 

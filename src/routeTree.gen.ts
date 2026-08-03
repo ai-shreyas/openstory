@@ -29,9 +29,9 @@ import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as ApiRealtimeRouteImport } from './routes/api/realtime'
 import { Route as MarketingTermsRouteImport } from './routes/_marketing/terms'
 import { Route as MarketingPrivacyRouteImport } from './routes/_marketing/privacy'
-import { Route as MarketingPricingRouteImport } from './routes/_marketing/pricing'
 import { Route as AuthVerifyRouteImport } from './routes/_auth/verify'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
+import { Route as AppPricingRouteImport } from './routes/_app/pricing'
 import { Route as AppCreditsRouteImport } from './routes/_app/credits'
 import { Route as ApiTestRouteRouteImport } from './routes/api/test/route'
 import { Route as AppSettingsRouteRouteImport } from './routes/_app/settings/route'
@@ -182,11 +182,6 @@ const MarketingPrivacyRoute = MarketingPrivacyRouteImport.update({
   path: '/privacy',
   getParentRoute: () => MarketingRoute,
 } as any)
-const MarketingPricingRoute = MarketingPricingRouteImport.update({
-  id: '/pricing',
-  path: '/pricing',
-  getParentRoute: () => MarketingRoute,
-} as any)
 const AuthVerifyRoute = AuthVerifyRouteImport.update({
   id: '/verify',
   path: '/verify',
@@ -196,6 +191,11 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => AuthRouteRoute,
+} as any)
+const AppPricingRoute = AppPricingRouteImport.update({
+  id: '/pricing',
+  path: '/pricing',
+  getParentRoute: () => AppRouteRoute,
 } as any)
 const AppCreditsRoute = AppCreditsRouteImport.update({
   id: '/credits',
@@ -471,9 +471,9 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRouteRouteWithChildren
   '/api/test': typeof ApiTestRouteRouteWithChildren
   '/credits': typeof AppCreditsRoute
+  '/pricing': typeof AppPricingRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
-  '/pricing': typeof MarketingPricingRoute
   '/privacy': typeof MarketingPrivacyRoute
   '/terms': typeof MarketingTermsRoute
   '/api/realtime': typeof ApiRealtimeRoute
@@ -543,9 +543,9 @@ export interface FileRoutesByTo {
   '/admin': typeof AppAdminRouteRouteWithChildren
   '/api/test': typeof ApiTestRouteRouteWithChildren
   '/credits': typeof AppCreditsRoute
+  '/pricing': typeof AppPricingRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
-  '/pricing': typeof MarketingPricingRoute
   '/privacy': typeof MarketingPrivacyRoute
   '/terms': typeof MarketingTermsRoute
   '/api/realtime': typeof ApiRealtimeRoute
@@ -620,9 +620,9 @@ export interface FileRoutesById {
   '/_app/settings': typeof AppSettingsRouteRouteWithChildren
   '/api/test': typeof ApiTestRouteRouteWithChildren
   '/_app/credits': typeof AppCreditsRoute
+  '/_app/pricing': typeof AppPricingRoute
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/verify': typeof AuthVerifyRoute
-  '/_marketing/pricing': typeof MarketingPricingRoute
   '/_marketing/privacy': typeof MarketingPrivacyRoute
   '/_marketing/terms': typeof MarketingTermsRoute
   '/api/realtime': typeof ApiRealtimeRoute
@@ -697,9 +697,9 @@ export interface FileRouteTypes {
     | '/settings'
     | '/api/test'
     | '/credits'
+    | '/pricing'
     | '/login'
     | '/verify'
-    | '/pricing'
     | '/privacy'
     | '/terms'
     | '/api/realtime'
@@ -769,9 +769,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/api/test'
     | '/credits'
+    | '/pricing'
     | '/login'
     | '/verify'
-    | '/pricing'
     | '/privacy'
     | '/terms'
     | '/api/realtime'
@@ -845,9 +845,9 @@ export interface FileRouteTypes {
     | '/_app/settings'
     | '/api/test'
     | '/_app/credits'
+    | '/_app/pricing'
     | '/_auth/login'
     | '/_auth/verify'
-    | '/_marketing/pricing'
     | '/_marketing/privacy'
     | '/_marketing/terms'
     | '/api/realtime'
@@ -1080,13 +1080,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MarketingPrivacyRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/_marketing/pricing': {
-      id: '/_marketing/pricing'
-      path: '/pricing'
-      fullPath: '/pricing'
-      preLoaderRoute: typeof MarketingPricingRouteImport
-      parentRoute: typeof MarketingRoute
-    }
     '/_auth/verify': {
       id: '/_auth/verify'
       path: '/verify'
@@ -1100,6 +1093,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/login'
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof AuthRouteRoute
+    }
+    '/_app/pricing': {
+      id: '/_app/pricing'
+      path: '/pricing'
+      fullPath: '/pricing'
+      preLoaderRoute: typeof AppPricingRouteImport
+      parentRoute: typeof AppRouteRoute
     }
     '/_app/credits': {
       id: '/_app/credits'
@@ -1529,6 +1529,7 @@ interface AppRouteRouteChildren {
   AppAdminRouteRoute: typeof AppAdminRouteRouteWithChildren
   AppSettingsRouteRoute: typeof AppSettingsRouteRouteWithChildren
   AppCreditsRoute: typeof AppCreditsRoute
+  AppPricingRoute: typeof AppPricingRoute
   AppSequencesIdRouteRoute: typeof AppSequencesIdRouteRouteWithChildren
   AppLocationsLocationIdRoute: typeof AppLocationsLocationIdRoute
   AppModelsSplatRoute: typeof AppModelsSplatRoute
@@ -1547,6 +1548,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppAdminRouteRoute: AppAdminRouteRouteWithChildren,
   AppSettingsRouteRoute: AppSettingsRouteRouteWithChildren,
   AppCreditsRoute: AppCreditsRoute,
+  AppPricingRoute: AppPricingRoute,
   AppSequencesIdRouteRoute: AppSequencesIdRouteRouteWithChildren,
   AppLocationsLocationIdRoute: AppLocationsLocationIdRoute,
   AppModelsSplatRoute: AppModelsSplatRoute,
@@ -1580,14 +1582,12 @@ const AuthRouteRouteWithChildren = AuthRouteRoute._addFileChildren(
 )
 
 interface MarketingRouteChildren {
-  MarketingPricingRoute: typeof MarketingPricingRoute
   MarketingPrivacyRoute: typeof MarketingPrivacyRoute
   MarketingTermsRoute: typeof MarketingTermsRoute
   MarketingIndexRoute: typeof MarketingIndexRoute
 }
 
 const MarketingRouteChildren: MarketingRouteChildren = {
-  MarketingPricingRoute: MarketingPricingRoute,
   MarketingPrivacyRoute: MarketingPrivacyRoute,
   MarketingTermsRoute: MarketingTermsRoute,
   MarketingIndexRoute: MarketingIndexRoute,

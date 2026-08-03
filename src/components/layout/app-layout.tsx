@@ -7,6 +7,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import type * as React from 'react';
 import { AuthGateProvider } from '@/components/auth/auth-gate-provider';
+import { WelcomeCreditsDialog } from '@/components/billing/welcome-credits-dialog';
 import { AppSidebar } from './app-sidebar';
 import { Breadcrumbs } from './breadcrumbs';
 import { InvalidApiKeyBanner } from './invalid-api-key-banner';
@@ -22,6 +23,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     <AuthGateProvider>
       <SidebarProvider className="h-svh">
         <AppSidebar />
+        <WelcomeCreditsDialog />
         <SidebarInset className="min-w-0 min-h-0">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger />
