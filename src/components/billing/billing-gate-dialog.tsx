@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { FalLogo } from '@/components/icons/fal-logo';
 import { saveApiKeyFn } from '@/functions/api-keys';
 import { requestFounderCreditsFn } from '@/functions/billing';
@@ -122,13 +123,20 @@ const OptionCard: React.FC<OptionCardProps> = ({
 };
 
 /**
- * "Ask Tom for Credits" (#1096) — one click emails the founder (and fires a
- * PostHog product event server-side). Success collapses into a confirmation
- * card so it can't be re-sent from the same dialog.
+ * "Ask the founder for credits" (#1096, reworked in #1099) — expands into an
+ * optional message form (like the Feedback dialog) before emailing the
+ * founder (a PostHog product event fires server-side). Success collapses
+ * into a confirmation card so it can't be re-sent from the same dialog.
  */
 const AskFounderCard: React.FC = () => {
+  const [expanded, setExpanded] = useState(false);
+  const [message, setMessage] = useState('');
+
   const mutation = useMutation({
-    mutationFn: () => requestFounderCreditsFn(),
+    mutationFn: () =>
+      requestFounderCreditsFn({
+        data: { message: message.trim() || undefined },
+      }),
   });
 
   if (mutation.isSuccess) {
@@ -147,12 +155,11 @@ const AskFounderCard: React.FC = () => {
     );
   }
 
-  return (
-    <>
+  if (!expanded) {
+    return (
       <button
         type="button"
-        onClick={() => mutation.mutate()}
-        disabled={mutation.isPending}
+        onClick={() => setExpanded(true)}
         className={cn(cardClassName('muted'), 'w-full text-left')}
       >
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground group-hover:bg-muted/80">
@@ -160,14 +167,61 @@ const AskFounderCard: React.FC = () => {
         </div>
         <div className="flex-1 space-y-0.5">
           <span className="text-sm font-medium">
-            {mutation.isPending ? 'Sending…' : 'Ask Tom for Credits'}
+            Ask the founder for credits
           </span>
           <p className="text-xs text-muted-foreground">
-            Ask the founder for credits. Seriously, Tom replies.
+            Seriously. Tom replies.
           </p>
         </div>
         <ArrowRight className="size-3.5 shrink-0 -translate-x-1 text-muted-foreground opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-60" />
       </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border/60 p-3.5">
+      <div className="flex items-center gap-3.5">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <HeartHandshake className="size-4" />
+        </div>
+        <div className="flex-1 space-y-0.5">
+          <span className="text-sm font-medium">
+            Ask the founder for credits
+          </span>
+          <p className="text-xs text-muted-foreground">
+            Seriously. Tom replies.
+          </p>
+        </div>
+      </div>
+      <Textarea
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            mutation.mutate();
+          }
+        }}
+        placeholder="Tell Tom what you're making (optional)"
+        rows={3}
+        maxLength={2000}
+      />
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setExpanded(false)}
+          disabled={mutation.isPending}
+        >
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+        >
+          {mutation.isPending ? 'Sending…' : 'Send request'}
+        </Button>
+      </div>
       {mutation.isError && (
         <p role="alert" className="text-xs text-destructive">
           {mutation.error instanceof Error
@@ -175,7 +229,7 @@ const AskFounderCard: React.FC = () => {
             : 'Failed to send request'}
         </p>
       )}
-    </>
+    </div>
   );
 };
 

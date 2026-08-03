@@ -13,21 +13,22 @@ interface FounderCreditRequestEmailProps {
   userEmail: string;
   teamId: string;
   balanceDisplay: string;
+  message?: string;
 }
 
 const detailRowClass = 'm-0 text-sm leading-6 text-gray-700';
 
 export const FounderCreditRequestEmail: React.FC<
   FounderCreditRequestEmailProps
-> = ({ appName, userName, userEmail, teamId, balanceDisplay }) => (
+> = ({ appName, userName, userEmail, teamId, balanceDisplay, message }) => (
   <EmailLayout appName={appName} preview={`${userEmail} is asking for credits`}>
     <Section>
       <Heading as="h2" className={headingClass}>
         Credit request
       </Heading>
       <Text className={paragraphClass}>
-        A user tapped &ldquo;Ask Tom for Credits&rdquo; on the billing gate.
-        Reply to them directly, or send a gift code.
+        A user asked the founder for credits on the billing gate. Reply to them
+        directly, or send a gift code.
       </Text>
 
       <Section className="my-6 rounded-lg bg-gray-100 p-6">
@@ -44,6 +45,15 @@ export const FounderCreditRequestEmail: React.FC<
           <strong>Balance:</strong> {balanceDisplay}
         </Text>
       </Section>
+
+      {message ? (
+        <Section className="my-6 rounded-lg bg-gray-100 p-6">
+          <Text className={detailRowClass}>
+            <strong>Message:</strong>
+          </Text>
+          <Text className={paragraphClass}>{message}</Text>
+        </Section>
+      ) : null}
     </Section>
   </EmailLayout>
 );

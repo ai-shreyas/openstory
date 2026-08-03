@@ -256,11 +256,17 @@ export const getBillingBalanceFn = createServerFn({ method: 'GET' })
 // Founder credit request ("Ask Tom for Credits", #1096)
 // ============================================================================
 
+const founderCreditsInputSchema = z.object({
+  message: z.string().trim().max(2000).optional(),
+});
+
 export const requestFounderCreditsFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .handler(async ({ context }) => {
+  .inputValidator(zodValidator(founderCreditsInputSchema))
+  .handler(async ({ data, context }) => {
     const balance = await context.scopedDb.billing.getBalance();
     const balanceDisplay = microsToDisplayUsd(balance);
+    const message = data.message || undefined;
 
     const result = await sendFounderCreditRequestEmail({
       to: FOUNDER_EMAIL,
@@ -268,6 +274,7 @@ export const requestFounderCreditsFn = createServerFn({ method: 'POST' })
       userEmail: context.user.email,
       teamId: context.teamId,
       balanceDisplay,
+      message,
     });
 
     // Fired regardless of email outcome — the PostHog → Slack alert (#1088)
@@ -280,6 +287,7 @@ export const requestFounderCreditsFn = createServerFn({ method: 'POST' })
         userEmail: context.user.email,
         balance: balanceDisplay,
         emailSent: result.success,
+        hasMessage: !!message,
       },
     });
 

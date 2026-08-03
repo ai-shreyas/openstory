@@ -169,13 +169,27 @@ export const loggerMiddleware = createMiddleware({ type: 'function' }).server(
     } catch (error) {
       const durationMs = Math.round(performance.now() - start);
       const err = toErrorPayload(error);
-      fnLogger.error('serverFn {fnName} failed: {errCode} {errMessage}', {
+      const logPayload = {
         fnName,
         durationMs,
         errCode: err.code,
         errMessage: err.message,
         err,
-      });
+      };
+      // Expected business rejections (4xx OpenStoryErrors — insufficient
+      // credits, validation, auth) are outcomes, not failures: warn, so prod
+      // error logs stay signal (#1099). Real failures stay at error.
+      if (typeof err.statusCode === 'number' && err.statusCode < 500) {
+        fnLogger.warn(
+          'serverFn {fnName} rejected: {errCode} {errMessage}',
+          logPayload
+        );
+      } else {
+        fnLogger.error(
+          'serverFn {fnName} failed: {errCode} {errMessage}',
+          logPayload
+        );
+      }
       throw error;
     }
   }

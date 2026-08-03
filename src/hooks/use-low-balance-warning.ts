@@ -5,14 +5,12 @@
 
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import { openAddCreditsDialog } from './use-add-credits-dialog';
 import { openBillingGate } from './use-billing-gate-dialog';
 import { useBillingBalance } from './use-billing-balance';
 
 export function useLowBalanceWarning() {
-  const { balance, isLowBalance, isZeroBalance, lowBalanceThreshold, data } =
+  const { balance, isLowBalance, isZeroBalance, lowBalanceThreshold } =
     useBillingBalance();
-  const hasToppedUp = data?.hasPaymentMethod ?? false;
   const prevBalanceRef = useRef<number | null>(null);
   const hasWarnedRef = useRef(false);
 
@@ -35,21 +33,16 @@ export function useLowBalanceWarning() {
     // Balance decreased — check if we should warn
     if (hasWarnedRef.current) return;
 
-    // First-time users get a secondary BYOK escape hatch — the gate dialog
-    // holds the fal key form. Repeat purchasers just re-up.
-    const byokButton = hasToppedUp
-      ? undefined
-      : { cancel: { label: 'BYOK', onClick: openBillingGate } };
-
+    // "Options" opens the billing gate — credits, auto-reload, BYOK, and
+    // gift codes all live there (#1099).
     if (isZeroBalance) {
       hasWarnedRef.current = true;
       toast.error('Your credit balance is $0', {
         description: 'Generation is disabled until you add credits.',
         action: {
-          label: 'Add Credits',
-          onClick: openAddCreditsDialog,
+          label: 'Options',
+          onClick: openBillingGate,
         },
-        ...byokButton,
         duration: 10_000,
       });
     } else if (isLowBalance) {
@@ -57,12 +50,11 @@ export function useLowBalanceWarning() {
       toast.warning(`Balance is below $${lowBalanceThreshold}`, {
         description: `Your balance is $${balance.toFixed(2)}.`,
         action: {
-          label: 'Add Credits',
-          onClick: openAddCreditsDialog,
+          label: 'Options',
+          onClick: openBillingGate,
         },
-        ...byokButton,
         duration: 8_000,
       });
     }
-  }, [balance, isLowBalance, isZeroBalance, lowBalanceThreshold, hasToppedUp]);
+  }, [balance, isLowBalance, isZeroBalance, lowBalanceThreshold]);
 }
