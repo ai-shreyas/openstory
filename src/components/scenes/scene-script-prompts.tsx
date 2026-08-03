@@ -42,7 +42,6 @@ import {
   markArtifactFresh,
   shotIsStale,
   shotIsUpdating,
-  shotStalenessKey,
   shotStalenessNamespace,
   shotStalenessUnknown,
   useShotStaleness,

@@ -50,8 +50,9 @@ import {
 } from '@/lib/ai/models.config';
 import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
-import { estimateVideoCost } from '@/lib/billing/cost-estimation';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { isInsufficientCreditsError } from '@/lib/errors';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
@@ -458,9 +459,18 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
             model,
           });
           try {
-            await requireCredits(scopedDb, estimateVideoCost(model, duration), {
-              errorMessage: 'Insufficient credits for video generation',
-            });
+            await requireCredits(
+              scopedDb,
+              gateEstimate(
+                estimateVideoCost(model, duration, {
+                  pricing: await getEffectiveFalPricing(),
+                }),
+                { model, operation: 'update-stale-shots:video' }
+              ),
+              {
+                errorMessage: 'Insufficient credits for video generation',
+              }
+            );
           } catch (error) {
             if (isInsufficientCreditsError(error)) {
               throw new NonRetryableError(

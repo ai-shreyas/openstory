@@ -1,22 +1,30 @@
 import { getShotStalenessBatchFn, getShotStalenessFn } from '@/functions/shots';
-import {
-  SHOT_ARTIFACTS,
-  type ShotArtifact,
-  type ShotStalenessResult,
-} from '@/lib/shots/shot-staleness';
+import type { ArtifactStaleness } from '@/lib/shots/shot-staleness';
 import {
   type QueryClient,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
 
-export type { ShotArtifact };
+/**
+ * Per-artifact staleness state — see `computeShotStaleness` for the state
+ * semantics. `ArtifactStaleness` is imported rather than redeclared so the
+ * client and server can't drift on the vocabulary. Only `'stale'` drives UI
+ * regenerate actions: `'untracked'` (no hash) and `'unknown'` (check failed)
+ * both mean "no opinion to surface as stale", and `'updating'` means a job is
+ * already fixing it (#1085).
+ */
+
+/** The tracked artifacts, and the source of truth for `ShotStaleness`'s keys. */
+const SHOT_ARTIFACTS = ['thumbnail', 'visualPrompt', 'motionPrompt'] as const;
+
+export type ShotArtifact = (typeof SHOT_ARTIFACTS)[number];
 
 /**
- * The server's result shape, re-exported rather than redeclared so the two
- * can't drift on either the state vocabulary or the artifact keys.
+ * Client-facing staleness (wire shape). Server `ShotStalenessResult` also
+ * carries `liveHashes` for enqueue paths; those never cross the wire.
  */
-export type ShotStaleness = ShotStalenessResult;
+export type ShotStaleness = Record<ShotArtifact, ArtifactStaleness>;
 
 /** Which of the shot's artifacts are out of date, if any. */
 const staleArtifacts = (staleness: ShotStaleness | undefined): ShotArtifact[] =>

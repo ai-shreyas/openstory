@@ -150,6 +150,7 @@ function buildScopedDb(
     characters: { listWithSheets: () => Promise.resolve([]) },
     sequenceLocations: { listWithReferences: () => Promise.resolve([]) },
     sequenceElements: { list: () => Promise.resolve([]) },
+    styles: { getById: () => Promise.resolve(null) },
     renderSegments: {
       listBySequence: () => Promise.resolve(opts.video?.segments ?? []),
     },

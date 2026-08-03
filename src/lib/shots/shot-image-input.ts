@@ -6,8 +6,9 @@
  * server-side without duplicating the logic.
  */
 
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { resolveImageModel } from '@/lib/ai/resolve-asset-models';
-import { estimateImageCost } from '@/lib/billing/cost-estimation';
+import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import {
   aspectRatioToImageSize,
@@ -145,7 +146,12 @@ export async function prepareShotImageWorkflowInput(args: {
 
   await requireCredits(
     scopedDb,
-    estimateImageCost(model, sequence.aspectRatio, 1),
+    gateEstimate(
+      estimateImageCost(model, sequence.aspectRatio, 1, {
+        pricing: await getEffectiveFalPricing(),
+      }),
+      { model, operation: 'shot-image' }
+    ),
     { errorMessage: 'Insufficient credits for image generation' }
   );
 

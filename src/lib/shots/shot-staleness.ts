@@ -67,13 +67,8 @@ export const UNTRACKED_STALENESS: ShotStalenessResult = {
   liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
 };
 
-export type ShotStalenessRefs = {
-  characters: Awaited<ReturnType<ScopedDb['characters']['listWithSheets']>>;
-  locations: Awaited<
-    ReturnType<ScopedDb['sequenceLocations']['listWithReferences']>
-  >;
-  elements: Awaited<ReturnType<ScopedDb['sequenceElements']['list']>>;
-};
+/** Sequence-scoped rows loaded once for a batch of shot comparisons. */
+export type ShotStalenessRefs = ShotPromptContextRefs;
 
 /**
  * Five states per artifact:

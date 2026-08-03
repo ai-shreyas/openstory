@@ -202,16 +202,19 @@ export async function computePlan(args: {
     : new Map<string, ShotVideoState>();
 
   await scopedDb.shots.ensureAnchorFrames(inScope);
-  const [anchorRows, scriptBySceneId, characters, locations, elements] =
+  const [anchorRows, scriptBySceneId, characters, locations, elements, style] =
     await Promise.all([
       scopedDb.frames.listAnchorsBySequence(sequenceId),
       loadSelectedScriptsBySequence(scopedDb, sequenceId),
       scopedDb.characters.listWithSheets(sequenceId),
       scopedDb.sequenceLocations.listWithReferences(sequenceId),
       scopedDb.sequenceElements.list(sequenceId),
+      sequence.styleId
+        ? scopedDb.styles.getById(sequence.styleId)
+        : Promise.resolve(null),
     ]);
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-  const refs: ShotStalenessRefs = { characters, locations, elements };
+  const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
   const targets: PlanTarget[] = [];
   const skipped: SkippedShot[] = [];

@@ -29,11 +29,17 @@ export type StalenessEntityType =
   | 'talent'
   | 'sequence';
 
-export type StalenessIndicatorDensity =
+type StalenessIndicatorDensity =
   | 'inline'
   | 'corner-dot'
   | 'status-line'
   | 'header-chip';
+
+/** The subset the divergent/sheet banners branch on; they render no others. */
+export type BannerDensity = Extract<
+  StalenessIndicatorDensity,
+  'inline' | 'corner-dot'
+>;
 
 type StalenessIndicatorBaseProps = {
   entityType: StalenessEntityType;
@@ -105,8 +111,7 @@ const ARTIFACT_LABEL: Record<StalenessArtifact, string> = {
 export const StalenessIndicator: React.FC<StalenessIndicatorProps> = (
   props
 ) => {
-  const { entityType, density = 'inline', isRegenerating = false, className } =
-    props;
+  const { entityType, isRegenerating = false, className } = props;
   const [dismissed, setDismissed] = useState(false);
   // Status-line "Update all" opens the depth confirm dialog (#1085).
   const [updateAllOpen, setUpdateAllOpen] = useState(false);
@@ -118,7 +123,7 @@ export const StalenessIndicator: React.FC<StalenessIndicatorProps> = (
     ? `Stale ${ARTIFACT_LABEL[artifact]} on this ${entityType} — inputs changed since it was generated`
     : `Stale artifacts on this ${entityType} — inputs changed since they were generated`;
 
-  if (density === 'corner-dot') {
+  if (props.density === 'corner-dot') {
     // Non-interactive: corner-dot is a presentational signal that nests inside
     // tab triggers and other interactive parents. Regeneration always happens
     // from the tab body's inline banner where there's room for proper UX.

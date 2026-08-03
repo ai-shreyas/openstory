@@ -4,7 +4,8 @@ import {
   isValidTextToImageModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
-import { estimateImageCost } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import { getWorkflowRunOutcome } from '@/lib/workflow/run-outcome';
 import { workflowNameFromRunId } from '@/lib/workflow/trigger-bindings';
@@ -647,16 +648,25 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
     await scopedDb.shots.ensureAnchorFrames(targetShots);
     // Loaded once here and threaded into every shot's comparison as `refs`;
     // without that each shot would re-read all four for both prompt branches.
-    const [anchorRows, scriptBySceneId, characters, locations, elements] =
-      await Promise.all([
-        scopedDb.frames.listAnchorsBySequence(sequence.id),
-        loadSelectedScriptsBySequence(scopedDb, sequence.id),
-        scopedDb.characters.listWithSheets(sequence.id),
-        scopedDb.sequenceLocations.listWithReferences(sequence.id),
-        scopedDb.sequenceElements.list(sequence.id),
-      ]);
+    const [
+      anchorRows,
+      scriptBySceneId,
+      characters,
+      locations,
+      elements,
+      style,
+    ] = await Promise.all([
+      scopedDb.frames.listAnchorsBySequence(sequence.id),
+      loadSelectedScriptsBySequence(scopedDb, sequence.id),
+      scopedDb.characters.listWithSheets(sequence.id),
+      scopedDb.sequenceLocations.listWithReferences(sequence.id),
+      scopedDb.sequenceElements.list(sequence.id),
+      sequence.styleId
+        ? scopedDb.styles.getById(sequence.styleId)
+        : Promise.resolve(null),
+    ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-    const refs: ShotStalenessRefs = { characters, locations, elements };
+    const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
     const entries = await Promise.all(
       targetShots.map(
@@ -736,12 +746,17 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
     // level should never start. 'prompts' has no render cost; LLM spend is
     // deducted inside the workflow as always.
     if (depth !== 'prompts') {
+      const model = safeTextToImageModel(
+        sequence.imageModel,
+        DEFAULT_IMAGE_MODEL
+      );
       await requireCredits(
         scopedDb,
-        estimateImageCost(
-          safeTextToImageModel(sequence.imageModel, DEFAULT_IMAGE_MODEL),
-          sequence.aspectRatio,
-          1
+        gateEstimate(
+          estimateImageCost(model, sequence.aspectRatio, 1, {
+            pricing: await getEffectiveFalPricing(),
+          }),
+          { model, operation: 'update-stale-shots' }
         ),
         { errorMessage: 'Insufficient credits to update out-of-date shots' }
       );
