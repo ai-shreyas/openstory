@@ -39,6 +39,15 @@ const sequence = {
 function makeScopedDb(overrides: {
   visualFallbackHash?: string | null;
   motionFallbackHash?: string | null;
+  /** Live visual claim for the 'updating' overlay (#1085). */
+  visualLiveClaim?: { id: string } | null;
+  /** Live motion claim for the 'updating' overlay (#1085). */
+  motionLiveClaim?: { id: string } | null;
+  /** Live image claims (direct or chained). */
+  imageLiveClaims?: Array<{
+    pendingInputHash: string | null;
+    dependsOnVersionId: string | null;
+  }>;
 }) {
   return asStub<ScopedDb>({
     characters: { listWithSheets: vi.fn().mockResolvedValue([]) },
@@ -54,6 +63,12 @@ function makeScopedDb(overrides: {
             ? { inputHash: overrides.visualFallbackHash }
             : null
         ),
+      // Default: no live claim → stale stays stale. Tests that cover the
+      // 'updating' overlay pass visualLiveClaim explicitly.
+      getLivePending: vi
+        .fn()
+        .mockResolvedValue(overrides.visualLiveClaim ?? null),
+      getByIdForFrame: vi.fn().mockResolvedValue(null),
     },
     shotPromptVersions: {
       getLatest: vi.fn().mockResolvedValue(null),
@@ -64,6 +79,14 @@ function makeScopedDb(overrides: {
             ? { inputHash: overrides.motionFallbackHash }
             : null
         ),
+      getLivePending: vi
+        .fn()
+        .mockResolvedValue(overrides.motionLiveClaim ?? null),
+    },
+    frameVariants: {
+      listLiveClaims: vi
+        .fn()
+        .mockResolvedValue(overrides.imageLiveClaims ?? []),
     },
   });
 }
@@ -97,10 +120,16 @@ describe('computeShotStaleness', () => {
       scene,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       thumbnail: 'unknown',
       visualPrompt: 'fresh',
       motionPrompt: 'stale',
+    });
+    // Thumbnail branch never produced a hash (it threw); prompts did.
+    expect(result.liveHashes).toEqual({
+      thumbnail: null,
+      visualPrompt: 'visual-stored',
+      motionPrompt: 'motion-moved',
     });
   });
 
@@ -124,10 +153,51 @@ describe('computeShotStaleness', () => {
     });
 
     // Without the fallback both would be stuck at 'untracked' forever.
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       thumbnail: 'fresh',
       visualPrompt: 'stale',
       motionPrompt: 'stale',
+    });
+  });
+
+  it("overlays 'updating' when a live claim matches the live hash (#1085)", async () => {
+    buildRegenerateShotSnapshot.mockResolvedValue({
+      snapshotInputHash: 'image-stored',
+    });
+    loadNarrowShotPromptContext.mockResolvedValue({});
+    // Stored hashes diverge → would be stale without a claim.
+    computeVisualPromptInputHash.mockResolvedValue('visual-live');
+    computeMotionPromptInputHash.mockResolvedValue('motion-live');
+
+    const result = await computeShotStaleness({
+      scopedDb: makeScopedDb({
+        visualLiveClaim: { id: 'fpv-claim' },
+        motionLiveClaim: { id: 'spv-claim' },
+        imageLiveClaims: [
+          { pendingInputHash: 'image-stored', dependsOnVersionId: null },
+        ],
+      }),
+      sequence,
+      // Frame image hash matches snapshot → thumbnail would be fresh except we
+      // still cover the image-claim path via a direct hash match on a claim.
+      // Force thumbnail stale by storing a different hash.
+      shot: { ...shot, motionPromptInputHash: 'motion-old' },
+      frame: {
+        ...frame,
+        visualPromptInputHash: 'visual-old',
+        imageInputHash: 'image-old',
+      },
+      scene,
+    });
+
+    expect(result).toMatchObject({
+      visualPrompt: 'updating',
+      motionPrompt: 'updating',
+      // Direct image claim hash matches liveHashes.thumbnail only when the
+      // snapshot hash equals the claim's pendingInputHash — snapshot is
+      // 'image-stored', so set claim accordingly above. With imageInputHash
+      // 'image-old' the thumbnail is stale and the claim promotes it.
+      thumbnail: 'updating',
     });
   });
 });
