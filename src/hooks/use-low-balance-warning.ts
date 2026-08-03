@@ -33,8 +33,8 @@ export function useLowBalanceWarning() {
     // Balance decreased — check if we should warn
     if (hasWarnedRef.current) return;
 
-    // "Options" opens the billing gate — credits, auto-reload, BYOK, and
-    // gift codes all live there (#1099).
+    // "Options" opens the billing gate — buying credits, asking the founder,
+    // fal.ai BYOK, and gift codes all live there (#1099).
     if (isZeroBalance) {
       hasWarnedRef.current = true;
       toast.error('Your credit balance is $0', {

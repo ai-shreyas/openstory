@@ -1,7 +1,6 @@
 /**
- * "Top up to" auto-top-up semantics (#1099): the off-session charge brings
- * the balance up to the configured target (OpenAI-style auto-reload), rather
- * than adding a flat amount.
+ * Auto-top-up: when the balance falls to the threshold, charge the saved card
+ * off-session for a flat configured amount and credit it (#1099).
  */
 
 import { micros } from '@/lib/billing/money';
@@ -82,16 +81,32 @@ beforeEach(async () => {
     .values({ id: userId, name: 'U', email: `${userId}@example.com` });
 });
 
-describe('maybeAutoTopUp ("top up to" semantics)', () => {
-  it('charges target − balance and restores the balance to the target', async () => {
-    await db.insert(credits).values({ teamId, balance: 3_000_000 }); // $3
-    await db.insert(teamBillingSettings).values({
-      teamId,
-      stripeCustomerId: 'cus_1',
-      autoTopUpEnabled: true,
-      autoTopUpThresholdMicros: 5_000_000, // $5
-      autoTopUpAmountMicros: 100_000_000, // top up to $100
-    });
+async function seedSettings(overrides: {
+  balance: number;
+  thresholdMicros: number | null;
+  amountMicros?: number;
+}) {
+  await db.insert(credits).values({ teamId, balance: overrides.balance });
+  await db.insert(teamBillingSettings).values({
+    teamId,
+    stripeCustomerId: 'cus_1',
+    autoTopUpEnabled: true,
+    autoTopUpThresholdMicros: overrides.thresholdMicros,
+    autoTopUpAmountMicros: overrides.amountMicros ?? 100_000_000,
+  });
+}
+
+function balanceOf() {
+  return db
+    .select({ balance: credits.balance })
+    .from(credits)
+    .where(eq(credits.teamId, teamId))
+    .then(([row]) => row?.balance);
+}
+
+describe('maybeAutoTopUp', () => {
+  it('charges the configured amount and credits it', async () => {
+    await seedSettings({ balance: 3_000_000, thresholdMicros: 5_000_000 });
 
     paymentIntentCreate.mockResolvedValue({
       id: 'pi_1',
@@ -102,50 +117,73 @@ describe('maybeAutoTopUp ("top up to" semantics)', () => {
     const billing = createBillingMethods(db, teamId, userId);
     await billing.checkAutoTopUp();
 
-    // $97 credited + 7% fee → $103.79 charged
+    // $100 credited + 7% fee → $107.00 charged
     expect(paymentIntentCreate).toHaveBeenCalledTimes(1);
     expect(paymentIntentCreate.mock.calls[0]?.[0]).toMatchObject({
-      amount: 10_379,
+      amount: 10_700,
       customer: 'cus_1',
       payment_method: 'pm_1',
       off_session: true,
     });
 
-    const [row] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(row?.balance).toBe(100_000_000);
+    expect(await balanceOf()).toBe(103_000_000); // $3 + $100
   });
 
   it('does not charge when the balance is above the threshold', async () => {
-    await db.insert(credits).values({ teamId, balance: 50_000_000 }); // $50
-    await db.insert(teamBillingSettings).values({
-      teamId,
-      stripeCustomerId: 'cus_1',
-      autoTopUpEnabled: true,
-      autoTopUpThresholdMicros: 5_000_000,
-      autoTopUpAmountMicros: 100_000_000,
-    });
+    await seedSettings({ balance: 50_000_000, thresholdMicros: 5_000_000 });
 
     const billing = createBillingMethods(db, teamId, userId);
     await billing.checkAutoTopUp();
 
     expect(paymentIntentCreate).not.toHaveBeenCalled();
   });
+
+  it('honours a $0 threshold instead of reading it as "unset"', async () => {
+    // A falsy-check here silently disabled auto-top-up for anyone who chose
+    // "reload when I hit zero", while the settings page still said it was on.
+    await seedSettings({ balance: 0, thresholdMicros: 0 });
+
+    paymentIntentCreate.mockResolvedValue({
+      id: 'pi_1',
+      status: 'succeeded',
+      latest_charge: null,
+    });
+
+    const billing = createBillingMethods(db, teamId, userId);
+    await billing.checkAutoTopUp();
+
+    expect(paymentIntentCreate).toHaveBeenCalledTimes(1);
+    expect(await balanceOf()).toBe(100_000_000);
+  });
+
+  it('does not credit when the payment intent does not succeed', async () => {
+    await seedSettings({ balance: 3_000_000, thresholdMicros: 5_000_000 });
+
+    paymentIntentCreate.mockResolvedValue({
+      id: 'pi_1',
+      status: 'requires_action',
+      latest_charge: null,
+    });
+
+    const billing = createBillingMethods(db, teamId, userId);
+    await billing.checkAutoTopUp();
+
+    expect(paymentIntentCreate).toHaveBeenCalledTimes(1);
+    expect(await balanceOf()).toBe(3_000_000);
+  });
 });
 
 describe('updateAutoTopUpSettings validation', () => {
-  it('rejects a target less than the minimum gap above the threshold', async () => {
+  it('rejects an amount that would not lift the balance past the threshold', async () => {
     await db.insert(credits).values({ teamId, balance: 0 });
     const billing = createBillingMethods(db, teamId, userId);
 
     await expect(
       billing.updateAutoTopUpSettings({
         enabled: true,
-        thresholdMicros: micros(8_000_000), // $8
-        amountMicros: micros(10_000_000), // $10 — only $2 above
+        thresholdMicros: micros(20_000_000), // $20
+        amountMicros: micros(10_000_000), // $10 — reload stays under it
       })
-    ).rejects.toThrow(/above the threshold/);
+    ).rejects.toThrow(/greater than the threshold/);
   });
 });

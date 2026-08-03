@@ -7,6 +7,15 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'query-client', 'query-client']);
 
+declare module '@tanstack/react-query' {
+  interface Register {
+    mutationMeta: {
+      /** Set when the mutation surfaces its own error UI — suppresses the global toast. */
+      inlineError?: boolean;
+    };
+  }
+}
+
 export function makeQueryClient() {
   let qc!: QueryClient;
   qc = new QueryClient({
@@ -16,7 +25,7 @@ export function makeQueryClient() {
           queryKey: mutation.options.mutationKey,
         });
       },
-      onError: (error) => {
+      onError: (error, _variables, _context, mutation) => {
         logger.error('[MUTATION ERROR]', {
           data: error instanceof Error ? error.message : error,
         });
@@ -26,6 +35,9 @@ export function makeQueryClient() {
           openBillingGate();
           return;
         }
+        // Mutations that render their own inline error opt out, so a failure
+        // isn't reported twice.
+        if (mutation.meta?.inlineError) return;
         toast.error(error.message);
       },
     }),

@@ -1,8 +1,8 @@
 /**
  * Auto Top-Up Dialog (#1099)
- * OpenAI-style "Auto-reload credits" modal: enable toggle, threshold,
- * top-up-to target, and the resulting charge. Opened from the "Modify"
- * button in billing settings.
+ * "Auto-reload credits" modal: enable toggle, the balance that triggers a
+ * reload, the amount added, and the resulting charge. Opened from the
+ * "Modify" button in billing settings.
  */
 
 import { Button } from '@/components/ui/button';
@@ -27,13 +27,12 @@ import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
 import {
   formatPlatformFeePercent,
   MAX_TOPUP_AMOUNT_USD,
-  MIN_AUTO_TOPUP_GAP_USD,
   MIN_TOPUP_AMOUNT_USD,
   splitCheckoutAmounts,
 } from '@/lib/billing/constants';
 import { usePostHog } from '@posthog/react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 type AutoTopUpDialogProps = {
@@ -85,37 +84,46 @@ export function AutoTopUpDialog({ open, onOpenChange }: AutoTopUpDialogProps) {
 
   const [enabled, setEnabled] = useState(false);
   const [threshold, setThreshold] = useState('5');
-  const [target, setTarget] = useState('100');
+  const [amount, setAmount] = useState('100');
   const [error, setError] = useState<string | null>(null);
 
-  // Seed from saved settings each time the dialog opens
+  // Seed from saved settings on the OPEN transition only. Keying this on
+  // `balanceData` would re-run on every balance refetch (staleTime 30s, plus
+  // realtime invalidation on each generation) and wipe in-progress edits.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open || !balanceData) return;
-    setEnabled(balanceData.autoTopUp.enabled);
-    setThreshold(String(balanceData.autoTopUp.thresholdUsd ?? 5));
-    setTarget(String(balanceData.autoTopUp.amountUsd ?? 100));
-    setError(null);
+    if (open && !wasOpen.current && balanceData) {
+      setEnabled(balanceData.autoTopUp.enabled);
+      setThreshold(String(balanceData.autoTopUp.thresholdUsd ?? 5));
+      setAmount(String(balanceData.autoTopUp.amountUsd ?? 100));
+      setError(null);
+      wasOpen.current = true;
+    } else if (!open) {
+      wasOpen.current = false;
+    }
   }, [open, balanceData]);
 
   const thresholdUsd = parseFloat(threshold);
-  const targetUsd = parseFloat(target);
+  const amountUsd = parseFloat(amount);
   const isValid =
     !enabled ||
     (!isNaN(thresholdUsd) &&
-      !isNaN(targetUsd) &&
+      !isNaN(amountUsd) &&
       thresholdUsd >= 0 &&
-      targetUsd >= MIN_TOPUP_AMOUNT_USD &&
-      targetUsd <= MAX_TOPUP_AMOUNT_USD &&
-      targetUsd >= thresholdUsd + MIN_AUTO_TOPUP_GAP_USD);
+      thresholdUsd <= MAX_TOPUP_AMOUNT_USD &&
+      amountUsd >= MIN_TOPUP_AMOUNT_USD &&
+      amountUsd <= MAX_TOPUP_AMOUNT_USD &&
+      // Otherwise the reload lands back under the threshold and re-triggers.
+      amountUsd > thresholdUsd);
   const chargeBreakdown =
-    enabled && isValid ? splitCheckoutAmounts(targetUsd - thresholdUsd) : null;
+    enabled && isValid ? splitCheckoutAmounts(amountUsd) : null;
 
   const mutation = useMutation({
     mutationFn: () =>
       updateAutoTopUpFn({
         data: {
           enabled,
-          ...(enabled && { thresholdUsd, amountUsd: targetUsd }),
+          ...(enabled && { thresholdUsd, amountUsd }),
         },
       }),
     onSuccess: () => {
@@ -126,7 +134,7 @@ export function AutoTopUpDialog({ open, onOpenChange }: AutoTopUpDialogProps) {
       if (enabled) {
         posthog.capture('auto_topup_enabled', {
           threshold_usd: thresholdUsd,
-          amount_usd: targetUsd,
+          amount_usd: amountUsd,
         });
       }
       toast.success(enabled ? 'Auto-reload enabled' : 'Auto-reload disabled');
@@ -142,7 +150,7 @@ export function AutoTopUpDialog({ open, onOpenChange }: AutoTopUpDialogProps) {
   const handleSave = () => {
     if (!isValid) {
       setError(
-        `Top-up target must be at least $${MIN_AUTO_TOPUP_GAP_USD} above the threshold (and between $${MIN_TOPUP_AMOUNT_USD} and $${MAX_TOPUP_AMOUNT_USD.toLocaleString()})`
+        `Enter an amount between $${MIN_TOPUP_AMOUNT_USD} and $${MAX_TOPUP_AMOUNT_USD.toLocaleString()}, greater than the balance that triggers it`
       );
       return;
     }
@@ -189,12 +197,12 @@ export function AutoTopUpDialog({ open, onOpenChange }: AutoTopUpDialogProps) {
             }}
           />
           <AmountField
-            id="auto-topup-target"
-            label="Top up to:"
-            value={target}
+            id="auto-topup-amount"
+            label="Add to my balance:"
+            value={amount}
             disabled={!enabled}
             onChange={(value) => {
-              setTarget(value);
+              setAmount(value);
               setError(null);
             }}
           />
@@ -212,8 +220,8 @@ export function AutoTopUpDialog({ open, onOpenChange }: AutoTopUpDialogProps) {
           </div>
           {chargeBreakdown && (
             <p className="text-xs text-muted-foreground">
-              Includes the {formatPlatformFeePercent()} platform fee. The exact
-              charge tops your balance up to ${targetUsd.toFixed(2)}.
+              Includes the {formatPlatformFeePercent()} platform fee. Charged
+              each time your balance falls to ${thresholdUsd.toFixed(2)}.
             </p>
           )}
           <Separator />

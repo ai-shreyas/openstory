@@ -21,14 +21,18 @@ import { getStripeOrThrow } from '@/lib/billing/stripe';
 import type { TransactionType } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
 import { FOUNDER_EMAIL } from '@/lib/marketing/constants';
+import { getLogger } from '@/lib/observability/logger';
 import { captureProductEvent } from '@/lib/observability/product-events';
 import { sendFounderCreditRequestEmail } from '@/lib/services/email-service';
 import { getServerAppUrl } from '@/lib/utils/environment';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { zodValidator } from '@tanstack/zod-adapter';
+import Stripe from 'stripe';
 import { z } from 'zod';
 import { authWithTeamMiddleware } from './middleware';
+
+const logger = getLogger(['openstory', 'functions', 'billing']);
 
 const checkoutInputSchema = z.object({
   amountUsd: z.number().min(MIN_TOPUP_AMOUNT_USD).max(MAX_TOPUP_AMOUNT_USD),
@@ -74,12 +78,17 @@ export type SavedPaymentMethod = {
  * Stripe Checkout (`setup_future_usage: 'off_session'`), so a team that has
  * never checked out has none — the add-credits dialog then falls back to a
  * Checkout redirect.
+ *
+ * Admin-only: these cards belong to whoever set billing up, and
+ * `purchaseCreditsFn` can charge them without further consent.
  */
 export const listPaymentMethodsFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
   .handler(
     async ({ context }): Promise<{ paymentMethods: SavedPaymentMethod[] }> => {
       if (!isStripeEnabled()) return { paymentMethods: [] };
+
+      await requireTeamAdminAccess(context.user.id, context.teamId);
 
       const settings = await context.scopedDb.billing.getBillingSettings();
       if (!settings.stripeCustomerId) return { paymentMethods: [] };
@@ -100,13 +109,21 @@ export const listPaymentMethodsFn = createServerFn({ method: 'GET' })
       const defaultPmId =
         typeof defaultPm === 'string' ? defaultPm : defaultPm?.id;
 
+      // Drop cardless rows rather than inventing brand/last4 for them — a
+      // blank "Visa •••• " is still selectable and still chargeable.
       const paymentMethods = methods.data
-        .map((pm) => ({
-          id: pm.id,
-          brand: pm.card?.brand ?? 'card',
-          last4: pm.card?.last4 ?? '',
-          isDefault: pm.id === defaultPmId,
-        }))
+        .flatMap((pm) =>
+          pm.card
+            ? [
+                {
+                  id: pm.id,
+                  brand: pm.card.brand,
+                  last4: pm.card.last4,
+                  isDefault: pm.id === defaultPmId,
+                },
+              ]
+            : []
+        )
         .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
 
       return { paymentMethods };
@@ -116,6 +133,12 @@ export const listPaymentMethodsFn = createServerFn({ method: 'GET' })
 const purchaseInputSchema = z.object({
   amountUsd: z.number().min(MIN_TOPUP_AMOUNT_USD).max(MAX_TOPUP_AMOUNT_USD),
   paymentMethodId: z.string().min(1),
+  /**
+   * Client-generated, stable for the lifetime of one "Continue" press. Keys
+   * both the Stripe charge and the wallet credit so a retry — ours, the
+   * user's, or the transport's — can never charge or credit twice.
+   */
+  requestId: z.string().min(1).max(64),
 });
 
 /**
@@ -130,6 +153,8 @@ export const purchaseCreditsFn = createServerFn({ method: 'POST' })
     if (!isStripeEnabled()) {
       throw new ValidationError('Stripe is not configured');
     }
+
+    await requireTeamAdminAccess(context.user.id, context.teamId);
 
     const settings = await context.scopedDb.billing.getBillingSettings();
     if (!settings.stripeCustomerId) {
@@ -151,34 +176,55 @@ export const purchaseCreditsFn = createServerFn({ method: 'POST' })
     }
 
     const amountMicros = usdToMicros(data.amountUsd);
+    const idempotencyKey = `purchase:${context.teamId}:${data.requestId}`;
 
     let paymentIntent;
     try {
-      paymentIntent = await stripe.paymentIntents.create({
-        amount: totalCheckoutCents(amountMicros),
-        currency: 'usd',
-        customer: settings.stripeCustomerId,
-        payment_method: data.paymentMethodId,
-        off_session: true,
-        confirm: true,
-        expand: ['latest_charge'],
-        metadata: {
-          teamId: context.teamId,
-          type: 'credit_top_up_direct',
-          amountUsd: String(data.amountUsd),
+      paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: totalCheckoutCents(amountMicros),
+          currency: 'usd',
+          customer: settings.stripeCustomerId,
+          payment_method: data.paymentMethodId,
+          off_session: true,
+          confirm: true,
+          expand: ['latest_charge'],
+          // userId is required by stripeWebhookMiddleware — without it the
+          // reconciling payment_intent.succeeded webhook is rejected with 400.
+          metadata: {
+            teamId: context.teamId,
+            userId: context.user.id,
+            type: 'credit_top_up_direct',
+            amountUsd: String(data.amountUsd),
+            idempotencyKey,
+          },
         },
-      });
+        { idempotencyKey }
+      );
     } catch (err) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message
-          : 'Your card was declined';
-      throw new ValidationError(message);
+      // ONLY a declined card is the user's problem. An invalid API key, a
+      // Stripe outage, or a bug of ours must stay a 5xx — relabelling it 400
+      // both misinforms the user and (via the log-level split in
+      // loggerMiddleware) hides a payment outage from production error logs.
+      if (err instanceof Stripe.errors.StripeCardError) {
+        throw new ValidationError(err.message);
+      }
+      throw err;
     }
 
     if (paymentIntent.status !== 'succeeded') {
+      // `processing` / `requires_capture` will likely settle, so telling the
+      // user it failed would be wrong — when they do, payment_intent.succeeded
+      // fires and the webhook grants the credits.
+      logger.warn('Direct purchase intent not immediately successful', {
+        teamId: context.teamId,
+        status: paymentIntent.status,
+        stripePaymentIntentId: paymentIntent.id,
+      });
       throw new ValidationError(
-        'Your card requires additional verification — use "Add payment method" to pay via checkout instead'
+        paymentIntent.status === 'requires_action'
+          ? 'Your card requires additional verification — use "Add payment method" to pay via checkout instead'
+          : 'Your payment is still processing — your credits will appear shortly'
       );
     }
 
@@ -188,13 +234,29 @@ export const purchaseCreditsFn = createServerFn({ method: 'POST' })
         ? (charge.receipt_url ?? undefined)
         : undefined;
 
-    const result = await context.scopedDb.billing.addCredits(amountMicros, {
-      description: `Top-up: ${microsToDisplayUsd(amountMicros)}`,
-      metadata: {
+    let result;
+    try {
+      result = await context.scopedDb.billing.addCredits(amountMicros, {
+        description: `Top-up: ${microsToDisplayUsd(amountMicros)}`,
+        idempotencyKey,
+        metadata: {
+          stripePaymentIntentId: paymentIntent.id,
+          ...(receiptUrl && { receiptUrl }),
+        },
+      });
+    } catch (err) {
+      // The card is already charged. Everything needed to reconcile by hand
+      // goes in this log; the webhook retries the grant with the same key.
+      logger.error('Charged the customer but failed to credit the wallet', {
+        teamId: context.teamId,
+        userId: context.user.id,
+        amountMicros,
+        idempotencyKey,
         stripePaymentIntentId: paymentIntent.id,
-        ...(receiptUrl && { receiptUrl }),
-      },
-    });
+        err,
+      });
+      throw err;
+    }
 
     captureProductEvent({
       distinctId: context.user.id,
@@ -207,9 +269,13 @@ export const purchaseCreditsFn = createServerFn({ method: 'POST' })
       },
     });
 
+    // `null` means this exact grant already landed (replayed request) — the
+    // earlier credit stands, so report the balance rather than a phantom.
     return {
       success: true,
-      balance: result ? microsToUsd(result.newBalance) : null,
+      balance: microsToUsd(
+        result?.newBalance ?? (await context.scopedDb.billing.getBalance())
+      ),
     };
   });
 
@@ -377,10 +443,16 @@ export const getTransactionsFn = createServerFn({ method: 'GET' })
 // Auto Top-Up
 // ============================================================================
 
+// Bounded like the interactive purchase paths: `amountUsd` drives an
+// unattended off-session charge, so it is the LAST place to trust the client.
 const autoTopUpInputSchema = z.object({
   enabled: z.boolean(),
-  thresholdUsd: z.number().optional(),
-  amountUsd: z.number().optional(),
+  thresholdUsd: z.number().min(0).max(MAX_TOPUP_AMOUNT_USD).optional(),
+  amountUsd: z
+    .number()
+    .min(MIN_TOPUP_AMOUNT_USD)
+    .max(MAX_TOPUP_AMOUNT_USD)
+    .optional(),
 });
 
 export const updateAutoTopUpFn = createServerFn({ method: 'POST' })

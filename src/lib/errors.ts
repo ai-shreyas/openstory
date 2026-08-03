@@ -1,13 +1,19 @@
 /**
  * Custom error classes for better error handling and categorization.
  *
- * Server-fn boundary: seroval's default Error serializer keeps only
- * `name`/`message` — own props like `code` are DROPPED in transit (#1099
- * disproved the #1087 assumption empirically). The serialization adapter at
- * the bottom of this file round-trips `OpenStoryError` through the server-fn
- * envelope; it must stay registered in `createStart` (src/start.ts) for
- * `errorCode()` to work on the client. Branch on `errorCode()`, never on
- * message prose.
+ * Server-fn boundary: seroval itself preserves own props on Errors, but
+ * TanStack Router registers `ShallowErrorPlugin` in `defaultSerovalPlugins`,
+ * and that plugin matches EVERY `Error` and serializes only `message` —
+ * `code`, `statusCode`, `details` and even `name` are dropped in transit.
+ * (#1087 blamed seroval; #1099 traced it to the plugin.)
+ *
+ * The adapter at the bottom of this file wins because
+ * `getDefaultSerovalPlugins()` builds `[...serializationAdapters,
+ * ...defaultSerovalPlugins]` and seroval uses the FIRST plugin whose `test()`
+ * passes. Two things keep that working, and both are silent if broken:
+ *   1. the adapter stays registered in `createStart` (src/start.ts), and
+ *   2. custom adapters keep being ordered ahead of the defaults.
+ * `errors.test.ts` pins both. Branch on `errorCode()`, never on message prose.
  */
 
 import { createSerializationAdapter } from '@tanstack/react-router';
@@ -29,8 +35,13 @@ export class OpenStoryError extends Error {
     this.statusCode = statusCode;
     this.details = details;
 
-    // Maintains proper stack trace for where our error was thrown (only available on V8)
-    Error.captureStackTrace(this, this.constructor);
+    // V8-only, and since #1099 this constructor also runs in the browser
+    // (fromSerializable). An unguarded call throws a TypeError inside seroval
+    // deserialization on non-V8 engines, which would swallow the whole
+    // server-fn response instead of surfacing the error it carries.
+    if (typeof Error.captureStackTrace === 'function') {
+      Error.captureStackTrace(this, this.constructor);
+    }
   }
 
   toJSON() {
@@ -101,9 +112,10 @@ export class InsufficientCreditsError extends OpenStoryError {
 /**
  * Stable machine-readable code from a thrown value.
  *
- * Works for live `OpenStoryError` instances on the server and for the
- * instances `openStoryErrorSerializationAdapter` reconstructs on the client
- * after a server-fn throw.
+ * Structural, not nominal: it reads a string `.code` off anything that has one
+ * — live `OpenStoryError`s on the server, the instances
+ * `openStoryErrorSerializationAdapter` reconstructs on the client, and also
+ * foreign errors that happen to carry a `code` (Stripe, Node `ENOENT`, …).
  */
 export function errorCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
@@ -149,10 +161,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Round-trips OpenStoryError (and subclasses) through the server-fn seroval
- * envelope so `code`/`statusCode`/`details` survive to the client. Details
- * ride as JSON to stay inside seroval's serializable value set. Registered
- * in `createStart` (src/start.ts).
+ * Round-trips OpenStoryError through the server-fn seroval envelope so
+ * `code`/`statusCode`/`details` survive to the client. Details ride as JSON to
+ * stay inside seroval's serializable value set. Registered in `createStart`
+ * (src/start.ts) — see this file's header for why ordering matters.
+ *
+ * Subclass identity is deliberately NOT preserved: every error arrives as a
+ * base `OpenStoryError` with `name` patched back on, so client-side
+ * `instanceof InsufficientCreditsError` is always false. Discriminate with
+ * `errorCode()` / `isInsufficientCreditsError()`.
+ *
+ * Both JSON hops are guarded because they run *while serializing an error*:
+ * a circular ref in `details` would otherwise replace a clean 402 with an
+ * opaque serialization failure and the billing gate would never open.
  */
 export const openStoryErrorSerializationAdapter = createSerializationAdapter({
   key: 'openstory-error',
@@ -162,19 +183,38 @@ export const openStoryErrorSerializationAdapter = createSerializationAdapter({
     message: error.message,
     code: error.code,
     statusCode: error.statusCode,
-    detailsJson: error.details ? JSON.stringify(error.details) : undefined,
+    detailsJson: safeStringify(error.details),
   }),
   fromSerializable: (value) => {
-    const parsedDetails: unknown = value.detailsJson
-      ? JSON.parse(value.detailsJson)
-      : undefined;
     const error = new OpenStoryError(
       value.message,
       value.code,
       value.statusCode,
-      isRecord(parsedDetails) ? parsedDetails : undefined
+      safeParseRecord(value.detailsJson)
     );
     error.name = value.name;
     return error;
   },
 });
+
+/** Details are diagnostic — losing them must never lose the error itself. */
+function safeStringify(
+  details: Record<string, unknown> | undefined
+): string | undefined {
+  if (!details) return undefined;
+  try {
+    return JSON.stringify(details);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeParseRecord(json: string | undefined) {
+  if (!json) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}

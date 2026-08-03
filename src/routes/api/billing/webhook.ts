@@ -127,13 +127,48 @@ export const Route = createFileRoute('/api/billing/webhook')({
             }
 
             case 'payment_intent.succeeded': {
-              // Handle auto-top-up payment confirmations
               const paymentIntent = event.data.object;
               // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-              if (paymentIntent.metadata?.type === 'auto_top_up') {
+              const type = paymentIntent.metadata?.type;
+
+              if (type === 'auto_top_up') {
                 logger.info(
                   `Auto-top-up payment succeeded for team ${paymentIntent.metadata.teamId}`
                 );
+                break;
+              }
+
+              if (type !== 'credit_top_up_direct') break;
+
+              // Reconciles a direct purchase whose in-band grant never landed
+              // (the server fn died between charging and crediting). Safe to
+              // run on every delivery: addCredits dedupes on idempotencyKey,
+              // so the normal case is a no-op.
+              const idempotencyKey = paymentIntent.metadata.idempotencyKey;
+              const amountUsd = parseFloat(
+                paymentIntent.metadata.amountUsd ?? ''
+              );
+              if (!idempotencyKey || isNaN(amountUsd)) {
+                logger.error('Direct top-up intent missing metadata', {
+                  teamId,
+                  data: paymentIntent.metadata,
+                });
+                break;
+              }
+
+              const amountMicros = usdToMicros(amountUsd);
+              const granted = await scopedDb.billing.addCredits(amountMicros, {
+                description: `Top-up: ${microsToDisplayUsd(amountMicros)}`,
+                idempotencyKey,
+                metadata: { stripePaymentIntentId: paymentIntent.id },
+              });
+
+              if (granted) {
+                logger.warn('Reconciled a direct top-up the server fn missed', {
+                  teamId,
+                  amountMicros,
+                  stripePaymentIntentId: paymentIntent.id,
+                });
               }
               break;
             }

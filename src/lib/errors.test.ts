@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+// Static, not a dynamic import inside the test: pulling in the whole start
+// instance takes seconds under full-suite load and would blow the timeout.
+import { startInstance } from '@/start';
 import {
   ConfigurationError,
   ConnectionError,
@@ -8,6 +11,7 @@ import {
   handleApiError,
   InsufficientCreditsError,
   isInsufficientCreditsError,
+  openStoryErrorSerializationAdapter,
   StorageError,
   ValidationError,
   OpenStoryError,
@@ -208,21 +212,22 @@ describe('errorCode / isInsufficientCreditsError', () => {
     ).toBeUndefined();
   });
 
-  it('preserves code/statusCode/details through a seroval round-trip (server-fn wire)', async () => {
-    // TanStack Start serializes server-fn errors with seroval's toCrossJSONAsync
-    // / fromCrossJSON (see start-server-core server-functions-handler). This is
-    // the empirical check for #1087: own props survive; the class does not.
-    const { toCrossJSONAsync, fromCrossJSON } = await import('seroval');
+  it('preserves code/statusCode/details through the serialization adapter', () => {
+    // The adapter is the ONLY reason `code` reaches the client: TanStack
+    // Router's ShallowErrorPlugin matches every Error and keeps `message`
+    // alone. Without this round-trip the billing gate silently stops opening.
     const original = new InsufficientCreditsError(
       'Insufficient credits for image',
       { needed: 10 }
     );
-    const wire = await toCrossJSONAsync(original, { refs: new Map() });
-    const restored: unknown = fromCrossJSON(wire, { refs: new Map() });
+    const restored: unknown =
+      openStoryErrorSerializationAdapter.fromSerializable(
+        openStoryErrorSerializationAdapter.toSerializable(original)
+      );
 
     expect(restored).toBeInstanceOf(Error);
+    // Subclass identity is intentionally lost — discriminate on the code.
     expect(restored).not.toBeInstanceOf(InsufficientCreditsError);
-    // Own props survive; narrow via errorCode / property access after guards.
     expect(restored).toMatchObject({
       name: 'InsufficientCreditsError',
       message: 'Insufficient credits for image',
@@ -231,7 +236,36 @@ describe('errorCode / isInsufficientCreditsError', () => {
       details: { needed: 10 },
     });
     expect(isInsufficientCreditsError(restored)).toBe(true);
-    expect(errorCode(restored)).toBe('INSUFFICIENT_CREDITS');
+  });
+
+  it('survives details it cannot serialize rather than failing the error', () => {
+    // A throw inside error serialization would replace the real error with an
+    // opaque one, so the gate would never open.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const restored: unknown =
+      openStoryErrorSerializationAdapter.fromSerializable(
+        openStoryErrorSerializationAdapter.toSerializable(
+          new InsufficientCreditsError('Insufficient credits', circular)
+        )
+      );
+
+    expect(isInsufficientCreditsError(restored)).toBe(true);
+    if (!(restored instanceof OpenStoryError)) {
+      throw new Error('expected an OpenStoryError');
+    }
+    expect(restored.details).toBeUndefined();
+  });
+
+  it('stays registered in createStart', async () => {
+    // Drop the adapter from src/start.ts and everything still typechecks and
+    // every other test still passes — the only symptom would be the billing
+    // gate quietly never opening again. This is the guard for that.
+    const options = await startInstance.getOptions();
+
+    expect(options.serializationAdapters).toContain(
+      openStoryErrorSerializationAdapter
+    );
   });
 
   it('surfaces the plain message for display', () => {

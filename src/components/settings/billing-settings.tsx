@@ -1,8 +1,9 @@
 /**
  * Billing Settings Component
  * Credit balance, add-credits + auto-top-up dialogs, and invoices (#1099).
- * All purchasing happens in the AddCreditsDialog / AutoTopUpDialog modals —
- * this page only shows state and opens them.
+ * Purchasing happens in the AddCreditsDialog / AutoTopUpDialog modals, which
+ * this page opens. The one exception is the post-checkout "Enable
+ * auto-reload?" prompt below, which writes settings directly.
  */
 
 import { AutoTopUpDialog } from '@/components/billing/auto-topup-dialog';
@@ -323,8 +324,8 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
                 </p>
               ) : balanceData.autoTopUp.enabled ? (
                 <p className="text-sm text-muted-foreground tabular-nums">
-                  Tops up to ${balanceData.autoTopUp.amountUsd?.toFixed(2)} when
-                  your balance falls below $
+                  Adds ${balanceData.autoTopUp.amountUsd?.toFixed(2)} when your
+                  balance falls below $
                   {balanceData.autoTopUp.thresholdUsd?.toFixed(2)}.
                 </p>
               ) : (

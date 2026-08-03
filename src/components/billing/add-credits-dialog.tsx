@@ -1,9 +1,11 @@
 /**
  * Add Credits Dialog (#1099)
- * OpenAI-style "Add to credit balance" modal — the only way to add credits.
- * A saved card is charged in place; "+ Add payment method" (or having no
- * saved card) falls back to Stripe Checkout, which saves the card for next
- * time. Globally mounted in AppLayout, opened via openAddCreditsDialog().
+ * OpenAI-style "Add to credit balance" modal — the in-app purchase surface.
+ * (Credits also arrive via gift codes, the signup grant, founder grants, and
+ * auto-top-up.) A saved card is charged in place; "+ Add payment method" (or
+ * having no saved card) falls back to Stripe Checkout, which saves the card
+ * for next time. Globally mounted in AppLayout, opened via
+ * openAddCreditsDialog().
  */
 
 import { Button } from '@/components/ui/button';
@@ -38,6 +40,7 @@ import {
   closeAddCreditsDialog,
   useAddCreditsDialogOpen,
 } from '@/hooks/use-add-credits-dialog';
+import { closeBillingGate } from '@/hooks/use-billing-gate-dialog';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
 import { useSession } from '@/lib/auth/client';
@@ -53,6 +56,7 @@ import { Link } from '@tanstack/react-router';
 import { CreditCard, ExternalLink, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { ulid } from 'ulid';
 
 /** Sentinel Select value for "pay with a new card at checkout". */
 const NEW_CARD = 'new-card';
@@ -70,14 +74,25 @@ export function AddCreditsDialog() {
   const [amount, setAmount] = useState('10');
   const [selectedPm, setSelectedPm] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Idempotency key for the purchase. Stable across retries of the same
+   * attempt (React Query resends the same variables), so a timed-out request
+   * whose charge actually landed can never charge or credit a second time.
+   */
+  const [requestId, setRequestId] = useState(() => ulid());
 
-  const { data: pmData, isLoading: pmLoading } = useQuery({
+  const {
+    data: pmData,
+    isLoading: pmLoading,
+    error: pmError,
+  } = useQuery({
     queryKey: ['billing-payment-methods'],
     queryFn: () => listPaymentMethodsFn(),
     staleTime: 60_000,
     enabled: open && !!session,
   });
 
+  // Sorted default-first by listPaymentMethodsFn, so [0] is the default card.
   const paymentMethods = pmData?.paymentMethods ?? [];
   const effectivePm = selectedPm ?? paymentMethods[0]?.id ?? NEW_CARD;
 
@@ -102,8 +117,12 @@ export function AddCreditsDialog() {
   };
 
   const purchaseMutation = useMutation({
-    mutationFn: (input: { amountUsd: number; paymentMethodId: string }) =>
-      purchaseCreditsFn({ data: input }),
+    meta: { inlineError: true },
+    mutationFn: (input: {
+      amountUsd: number;
+      paymentMethodId: string;
+      requestId: string;
+    }) => purchaseCreditsFn({ data: input }),
     onSuccess: (_data, input) => {
       invalidateBilling();
       triggerBalanceFlash();
@@ -111,13 +130,21 @@ export function AddCreditsDialog() {
         `Added $${input.amountUsd.toFixed(2)} to your credit balance`
       );
       onOpenChange(false);
+      // This dialog often opens on top of the gate; with credits now bought,
+      // leaving the gate up (it blocks Escape and outside-click) would strand
+      // the user on a "you're out of credits" modal they just resolved.
+      closeBillingGate();
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : 'Payment failed');
+      // A new key on retry: the failed attempt's key is spent, and Stripe
+      // replays the original outcome for a reused one.
+      setRequestId(ulid());
     },
   });
 
   const checkoutMutation = useMutation({
+    meta: { inlineError: true },
     mutationFn: (checkoutAmountUsd: number) =>
       createCheckoutSessionFn({ data: { amountUsd: checkoutAmountUsd } }),
     onSuccess: (data) => {
@@ -144,13 +171,22 @@ export function AddCreditsDialog() {
       method,
     });
     if (method === 'checkout') {
-      // Suggest this amount for auto-top-up on return from Stripe
-      localStorage.setItem('openstory:last-topup-amount', String(amountUsd));
+      try {
+        // Suggest this amount for auto-top-up on return from Stripe
+        localStorage.setItem('openstory:last-topup-amount', String(amountUsd));
+      } catch {
+        // Private mode / quota. This only seeds a follow-up prompt — it must
+        // never stop the checkout the user actually asked for.
+      }
       prepareBalanceFlash();
       checkoutMutation.mutate(amountUsd);
       return;
     }
-    purchaseMutation.mutate({ amountUsd, paymentMethodId: effectivePm });
+    purchaseMutation.mutate({
+      amountUsd,
+      paymentMethodId: effectivePm,
+      requestId,
+    });
   };
 
   return (
@@ -203,7 +239,14 @@ export function AddCreditsDialog() {
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="add-credits-payment-method">Payment method</Label>
-          {pmLoading ? (
+          {pmError ? (
+            // Never render a failed fetch as "you have no saved cards" — that
+            // silently pushes a returning customer back through Checkout.
+            <p role="alert" className="text-xs text-destructive">
+              Couldn&apos;t load your saved cards
+              {pmError instanceof Error ? `: ${pmError.message}` : ''}
+            </p>
+          ) : pmLoading ? (
             <Skeleton className="h-9 w-full" />
           ) : (
             <Select
@@ -266,9 +309,12 @@ export function AddCreditsDialog() {
           >
             Cancel
           </Button>
+          {/* pmLoading gates submit: until the cards land, effectivePm is
+              NEW_CARD, so an early click would bounce a saved-card customer
+              out to Checkout. */}
           <Button
             onClick={handleContinue}
-            disabled={!isValidAmount || isPending}
+            disabled={!isValidAmount || isPending || pmLoading}
           >
             {isPending ? 'Processing…' : 'Continue'}
           </Button>
