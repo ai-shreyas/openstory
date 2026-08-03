@@ -45,20 +45,39 @@ import { buildEventInsert } from './sequence-events';
 function isUniqueConstraintError(error: unknown): boolean {
   let current: unknown = error;
   for (let i = 0; i < 6 && current != null; i++) {
+    if (current instanceof Error) {
+      if (/unique|constraint|SQLITE_CONSTRAINT/i.test(current.message)) {
+        return true;
+      }
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'string' && /UNIQUE|CONSTRAINT/i.test(code)) {
+        return true;
+      }
+      current = current.cause;
+      continue;
+    }
     if (typeof current === 'object') {
       const code = (current as { code?: unknown }).code;
       if (typeof code === 'string' && /UNIQUE|CONSTRAINT/i.test(code)) {
         return true;
       }
-      const msg = current instanceof Error ? current.message : String(current);
-      if (/unique|constraint|SQLITE_CONSTRAINT/i.test(msg)) return true;
-      current = (current as { cause?: unknown }).cause;
-    } else {
-      if (/unique|constraint|SQLITE_CONSTRAINT/i.test(String(current))) {
+      const message = (current as { message?: unknown }).message;
+      if (
+        typeof message === 'string' &&
+        /unique|constraint|SQLITE_CONSTRAINT/i.test(message)
+      ) {
         return true;
       }
-      break;
+      current = (current as { cause?: unknown }).cause;
+      continue;
     }
+    if (
+      typeof current === 'string' &&
+      /unique|constraint|SQLITE_CONSTRAINT/i.test(current)
+    ) {
+      return true;
+    }
+    break;
   }
   return false;
 }
