@@ -195,7 +195,7 @@ export function AddCreditsDialog() {
               onClick={() => onOpenChange(false)}
               className="inline-flex shrink-0 items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
             >
-              Model pricing
+              Pricing
               <ExternalLink className="size-3" />
             </Link>
           </div>
