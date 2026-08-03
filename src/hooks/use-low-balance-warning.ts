@@ -6,11 +6,13 @@
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { openAddCreditsDialog } from './use-add-credits-dialog';
+import { openBillingGate } from './use-billing-gate-dialog';
 import { useBillingBalance } from './use-billing-balance';
 
 export function useLowBalanceWarning() {
-  const { balance, isLowBalance, isZeroBalance, lowBalanceThreshold } =
+  const { balance, isLowBalance, isZeroBalance, lowBalanceThreshold, data } =
     useBillingBalance();
+  const hasToppedUp = data?.hasPaymentMethod ?? false;
   const prevBalanceRef = useRef<number | null>(null);
   const hasWarnedRef = useRef(false);
 
@@ -33,6 +35,12 @@ export function useLowBalanceWarning() {
     // Balance decreased — check if we should warn
     if (hasWarnedRef.current) return;
 
+    // First-time users get a secondary BYOK escape hatch — the gate dialog
+    // holds the fal key form. Repeat purchasers just re-up.
+    const byokButton = hasToppedUp
+      ? undefined
+      : { cancel: { label: 'BYOK', onClick: openBillingGate } };
+
     if (isZeroBalance) {
       hasWarnedRef.current = true;
       toast.error('Your credit balance is $0', {
@@ -41,6 +49,7 @@ export function useLowBalanceWarning() {
           label: 'Add Credits',
           onClick: openAddCreditsDialog,
         },
+        ...byokButton,
         duration: 10_000,
       });
     } else if (isLowBalance) {
@@ -51,8 +60,9 @@ export function useLowBalanceWarning() {
           label: 'Add Credits',
           onClick: openAddCreditsDialog,
         },
+        ...byokButton,
         duration: 8_000,
       });
     }
-  }, [balance, isLowBalance, isZeroBalance, lowBalanceThreshold]);
+  }, [balance, isLowBalance, isZeroBalance, lowBalanceThreshold, hasToppedUp]);
 }

@@ -1,6 +1,5 @@
 import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
-import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { PremiumCard } from '@/components/cards/premium-card';
 import {
   ElementSelector,
@@ -618,8 +617,7 @@ export const ScriptView: FC<{
 
   const createSequenceMutation = useCreateSequence();
   const { requireAuth } = useAuthGate();
-  const { needsBillingSetup, showGate, gateProps, hasFalKey, stripeEnabled } =
-    useBillingGate();
+  const { needsBillingSetup, showGate } = useBillingGate();
 
   // Style recommendations. We rank a *snapshot* of the script (not the live
   // value) so the LLM call only fires on an explicit trigger — the "Recommend
@@ -1178,11 +1176,6 @@ export const ScriptView: FC<{
           </div>
         </CardFooter>
       </form>
-      <BillingGateDialog
-        {...gateProps}
-        hasFalKey={hasFalKey}
-        stripeEnabled={stripeEnabled}
-      />
       <AlertDialog
         open={showRegenerateConfirm}
         onOpenChange={(v) => setEnhance('showRegenerateConfirm', v)}

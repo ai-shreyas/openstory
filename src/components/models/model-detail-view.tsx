@@ -40,7 +40,6 @@ import {
   listGeneratedAssetsFn,
 } from '@/functions/model-assets';
 import { getModelDetailFn, getModelFamilyFn } from '@/functions/model-catalog';
-import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { isInsufficientCreditsError } from '@/lib/errors';
@@ -178,12 +177,7 @@ const ModelRunPanel: FC<{ detail: ModelDetail }> = ({ detail }) => {
   const { model, inputSchema } = detail;
   const queryClient = useQueryClient();
   const { requireAuth, isAuthenticated } = useAuthGate();
-  const {
-    showGate: showBillingGate,
-    gateProps: billingGateProps,
-    hasFalKey,
-    stripeEnabled,
-  } = useFalBillingGate();
+  const { showGate: showBillingGate } = useFalBillingGate();
 
   const [values, setValues] = useState<Record<string, JsonValue>>(() =>
     seedFormValue(inputSchema)
@@ -356,12 +350,6 @@ const ModelRunPanel: FC<{ detail: ModelDetail }> = ({ detail }) => {
           </Suspense>
         </section>
       )}
-
-      <BillingGateDialog
-        {...billingGateProps}
-        hasFalKey={hasFalKey}
-        stripeEnabled={stripeEnabled}
-      />
     </div>
   );
 };

@@ -22,7 +22,6 @@ import { getDivergentVariantPromptDiffFn } from '@/functions/prompt-variants';
 import { smartRetryFn } from '@/functions/smart-retry';
 import { useActiveImageModel } from '@/hooks/use-active-image-model';
 import { useActiveVideoModel } from '@/hooks/use-active-video-model';
-import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useSceneSelection } from '@/hooks/use-scene-selection';
@@ -219,12 +218,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const navigate = useNavigate();
   const posthog = usePostHog();
 
-  const {
-    showGate: showBillingGate,
-    gateProps: billingGateProps,
-    hasFalKey,
-    stripeEnabled,
-  } = useFalBillingGate();
+  const { showGate: showBillingGate } = useFalBillingGate();
 
   const {
     selection,
@@ -1520,12 +1514,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             />
           );
         })()}
-
-      <BillingGateDialog
-        {...billingGateProps}
-        hasFalKey={hasFalKey}
-        stripeEnabled={stripeEnabled}
-      />
     </div>
   );
 };

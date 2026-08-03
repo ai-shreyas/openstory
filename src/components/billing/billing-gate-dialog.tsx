@@ -21,7 +21,14 @@ import { saveApiKeyFn } from '@/functions/api-keys';
 import { requestFounderCreditsFn } from '@/functions/billing';
 import { getCurrentUserProfileFn } from '@/functions/user';
 import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
-import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
+import {
+  BILLING_GATE_KEY,
+  useBillingGateQuery,
+} from '@/hooks/use-billing-gate';
+import {
+  closeBillingGate,
+  useBillingGateDialogOpen,
+} from '@/hooks/use-billing-gate-dialog';
 import { cn } from '@/lib/utils';
 import { usePostHog } from '@posthog/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -384,5 +391,27 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
         </div>
       </DialogContent>
     </Dialog>
+  );
+};
+
+/**
+ * Globally-mounted gate instance (#1099), opened via `openBillingGate()` —
+ * including by the query client's global mutation error handler on
+ * INSUFFICIENT_CREDITS. The onboarding flow on /sequences/new keeps its own
+ * instance for its dismissal memory.
+ */
+export const GlobalBillingGateDialog: React.FC = () => {
+  const open = useBillingGateDialogOpen();
+  const { data } = useBillingGateQuery();
+
+  return (
+    <BillingGateDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) closeBillingGate();
+      }}
+      hasFalKey={data?.hasFalKey ?? false}
+      stripeEnabled={data?.stripeEnabled ?? true}
+    />
   );
 };
