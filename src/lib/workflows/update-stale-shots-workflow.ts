@@ -48,32 +48,33 @@ import {
   DEFAULT_ANALYSIS_MODEL,
   getAnalysisModelById,
 } from '@/lib/ai/models.config';
-import { DEFAULT_IMAGE_MODEL, safeTextToImageModel } from '@/lib/ai/models';
-import { loadShotPromptContext } from '@/lib/ai/prompt-context';
 import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import { requireCredits } from '@/lib/billing/preflight';
 import { estimateVideoCost } from '@/lib/billing/cost-estimation';
-import type { Shot } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { isInsufficientCreditsError } from '@/lib/errors';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
-import { assembleSequenceSegments } from '@/lib/scenes/scene-segments';
+import { getLogger } from '@/lib/observability/logger';
 import {
   loadSelectedScriptsBySequence,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { prepareShotImageWorkflowInput } from '@/lib/shots/shot-image-input';
 import {
-  computeShotStaleness,
-  type ShotStalenessRefs,
-} from '@/lib/shots/shot-staleness';
-import {
-  depthIncludes,
+  DEFAULT_UPDATE_STALE_DEPTH,
   type UpdateStaleDepth,
 } from '@/lib/shots/update-stale-depth';
-import { isInsufficientCreditsError } from '@/lib/errors';
+import {
+  claimTargets,
+  computePlan,
+  type MusicPlan,
+  type PlanTarget,
+  type ShotClaims,
+  type SkippedShot,
+} from '@/lib/shots/update-stale-plan';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -90,7 +91,6 @@ import type {
 import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'update-stale-shots']);
 
@@ -120,110 +120,6 @@ type UpdateStaleShotsResult = {
   skipped: SkippedShot[];
 };
 
-/**
- * One shot's frozen slice of the plan.
- *
- * Deliberately holds only ids and flags — no `Scene` objects. The whole plan
- * is persisted as one `step.do` result, which Cloudflare caps at 1 MiB
- * (docs/investigations/cloudflare-workflows.md). A sequence-scope run right
- * after a style edit is the worst case: every shot stale, and inlining each
- * target's scene plus two neighbour scenes blew the cap and killed the run at
- * its first step. Scenes are materialised per shot in `prepare-prompt-*`
- * instead. The invariant the plan exists to protect — the frozen *target
- * set*, immune to mid-run edits adding or removing work — is unchanged.
- */
-type PlanTarget = {
-  shotId: string;
-  frameId: string;
-  /**
-   * Neighbour shot ids for motion continuity, resolved to raw metadata at
-   * spawn time (parity with regenerateShotPromptFn). Null when not a motion
-   * target, or at the ends of the sequence.
-   */
-  beforeShotId: string | null;
-  afterShotId: string | null;
-  startingFrameImageUrl: string | null;
-  regenVisual: boolean;
-  regenMotion: boolean;
-  /**
-   * The image itself read stale. Rendered directly, or chained after the
-   * visual prompt when that is stale too. Never true for shots without a
-   * rendered image — Update all must not spend credits creating a first
-   * still.
-   */
-  regenImage: boolean;
-  /**
-   * Live input hashes captured at plan time (#1085) — stamped onto the
-   * pending claim rows in `claim-targets` so in-flight work reads as
-   * 'updating' and duplicate enqueues no-op. Non-null whenever the matching
-   * regen flag is set.
-   */
-  visualLiveHash: string | null;
-  motionLiveHash: string | null;
-  imageLiveHash: string | null;
-  /** Model to stamp on the image claim row; the render's own resolution in
-   * `prepare-image-*` overwrites it via `claimForGeneration`. */
-  imageModel: string;
-  /**
-   * Depth ≥ 'video' (#1085): re-render this shot's video. True only when a
-   * video is already selected (never a FIRST render), none is currently
-   * generating, and either an upstream artifact regenerates in this run or
-   * the segment's selected version already reads stale (manifest pointers
-   * diverged). Waits on this run's motion-prompt and image stages.
-   */
-  regenVideo: boolean;
-};
-
-/**
- * The pending rows claimed for one shot (#1085). A null slot for a set regen
- * flag means another run already holds a live claim for that artifact — this
- * run skips it rather than double-generating.
- */
-type ShotClaims = {
-  visualVersionId: string | null;
-  motionVersionId: string | null;
-  imageVariantId: string | null;
-};
-
-/**
- * A shot the plan could not act on. Distinct from a `UpdateFailure`: nothing
- * was attempted. Reported so a run that quietly covered less than the user
- * asked for can't read as a clean success.
- */
-type SkippedShot = {
-  shotId: string;
-  reason:
-    | 'no-anchor-frame'
-    | 'no-scene'
-    | 'staleness-unknown'
-    | 'already-in-flight';
-};
-
-/**
- * Depth 'music' (#1085): the sequence-level music slice of the plan.
- * `regenPrompt` — the music prompt's stored hash diverges from live.
- * `regenTrack` — a track already exists AND the prompt regenerates in this
- * run (cascade-only: there is no track-level staleness signal today, so a
- * fresh prompt with an old track is deliberately left alone). Never a FIRST
- * generation of either.
- */
-type MusicPlan = { regenPrompt: boolean; regenTrack: boolean };
-
-type Plan = {
-  aspectRatio: FramePromptWorkflowInput['aspectRatio'];
-  /** Non-null only at depth 'music'. */
-  music: MusicPlan | null;
-  promptContext: {
-    characterBible: FramePromptWorkflowInput['characterBible'];
-    locationBible: FramePromptWorkflowInput['locationBible'];
-    elementBible: FramePromptWorkflowInput['elementBible'];
-    styleConfig: FramePromptWorkflowInput['styleConfig'];
-    analysisModelId: FramePromptWorkflowInput['analysisModelId'];
-  } | null;
-  targets: PlanTarget[];
-  skipped: SkippedShot[];
-};
-
 type ImageChildOutput = { imageUrl?: string; cancelled?: boolean };
 
 /** A prompt target's scenes, materialised per shot in `prepare-prompt-*`. */
@@ -247,17 +143,32 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
     if (!sequenceId) {
       throw new WorkflowValidationError('Sequence ID is required');
     }
-    // Runs enqueued before the depth picker existed carry no depth; 'images'
-    // matches the pre-picker gating most closely.
-    const depth: UpdateStaleDepth = input.depth ?? 'images';
+    // Runs enqueued before the depth picker existed carry no depth.
+    const depth: UpdateStaleDepth = input.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
 
     // ============================================================
-    // PHASE 1: compute the plan from live state. The step result is
-    // durably persisted — this is the run's frozen snapshot.
+    // PHASE 1: freeze the plan from live state (domain logic lives in
+    // `@/lib/shots/update-stale-plan`). The step result is the run's
+    // durable snapshot of what will regenerate / be billed.
     // ============================================================
-    const plan = await step.do('compute-plan', () =>
-      computePlan({ scopedDb, sequenceId, sceneId, shotId, depth })
-    );
+    const plan = await step.do('compute-plan', async () => {
+      try {
+        return await computePlan({
+          scopedDb,
+          sequenceId,
+          sceneId,
+          shotId,
+          depth,
+        });
+      } catch (error) {
+        // Plan throws WorkflowValidationError (lib-safe); CF retries plain
+        // Errors inside step.do, so re-wrap as NonRetryableError here.
+        if (error instanceof WorkflowValidationError) {
+          throw new NonRetryableError(error.message, error.name);
+        }
+        throw error;
+      }
+    });
 
     const counters = {
       visualPrompts: 0,
@@ -1088,394 +999,4 @@ function toFailure(
     stage,
     error: error instanceof Error ? error.message : String(error),
   };
-}
-
-/**
- * Recompute staleness for the in-scope shots from live state and freeze the
- * regeneration plan. Runs inside `step.do('compute-plan')`, so the returned
- * value is the run's durable snapshot. Exported for testing — the gating
- * rules here decide what gets regenerated and therefore what gets billed.
- */
-export async function computePlan(args: {
-  scopedDb: ScopedDb;
-  sequenceId: string;
-  sceneId?: string;
-  shotId?: string;
-  depth?: UpdateStaleDepth;
-}): Promise<Plan> {
-  const { scopedDb, sequenceId, sceneId, shotId, depth = 'images' } = args;
-  const sequence = await scopedDb.sequences.getById(sequenceId);
-  if (!sequence) {
-    throw new NonRetryableError(
-      `Sequence ${sequenceId} not found`,
-      'WorkflowValidationError'
-    );
-  }
-
-  const allShots = await scopedDb.shots.listBySequence(sequenceId);
-  const inScope = allShots.filter((shot) => {
-    if (shotId) return shot.id === shotId;
-    if (sceneId) return shot.sceneId === sceneId;
-    return true;
-  });
-  const skipped: SkippedShot[] = [];
-  const planBase: Plan = {
-    aspectRatio: sequence.aspectRatio,
-    music: depthIncludes(depth, 'music')
-      ? await computeMusicPlan(scopedDb, sequence, allShots)
-      : null,
-    promptContext: null,
-    targets: [],
-    skipped,
-  };
-  if (inScope.length === 0) return planBase;
-
-  // Depth ≥ 'video': per-shot video state from the segment assembly — the
-  // same 4 batched reads + pure assemble `getSequenceSegmentsFn` uses, so
-  // "has a video" / "already stale" / "currently generating" match the UI.
-  const videoStateByShot = new Map<
-    string,
-    { hasVideo: boolean; alreadyStale: boolean; generating: boolean }
-  >();
-  if (depthIncludes(depth, 'video')) {
-    const [segments, versions, allFrames] = await Promise.all([
-      scopedDb.renderSegments.listBySequence(sequenceId),
-      scopedDb.videoVariants.listBySequence(sequenceId),
-      scopedDb.frames.listBySequence(sequenceId),
-    ]);
-    const assembled = assembleSequenceSegments({
-      segments,
-      versions,
-      shots: allShots,
-      frames: allFrames,
-    });
-    for (const segment of assembled) {
-      const generating = versions.some(
-        (v) => v.renderSegmentId === segment.id && v.status === 'generating'
-      );
-      for (const segShotId of segment.shotIds) {
-        videoStateByShot.set(segShotId, {
-          hasVideo: segment.selectedVersion !== null,
-          alreadyStale: segment.stale,
-          generating,
-        });
-      }
-    }
-  }
-
-  await scopedDb.shots.ensureAnchorFrames(inScope);
-  const [anchorRows, scriptBySceneId, characters, locations, elements] =
-    await Promise.all([
-      scopedDb.frames.listAnchorsBySequence(sequenceId),
-      loadSelectedScriptsBySequence(scopedDb, sequenceId),
-      scopedDb.characters.listWithSheets(sequenceId),
-      scopedDb.sequenceLocations.listWithReferences(sequenceId),
-      scopedDb.sequenceElements.list(sequenceId),
-    ]);
-  const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-  const refs: ShotStalenessRefs = { characters, locations, elements };
-
-  const targets: PlanTarget[] = [];
-  // Any target's scene works for the bible load below — the scene only
-  // matters to the hash/narrowing paths, not the bible construction.
-  let anyScene: Scene | null = null;
-  for (const shot of inScope) {
-    const frame = anchorsByShot.get(shot.id);
-    if (!frame) {
-      skipped.push({ shotId: shot.id, reason: 'no-anchor-frame' });
-      continue;
-    }
-    const { scene } = resolveSceneForShot(shot, scriptBySceneId);
-    if (!scene) {
-      // Shots awaiting script analysis have null metadata. The client's
-      // staleness map can still mark such a shot stale (the thumbnail branch
-      // runs without a scene), so record the skip rather than dropping it —
-      // otherwise the UI waits forever on work that was never planned.
-      skipped.push({ shotId: shot.id, reason: 'no-scene' });
-      continue;
-    }
-    const staleness = await computeShotStaleness({
-      scopedDb,
-      sequence,
-      shot,
-      frame,
-      scene,
-      refs,
-    });
-    // 'unknown' means the comparison failed, not that the artifact is fine.
-    // Regenerating on a guess would burn credits; skipping silently would
-    // report a clean run. Record it so the user is told.
-    if (
-      staleness.thumbnail === 'unknown' ||
-      staleness.visualPrompt === 'unknown' ||
-      staleness.motionPrompt === 'unknown'
-    ) {
-      skipped.push({ shotId: shot.id, reason: 'staleness-unknown' });
-      continue;
-    }
-    // 'stale' only — 'updating' means a live claim already covers the
-    // artifact (this run's dedup, #1085), 'fresh'/'untracked' need nothing.
-    const regenVisual = staleness.visualPrompt === 'stale';
-    const regenMotion = staleness.motionPrompt === 'stale';
-    // Depth ≥ 'images' cascades: a still whose visual prompt regenerates in
-    // this run is re-rendered too (it would read stale the moment the prompt
-    // lands), alongside stills that are stale in their own right. Depth
-    // 'prompts' renders nothing. Never a FIRST still, at any depth.
-    const regenImage =
-      depthIncludes(depth, 'images') &&
-      !!frame.imageUrl &&
-      (staleness.thumbnail === 'stale' || regenVisual);
-    // Depth ≥ 'video' cascades onto existing videos whose upstream changes in
-    // this run — or whose manifest already diverged. Skipped while a render
-    // is in flight (the in-flight one is already producing the fix).
-    const videoState = videoStateByShot.get(shot.id);
-    const regenVideo =
-      !!videoState &&
-      videoState.hasVideo &&
-      !videoState.generating &&
-      (regenMotion || regenImage || videoState.alreadyStale);
-    if (!regenVisual && !regenMotion && !regenImage && !regenVideo) continue;
-
-    anyScene ??= scene;
-    // Neighbour ids give the motion LLM the same continuity context the
-    // single-shot regen path passes (parity with regenerateShotPromptFn:
-    // raw metadata, ordered by the sequence's shot list). Resolved to scenes
-    // at spawn time — see `PlanTarget`.
-    const idx = allShots.findIndex((s) => s.id === shot.id);
-    targets.push({
-      shotId: shot.id,
-      frameId: frame.id,
-      beforeShotId: regenMotion ? (allShots[idx - 1]?.id ?? null) : null,
-      afterShotId: regenMotion ? (allShots[idx + 1]?.id ?? null) : null,
-      startingFrameImageUrl: frame.imageUrl,
-      regenVisual,
-      regenMotion,
-      regenImage,
-      visualLiveHash: staleness.liveHashes.visualPrompt,
-      motionLiveHash: staleness.liveHashes.motionPrompt,
-      imageLiveHash: staleness.liveHashes.thumbnail,
-      imageModel: safeTextToImageModel(frame.imageModel, DEFAULT_IMAGE_MODEL),
-      regenVideo,
-    });
-  }
-  if (targets.length === 0 || !anyScene) return planBase;
-
-  // Bibles + style are sequence-wide; load once via the same context loader
-  // the single-shot regen path uses.
-  const ctx = await loadShotPromptContext({
-    scopedDb,
-    sequence,
-    scene: anyScene,
-  });
-  return {
-    ...planBase,
-    promptContext: {
-      characterBible: ctx.characterBible,
-      locationBible: ctx.locationBible,
-      elementBible: ctx.elementBible,
-      styleConfig: ctx.styleConfig,
-      analysisModelId:
-        getAnalysisModelById(ctx.analysisModel)?.id ?? DEFAULT_ANALYSIS_MODEL,
-    },
-    targets,
-  };
-}
-
-/**
- * Sequence-level music slice of the plan (depth 'music'). Mirrors
- * `getMusicPromptStalenessFn`'s comparison exactly (latest version's
- * analysis model, fallback to the sequence's). Untracked (no stored hash,
- * no scenes) means NOTHING — Update all never creates a first music prompt
- * or track — and an in-flight generation (musicStatus 'generating') is left
- * to finish rather than duplicated.
- */
-async function computeMusicPlan(
-  scopedDb: ScopedDb,
-  sequence: NonNullable<Awaited<ReturnType<ScopedDb['sequences']['getById']>>>,
-  allShots: Shot[]
-): Promise<MusicPlan> {
-  const none: MusicPlan = { regenPrompt: false, regenTrack: false };
-  if (!sequence.musicPromptInputHash) return none;
-  const scenes = allShots
-    .map((s) => s.metadata)
-    .filter((m): m is NonNullable<typeof m> => m !== null);
-  if (scenes.length === 0) return none;
-  try {
-    const sceneSummaries = buildMusicSceneSummaries(scenes);
-    const latest = await scopedDb.sequenceMusicPromptVersions.getLatest(
-      sequence.id
-    );
-    const analysisModel =
-      latest?.analysisModel ??
-      getAnalysisModelById(sequence.analysisModel)?.id ??
-      DEFAULT_ANALYSIS_MODEL;
-    const liveHash = await computeMusicPromptInputHash({
-      sceneSummaries,
-      analysisModel,
-    });
-    const regenPrompt = liveHash !== sequence.musicPromptInputHash;
-    return {
-      regenPrompt,
-      // Cascade-only: the track follows its prompt. No prompt change → the
-      // track is left alone (no track-level staleness signal exists today).
-      regenTrack:
-        regenPrompt &&
-        !!sequence.musicUrl &&
-        sequence.musicStatus !== 'generating',
-    };
-  } catch (error) {
-    // Hash uncomputable — report nothing rather than guessing (same
-    // fail-closed posture as the per-shot 'unknown' handling).
-    logger.warn(`music staleness uncomputable for sequence ${sequence.id}:`, {
-      err: error,
-    });
-    return none;
-  }
-}
-
-/**
- * Claim the plan's targets (#1085): pre-create a pending version row per
- * artifact this run will produce, so in-flight work reads as 'updating',
- * duplicate enqueues no-op, and the children complete these rows in place.
- *
- * Runs inside `step.do('claim-targets')` and is idempotent across step
- * retries: an existing live claim stamped with THIS run's instance id is
- * reused; one stamped by anyone else means the artifact is already being
- * produced elsewhere, so this run skips it (reported as `already-in-flight`
- * rather than silently narrowing the run). Exported for testing.
- */
-export async function claimTargets(args: {
-  scopedDb: ScopedDb;
-  targets: PlanTarget[];
-  sequenceId: string;
-  parentInstanceId: string;
-}): Promise<{
-  claimsByShot: Record<string, ShotClaims>;
-  skipped: SkippedShot[];
-}> {
-  const { scopedDb, targets, sequenceId, parentInstanceId } = args;
-  const claimsByShot: Record<string, ShotClaims> = {};
-  const skipped: SkippedShot[] = [];
-
-  for (const target of targets) {
-    const claims: ShotClaims = {
-      visualVersionId: null,
-      motionVersionId: null,
-      imageVariantId: null,
-    };
-    let foreignClaim = false;
-
-    if (target.regenVisual && target.visualLiveHash) {
-      const existing = await scopedDb.framePromptVersions.getLivePending(
-        target.frameId,
-        target.visualLiveHash
-      );
-      if (existing) {
-        if (existing.workflowRunId === parentInstanceId) {
-          claims.visualVersionId = existing.id;
-        } else {
-          foreignClaim = true;
-        }
-      } else {
-        try {
-          const row = await scopedDb.framePromptVersions.createPending({
-            frameId: target.frameId,
-            pendingInputHash: target.visualLiveHash,
-            workflowRunId: parentInstanceId,
-          });
-          claims.visualVersionId = row.id;
-        } catch {
-          // Lost the insert race to a concurrent enqueue (partial unique
-          // index on live claims) — the artifact is already being produced.
-          foreignClaim = true;
-        }
-      }
-    }
-
-    if (target.regenMotion && target.motionLiveHash) {
-      const existing = await scopedDb.shotPromptVersions.getLivePending(
-        target.shotId,
-        target.motionLiveHash
-      );
-      if (existing) {
-        if (existing.workflowRunId === parentInstanceId) {
-          claims.motionVersionId = existing.id;
-        } else {
-          foreignClaim = true;
-        }
-      } else {
-        try {
-          const row = await scopedDb.shotPromptVersions.createPending({
-            shotId: target.shotId,
-            pendingInputHash: target.motionLiveHash,
-            workflowRunId: parentInstanceId,
-          });
-          claims.motionVersionId = row.id;
-        } catch {
-          foreignClaim = true; // lost the insert race — see the visual twin
-        }
-      }
-    }
-
-    if (target.regenImage) {
-      const liveClaims = await scopedDb.frameVariants.listLiveClaims(
-        target.frameId
-      );
-      if (target.regenVisual) {
-        // Chained render: valid only behind OUR visual claim. A foreign
-        // visual claim means someone else owns the prompt regen — chaining
-        // onto their run is not this run's call, so skip the image too.
-        if (claims.visualVersionId) {
-          const visualVersionId = claims.visualVersionId;
-          const ours = liveClaims.find(
-            (c) => c.dependsOnVersionId === visualVersionId
-          );
-          claims.imageVariantId =
-            ours?.id ??
-            (
-              await scopedDb.frameVariants.createPendingClaim({
-                frameId: target.frameId,
-                sequenceId,
-                model: target.imageModel,
-                dependsOnVersionId: visualVersionId,
-                workflowRunId: parentInstanceId,
-              })
-            ).id;
-        } else {
-          foreignClaim = true;
-        }
-      } else if (target.imageLiveHash) {
-        const existing = liveClaims.find(
-          (c) => c.pendingInputHash === target.imageLiveHash
-        );
-        if (existing) {
-          if (existing.workflowRunId === parentInstanceId) {
-            claims.imageVariantId = existing.id;
-          } else {
-            foreignClaim = true;
-          }
-        } else {
-          try {
-            const row = await scopedDb.frameVariants.createPendingClaim({
-              frameId: target.frameId,
-              sequenceId,
-              model: target.imageModel,
-              pendingInputHash: target.imageLiveHash,
-              workflowRunId: parentInstanceId,
-            });
-            claims.imageVariantId = row.id;
-          } catch {
-            foreignClaim = true; // lost the insert race — see the visual twin
-          }
-        }
-      }
-    }
-
-    if (foreignClaim) {
-      skipped.push({ shotId: target.shotId, reason: 'already-in-flight' });
-    }
-    claimsByShot[target.shotId] = claims;
-  }
-
-  return { claimsByShot, skipped };
 }

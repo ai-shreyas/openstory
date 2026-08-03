@@ -90,7 +90,10 @@ export type ShotStalenessRefs = {
  *                     transient D1 read, malformed row). Distinct from
  *                     `'untracked'`: the UI renders it as "couldn't check"
  *                     rather than as silence, so a broken comparison never
- *                     reads as "up to date".
+ *                     reads as "up to date". WRITE paths must not treat "we
+ *                     couldn't tell" as "nothing to do" — `computePlan`
+ *                     (update-stale-plan) reports these as skipped rather than
+ *                     silently dropping a possibly-stale artifact.
  *
  * `refs` lets batched callers load the sequence-scoped rows once for the whole
  * scene/sequence instead of once per shot; when absent they are loaded lazily.

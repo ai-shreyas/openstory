@@ -26,6 +26,13 @@ export const UPDATE_STALE_DEPTHS = [
 
 export type UpdateStaleDepth = (typeof UPDATE_STALE_DEPTHS)[number];
 
+/**
+ * Default cascade depth when a run (or client) omits `depth`. Matches the
+ * pre–depth-picker gating most closely: prompts + affected stills, no video
+ * or music.
+ */
+export const DEFAULT_UPDATE_STALE_DEPTH: UpdateStaleDepth = 'images';
+
 const RANK: Record<UpdateStaleDepth, number> = {
   prompts: 0,
   images: 1,

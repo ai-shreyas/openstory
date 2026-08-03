@@ -15,7 +15,10 @@ import {
   type ShotStalenessRefs,
   type ShotStalenessResult,
 } from '@/lib/shots/shot-staleness';
-import { UPDATE_STALE_DEPTHS } from '@/lib/shots/update-stale-depth';
+import {
+  DEFAULT_UPDATE_STALE_DEPTH,
+  UPDATE_STALE_DEPTHS,
+} from '@/lib/shots/update-stale-depth';
 import {
   projectShotWithImage,
   projectShotMissingFrame,
@@ -727,7 +730,7 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
   )
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user, scopedDb } = context;
-    const depth = data.depth ?? 'images';
+    const depth = data.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
     // The plan isn't known yet, so this can't be the exact cost — it's a
     // floor: a run that can't afford even one artifact of its most expensive
     // level should never start. 'prompts' has no render cost; LLM spend is

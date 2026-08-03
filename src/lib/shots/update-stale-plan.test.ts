@@ -88,8 +88,7 @@ vi.doMock('@/lib/ai/input-hash', () => ({
   computeMusicPromptInputHash: vi.fn(() => Promise.resolve('live-music-hash')),
 }));
 
-const { computePlan, claimTargets } =
-  await import('./update-stale-shots-workflow');
+const { computePlan, claimTargets } = await import('./update-stale-plan');
 
 type VideoFixture = {
   segments?: Array<{
