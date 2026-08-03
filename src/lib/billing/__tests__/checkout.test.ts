@@ -50,7 +50,8 @@ describe('createCheckoutSession', () => {
         price_data: expect.objectContaining({ unit_amount: 10_000 }),
       }),
       expect.objectContaining({
-        price_data: expect.objectContaining({ unit_amount: 500 }),
+        // 7% platform fee on $100 credits → $7.00
+        price_data: expect.objectContaining({ unit_amount: 700 }),
       }),
     ]);
     expect(session.metadata).toMatchObject({
