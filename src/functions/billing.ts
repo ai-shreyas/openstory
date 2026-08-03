@@ -61,15 +61,23 @@ export const getBillingBalanceFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const { scopedDb } = context;
 
-    const [balance, settings] = await Promise.all([
+    const [balance, settings, usageHistory] = await Promise.all([
       scopedDb.billing.getBalance(),
       scopedDb.billing.getBillingSettings(),
+      // One credit_usage row is enough — drives welcome-credits suppression (#1096).
+      scopedDb.billing.getTransactionHistory({
+        limit: 1,
+        type: 'credit_usage',
+      }),
     ]);
 
     return {
       teamId: context.teamId,
       balance: microsToUsd(balance),
       stripeEnabled: isStripeEnabled(),
+      // D1 `count(*)` can arrive as a string — coerce. Prefer row presence too.
+      hasUsedCredits:
+        usageHistory.transactions.length > 0 || Number(usageHistory.total) > 0,
       autoTopUp: {
         enabled: settings.autoTopUpEnabled,
         thresholdUsd: settings.autoTopUpThresholdMicros

@@ -7,6 +7,7 @@
 
 import { getEnv } from '#env';
 import { env as workerEnv } from 'cloudflare:workers';
+import { FeedbackEmail } from '@/lib/emails/feedback-email';
 import { FounderCreditRequestEmail } from '@/lib/emails/founder-credit-request-email';
 import { OtpEmail } from '@/lib/emails/otp-email';
 import { renderEmail } from '@/lib/emails/render-email';
@@ -131,6 +132,29 @@ export async function sendFounderCreditRequestEmail(params: {
         userEmail={params.userEmail}
         teamId={params.teamId}
         balanceDisplay={params.balanceDisplay}
+      />
+    ),
+  });
+}
+
+/** In-app Feedback sidebar dialog — lands on CONTACT_EMAIL. */
+export async function sendFeedbackEmail(params: {
+  to: string;
+  userName: string;
+  userEmail: string;
+  teamId: string;
+  message: string;
+}): Promise<{ success: boolean; error?: string }> {
+  return sendEmail({
+    to: params.to,
+    subject: `Feedback from ${params.userEmail}`,
+    body: (
+      <FeedbackEmail
+        appName={getAppName()}
+        userName={params.userName}
+        userEmail={params.userEmail}
+        teamId={params.teamId}
+        message={params.message}
       />
     ),
   });

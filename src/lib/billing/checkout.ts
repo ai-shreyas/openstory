@@ -5,7 +5,7 @@
 
 import { ValidationError } from '@/lib/errors';
 import {
-  formatProcessingFeePercent,
+  formatPlatformFeePercent,
   MIN_TOPUP_AMOUNT_USD,
   splitCheckoutAmounts,
 } from './constants';
@@ -69,7 +69,7 @@ export async function createCheckoutSession(
   const { creditUsd, feeUsd } = splitCheckoutAmounts(amountUsd);
   const creditCents = Math.round(creditUsd * 100);
   const feeCents = Math.round(feeUsd * 100);
-  const feeLabel = formatProcessingFeePercent();
+  const feeLabel = formatPlatformFeePercent();
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
@@ -96,8 +96,8 @@ export async function createCheckoutSession(
           currency: 'usd',
           unit_amount: feeCents,
           product_data: {
-            name: `Processing fee (${feeLabel})`,
-            description: `One-time processing fee on credit purchases. AI usage is billed at provider cost with no additional fee.`,
+            name: `Platform fee (${feeLabel})`,
+            description: `One-time platform fee on credit purchases. Generations deduct credits at lab rates with no extra fee.`,
           },
         },
         quantity: 1,

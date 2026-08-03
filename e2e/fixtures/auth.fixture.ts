@@ -93,12 +93,15 @@ export async function authenticateUser(
 ): Promise<void> {
   const testOtp = '123456';
 
-  // The welcome-credits dialog (#1096) fires once for accounts younger than
-  // 7 days — i.e. every freshly-created e2e user. Pre-seed its seen-flag so
-  // the modal never overlays the UI under test; auth.setup's storageState
-  // snapshot carries it into every spec that reuses the shared session.
+  // Welcome-credits dialog (#1096) re-shows every 3h until the team has a
+  // credit_usage row. Fresh e2e users have none — pre-seed a recent dismiss
+  // so the modal never overlays the UI under test. storageState carries it
+  // into specs that reuse the shared session.
   await page.addInitScript(() => {
-    localStorage.setItem('openstory:welcome-credits-seen', 'true');
+    localStorage.setItem(
+      'openstory:welcome-credits-dismissed-at',
+      String(Date.now())
+    );
   });
 
   // Create OTP via test API (the route normalizes to the identifier

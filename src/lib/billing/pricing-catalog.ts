@@ -2,6 +2,9 @@
  * Public model pricing catalog — single source for the /pricing page.
  * Combines live fal pricing (`model_pricing`, passed in by the server
  * function) with OpenRouter LLM token rates.
+ *
+ * Columns use **lab** (who made the model) and **via** (which API we call).
+ * Price cells are starting points — full rules live on the via platform.
  */
 
 import type { EffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
@@ -18,10 +21,18 @@ import {
 } from '@/lib/ai/openrouter-pricing-data';
 import { microsToUsd } from '@/lib/billing/money';
 
+type PricingVia = 'fal.ai' | 'OpenRouter';
+
 type PricingRow = {
   name: string;
-  provider: string;
+  /** Who trained / owns the model (xAI, ByteDance, Google, …). */
+  lab: string;
+  /** Which API OpenStory calls for this model today. */
+  via: PricingVia;
+  /** Official pricing / model page on the via platform. */
+  docsUrl: string;
   license?: 'open-source' | 'proprietary';
+  /** Short indicative rate — not the full tariff. */
   price: string;
   detail?: string;
 };
@@ -62,13 +73,21 @@ function formatUsd(amount: number): string {
   return `$${amount.toFixed(6)}`;
 }
 
+function falDocsUrl(endpointId: string): string {
+  return `https://fal.ai/models/${endpointId}`;
+}
+
+function openRouterDocsUrl(modelId: string): string {
+  return `https://openrouter.ai/models/${modelId}`;
+}
+
 function formatFalPrice(
   falPricing: Record<string, EffectiveFalPricing>,
   endpointId: string
 ): { price: string; detail?: string } {
   const pricing = falPricing[endpointId];
   if (!pricing) {
-    return { price: 'Contact support', detail: 'Pricing unavailable' };
+    return { price: 'See fal.ai', detail: 'Live rate unavailable — open docs' };
   }
 
   const unitUsd = microsToUsd(pricing.unitPrice);
@@ -85,28 +104,34 @@ function formatFalPrice(
   if (typical != null && Math.abs(typical - unitUsd) > unitUsd * 0.05) {
     return {
       price: `~${formatUsd(typical)} / generation`,
-      detail: 'Typical cost per generation (billed from provider units)',
+      detail: 'Indicative typical cost — billed from platform units',
     };
   }
 
-  return { price: `${formatUsd(unitUsd)} / ${unitLabel}` };
+  return {
+    price: `from ${formatUsd(unitUsd)} / ${unitLabel}`,
+    detail: 'Indicative unit rate — resolution, duration, and extras vary',
+  };
 }
 
 function formatLlmPrice(modelId: string): { price: string; detail?: string } {
   const pricing = OPENROUTER_PRICING[modelId];
   if (!pricing) {
-    return { price: 'Per request', detail: 'Billed at provider cost' };
+    return {
+      price: 'See OpenRouter',
+      detail: 'Billed at platform token rates',
+    };
   }
 
   const input = formatUsd(pricing.promptPerMillionTokens);
   const output = formatUsd(pricing.completionPerMillionTokens);
   const detail =
     pricing.webSearchPerQuery != null
-      ? `Web search: ${formatUsd(pricing.webSearchPerQuery)} / query`
-      : undefined;
+      ? `Web search: ${formatUsd(pricing.webSearchPerQuery)} / query · see OpenRouter for full tariff`
+      : 'Token rates — see OpenRouter for full tariff';
 
   return {
-    price: `${input} / M input · ${output} / M output`,
+    price: `${input} / M in · ${output} / M out`,
     detail,
   };
 }
@@ -124,7 +149,7 @@ export function buildPricingCatalog(opts: {
 }): PricingCatalog {
   const { falPricing } = opts;
 
-  const toRow = (model: {
+  const toFalRow = (model: {
     id: string;
     name: string;
     provider: string;
@@ -133,7 +158,9 @@ export function buildPricingCatalog(opts: {
     const { price, detail } = formatFalPrice(falPricing, model.id);
     return {
       name: model.name,
-      provider: model.provider,
+      lab: model.provider,
+      via: 'fal.ai',
+      docsUrl: falDocsUrl(model.id),
       license: model.license,
       price,
       detail,
@@ -142,19 +169,21 @@ export function buildPricingCatalog(opts: {
 
   const imageRows = visibleImageModels()
     .sort((a, b) => a.qualityRank - b.qualityRank)
-    .map(toRow);
+    .map(toFalRow);
   const videoRows = Object.values(IMAGE_TO_VIDEO_MODELS)
     .sort((a, b) => a.qualityRank - b.qualityRank)
-    .map(toRow);
+    .map(toFalRow);
   const audioRows = Object.values(AUDIO_MODELS)
     .sort((a, b) => a.qualityRank - b.qualityRank)
-    .map(toRow);
+    .map(toFalRow);
 
   const llmRows: PricingRow[] = SCRIPT_ANALYSIS_MODELS.map((model) => {
     const { price, detail } = formatLlmPrice(model.id);
     return {
       name: model.name,
-      provider: model.provider,
+      lab: model.provider,
+      via: 'OpenRouter',
+      docsUrl: openRouterDocsUrl(model.id),
       license: model.license,
       price,
       detail,
@@ -171,36 +200,37 @@ export function buildPricingCatalog(opts: {
   );
 
   return {
+    // Media first — script analysis is a smaller share of spend and sits last.
     sections: [
-      {
-        id: 'llm',
-        title: 'Script analysis (LLM)',
-        description:
-          'Script enhancement, scene splitting, character extraction, and motion prompts. Billed per request at OpenRouter provider cost — same model as openrouter.ai.',
-        rows: llmRows,
-      },
       {
         id: 'image',
         title: 'Image generation',
         description:
-          'Shots, character sheets, location sheets, and style previews. Billed per generation at fal.ai provider cost.',
+          'Shots, character sheets, location sheets, and style previews. Indicative rates via fal.ai — open each model’s page for resolution tiers and extras.',
         rows: imageRows,
       },
       {
         id: 'video',
         title: 'Video / motion',
         description:
-          'Image-to-video motion generation per shot. Billed per second (or flat rate where noted) at fal.ai provider cost.',
+          'Image-to-video per shot. Duration, resolution, and reference media often change the bill — use the fal.ai link for the full tariff.',
         rows: videoRows,
       },
       {
         id: 'audio',
         title: 'Music & audio',
         description:
-          'Background music and soundtracks per sequence. Billed per minute or second at fal.ai provider cost.',
+          'Background music and soundtracks. Billed per minute or second via fal.ai.',
         rows: audioRows,
       },
+      {
+        id: 'llm',
+        title: 'Script analysis',
+        description:
+          'Script enhancement, scene splitting, character extraction, and motion prompts. Token rates via OpenRouter.',
+        rows: llmRows,
+      },
     ],
-    lastUpdated: `Media models: ${falDate} · LLM models: ${orDate}`,
+    lastUpdated: `Media (fal.ai): ${falDate} · Script analysis (OpenRouter): ${orDate}`,
   };
 }
