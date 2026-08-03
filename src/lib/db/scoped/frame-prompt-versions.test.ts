@@ -350,6 +350,282 @@ describe('framePromptVersions.getByIdForFrame', () => {
   });
 });
 
+describe('framePromptVersions.completePendingAiVersion', () => {
+  it('completes the claim in place and mirrors onto the frame', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Regenerated prompt',
+      inputHash: 'live-hash',
+      analysisModel: HAIKU,
+    });
+
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+    expect(completed?.text).toBe('Regenerated prompt');
+    expect(completed?.inputHash).toBe('live-hash');
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Regenerated prompt');
+    expect(frame.visualPromptInputHash).toBe('live-hash');
+    expect(frame.selectedImagePromptVersionId).toBe(claim.id);
+  });
+
+  it('a post-click user edit keeps the mirror — the run completes to history only', async () => {
+    // The invariant the PR is named for: the system cannot lose an edit.
+    const m = createFramePromptVersionsMethods(db);
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    // User edits AFTER the claim was enqueued: a newer completed row lands.
+    const edit = await m.write({
+      frameId,
+      text: 'Post-click hand edit',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Older run output',
+      inputHash: 'other-hash',
+      analysisModel: HAIKU,
+    });
+
+    // The claim itself completed into history…
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+
+    // …but the frame still shows the user's edit.
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Post-click hand edit');
+    expect(frame.selectedImagePromptVersionId).toBe(edit.id);
+  });
+
+  it('returns null for a claim cancelled mid-flight and never mirrors', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    await m.write({
+      frameId,
+      text: 'Original',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: HAIKU,
+    });
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+    await m.markTerminal(claim.id, 'cancelled');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Should be discarded',
+      inputHash: 'live-hash',
+      analysisModel: HAIKU,
+    });
+
+    expect(completed).toBeNull();
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Original');
+    const [row] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claim.id));
+    expect(row?.status).toBe('cancelled');
+  });
+
+  it('identical text at a colliding hash retires the claim in favour of the existing row', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const existing = await m.write({
+      frameId,
+      text: 'Same output',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: HAIKU,
+    });
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'hash-1',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Same output',
+      inputHash: 'hash-1',
+      analysisModel: HAIKU,
+    });
+
+    // The existing row wins; the placeholder retires as 'cancelled'.
+    expect(completed?.id).toBe(existing.id);
+    const [placeholder] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claim.id));
+    expect(placeholder?.status).toBe('cancelled');
+    // No unique-index violation, and the mirror points at the surviving row.
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.selectedImagePromptVersionId).toBe(existing.id);
+  });
+
+  it('new text at a colliding hash completes with a null row-hash (index bypass)', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    await m.write({
+      frameId,
+      text: 'Old output',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: HAIKU,
+    });
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'hash-1',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Fresh different output',
+      inputHash: 'hash-1',
+      analysisModel: HAIKU,
+    });
+
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.inputHash).toBeNull();
+    // The frame's cached hash still tracks the real context.
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Fresh different output');
+    expect(frame.visualPromptInputHash).toBe('hash-1');
+  });
+
+  it('throws for a claim that belongs to another frame (ownership guard)', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const [sibling] = await db
+      .insert(frames)
+      .values({ shotId, sequenceId, orderIndex: 1, role: 'last' })
+      .returning();
+    if (!sibling) throw new Error('test setup: sibling frame missing');
+    const claim = await m.createPending({
+      frameId: sibling.id,
+      pendingInputHash: 'live-hash',
+    });
+
+    await expect(
+      m.completePendingAiVersion({
+        versionId: claim.id,
+        frameId,
+        text: 'Wrong frame',
+        inputHash: 'live-hash',
+        analysisModel: HAIKU,
+      })
+    ).rejects.toThrow(/not found for frame/);
+  });
+
+  it('restore demotes live claims so completion never remirrors', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const original = await m.write({
+      frameId,
+      text: 'Original prompt',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: HAIKU,
+    });
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    // User restores the original while the claim is still generating.
+    await m.select(frameId, original.id, { actorId: null });
+
+    const [demoted] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+    expect(await m.getLivePending(frameId, 'live-hash')).toBeNull();
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Would clobber restore',
+      inputHash: 'live-hash',
+      analysisModel: HAIKU,
+    });
+    expect(completed?.status).toBe('completed');
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Original prompt');
+    expect(frame.selectedImagePromptVersionId).toBe(original.id);
+  });
+
+  it('write demotes live claims (edit frees the unique slot + blocks remirror)', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    await m.write({
+      frameId,
+      text: 'User edit while regenerating',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const [demoted] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+    // Live unique slot freed — a fresh enqueue for a new hash can proceed.
+    expect(await m.getLivePending(frameId, 'live-hash')).toBeNull();
+  });
+});
+
 describe('framePromptVersions.getLatestWithInputHash', () => {
   it('skips null-hash user-edits and returns the most recent hashed row', async () => {
     const m = createFramePromptVersionsMethods(db);

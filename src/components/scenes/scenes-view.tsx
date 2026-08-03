@@ -91,7 +91,9 @@ import { toast } from 'sonner';
  */
 type SceneModelVariant = {
   model: string;
-  status: ShotVariant['status'];
+  // FrameVariant's wider union (adds 'cancelled', #1085); shot-variant rows
+  // assign into it unchanged.
+  status: FrameVariant['status'];
   url: string | null;
   discardedAt: Date | null;
   divergedAt?: Date | null;
@@ -1363,9 +1365,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 staleLabel={
                   effectiveTab === 'image-prompt' &&
                   curSelectedShotId &&
-                  !regeneratingImages.has(curSelectedShotId) &&
-                  scopeStaleness?.[curSelectedShotId]?.thumbnail === 'stale'
-                    ? 'Out of date'
+                  !regeneratingImages.has(curSelectedShotId)
+                    ? scopeStaleness?.[curSelectedShotId]?.thumbnail === 'stale'
+                      ? 'Out of date'
+                      : scopeStaleness?.[curSelectedShotId]?.thumbnail ===
+                          'updating'
+                        ? 'Updating…'
+                        : null
                     : null
                 }
                 progressMessage={

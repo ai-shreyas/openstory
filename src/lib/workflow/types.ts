@@ -44,6 +44,7 @@ import type {
   StyleConfig,
 } from '@/lib/db/schema';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
+import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import type { Json } from '@/types/database';
 import { z } from 'zod';
 import type { musicDesignResultSchema } from '../ai/response-schemas';
@@ -111,6 +112,14 @@ export interface ImageWorkflowInput extends SequenceWorkflowContext {
    * (there is no primary to protect).
    */
   variantOnly?: boolean;
+  /**
+   * Pre-created pending `frame_variants` claim row to complete in place
+   * (#1085). When set, `set-generating-status` transitions THIS row to
+   * 'generating' instead of appending a fresh one, and `persist-result`
+   * completes it. Absent on legacy paths (variant adds, storyboard, preview),
+   * which keep the append-in-workflow behaviour.
+   */
+  targetVariantId?: string;
 }
 
 /**
@@ -353,6 +362,28 @@ export type RegenerateShotSnapshot = {
  * workflow does not read live mutable state inside `context.run`. See
  * docs/architecture/workflow-snapshots-and-content-hash-staleness.md.
  */
+/**
+ * "Update all" (#1077): regenerate every stale artifact in scope, in
+ * dependency order (prompt → image per shot). The payload is deliberately
+ * tiny — the workflow's `compute-plan` step recomputes staleness from live
+ * scoped state at run start and persists the plan as its durable step result,
+ * so the target set is authoritative and immune to a stale client cache.
+ */
+export interface UpdateStaleShotsWorkflowInput extends SequenceWorkflowContext {
+  sequenceId: string;
+  /** Limit to one scene's shots (scene-scope Update all). */
+  sceneId?: string;
+  /** Limit to a single shot (shot-scope Update all). */
+  shotId?: string;
+  /**
+   * Cascade depth (#1085): 'prompts' | 'images' | 'video' | 'music',
+   * cumulative — see src/lib/shots/update-stale-depth.ts. Absent on runs
+   * enqueued before the picker existed; treated as 'images' (the closest
+   * match to the original stale-only behaviour).
+   */
+  depth?: UpdateStaleDepth;
+}
+
 export interface RegenerateShotsWorkflowInput extends SequenceWorkflowContext {
   /** Shot IDs to regenerate */
   shotIds: string[];
@@ -523,6 +554,13 @@ export interface FramePromptWorkflowInput extends SequenceWorkflowContext {
    * publishes on workflows nobody is watching.
    */
   emitStreaming?: boolean;
+  /**
+   * Pre-created pending `frame_prompt_versions` row to complete in place
+   * (#1085). Set by enqueue points that claim their targets up front
+   * (regenerateShotPromptFn, UpdateStaleShotsWorkflow); absent on the
+   * analysis-pipeline path, which still appends on completion.
+   */
+  targetVersionId?: string;
 }
 
 export interface MotionPromptBatchWorkflowInput extends SequenceWorkflowContext {
@@ -564,6 +602,11 @@ export interface MotionPromptWorkflowInput extends SequenceWorkflowContext {
   startingFrameImageUrl?: string | null;
   /** See {@link FramePromptWorkflowInput.emitStreaming}. */
   emitStreaming?: boolean;
+  /**
+   * Pre-created pending `shot_prompt_versions` row (motion) to complete in
+   * place (#1085). See {@link FramePromptWorkflowInput.targetVersionId}.
+   */
+  targetVersionId?: string;
 }
 /**
  * Workflow result types

@@ -157,21 +157,43 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
 
       await step.do('save-motion-prompt-to-db', async () => {
         // The motion prompt is NOT written into `scene.metadata` any more
-        // (#713). `writeAiVersion` decides ai-generated vs regenerated from
-        // history, appends the version, mirrors its text onto
-        // `shot.motionPrompt`, and repoints `selectedMotionPromptVersionId` —
-        // superseding any prior user override automatically (the override stays
-        // in history and can be restored).
-        await scopedDb.shotPromptVersions.writeAiVersion({
-          shotId,
-          text: motionPrompt.fullPrompt,
-          components: motionPrompt.components,
-          parameters: motionPrompt.parameters,
-          dialogue: motionPrompt.dialogue ?? null,
-          audio: motionPrompt.audio ?? null,
-          inputHash,
-          analysisModel: analysisModelId,
-        });
+        // (#713). The version write mirrors its text onto `shot.motionPrompt`
+        // and repoints `selectedMotionPromptVersionId` — superseding any prior
+        // user override automatically (the override stays in history and can
+        // be restored).
+        if (input.targetVersionId) {
+          // #1085: complete the pre-created pending claim in place. Null =
+          // cancelled mid-flight; the output is deliberately discarded.
+          const completed =
+            await scopedDb.shotPromptVersions.completePendingAiVersion({
+              versionId: input.targetVersionId,
+              shotId,
+              text: motionPrompt.fullPrompt,
+              components: motionPrompt.components,
+              parameters: motionPrompt.parameters,
+              dialogue: motionPrompt.dialogue ?? null,
+              audio: motionPrompt.audio ?? null,
+              inputHash,
+              analysisModel: analysisModelId,
+            });
+          if (!completed) {
+            logger.info(
+              `[MotionPromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
+            );
+            return;
+          }
+        } else {
+          await scopedDb.shotPromptVersions.writeAiVersion({
+            shotId,
+            text: motionPrompt.fullPrompt,
+            components: motionPrompt.components,
+            parameters: motionPrompt.parameters,
+            dialogue: motionPrompt.dialogue ?? null,
+            audio: motionPrompt.audio ?? null,
+            inputHash,
+            analysisModel: analysisModelId,
+          });
+        }
 
         // The prompt lives on `shot.motionPrompt` (mirror) now, not metadata;
         // carry the base scene so the client refreshes the shot on this event.
@@ -194,12 +216,27 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
   protected override async onFailure({
     event,
     error,
+    scopedDb,
   }: {
     event: Readonly<WorkflowEvent<MotionPromptWorkflowInput>>;
     error: string;
     scopedDb: ScopedDb;
   }): Promise<void> {
     logger.error('[MotionPromptWorkflow:cf] Failed', { error });
+    // #1085: fail the pending claim so it stops reading as "updating".
+    // Best-effort — the reconciler sweeps anything this misses.
+    if (event.payload.targetVersionId) {
+      try {
+        await scopedDb.shotPromptVersions.markTerminal(
+          event.payload.targetVersionId,
+          'failed'
+        );
+      } catch (dbErr) {
+        logger.warn('[MotionPromptWorkflow:cf] failed to mark claim failed', {
+          err: dbErr,
+        });
+      }
+    }
     try {
       const payload = event.payload;
       if (payload.emitStreaming && payload.shotId) {

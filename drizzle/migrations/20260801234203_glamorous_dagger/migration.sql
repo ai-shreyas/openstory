@@ -1,0 +1,3 @@
+CREATE UNIQUE INDEX `uq_frame_prompt_versions_live_claim` ON `frame_prompt_versions` (`frame_id`,`pending_input_hash`) WHERE "frame_prompt_versions"."pending_input_hash" IS NOT NULL AND "frame_prompt_versions"."status" IN ('pending', 'generating');--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_frame_variants_live_claim` ON `frame_variants` (`frame_id`,`pending_input_hash`) WHERE "frame_variants"."pending_input_hash" IS NOT NULL AND "frame_variants"."status" IN ('pending', 'generating');--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_shot_prompt_versions_live_claim` ON `shot_prompt_versions` (`shot_id`,`prompt_type`,`pending_input_hash`) WHERE "shot_prompt_versions"."pending_input_hash" IS NOT NULL AND "shot_prompt_versions"."status" IN ('pending', 'generating');

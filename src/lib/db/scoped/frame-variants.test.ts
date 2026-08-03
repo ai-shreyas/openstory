@@ -679,3 +679,192 @@ describe('frameVariants.isStale', () => {
     expect(await m.isStale(hashed.id, 'h-new')).toBe(true);
   });
 });
+
+describe('frameVariants pending claims (#1085)', () => {
+  it('createPendingClaim + listLiveClaims only surface claim rows', async () => {
+    const m = createFrameVariantsMethods(db);
+    // Ordinary append without claim fields is not a "claim".
+    await m.appendVersion(
+      variantInput({
+        status: 'generating',
+        url: null,
+        workflowRunId: 'run-plain',
+      })
+    );
+    const direct = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+      workflowRunId: 'run-claim',
+    });
+    const chained = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      dependsOnVersionId: 'fpv-dep',
+      workflowRunId: 'run-chain',
+    });
+
+    const live = await m.listLiveClaims(frameId);
+    expect(live.map((r) => r.id).sort()).toEqual(
+      [direct.id, chained.id].sort()
+    );
+  });
+
+  it('claimForGeneration returns null after markTerminal (cancel wins)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const claim = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+    });
+    await m.markTerminal(claim.id, 'cancelled', 'Cancelled by user');
+
+    const claimed = await m.claimForGeneration(claim.id, {
+      workflowRunId: 'run-1',
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+    });
+    expect(claimed).toBeNull();
+    const [row] = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.id, claim.id));
+    expect(row?.status).toBe('cancelled');
+  });
+
+  it('completeIfLive returns null when cancelled mid-flight (no resurrection)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const claim = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+    });
+    await m.claimForGeneration(claim.id, {
+      workflowRunId: 'run-1',
+      model: 'nano_banana_2',
+    });
+    await m.markTerminal(claim.id, 'cancelled', 'Cancelled by user');
+
+    const completed = await m.completeIfLive(claim.id, {
+      url: 'https://cdn/should-not-land.png',
+      storagePath: 'r2/nope.png',
+    });
+    expect(completed).toBeNull();
+    const [row] = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.id, claim.id));
+    expect(row?.status).toBe('cancelled');
+    expect(row?.url).toBeNull();
+  });
+
+  it('completeIfLive completes a live claim in place', async () => {
+    const m = createFrameVariantsMethods(db);
+    const claim = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+    });
+    await m.claimForGeneration(claim.id, {
+      workflowRunId: 'run-1',
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+    });
+
+    const completed = await m.completeIfLive(claim.id, {
+      url: 'https://cdn/img.png',
+      storagePath: 'r2/img.png',
+      inputHash: 'img-hash',
+    });
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+    expect(completed?.url).toBe('https://cdn/img.png');
+  });
+
+  it('cancelByDependency cancels only live dependents of that prompt version', async () => {
+    const m = createFrameVariantsMethods(db);
+    const dep = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      dependsOnVersionId: 'fpv-1',
+    });
+    const other = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      dependsOnVersionId: 'fpv-other',
+    });
+    const direct = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      pendingInputHash: 'img-hash',
+    });
+
+    const cascaded = await m.cancelByDependency(
+      'fpv-1',
+      'Upstream visual prompt was cancelled'
+    );
+    expect(cascaded.map((r) => r.id)).toEqual([dep.id]);
+    expect(cascaded[0]?.status).toBe('cancelled');
+
+    const [otherRow] = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.id, other.id));
+    const [directRow] = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.id, direct.id));
+    expect(otherRow?.status).toBe('pending');
+    expect(directRow?.status).toBe('pending');
+  });
+
+  it('claimForGeneration unique-hash collision stands down (null) instead of throwing', async () => {
+    const m = createFrameVariantsMethods(db);
+    // Direct claim already holds the live hash slot.
+    const holder = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      pendingInputHash: 'shared-hash',
+      workflowRunId: 'run-holder',
+    });
+    // Chained claim starts with null hash (excluded from unique index).
+    const chained = await m.createPendingClaim({
+      frameId,
+      sequenceId,
+      model: 'nano_banana_2',
+      dependsOnVersionId: 'fpv-1',
+      workflowRunId: 'run-chain',
+    });
+
+    // Stamping the shared hash onto the chained row hits the partial unique index.
+    const claimed = await m.claimForGeneration(chained.id, {
+      workflowRunId: 'run-chain',
+      model: 'nano_banana_2',
+      pendingInputHash: 'shared-hash',
+    });
+    expect(claimed).toBeNull();
+
+    // Holder still owns the slot; chained stayed pending (update rolled back).
+    const [holderRow] = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.id, holder.id));
+    const [chainedRow] = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.id, chained.id));
+    expect(holderRow?.status).toBe('pending');
+    expect(holderRow?.pendingInputHash).toBe('shared-hash');
+    expect(chainedRow?.status).toBe('pending');
+    expect(chainedRow?.pendingInputHash).toBeNull();
+  });
+});

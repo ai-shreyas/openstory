@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  useCancelPendingArtifact,
   useRestoreMusicPromptVariant,
   useRestoreShotPromptVariant,
   useSequenceMusicPromptVariants,
@@ -29,11 +30,12 @@ import {
   isValidTextToImageModel,
   videoModelDisplayName,
 } from '@/lib/ai/models';
-import type { PromptVariantSource } from '@/lib/db/schema';
+import type { PromptVariantSource, PromptVersionStatus } from '@/lib/db/schema';
 import { cn } from '@/lib/utils';
 import {
   AlertCircle,
   AlertTriangle,
+  Ban,
   Check,
   Image as ImageIcon,
   Loader2,
@@ -97,7 +99,14 @@ type PromptRow = {
   createdAt: Date;
   createdByName: string | null;
   inputHash: string | null;
+  /** Lifecycle (#1085): non-'completed' rows are in-flight placeholders or
+   * their terminal failures — greyed, no diff/restore, cancellable while
+   * live. Music history predates the column and always reads 'completed'. */
+  status: PromptVersionStatus;
 };
+
+const isLiveStatus = (status: string): boolean =>
+  status === 'pending' || status === 'generating';
 
 type MediaRow = {
   id: string;
@@ -146,9 +155,11 @@ function MediaStatusIcon({ status }: { status: string }) {
     return <Check className="h-3 w-3 text-muted-foreground" aria-hidden />;
   if (status === 'failed')
     return <AlertTriangle className="h-3 w-3 text-destructive" aria-hidden />;
+  if (status === 'cancelled')
+    return <Ban className="h-3 w-3 text-muted-foreground" aria-hidden />;
   return (
     <Loader2
-      className="h-3 w-3 animate-spin text-muted-foreground"
+      className="h-3 w-3 animate-spin text-muted-foreground motion-reduce:animate-none"
       aria-hidden
     />
   );
@@ -162,6 +173,9 @@ type MediaHistoryListProps = {
   onRetry: () => void;
   selecting: boolean;
   onSelect: (versionId: string) => void;
+  /** Cancel an in-flight generation (#1085) — image versions only today. */
+  cancelling?: boolean;
+  onCancel?: (versionId: string) => void;
 };
 
 /**
@@ -176,6 +190,8 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
   onRetry,
   selecting,
   onSelect,
+  cancelling = false,
+  onCancel,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const emptyLabel =
@@ -310,13 +326,36 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
                 {row.status === 'failed' && (
                   <span className="text-xs text-destructive">Failed</span>
                 )}
-                {row.status === 'generating' && (
+                {row.status === 'cancelled' && (
+                  <span className="text-xs text-muted-foreground">
+                    Cancelled
+                  </span>
+                )}
+                {isLiveStatus(row.status) && (
                   <span className="text-xs text-muted-foreground">
                     Generating…
                   </span>
                 )}
               </div>
             </button>
+
+            {onCancel && isLiveStatus(row.status) && (
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={cancelling}
+                  onClick={() => onCancel(row.id)}
+                  aria-label={`Cancel this ${kind} generation`}
+                >
+                  {cancelling && (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin motion-reduce:animate-none" />
+                  )}
+                  Cancel
+                </Button>
+              </div>
+            )}
 
             {expanded && (
               <section
@@ -384,6 +423,9 @@ type PromptHistoryListProps = {
   onRetry: () => void;
   restorePending: boolean;
   onRestore: (variantId: string) => void;
+  /** Cancel an in-flight prompt generation (#1085). */
+  cancelling?: boolean;
+  onCancel?: (variantId: string) => void;
 };
 
 const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
@@ -394,6 +436,8 @@ const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
   onRetry,
   restorePending,
   onRestore,
+  cancelling = false,
+  onCancel,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -439,6 +483,64 @@ const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
   return (
     <ul className="flex flex-col gap-2 pt-2">
       {rows.map((row) => {
+        // In-flight placeholders and their terminal failures (#1085): no
+        // text to diff or restore — a quiet status row, cancellable while
+        // the generation is still live.
+        if (row.status !== 'completed') {
+          const live = isLiveStatus(row.status);
+          return (
+            <li
+              key={row.id}
+              className="flex flex-col gap-2 rounded-md border border-dashed p-3 text-muted-foreground"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  {live ? (
+                    <Loader2
+                      className="h-3 w-3 animate-spin motion-reduce:animate-none"
+                      aria-hidden
+                    />
+                  ) : row.status === 'failed' ? (
+                    <AlertTriangle
+                      className="h-3 w-3 text-destructive"
+                      aria-hidden
+                    />
+                  ) : (
+                    <Ban className="h-3 w-3" aria-hidden />
+                  )}
+                  <span className="text-sm">
+                    {live
+                      ? 'Generating…'
+                      : row.status === 'failed'
+                        ? 'Generation failed'
+                        : 'Cancelled'}
+                  </span>
+                </div>
+                <span className="text-xs tabular-nums">
+                  {formatTimestamp(row.createdAt)}
+                </span>
+              </div>
+              {live && onCancel && (
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={cancelling}
+                    onClick={() => onCancel(row.id)}
+                    aria-label="Cancel this prompt generation"
+                  >
+                    {cancelling && (
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin motion-reduce:animate-none" />
+                    )}
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </li>
+          );
+        }
+
         const expanded = expandedId === row.id;
         const isCurrent = row.text === currentText;
         const panelId = `prompt-history-panel-${row.id}`;
@@ -546,6 +648,7 @@ export const PromptHistorySheet: React.FC<PromptHistorySheetProps> = (
         createdAt: v.createdAt,
         createdByName: v.createdByName,
         inputHash: v.inputHash,
+        status: 'completed' as const,
       }))
     : shotQuery.data?.map((v) => ({
         id: v.id,
@@ -554,6 +657,7 @@ export const PromptHistorySheet: React.FC<PromptHistorySheetProps> = (
         createdAt: v.createdAt,
         createdByName: v.createdByName,
         inputHash: v.inputHash,
+        status: v.status,
       }));
 
   const restoreShot = useRestoreShotPromptVariant({
@@ -563,6 +667,48 @@ export const PromptHistorySheet: React.FC<PromptHistorySheetProps> = (
   });
   const restoreMusic = useRestoreMusicPromptVariant(sequenceId);
   const restoreMutation = isMusic ? restoreMusic : restoreShot;
+
+  // Cancel an in-flight pending claim (#1085) — shot modes only.
+  const cancelPending = useCancelPendingArtifact({
+    sequenceId,
+    shotId: shotId ?? '',
+  });
+  const onCancelPrompt = isMusic
+    ? undefined
+    : (versionId: string) =>
+        cancelPending.mutate(
+          {
+            versionId,
+            artifact: mode === 'visual' ? 'visual-prompt' : 'motion-prompt',
+          },
+          {
+            onSuccess: ({ cancelled }) => {
+              if (!cancelled) toast.info('This generation already finished');
+            },
+            onError: (err) =>
+              toast.error('Cancel failed', {
+                description:
+                  err instanceof Error ? err.message : 'Unknown error',
+              }),
+          }
+        );
+  const onCancelImage =
+    isMusic || mode !== 'visual'
+      ? undefined
+      : (versionId: string) =>
+          cancelPending.mutate(
+            { versionId, artifact: 'image' },
+            {
+              onSuccess: ({ cancelled }) => {
+                if (!cancelled) toast.info('This generation already finished');
+              },
+              onError: (err) =>
+                toast.error('Cancel failed', {
+                  description:
+                    err instanceof Error ? err.message : 'Unknown error',
+                }),
+            }
+          );
 
   const imageQuery = useShotImageVersions(
     { sequenceId, shotId: shotId ?? '' },
@@ -666,6 +812,8 @@ export const PromptHistorySheet: React.FC<PromptHistorySheetProps> = (
                   onRetry={() => void refetch()}
                   restorePending={restoreMutation.isPending}
                   onRestore={onRestore}
+                  cancelling={cancelPending.isPending}
+                  onCancel={onCancelPrompt}
                 />
               </ScrollArea>
             </TabsContent>
@@ -682,6 +830,8 @@ export const PromptHistorySheet: React.FC<PromptHistorySheetProps> = (
                   onRetry={() => void mediaQuery.refetch()}
                   selecting={selectMutation.isPending}
                   onSelect={onSelectMedia}
+                  cancelling={cancelPending.isPending}
+                  onCancel={onCancelImage}
                 />
               </ScrollArea>
             </TabsContent>

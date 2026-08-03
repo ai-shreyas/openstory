@@ -231,6 +231,11 @@
       "class_name": "RegenerateShotsWorkflow",
     },
     {
+      "name": "update-stale-shots-workflow",
+      "binding": "UPDATE_STALE_SHOTS_WORKFLOW",
+      "class_name": "UpdateStaleShotsWorkflow",
+    },
+    {
       "name": "recast-location-workflow",
       "binding": "RECAST_LOCATION_WORKFLOW",
       "class_name": "RecastLocationWorkflow",
@@ -466,6 +471,11 @@
           "name": "regenerate-shots-workflow",
           "binding": "REGENERATE_SHOTS_WORKFLOW",
           "class_name": "RegenerateShotsWorkflow",
+        },
+        {
+          "name": "update-stale-shots-workflow",
+          "binding": "UPDATE_STALE_SHOTS_WORKFLOW",
+          "class_name": "UpdateStaleShotsWorkflow",
         },
         {
           "name": "recast-location-workflow",
@@ -743,6 +753,11 @@
           "name": "regenerate-shots-workflow",
           "binding": "REGENERATE_SHOTS_WORKFLOW",
           "class_name": "RegenerateShotsWorkflow",
+        },
+        {
+          "name": "update-stale-shots-workflow",
+          "binding": "UPDATE_STALE_SHOTS_WORKFLOW",
+          "class_name": "UpdateStaleShotsWorkflow",
         },
         {
           "name": "recast-location-workflow",

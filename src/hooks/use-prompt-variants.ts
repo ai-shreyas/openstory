@@ -1,4 +1,5 @@
 import {
+  cancelPendingArtifactFn,
   listSequenceMusicPromptVariantsFn,
   listShotPromptVariantsFn,
   restoreSequenceMusicPromptVariantFn,
@@ -142,6 +143,45 @@ export function useSaveShotPrompt(args: {
         queryClient.invalidateQueries({
           queryKey: shotStalenessNamespace,
         }),
+      ]);
+    },
+  });
+}
+
+/**
+ * Cancel an in-flight pending artifact claim (#1085). Invalidates the history
+ * lists, the shot projection, and the staleness namespace — a cancelled claim
+ * flips the artifact from 'updating' back to 'stale'.
+ */
+export function useCancelPendingArtifact(args: {
+  sequenceId: string;
+  shotId: string;
+}) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { cancelled: boolean },
+    Error,
+    { versionId: string; artifact: 'visual-prompt' | 'motion-prompt' | 'image' }
+  >({
+    mutationFn: ({ versionId, artifact }) =>
+      cancelPendingArtifactFn({
+        data: {
+          sequenceId: args.sequenceId,
+          shotId: args.shotId,
+          versionId,
+          artifact,
+        },
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: promptVariantKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.detail(args.shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.list(args.sequenceId),
+        }),
+        queryClient.invalidateQueries({ queryKey: shotStalenessNamespace }),
       ]);
     },
   });

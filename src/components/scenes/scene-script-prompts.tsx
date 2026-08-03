@@ -35,10 +35,12 @@ import {
   segmentPanelIsInformative,
 } from '@/components/scenes/segment-video-panel';
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
+import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import {
   type ShotStaleness,
   markArtifactFresh,
   shotIsStale,
+  shotIsUpdating,
   shotStalenessNamespace,
   shotStalenessUnknown,
   useShotStaleness,
@@ -92,6 +94,7 @@ import {
   type SelectionScope,
 } from '@/lib/scenes/scene-selection';
 import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
+import { useUpdateStaleShots } from '@/hooks/use-update-stale-shots';
 import { SceneCastTab } from './scene-cast-tab';
 import { SceneStaleShots } from './scene-stale-shots';
 import { SceneElementsTab } from './scene-elements-tab';
@@ -459,6 +462,45 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     shotId: shot?.id,
   });
 
+  // "Update all" (#1077) — enqueues the durable UpdateStaleShotsWorkflow,
+  // which recomputes staleness server-side and regenerates whatever reads
+  // stale then. This component only picks the scope; the hook polls the run
+  // and reports what it did.
+  const updateStaleShots = useUpdateStaleShots({ sequenceId });
+  const handleUpdateAll = useCallback(
+    (depth: UpdateStaleDepth) => {
+      if (!shot?.id) return;
+      if (falNeedsBillingSetup) {
+        showFalGate();
+        return;
+      }
+      updateStaleShots.run({ shotId: shot.id, depth });
+    },
+    [shot?.id, falNeedsBillingSetup, showFalGate, updateStaleShots]
+  );
+  const handleScopeUpdateAll = useCallback(
+    (depth: UpdateStaleDepth) => {
+      if (!scopeShots || !scopeStaleness) return;
+      if (falNeedsBillingSetup) {
+        showFalGate();
+        return;
+      }
+      updateStaleShots.run({
+        // Undefined at sequence scope → the workflow covers the whole sequence.
+        sceneId: scriptSceneId,
+        depth,
+      });
+    },
+    [
+      scopeShots,
+      scopeStaleness,
+      scriptSceneId,
+      falNeedsBillingSetup,
+      showFalGate,
+      updateStaleShots,
+    ]
+  );
+
   const {
     items: mentionItems,
     characters: mentionCharacters,
@@ -508,6 +550,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     onSuccess: (result, vars) => {
       if (result.alreadyUpToDate) {
         toast.info('Prompt is already up to date');
+      } else if (result.alreadyInFlight) {
+        // Server-side dedup hit (#1085): a run — this tab's, another tab's,
+        // or a teammate's — is already producing this prompt.
+        toast.info('This prompt is already being regenerated');
       } else {
         // Workflow is now enqueued; hold the busy state via the stream's
         // `'pending'` status until deltas start arriving. Naturally cleared
@@ -1268,12 +1314,20 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // so, and "out of date" over a regenerating still just reads as stuck.
   const shotBusy = isGenerating || isGeneratingMotion;
   const shotHasStale = !!shot && !shotBusy && shotIsStale(staleness);
+  // 'updating' (#1085): a server-side pending claim exists — some run (this
+  // tab's, another tab's, a teammate's) is already regenerating the artifact.
+  const shotHasUpdating = !!shot && !shotBusy && shotIsUpdating(staleness);
   // The comparison failed rather than came back clean — say so instead of
   // rendering the confident silence of an up-to-date shot.
   const shotStaleUnknown =
     !!shot &&
     !shotBusy &&
     (isStalenessError || shotStalenessUnknown(staleness));
+  const isUpdatingAll = updateStaleShots.isRunning;
+  const visualBusy =
+    isRegeneratingVisualPrompt || staleness?.visualPrompt === 'updating';
+  const motionBusy =
+    isRegeneratingMotionPrompt || staleness?.motionPrompt === 'updating';
 
   return (
     <Tabs
@@ -1286,13 +1340,22 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       className="w-full"
     >
       {/* Staleness status line (#1077) — one quiet summary under the scope
-          header instead of the old filled banners. Purely informational: each
-          artifact carries its own Regenerate control on its tab, so the
-          summary states the condition and the tabs own the action. */}
-      {shotHasStale && (
-        <StalenessIndicator entityType="shot" density="status-line" />
+          header instead of the old filled banners. "Update all" regenerates
+          only what is stale now — it doesn't cascade into artifacts the
+          regeneration outdates. Video stays a manual pick on its tab. */}
+      {(shotHasStale || shotHasUpdating) && (
+        <StalenessIndicator
+          entityType="shot"
+          density="status-line"
+          message={shotHasStale ? undefined : 'Updating out-of-date artifacts…'}
+          // Busy while OUR run is in flight, or while everything left is
+          // already covered by a server-side claim (#1085) — clicking again
+          // would just no-op against the dedup.
+          isRegenerating={isUpdatingAll || !shotHasStale}
+          onRegenerateDepth={shotHasStale ? handleUpdateAll : undefined}
+        />
       )}
-      {shotStaleUnknown && !shotHasStale && (
+      {shotStaleUnknown && !shotHasStale && !shotHasUpdating && (
         <StalenessIndicator
           entityType="shot"
           density="status-line"
@@ -1302,13 +1365,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       )}
 
       {/* Scene/sequence scope (#1077): same one-line pattern, ending in
-          shot-number chips that navigate down to shot scope. */}
+          shot-number chips that navigate down to shot scope, plus a
+          multi-shot Update all. */}
       {!shot && scopeShots && onSelectShot && (
         <SceneStaleShots
           shots={scopeShots}
           staleness={scopeStaleness}
           stalenessFailed={scopeStalenessFailed}
           onSelectShot={onSelectShot}
+          onUpdateAll={handleScopeUpdateAll}
+          isUpdating={updateStaleShots.isRunning}
         />
       )}
 
@@ -1342,21 +1408,23 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           <TabsTrigger key={t.value} value={t.value}>
             {t.label}
             {t.value === 'image-prompt' &&
-              staleness?.visualPrompt === 'stale' && (
+              (staleness?.visualPrompt === 'stale' ||
+                staleness?.visualPrompt === 'updating') && (
                 <StalenessIndicator
                   artifact="visual-prompt"
                   entityType="shot"
                   density="corner-dot"
-                  isRegenerating={isRegeneratingVisualPrompt}
+                  isRegenerating={visualBusy}
                 />
               )}
             {t.value === 'motion-prompt' &&
-              staleness?.motionPrompt === 'stale' && (
+              (staleness?.motionPrompt === 'stale' ||
+                staleness?.motionPrompt === 'updating') && (
                 <StalenessIndicator
                   artifact="motion-prompt"
                   entityType="shot"
                   density="corner-dot"
-                  isRegenerating={isRegeneratingMotionPrompt}
+                  isRegenerating={motionBusy}
                 />
               )}
           </TabsTrigger>
@@ -1409,12 +1477,13 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                 {/* Quiet stale chip on the artifact itself (#1077); the
                     optimistic 'fresh' write clears it the moment Regenerate
                     is clicked. */}
-                {staleness?.visualPrompt === 'stale' && (
+                {(staleness?.visualPrompt === 'stale' ||
+                  staleness?.visualPrompt === 'updating') && (
                   <StalenessIndicator
                     artifact="visual-prompt"
                     entityType="shot"
                     density="header-chip"
-                    isRegenerating={isRegeneratingVisualPrompt}
+                    isRegenerating={visualBusy}
                     onRegenerate={() =>
                       regeneratePromptMutation.mutate({ promptType: 'visual' })
                     }
@@ -1679,12 +1748,13 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                   Prompt
                 </label>
                 {/* Quiet stale chip — same pattern as the image tab (#1077). */}
-                {staleness?.motionPrompt === 'stale' && (
+                {(staleness?.motionPrompt === 'stale' ||
+                  staleness?.motionPrompt === 'updating') && (
                   <StalenessIndicator
                     artifact="motion-prompt"
                     entityType="shot"
                     density="header-chip"
-                    isRegenerating={isRegeneratingMotionPrompt}
+                    isRegenerating={motionBusy}
                     onRegenerate={() =>
                       regeneratePromptMutation.mutate({ promptType: 'motion' })
                     }

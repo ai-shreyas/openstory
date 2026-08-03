@@ -366,17 +366,38 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
           );
         }
         // The prompt is NOT written into `scene.metadata` any more (#713):
-        // `frame_prompt_versions.writeAiVersion` mirrors its text onto
-        // `frame.imagePrompt` and repoints `selectedImagePromptVersionId`,
-        // superseding any prior user-override automatically (the override stays in
-        // history and can be restored).
-        await scopedDb.framePromptVersions.writeAiVersion({
-          frameId,
-          text: result.visual.fullPrompt,
-          components: result.visual.components,
-          inputHash,
-          analysisModel: analysisModelId,
-        });
+        // the version write mirrors its text onto `frame.imagePrompt` and
+        // repoints `selectedImagePromptVersionId`, superseding any prior
+        // user-override automatically (the override stays in history and can
+        // be restored).
+        if (input.targetVersionId) {
+          // #1085: a pre-created pending claim row exists — complete it in
+          // place. Null result = the claim was cancelled mid-flight; the
+          // output is deliberately discarded (nothing mirrored, no event).
+          const completed =
+            await scopedDb.framePromptVersions.completePendingAiVersion({
+              versionId: input.targetVersionId,
+              frameId,
+              text: result.visual.fullPrompt,
+              components: result.visual.components,
+              inputHash,
+              analysisModel: analysisModelId,
+            });
+          if (!completed) {
+            logger.info(
+              `[FramePromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
+            );
+            return;
+          }
+        } else {
+          await scopedDb.framePromptVersions.writeAiVersion({
+            frameId,
+            text: result.visual.fullPrompt,
+            components: result.visual.components,
+            inputHash,
+            analysisModel: analysisModelId,
+          });
+        }
 
         // The generated prompt now lives on `frame.imagePrompt` (mirror), not
         // in `metadata`; carry the base scene so the client refreshes the shot
@@ -403,6 +424,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
   protected override async onFailure({
     event,
     error,
+    scopedDb,
   }: {
     event: Readonly<WorkflowEvent<FramePromptWorkflowInput>>;
     error: string;
@@ -413,6 +435,26 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
       workflowRunId: event.instanceId,
       error,
     });
+    // #1085: fail the pending claim and cancel any chained image claim that
+    // was waiting on it — a run that died must not leave rows that read as
+    // "a job is fixing this" forever. Best-effort (the reconciler sweeps
+    // anything this misses).
+    if (payload.targetVersionId) {
+      try {
+        await scopedDb.framePromptVersions.markTerminal(
+          payload.targetVersionId,
+          'failed'
+        );
+        await scopedDb.frameVariants.cancelByDependency(
+          payload.targetVersionId,
+          'Upstream visual prompt generation failed'
+        );
+      } catch (dbErr) {
+        logger.warn('[FramePromptWorkflow:cf] failed to mark claim failed', {
+          err: dbErr,
+        });
+      }
+    }
     // Surface the failure on the per-shot channel so an actively-viewing
     // client can clear its streaming state and toast. Best-effort.
     try {

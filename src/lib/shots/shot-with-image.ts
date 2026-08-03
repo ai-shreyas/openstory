@@ -14,11 +14,13 @@
  */
 
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
-import type { Frame, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 
 export type ShotGridSheet = {
   url: string | null;
-  status: Frame['imageStatus'];
+  // Sourced from a `frame_variants` row, whose status union is wider than the
+  // frame's (adds 'cancelled', #1085).
+  status: Frame['imageStatus'] | FrameVariant['status'];
 };
 
 export type ShotWithImage = Shot & {
@@ -34,7 +36,7 @@ export type ShotWithImage = Shot & {
   thumbnailInputHash: Frame['imageInputHash'];
   visualPromptInputHash: Frame['visualPromptInputHash'];
   variantImageUrl: string | null;
-  variantImageStatus: Frame['imageStatus'];
+  variantImageStatus: ShotGridSheet['status'] | null;
   /** The anchor frame, verbatim — for version/variant-aware callers. */
   frame: Frame;
   /**

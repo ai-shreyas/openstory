@@ -700,6 +700,145 @@ describe('shot_prompt_variants helper', () => {
   });
 });
 
+describe('shotPromptVersions.completePendingAiVersion', () => {
+  it('completes the claim in place and mirrors onto the shot', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Regenerated motion prompt',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Regenerated motion prompt');
+    expect(refreshed.motionPromptInputHash).toBe('live-hash');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(claim.id);
+  });
+
+  it('a post-click user edit keeps the mirror — the run completes to history only', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const edit = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Post-click hand edit',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Older run output',
+      inputHash: 'other-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Post-click hand edit');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(edit.id);
+  });
+
+  it('returns null for a claim cancelled mid-flight and never mirrors', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    await db
+      .update(shots)
+      .set({ motionPrompt: 'Original', motionPromptInputHash: 'hash-0' })
+      .where(eq(shots.id, shotId));
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+    await m.markTerminal(claim.id, 'cancelled');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Should be discarded',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(completed).toBeNull();
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Original');
+  });
+
+  it('restore demotes live claims so completion never remirrors', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const original = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Original motion',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    await m.select(shotId, original.id, { actorId: null });
+
+    const [demoted] = await db
+      .select()
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+
+    await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Would clobber restore',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Original motion');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(original.id);
+  });
+});
+
 describe('sequence_music_prompt_variants helper', () => {
   it('user-edit clears musicPromptInputHash and overwrites the cached prompt/tags', async () => {
     const methods = createSequenceMusicPromptVersionsMethods(db);

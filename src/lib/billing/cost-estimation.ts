@@ -56,6 +56,8 @@ type GateOperation =
   | 'storyboard:motion'
   | 'storyboard:music'
   | 'storyboard:shot-images'
+  | 'update-stale-shots'
+  | 'update-stale-shots:video'
   | 'variant-upscale';
 
 /** Any model a fal estimate can be gated for. */
