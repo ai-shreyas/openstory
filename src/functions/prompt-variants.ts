@@ -423,6 +423,10 @@ export const cancelPendingArtifactFn = createServerFn({ method: 'POST' })
         'Upstream visual prompt was cancelled'
       );
       for (const dep of cascaded) {
+        // Terminate the image child (if it has a real single-artifact run id)
+        // before settling frame state — cancel should stop spend when possible.
+        // Status guards still discard any completion that races past this.
+        await terminateSingleArtifactRun(dep.workflowRunId);
         await settleFrameAfterImageCancel(scopedDb, dep.frameId, dep);
       }
       await terminateSingleArtifactRun(row.workflowRunId);

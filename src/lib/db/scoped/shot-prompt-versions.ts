@@ -139,8 +139,8 @@ export function createShotPromptVersionsMethods(db: Database) {
   /**
    * Revoke the mirror right of every live motion claim on this shot (#1085)
    * — see `framePromptVersions`' demote helper for the contract: an explicit
-   * user repoint wins over any in-flight regeneration, whose output then
-   * lands in history only.
+   * user repoint/edit wins over any in-flight regeneration, whose output then
+   * lands in history only. Also frees the live-claim unique index slot.
    */
   const demoteLiveClaims = (shotId: string) =>
     db
@@ -153,6 +153,35 @@ export function createShotPromptVersionsMethods(db: Database) {
           inArray(shotPromptVersions.status, [...LIVE_PENDING_STATUSES])
         )
       );
+
+  /**
+   * Post-transition mirror check for completePendingAiVersion (#1095 TOCTOU).
+   * See framePromptVersions.stillHoldsMirrorRight for the race rationale.
+   */
+  const stillHoldsMirrorRight = async (
+    shotId: string,
+    claimId: string
+  ): Promise<boolean> => {
+    const [row] = await db
+      .select({ pendingInputHash: shotPromptVersions.pendingInputHash })
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.id, claimId))
+      .limit(1);
+    if (!row || row.pendingInputHash === null) return false;
+    const [newer] = await db
+      .select({ id: shotPromptVersions.id })
+      .from(shotPromptVersions)
+      .where(
+        and(
+          eq(shotPromptVersions.shotId, shotId),
+          eq(shotPromptVersions.promptType, 'motion'),
+          eq(shotPromptVersions.status, 'completed'),
+          gt(shotPromptVersions.id, claimId)
+        )
+      )
+      .limit(1);
+    return !newer;
+  };
 
   const methods = {
     /**
@@ -260,11 +289,16 @@ export function createShotPromptVersionsMethods(db: Database) {
       // setting it here is load-bearing. The cached hash tracks `nextHash` (the
       // real upstream context) even on the force-regen path where the version row
       // itself carries a null hash — see the branch above.
-      await mirrorSelection(input.shotId, {
-        text: input.text,
-        inputHash: nextHash,
-        versionId: version.id,
-      });
+      // Demote live claims in the same batch so a concurrent
+      // completePendingAiVersion cannot clobber this write (#1095 TOCTOU).
+      await db.batch([
+        mirrorSelection(input.shotId, {
+          text: input.text,
+          inputHash: nextHash,
+          versionId: version.id,
+        }),
+        demoteLiveClaims(input.shotId),
+      ]);
 
       return version;
     },
@@ -435,28 +469,10 @@ export function createShotPromptVersionsMethods(db: Database) {
         )
         .limit(1);
 
-      // ULID ids order by creation time — a newer completed row is a
-      // post-click edit (or later run) whose mirror must be preserved.
-      const [newer] = await db
-        .select({ id: shotPromptVersions.id })
-        .from(shotPromptVersions)
-        .where(
-          and(
-            eq(shotPromptVersions.shotId, input.shotId),
-            eq(shotPromptVersions.promptType, 'motion'),
-            eq(shotPromptVersions.status, 'completed'),
-            gt(shotPromptVersions.id, claim.id)
-          )
-        )
-        .limit(1);
-
-      // Mirror right (#1085): revoked by a newer completed row (post-click
-      // edit) or by an explicit repoint that demoted the claim.
-      const mayMirror = !newer && claim.pendingInputHash !== null;
-
       if (conflicting && conflicting.text === input.text) {
         // Guarded retire — a no-op means a cancel already won the race, and
         // cancelled work must not mirror (same contract as the main branch).
+        // status 'cancelled' = retired duplicate placeholder, not user cancel.
         const retired = await db
           .update(shotPromptVersions)
           .set({ status: 'cancelled' })
@@ -468,7 +484,10 @@ export function createShotPromptVersionsMethods(db: Database) {
           )
           .returning({ id: shotPromptVersions.id });
         if (retired.length === 0) return null;
-        if (mayMirror) await mirrorOntoShot(input.shotId, conflicting);
+        // Re-evaluate AFTER the terminal transition (#1095 TOCTOU).
+        if (await stillHoldsMirrorRight(input.shotId, claim.id)) {
+          await mirrorOntoShot(input.shotId, conflicting);
+        }
         return conflicting;
       }
 
@@ -493,7 +512,8 @@ export function createShotPromptVersionsMethods(db: Database) {
         .returning();
       if (!updated) return null; // cancelled mid-flight — discard the output
 
-      if (mayMirror) {
+      // Mirror right re-checked after we own the terminal write (#1085/#1095).
+      if (await stillHoldsMirrorRight(input.shotId, claim.id)) {
         await mirrorSelection(input.shotId, {
           text: input.text,
           inputHash: input.inputHash,

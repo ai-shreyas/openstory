@@ -12,19 +12,26 @@
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
+  framePromptVersions,
+  frameVariants,
   generatedAssets,
+  shotPromptVersions,
   shotVariants,
   shots,
   sequenceElements,
   sequences,
 } from '@/lib/db/schema';
 
+// Claim tables included so #1085 pass assertions can match on table identity.
 type SchemaTable =
   | typeof shots
   | typeof shotVariants
   | typeof sequences
   | typeof sequenceElements
-  | typeof generatedAssets;
+  | typeof generatedAssets
+  | typeof framePromptVersions
+  | typeof shotPromptVersions
+  | typeof frameVariants;
 type SetPayload = Record<string, Date | string>;
 type UpdateCall = {
   table: SchemaTable;
@@ -36,12 +43,20 @@ const updateCalls: UpdateCall[] = [];
 let limitArgs: number[] = [];
 
 let stuckRows: Array<{ id: string; runId: string | null }> = [];
+/** When set, only this table's verified select returns stuckRows (others []). */
+let stuckSelectTable: SchemaTable | null = null;
+/**
+ * Claim verified paths call `.returning()` once per table, then the orphan
+ * path calls it again. Only the first call on stuckSelectTable should echo
+ * stuck ids — otherwise orphan would cascade/fail the same rows again.
+ */
+const verifiedReturningServed = new Set<SchemaTable>();
 let blindFailReturning: Array<{ id: string }> = [];
 let nextSelectThrows: Error | null = null;
 
 const dbMock = {
   select: () => ({
-    from: () => ({
+    from: (table: SchemaTable) => ({
       where: () => ({
         limit: async (n: number) => {
           limitArgs.push(n);
@@ -50,6 +65,7 @@ const dbMock = {
             nextSelectThrows = null;
             throw err;
           }
+          if (stuckSelectTable && table !== stuckSelectTable) return [];
           return stuckRows;
         },
       }),
@@ -58,9 +74,8 @@ const dbMock = {
   update: (table: SchemaTable) => ({
     set: (payload: SetPayload) => ({
       // The real `.where(condition)` returns a thenable that also exposes
-      // `.returning(...)`. Per-row updates `await` it; blind-fail passes call
-      // `.returning(...)` instead. Our mock supports both shapes — the
-      // thenable is intentional here.
+      // `.returning(...)`. Per-row updates `await` it; status-guarded claim
+      // fails and blind-fail passes call `.returning(...)` instead.
       where: () => ({
         // oxlint-disable-next-line no-thenable -- mocking drizzle's chain
         then(resolve: (value: undefined) => void) {
@@ -69,7 +84,19 @@ const dbMock = {
         },
         returning: async () => {
           updateCalls.push({ table, payload, returning: true });
-          return blindFailReturning;
+          if (blindFailReturning.length > 0) return blindFailReturning;
+          // Status-guarded verified claim update (first returning on the
+          // stuck table after a terminal run-state lookup).
+          if (
+            stuckSelectTable &&
+            table === stuckSelectTable &&
+            (runStateResult === 'failed' || runStateResult === 'completed') &&
+            !verifiedReturningServed.has(table)
+          ) {
+            verifiedReturningServed.add(table);
+            return stuckRows.map((r) => ({ id: r.id }));
+          }
+          return [];
         },
       }),
     }),
@@ -90,6 +117,8 @@ beforeEach(() => {
   updateCalls.length = 0;
   limitArgs = [];
   stuckRows = [];
+  stuckSelectTable = null;
+  verifiedReturningServed.clear();
   blindFailReturning = [];
   nextSelectThrows = null;
   runStateResult = null;
@@ -266,5 +295,114 @@ describe('reconcileAllStuckJobs — generated_assets passes (#458)', () => {
     expect(update).toBeDefined();
     expect(update?.payload.error).toMatch(/could not be started/);
     expect(counts['generated_assets.orphaned']).toBe(1);
+  });
+});
+
+describe('reconcileAllStuckJobs — pending artifact claim passes (#1085)', () => {
+  test('terminal instance → prompt claim failed via returning (status-guarded)', async () => {
+    stuckRows = [{ id: 'fpv_1', runId: 'openstory-so_frame-prompt_dead' }];
+    stuckSelectTable = framePromptVersions;
+    runStateResult = 'failed';
+    const { reconcileAllStuckJobs } = await import('./reconcile-all');
+
+    const counts = await reconcileAllStuckJobs();
+
+    const claimFail = updateCalls.find(
+      (c) =>
+        c.table === framePromptVersions &&
+        c.returning &&
+        c.payload.status === 'failed'
+    );
+    expect(claimFail).toBeDefined();
+    // Always 'failed' — never completes a claim from the reconciler.
+    expect(claimFail?.payload.status).toBe('failed');
+    expect(counts['frame_prompt_versions.claims']).toBeGreaterThan(0);
+    // Frame-side cascade cancels live dependents (non-returning update).
+    const cascade = updateCalls.find(
+      (c) =>
+        c.table === frameVariants &&
+        !c.returning &&
+        c.payload.status === 'cancelled'
+    );
+    expect(cascade).toBeDefined();
+    expect(cascade?.payload.error).toMatch(/Upstream visual prompt/);
+  });
+
+  test('unknown / in-flight instance → no claim fail write', async () => {
+    stuckRows = [{ id: 'fpv_1', runId: 'openstory-so_frame-prompt_running' }];
+    stuckSelectTable = framePromptVersions;
+    runStateResult = null;
+    const { reconcileAllStuckJobs } = await import('./reconcile-all');
+
+    const counts = await reconcileAllStuckJobs();
+
+    // Verified path continues without UPDATE; orphan returns no rows for this
+    // mock when runState is non-terminal. Count stays 0 (the orphan UPDATE
+    // statement may still be issued — where would match nothing in real D1).
+    expect(counts['frame_prompt_versions.claims']).toBe(0);
+    const cascade = updateCalls.find(
+      (c) =>
+        c.table === frameVariants &&
+        !c.returning &&
+        c.payload.status === 'cancelled'
+    );
+    expect(cascade).toBeUndefined();
+  });
+
+  test('shot prompt claim fail does not cascade frame variants', async () => {
+    stuckRows = [{ id: 'spv_1', runId: 'openstory-so_motion-prompt_dead' }];
+    stuckSelectTable = shotPromptVersions;
+    runStateResult = 'failed';
+    const { reconcileAllStuckJobs } = await import('./reconcile-all');
+
+    await reconcileAllStuckJobs();
+
+    const shotClaimFail = updateCalls.find(
+      (c) =>
+        c.table === shotPromptVersions &&
+        c.returning &&
+        c.payload.status === 'failed'
+    );
+    expect(shotClaimFail).toBeDefined();
+    const cascade = updateCalls.find(
+      (c) => c.table === frameVariants && c.payload.status === 'cancelled'
+    );
+    expect(cascade).toBeUndefined();
+  });
+
+  test('image claim terminal instance → failed with reason, returning-guarded', async () => {
+    stuckRows = [{ id: 'fv_1', runId: 'openstory-so_image_dead' }];
+    stuckSelectTable = frameVariants;
+    runStateResult = 'completed'; // still failed: claim never completed content
+    const { reconcileAllStuckJobs } = await import('./reconcile-all');
+
+    const counts = await reconcileAllStuckJobs();
+
+    const imageClaimFail = updateCalls.find(
+      (c) =>
+        c.table === frameVariants &&
+        c.returning &&
+        c.payload.status === 'failed' &&
+        typeof c.payload.error === 'string' &&
+        /died before starting/.test(c.payload.error)
+    );
+    expect(imageClaimFail).toBeDefined();
+    expect(counts['frame_variants.claims']).toBeGreaterThan(0);
+  });
+
+  test('orphan prompt claim (no run id) blind-fails after longer threshold', async () => {
+    blindFailReturning = [{ id: 'fpv_orphan' }];
+    const { reconcileAllStuckJobs } = await import('./reconcile-all');
+
+    const counts = await reconcileAllStuckJobs();
+
+    const orphanFail = updateCalls.find(
+      (c) =>
+        c.table === framePromptVersions &&
+        c.returning &&
+        c.payload.status === 'failed'
+    );
+    expect(orphanFail).toBeDefined();
+    expect(counts['frame_prompt_versions.claims']).toBeGreaterThan(0);
   });
 });

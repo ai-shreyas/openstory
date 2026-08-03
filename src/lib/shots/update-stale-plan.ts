@@ -96,7 +96,9 @@ export type PlanTarget = {
 
 /**
  * Pending rows claimed for one shot. A null slot for a set regen flag means
- * another run already holds a live claim — this run skips that artifact.
+ * either that artifact was not requested, or another run already holds a live
+ * claim for it (this run skips only that artifact; other non-null slots still
+ * regenerate).
  */
 export type ShotClaims = {
   visualVersionId: string | null;
@@ -105,8 +107,12 @@ export type ShotClaims = {
 };
 
 /**
- * A shot the plan could not act on. Distinct from a run failure: nothing was
- * attempted. Reported so a partial run cannot read as a clean success.
+ * Shots reported as incomplete work. Distinct from run failures:
+ * - no-anchor / no-scene / staleness-unknown: nothing planned for the shot.
+ * - already-in-flight: another run holds every live claim this run needed;
+ *   this run owns no claims for the shot. (If some artifacts were claimed
+ *   successfully and others were foreign, the shot is NOT listed here — the
+ *   run regenerates the ones it owns.)
  */
 export type SkippedShot = {
   shotId: string;
@@ -575,7 +581,14 @@ export async function claimTargets(args: {
       sequenceId,
       parentInstanceId,
     });
-    if (foreignClaim) {
+    // Only report already-in-flight when this run owns nothing for the shot.
+    // Partial ownership (e.g. visual ours, motion foreign) still regenerates
+    // the owned artifacts and must not read as "nothing attempted".
+    const ownsAny =
+      claims.visualVersionId !== null ||
+      claims.motionVersionId !== null ||
+      claims.imageVariantId !== null;
+    if (foreignClaim && !ownsAny) {
       skipped.push({ shotId: target.shotId, reason: 'already-in-flight' });
     }
     claimsByShot[target.shotId] = claims;
@@ -660,7 +673,8 @@ type ClaimResult = { kind: 'ours'; id: string } | { kind: 'foreign' };
 
 /**
  * Reuse our own live claim (step retry), treat anyone else's as foreign, or
- * create a new pending row. Lost insert races (partial unique index) → foreign.
+ * create a new pending row. Lost insert races (partial unique index) → foreign
+ * only when a live claim actually exists; other insert failures rethrow.
  */
 async function claimOrReuse(args: {
   parentInstanceId: string;
@@ -679,9 +693,16 @@ async function claimOrReuse(args: {
   try {
     const row = await args.create();
     return { kind: 'ours', id: row.id };
-  } catch {
-    // Lost the insert race to a concurrent enqueue.
-    return { kind: 'foreign' };
+  } catch (error) {
+    // Lost the insert race to a concurrent enqueue — only if a live claim
+    // is actually there. D1 blips / other constraint errors must surface.
+    const raced = await args.getExisting();
+    if (raced) {
+      return raced.workflowRunId === args.parentInstanceId
+        ? { kind: 'ours', id: raced.id }
+        : { kind: 'foreign' };
+    }
+    throw error;
   }
 }
 
@@ -738,7 +759,17 @@ async function claimImageArtifact(args: {
       workflowRunId: parentInstanceId,
     });
     return { kind: 'ours', id: row.id };
-  } catch {
-    return { kind: 'foreign' };
+  } catch (error) {
+    // Re-list live claims: unique-index race → foreign/ours; other errors rethrow.
+    const after = await scopedDb.frameVariants.listLiveClaims(target.frameId);
+    const raced = after.find(
+      (c) => c.pendingInputHash === target.imageLiveHash
+    );
+    if (raced) {
+      return raced.workflowRunId === parentInstanceId
+        ? { kind: 'ours', id: raced.id }
+        : { kind: 'foreign' };
+    }
+    throw error;
   }
 }

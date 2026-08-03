@@ -796,6 +796,47 @@ describe('shotPromptVersions.completePendingAiVersion', () => {
     if (!refreshed) throw new Error('test setup: refresh failed');
     expect(refreshed.motionPrompt).toBe('Original');
   });
+
+  it('restore demotes live claims so completion never remirrors', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const original = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Original motion',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    await m.select(shotId, original.id, { actorId: null });
+
+    const [demoted] = await db
+      .select()
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+
+    await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Would clobber restore',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Original motion');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(original.id);
+  });
 });
 
 describe('sequence_music_prompt_variants helper', () => {

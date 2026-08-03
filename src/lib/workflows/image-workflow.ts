@@ -2,18 +2,18 @@
  * Image generation workflow (#989: writes to `frames` / `frame_variants`).
  *
  * The still image is the FRAME's surface now. Each run:
- *   1. set-generating-status — flips the anchor frame to 'generating', records a
- *      user-edited prompt as a `frame_prompt_versions` row, and APPENDS an
- *      in-flight `frame_variants` version (kind='model').
+ *   1. set-generating-status — claim-or-append a `frame_variants` version, then
+ *      (unless variantOnly) flip the primary frame to 'generating'. With
+ *      `targetVariantId` (#1085) a pre-created pending claim is transitioned
+ *      in place via `claimForGeneration` (no append). Without it, a new
+ *      in-flight version is appended. Prep can exit null when the claim was
+ *      cancelled mid-flight or the anchor frame vanished.
  *   2. generate-image / deduct-credits / upload-image — unchanged.
- *   3. persist-result — completes the version, emits `image.generated`, then
- *      SELECT-OR-NOT: a new selection is a pointer repoint
- *      (`frameVariants.select`, which mirrors + emits `image.selected`), never an
- *      overwrite. `variantOnly` (adding a model) appends without selecting; a
- *      mid-flight input drift (snapshot ≠ current) appends a retained,
- *      stale-flagged version without repointing the primary. The old
- *      divergent-alternate machinery (`persistImageResult` / `divergedAt`) is
- *      retired — divergence is just "a version you didn't select".
+ *   3. persist-result — status-guarded complete (`completeIfLive`), emits
+ *      `image.generated`, then SELECT-OR-NOT: a new selection is a pointer
+ *      repoint (`frameVariants.select`), never an overwrite. `variantOnly`
+ *      (adding a model) appends without selecting; mid-flight input drift
+ *      retains a stale-flagged version without repointing the primary.
  */
 
 import { computeVisualPromptInputHash } from '@/lib/ai/input-hash';
@@ -62,8 +62,8 @@ type ImageWorkflowResult = {
 };
 
 /** Output of `set-generating-status`: the generation params plus the id of the
- * in-flight `frame_variants` version it appended (empty when there's no frame
- * context, e.g. preview mode or a shotless ad-hoc generation). */
+ * in-flight `frame_variants` version claimed or appended (empty when there's
+ * no frame context, e.g. preview mode or a shotless ad-hoc generation). */
 type PrepResult = {
   params: ImageGenerationParams;
   versionId: string;
@@ -273,7 +273,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
     );
 
     if (!prep) {
-      // The only null path above is a claim cancelled before the render.
+      // null prep = claim cancelled / unique-hash stand-down, OR anchor frame
+      // gone mid-run. Both are stand-downs for parents today (no imageUrl,
+      // cancelled: true) so Update all does not treat a missing frame as a
+      // hard stage failure.
       return {
         imageUrl: '',
         shotId: input.shotId,

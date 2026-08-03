@@ -39,6 +39,31 @@ import { buildFrameImageMirror, type CompletedFrameVariant } from './frames';
 import { buildEventInsert } from './sequence-events';
 
 /**
+ * D1 / SQLite unique-index violation. Drizzle wraps the driver error in
+ * `DrizzleQueryError` ("Failed query: …"), so walk `cause` and check `code`.
+ */
+function isUniqueConstraintError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let i = 0; i < 6 && current != null; i++) {
+    if (typeof current === 'object') {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'string' && /UNIQUE|CONSTRAINT/i.test(code)) {
+        return true;
+      }
+      const msg = current instanceof Error ? current.message : String(current);
+      if (/unique|constraint|SQLITE_CONSTRAINT/i.test(msg)) return true;
+      current = (current as { cause?: unknown }).cause;
+    } else {
+      if (/unique|constraint|SQLITE_CONSTRAINT/i.test(String(current))) {
+        return true;
+      }
+      break;
+    }
+  }
+  return false;
+}
+
+/**
  * An image `FrameVariant` plus the id of the shot whose anchor frame owns it.
  * Frame ids are NOT shot ids (#989), so sequence-wide listings that the client
  * keys by shot (coverage markers, per-shot variant filtering) carry the owning
@@ -201,26 +226,37 @@ export function createFrameVariantsMethods(db: Database) {
         pendingInputHash?: string | null;
       }
     ): Promise<FrameVariant | null> => {
-      const [row] = await db
-        .update(frameVariants)
-        .set({
-          status: 'generating',
-          workflowRunId: data.workflowRunId,
-          model: data.model,
-          promptVersionId: data.promptVersionId ?? null,
-          ...(data.pendingInputHash !== undefined
-            ? { pendingInputHash: data.pendingInputHash }
-            : {}),
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(frameVariants.id, versionId),
-            inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
+      try {
+        const [row] = await db
+          .update(frameVariants)
+          .set({
+            status: 'generating',
+            workflowRunId: data.workflowRunId,
+            model: data.model,
+            promptVersionId: data.promptVersionId ?? null,
+            ...(data.pendingInputHash !== undefined
+              ? { pendingInputHash: data.pendingInputHash }
+              : {}),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(frameVariants.id, versionId),
+              inArray(frameVariants.status, [...LIVE_PENDING_STATUSES])
+            )
           )
-        )
-        .returning();
-      return row ?? null;
+          .returning();
+        return row ?? null;
+      } catch (error) {
+        // Chained claims stamp snapshotInputHash at generation start. If another
+        // live claim on this frame already holds that hash, the partial unique
+        // index rejects the UPDATE. Stand down (null) like a cancel — do not
+        // throw and burn workflow step retries.
+        if (data.pendingInputHash != null && isUniqueConstraintError(error)) {
+          return null;
+        }
+        throw error;
+      }
     },
 
     /**

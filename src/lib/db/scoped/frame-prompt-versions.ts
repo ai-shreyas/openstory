@@ -77,11 +77,13 @@ export function createFramePromptVersionsMethods(db: Database) {
 
   /**
    * Revoke the mirror right of every live claim on this frame (#1085): after
-   * an explicit user repoint (restore / image-selection prompt restore), an
-   * in-flight regeneration may still land in history but must NOT overwrite
+   * an explicit user repoint (restore / image-selection prompt restore / edit),
+   * an in-flight regeneration may still land in history but must NOT overwrite
    * the user's choice on the frame. Nulling `pendingInputHash` is the
    * revocation — completion mirrors only claims that still hold their hash,
    * and the artifact honestly reads 'stale' again instead of 'updating'.
+   * Also frees the live-claim unique index slot so a fresh enqueue for a new
+   * hash is not blocked by a demoted-but-still-running claim.
    */
   const demoteLiveClaims = (frameId: string) =>
     db
@@ -93,6 +95,38 @@ export function createFramePromptVersionsMethods(db: Database) {
           inArray(framePromptVersions.status, [...LIVE_PENDING_STATUSES])
         )
       );
+
+  /**
+   * Post-transition mirror check for completePendingAiVersion (#1095 TOCTOU).
+   * Must run AFTER the claim has been moved terminal so a concurrent demote
+   * (nulls pendingInputHash while live) or a concurrent write (inserts a
+   * newer completed ULID) is visible before we touch the frame mirror.
+   */
+  const stillHoldsMirrorRight = async (
+    frameId: string,
+    claimId: string
+  ): Promise<boolean> => {
+    const [row] = await db
+      .select({ pendingInputHash: framePromptVersions.pendingInputHash })
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claimId))
+      .limit(1);
+    if (!row || row.pendingInputHash === null) return false;
+    // ULID ids order by creation time: any completed row newer than the claim
+    // is a post-click edit (or a later run) that must keep the mirror.
+    const [newer] = await db
+      .select({ id: framePromptVersions.id })
+      .from(framePromptVersions)
+      .where(
+        and(
+          eq(framePromptVersions.frameId, frameId),
+          eq(framePromptVersions.status, 'completed'),
+          gt(framePromptVersions.id, claimId)
+        )
+      )
+      .limit(1);
+    return !newer;
+  };
 
   const methods = {
     /**
@@ -163,15 +197,22 @@ export function createFramePromptVersionsMethods(db: Database) {
         throw new Error('Failed to insert frame prompt version');
       }
 
-      await db
-        .update(frames)
-        .set({
-          imagePrompt: input.text,
-          visualPromptInputHash: nextHash,
-          selectedImagePromptVersionId: version.id,
-          updatedAt: new Date(),
-        })
-        .where(eq(frames.id, input.frameId));
+      // Mirror the edit onto the frame, then revoke in-flight claims' mirror
+      // rights so a concurrent completePendingAiVersion cannot clobber this
+      // write (#1085 / #1095 TOCTOU). demote nulls pendingInputHash (and
+      // frees the live-claim unique slot) while claims stay pending/generating.
+      await db.batch([
+        db
+          .update(frames)
+          .set({
+            imagePrompt: input.text,
+            visualPromptInputHash: nextHash,
+            selectedImagePromptVersionId: version.id,
+            updatedAt: new Date(),
+          })
+          .where(eq(frames.id, input.frameId)),
+        demoteLiveClaims(input.frameId),
+      ]);
 
       return version;
     },
@@ -350,31 +391,13 @@ export function createFramePromptVersionsMethods(db: Database) {
         )
         .limit(1);
 
-      // ULID ids order by creation time: any completed row newer than the
-      // claim is a post-click edit (or a later run) that must keep the mirror.
-      const [newer] = await db
-        .select({ id: framePromptVersions.id })
-        .from(framePromptVersions)
-        .where(
-          and(
-            eq(framePromptVersions.frameId, input.frameId),
-            eq(framePromptVersions.status, 'completed'),
-            gt(framePromptVersions.id, claim.id)
-          )
-        )
-        .limit(1);
-
-      // Mirror right (#1085): revoked when a newer completed row landed
-      // (post-click edit), or when an explicit repoint demoted the claim
-      // (pendingInputHash nulled) — either way the user's choice wins and
-      // this run's output goes to history only.
-      const mayMirror = !newer && claim.pendingInputHash !== null;
-
       if (conflicting && conflicting.text === input.text) {
         // Identical output already in history — retire the placeholder. The
         // guarded UPDATE must have transitioned the claim ourselves: a no-op
         // means a cancel already won the race, and cancelled work must not
         // mirror (same contract as the main branch below).
+        // status 'cancelled' here = retired duplicate placeholder (no new
+        // content), not a user cancel.
         const retired = await db
           .update(framePromptVersions)
           .set({ status: 'cancelled' })
@@ -386,7 +409,12 @@ export function createFramePromptVersionsMethods(db: Database) {
           )
           .returning({ id: framePromptVersions.id });
         if (retired.length === 0) return null;
-        if (mayMirror) await mirrorOntoFrame(input.frameId, conflicting);
+        // Re-evaluate mirror right AFTER the terminal transition so a
+        // concurrent write/select that demoted us or landed a newer
+        // completed row wins (#1095 TOCTOU).
+        if (await stillHoldsMirrorRight(input.frameId, claim.id)) {
+          await mirrorOntoFrame(input.frameId, conflicting);
+        }
         return conflicting;
       }
 
@@ -408,7 +436,11 @@ export function createFramePromptVersionsMethods(db: Database) {
         .returning();
       if (!updated) return null; // cancelled mid-flight — discard the output
 
-      if (mayMirror) {
+      // Mirror right (#1085): re-checked after we own the terminal write.
+      // Revoked when a newer completed row landed (post-click edit) or when
+      // write/select demoted the claim (pendingInputHash nulled) — either
+      // way the user's choice wins and this run's output goes to history only.
+      if (await stillHoldsMirrorRight(input.frameId, claim.id)) {
         await db
           .update(frames)
           .set({

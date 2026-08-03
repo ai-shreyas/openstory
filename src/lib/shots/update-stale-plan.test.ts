@@ -593,6 +593,108 @@ describe('claimTargets (#1085)', () => {
       { shotId: 'shot-1', reason: 'already-in-flight' },
     ]);
   });
+
+  it('lost insert race (create throws, live claim exists) → foreign / already-in-flight', async () => {
+    let getLiveCalls = 0;
+    const db = asScopedDb({
+      framePromptVersions: {
+        getLivePending: () => {
+          getLiveCalls += 1;
+          // First call: empty; second (post-throw): foreign winner.
+          if (getLiveCalls === 1) return Promise.resolve(null);
+          return Promise.resolve({
+            id: 'fpv-winner',
+            workflowRunId: 'other-run',
+          });
+        },
+        createPending: () =>
+          Promise.reject(new Error('UNIQUE constraint failed')),
+      },
+      shotPromptVersions: {
+        getLivePending: () => Promise.resolve(null),
+        createPending: () => Promise.resolve({ id: 'unused' }),
+      },
+      frameVariants: {
+        listLiveClaims: () => Promise.resolve([]),
+        createPendingClaim: () => Promise.resolve({ id: 'unused' }),
+      },
+    });
+
+    const result = await claimTargets({
+      scopedDb: db,
+      targets: [makeTarget({ regenVisual: true })],
+      sequenceId: 'seq-1',
+      parentInstanceId: 'run-1',
+    });
+
+    expect(result.claimsByShot['shot-1']?.visualVersionId).toBeNull();
+    expect(result.skipped).toEqual([
+      { shotId: 'shot-1', reason: 'already-in-flight' },
+    ]);
+  });
+
+  it('create throws without a live claim → rethrows (not silent foreign)', async () => {
+    const db = asScopedDb({
+      framePromptVersions: {
+        getLivePending: () => Promise.resolve(null),
+        createPending: () => Promise.reject(new Error('D1 blip')),
+      },
+      shotPromptVersions: {
+        getLivePending: () => Promise.resolve(null),
+        createPending: () => Promise.resolve({ id: 'unused' }),
+      },
+      frameVariants: {
+        listLiveClaims: () => Promise.resolve([]),
+        createPendingClaim: () => Promise.resolve({ id: 'unused' }),
+      },
+    });
+
+    await expect(
+      claimTargets({
+        scopedDb: db,
+        targets: [makeTarget({ regenVisual: true })],
+        sequenceId: 'seq-1',
+        parentInstanceId: 'run-1',
+      })
+    ).rejects.toThrow(/D1 blip/);
+  });
+
+  it('partial foreign (visual foreign, motion ours) does NOT list the shot as skipped', async () => {
+    const created = { motion: [] as unknown[] };
+    const db = asScopedDb({
+      framePromptVersions: {
+        getLivePending: () =>
+          Promise.resolve({ id: 'fpv-foreign', workflowRunId: 'other-run' }),
+        createPending: () => Promise.resolve({ id: 'unused' }),
+      },
+      shotPromptVersions: {
+        getLivePending: () => Promise.resolve(null),
+        createPending: (input: unknown) => {
+          created.motion.push(input);
+          return Promise.resolve({ id: 'spv-ours' });
+        },
+      },
+      frameVariants: {
+        listLiveClaims: () => Promise.resolve([]),
+        createPendingClaim: () => Promise.resolve({ id: 'unused' }),
+      },
+    });
+
+    const result = await claimTargets({
+      scopedDb: db,
+      targets: [makeTarget({ regenVisual: true, regenMotion: true })],
+      sequenceId: 'seq-1',
+      parentInstanceId: 'run-1',
+    });
+
+    expect(result.claimsByShot['shot-1']).toMatchObject({
+      visualVersionId: null,
+      motionVersionId: 'spv-ours',
+    });
+    expect(created.motion).toHaveLength(1);
+    // Owns motion → not reported as already-in-flight (partial work is honest).
+    expect(result.skipped).toEqual([]);
+  });
 });
 
 describe('computePlan — scope', () => {

@@ -556,6 +556,74 @@ describe('framePromptVersions.completePendingAiVersion', () => {
       })
     ).rejects.toThrow(/not found for frame/);
   });
+
+  it('restore demotes live claims so completion never remirrors', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const original = await m.write({
+      frameId,
+      text: 'Original prompt',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: HAIKU,
+    });
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    // User restores the original while the claim is still generating.
+    await m.select(frameId, original.id, { actorId: null });
+
+    const [demoted] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+    expect(await m.getLivePending(frameId, 'live-hash')).toBeNull();
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      frameId,
+      text: 'Would clobber restore',
+      inputHash: 'live-hash',
+      analysisModel: HAIKU,
+    });
+    expect(completed?.status).toBe('completed');
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    if (!frame) throw new Error('test setup: refresh failed');
+    expect(frame.imagePrompt).toBe('Original prompt');
+    expect(frame.selectedImagePromptVersionId).toBe(original.id);
+  });
+
+  it('write demotes live claims (edit frees the unique slot + blocks remirror)', async () => {
+    const m = createFramePromptVersionsMethods(db);
+    const claim = await m.createPending({
+      frameId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    await m.write({
+      frameId,
+      text: 'User edit while regenerating',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const [demoted] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+    // Live unique slot freed — a fresh enqueue for a new hash can proceed.
+    expect(await m.getLivePending(frameId, 'live-hash')).toBeNull();
+  });
 });
 
 describe('framePromptVersions.getLatestWithInputHash', () => {

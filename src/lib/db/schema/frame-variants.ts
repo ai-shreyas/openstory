@@ -119,9 +119,9 @@ export const frameVariants = snakeCase.table(
     ),
     index('idx_frame_variants_sequence').on(table.sequenceId),
     // At most ONE live direct-regen claim per (frame, live-hash) (#1085).
-    // Chained claims carry a null pendingInputHash and are excluded — their
-    // uniqueness derives from the (already unique) prompt claim they depend
-    // on.
+    // Chained claims start with pendingInputHash null and are excluded from
+    // this index. App code reuses a live row with dependsOnVersionId === our
+    // visual claim; there is no DB uniqueness on the dependency edge.
     uniqueIndex('uq_frame_variants_live_claim')
       .on(table.frameId, table.pendingInputHash)
       .where(

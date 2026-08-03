@@ -309,10 +309,21 @@ async function reconcilePromptClaimsPass(
   for (const row of stuck) {
     const next = await resolveRunState(row.runId ?? '');
     if (next === null || next === 'unknown') continue;
-    await db
+    // Re-guard live status at write time: a long generation can complete the
+    // claim between the SELECT above and this UPDATE (resolveRunState is a
+    // network RPC). Without the predicate we'd overwrite completed content
+    // with 'failed' and cascade-cancel dependent image claims.
+    const transitioned = await db
       .update(table)
       .set({ status: 'failed' })
-      .where(eq(table.id, row.id));
+      .where(
+        and(
+          eq(table.id, row.id),
+          inArray(table.status, ['pending', 'generating'])
+        )
+      )
+      .returning({ id: table.id });
+    if (transitioned.length === 0) continue;
     await cascade(row.id);
     updated++;
   }
@@ -360,11 +371,17 @@ async function reconcileImageClaimsPass(db: Database): Promise<number> {
     const next = await resolveRunState(row.runId ?? '');
     if (next === null || next === 'unknown') continue;
     // 'failed' regardless of the instance verdict: a still-pending claim on a
-    // terminal instance means no render ever landed on this row.
-    await db
+    // terminal instance means no render ever landed on this row. Re-guard
+    // status so a completion that raced the network lookup is never
+    // overwritten (same TOCTOU as the prompt-claim pass).
+    const transitioned = await db
       .update(frameVariants)
       .set({ status: 'failed', error: 'Generation died before starting' })
-      .where(eq(frameVariants.id, row.id));
+      .where(
+        and(eq(frameVariants.id, row.id), eq(frameVariants.status, 'pending'))
+      )
+      .returning({ id: frameVariants.id });
+    if (transitioned.length === 0) continue;
     updated++;
   }
 
