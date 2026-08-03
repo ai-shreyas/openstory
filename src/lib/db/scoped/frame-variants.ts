@@ -38,6 +38,13 @@ import { LIVE_PENDING_STATUSES } from './frame-prompt-versions';
 import { buildFrameImageMirror, type CompletedFrameVariant } from './frames';
 import { buildEventInsert } from './sequence-events';
 
+function readStringProp(value: object, key: string): string | null {
+  if (!(key in value)) return null;
+  // Reflect.get avoids a typed assertion on an open object bag.
+  const prop = Reflect.get(value, key);
+  return typeof prop === 'string' ? prop : null;
+}
+
 /**
  * D1 / SQLite unique-index violation. Drizzle wraps the driver error in
  * `DrizzleQueryError` ("Failed query: …"), so walk `cause` and check `code`.
@@ -49,26 +56,19 @@ function isUniqueConstraintError(error: unknown): boolean {
       if (/unique|constraint|SQLITE_CONSTRAINT/i.test(current.message)) {
         return true;
       }
-      const code = (current as { code?: unknown }).code;
-      if (typeof code === 'string' && /UNIQUE|CONSTRAINT/i.test(code)) {
-        return true;
-      }
+      const code = readStringProp(current, 'code');
+      if (code && /UNIQUE|CONSTRAINT/i.test(code)) return true;
       current = current.cause;
       continue;
     }
     if (typeof current === 'object') {
-      const code = (current as { code?: unknown }).code;
-      if (typeof code === 'string' && /UNIQUE|CONSTRAINT/i.test(code)) {
+      const code = readStringProp(current, 'code');
+      if (code && /UNIQUE|CONSTRAINT/i.test(code)) return true;
+      const message = readStringProp(current, 'message');
+      if (message && /unique|constraint|SQLITE_CONSTRAINT/i.test(message)) {
         return true;
       }
-      const message = (current as { message?: unknown }).message;
-      if (
-        typeof message === 'string' &&
-        /unique|constraint|SQLITE_CONSTRAINT/i.test(message)
-      ) {
-        return true;
-      }
-      current = (current as { cause?: unknown }).cause;
+      current = Reflect.get(current, 'cause');
       continue;
     }
     if (
