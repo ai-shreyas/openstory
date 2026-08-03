@@ -213,6 +213,12 @@ export function createBillingMethods(
       description?: string;
       metadata?: Record<string, unknown>;
       stripeSessionId?: string;
+      /**
+       * Makes the grant replay-safe. Without it (or `stripeSessionId`) the
+       * `onConflictDoNothing` below has no reachable conflict target, so a
+       * retried credit is applied twice.
+       */
+      idempotencyKey?: string;
     } = {}
   ): Promise<{ newBalance: Microdollars; transactionId: string } | null> {
     if (amountMicros <= 0) {
@@ -252,6 +258,7 @@ export function createBillingMethods(
           `Added ${microsToDisplayUsd(amountMicros)} credits`,
         metadata: opts.metadata ?? {},
         stripeSessionId: opts.stripeSessionId ?? null,
+        idempotencyKey: opts.idempotencyKey ?? null,
       })
       .onConflictDoNothing()
       .returning({ id: transactions.id });
@@ -466,7 +473,11 @@ export function createBillingMethods(
     }
 
     void maybeAutoTopUp(newBalance).catch((err) => {
-      logger.error('Failed:', { err });
+      logger.error('Auto top-up failed after deduction', {
+        teamId,
+        balanceMicros: newBalance,
+        err,
+      });
     });
 
     return {
@@ -529,11 +540,14 @@ export function createBillingMethods(
 
     const settings = await read.getBillingSettings();
 
+    // `== null`, not falsy: a threshold of 0 ("top up when I hit zero") is a
+    // legitimate setting, and treating it as "unset" would silently disable
+    // auto-top-up for a team whose settings page says it is on.
     if (
       !settings.autoTopUpEnabled ||
       !settings.stripeCustomerId ||
-      !settings.autoTopUpThresholdMicros ||
-      !settings.autoTopUpAmountMicros
+      settings.autoTopUpThresholdMicros == null ||
+      settings.autoTopUpAmountMicros == null
     ) {
       return;
     }
@@ -564,18 +578,32 @@ export function createBillingMethods(
       }
     }
 
-    const stripe = getStripeOrThrow();
-    const amountCents = totalCheckoutCents(
-      micros(settings.autoTopUpAmountMicros)
-    );
+    const topUpMicros = micros(settings.autoTopUpAmountMicros);
 
+    const stripe = getStripeOrThrow();
+    const amountCents = totalCheckoutCents(topUpMicros);
+
+    // Every exit below leaves auto-top-up silently dead for this team while
+    // the settings page still advertises it as on — so each one logs (#1099).
     const customer = await stripe.customers.retrieve(settings.stripeCustomerId);
-    if (customer.deleted) return;
+    if (customer.deleted) {
+      logger.warn('Auto top-up skipped: Stripe customer deleted', {
+        teamId,
+        stripeCustomerId: settings.stripeCustomerId,
+      });
+      return;
+    }
 
     const defaultPaymentMethod =
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime
       customer.invoice_settings?.default_payment_method;
-    if (!defaultPaymentMethod) return;
+    if (!defaultPaymentMethod) {
+      logger.warn('Auto top-up skipped: no default payment method', {
+        teamId,
+        stripeCustomerId: settings.stripeCustomerId,
+      });
+      return;
+    }
 
     const paymentMethodId =
       typeof defaultPaymentMethod === 'string'
@@ -590,27 +618,40 @@ export function createBillingMethods(
       off_session: true,
       confirm: true,
       expand: ['latest_charge'],
+      // userId is required by stripeWebhookMiddleware — without it every
+      // payment_intent.* webhook for this charge is rejected with a 400.
       metadata: {
         teamId,
+        userId,
         type: 'auto_top_up',
       },
     });
 
-    if (paymentIntent.status === 'succeeded') {
-      const charge = paymentIntent.latest_charge;
-      const receiptUrl =
-        charge && typeof charge === 'object' ? charge.receipt_url : undefined;
-
-      const topUpMicros = micros(settings.autoTopUpAmountMicros);
-      await addCredits(topUpMicros, {
-        description: `Auto top-up: ${microsToDisplayUsd(topUpMicros)}`,
-        metadata: {
-          stripePaymentIntentId: paymentIntent.id,
-          autoTopUp: true,
-          ...(receiptUrl && { receiptUrl }),
-        },
+    if (paymentIntent.status !== 'succeeded') {
+      // Declines and SCA (`requires_action`) are the common off-session
+      // outcomes. Nothing downstream retries, so this is the only record that
+      // auto-top-up has stopped working for this team.
+      logger.error('Auto top-up payment did not succeed', {
+        teamId,
+        status: paymentIntent.status,
+        amountCents,
+        stripePaymentIntentId: paymentIntent.id,
       });
+      return;
     }
+
+    const charge = paymentIntent.latest_charge;
+    const receiptUrl =
+      charge && typeof charge === 'object' ? charge.receipt_url : undefined;
+
+    await addCredits(topUpMicros, {
+      description: `Auto top-up: ${microsToDisplayUsd(topUpMicros)}`,
+      metadata: {
+        stripePaymentIntentId: paymentIntent.id,
+        autoTopUp: true,
+        ...(receiptUrl && { receiptUrl }),
+      },
+    });
   }
 
   async function checkAutoTopUp(): Promise<void> {

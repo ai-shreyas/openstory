@@ -39,8 +39,12 @@ export const MIN_TOPUP_AMOUNT_USD = 10;
 export const MIN_TOPUP_AMOUNT_MICROS: Microdollars =
   usdToMicros(MIN_TOPUP_AMOUNT_USD);
 
-/** Preset top-up amounts shown on the billing page */
-export const PRESET_TOPUP_AMOUNTS_USD = [10, 100, 1000] as const;
+/**
+ * Maximum top-up amount in USD. Enforced server-side on every path that can
+ * move money: interactive checkout, direct saved-card purchase, and the
+ * auto-top-up amount (which drives an unattended off-session charge).
+ */
+export const MAX_TOPUP_AMOUNT_USD = 1000;
 
 /** Low balance warning threshold in USD (used when auto-top-up is disabled) */
 export const LOW_BALANCE_THRESHOLD_USD = 5;

@@ -16,11 +16,20 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { FalLogo } from '@/components/icons/fal-logo';
 import { saveApiKeyFn } from '@/functions/api-keys';
 import { requestFounderCreditsFn } from '@/functions/billing';
 import { getCurrentUserProfileFn } from '@/functions/user';
-import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
+import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
+import {
+  BILLING_GATE_KEY,
+  useBillingGateQuery,
+} from '@/hooks/use-billing-gate';
+import {
+  closeBillingGate,
+  useBillingGateDialogOpen,
+} from '@/hooks/use-billing-gate-dialog';
 import { cn } from '@/lib/utils';
 import { usePostHog } from '@posthog/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -57,8 +66,10 @@ type OptionCardProps = {
 const cardClassName = (variant: 'primary' | 'muted') =>
   cn(
     'group relative flex items-center gap-3.5 rounded-xl border p-3.5 transition-all duration-200',
+    // The primary card is THE action — it must read as highlighted next to
+    // the muted fallbacks, not as a sibling (#1099).
     variant === 'primary' &&
-      'border-primary/20 bg-primary/[0.03] hover:border-primary/40 hover:bg-primary/[0.06]',
+      'border-primary/50 bg-primary/10 hover:border-primary hover:bg-primary/15',
     variant === 'muted' &&
       'border-border/60 bg-transparent hover:border-border hover:bg-accent/50'
   );
@@ -71,14 +82,13 @@ const OptionCard: React.FC<OptionCardProps> = ({
   description,
   variant = 'muted',
   onClick,
-}) => (
-  <Link to={to ?? '/'} search={search} onClick={onClick}>
+}) => {
+  const card = (
     <div className={cardClassName(variant)}>
       <div
         className={cn(
           'flex size-10 shrink-0 items-center justify-center rounded-lg transition-colors duration-200',
-          variant === 'primary' &&
-            'bg-primary/10 text-primary group-hover:bg-primary/15',
+          variant === 'primary' && 'bg-primary text-primary-foreground',
           variant === 'muted' &&
             'bg-muted text-muted-foreground group-hover:bg-muted/80'
         )}
@@ -92,21 +102,42 @@ const OptionCard: React.FC<OptionCardProps> = ({
       <ArrowRight
         className={cn(
           'size-3.5 shrink-0 -translate-x-1 opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-60',
-          variant === 'muted' && 'text-muted-foreground'
+          variant === 'primary' ? 'text-primary' : 'text-muted-foreground'
         )}
       />
     </div>
-  </Link>
-);
+  );
+
+  if (!to) {
+    return (
+      <button type="button" onClick={onClick} className="w-full text-left">
+        {card}
+      </button>
+    );
+  }
+
+  return (
+    <Link to={to} search={search} onClick={onClick}>
+      {card}
+    </Link>
+  );
+};
 
 /**
- * "Ask Tom for Credits" (#1096) — one click emails the founder (and fires a
- * PostHog product event server-side). Success collapses into a confirmation
- * card so it can't be re-sent from the same dialog.
+ * "Ask the founder for credits" (#1096, reworked in #1099) — expands into an
+ * optional message form (like the Feedback dialog) before emailing the
+ * founder (a PostHog product event fires server-side). Success collapses
+ * into a confirmation card so it can't be re-sent from the same dialog.
  */
 const AskFounderCard: React.FC = () => {
+  const [expanded, setExpanded] = useState(false);
+  const [message, setMessage] = useState('');
+
   const mutation = useMutation({
-    mutationFn: () => requestFounderCreditsFn(),
+    mutationFn: () =>
+      requestFounderCreditsFn({
+        data: { message: message.trim() || undefined },
+      }),
   });
 
   if (mutation.isSuccess) {
@@ -125,12 +156,11 @@ const AskFounderCard: React.FC = () => {
     );
   }
 
-  return (
-    <>
+  if (!expanded) {
+    return (
       <button
         type="button"
-        onClick={() => mutation.mutate()}
-        disabled={mutation.isPending}
+        onClick={() => setExpanded(true)}
         className={cn(cardClassName('muted'), 'w-full text-left')}
       >
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground group-hover:bg-muted/80">
@@ -138,14 +168,61 @@ const AskFounderCard: React.FC = () => {
         </div>
         <div className="flex-1 space-y-0.5">
           <span className="text-sm font-medium">
-            {mutation.isPending ? 'Sending…' : 'Ask Tom for Credits'}
+            Ask the founder for credits
           </span>
           <p className="text-xs text-muted-foreground">
-            Ask the founder for credits. Seriously, Tom replies.
+            Seriously. Tom replies.
           </p>
         </div>
         <ArrowRight className="size-3.5 shrink-0 -translate-x-1 text-muted-foreground opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-60" />
       </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border/60 p-3.5">
+      <div className="flex items-center gap-3.5">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <HeartHandshake className="size-4" />
+        </div>
+        <div className="flex-1 space-y-0.5">
+          <span className="text-sm font-medium">
+            Ask the founder for credits
+          </span>
+          <p className="text-xs text-muted-foreground">
+            Seriously. Tom replies.
+          </p>
+        </div>
+      </div>
+      <Textarea
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            mutation.mutate();
+          }
+        }}
+        placeholder="Tell Tom what you're making (optional)"
+        rows={3}
+        maxLength={2000}
+      />
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setExpanded(false)}
+          disabled={mutation.isPending}
+        >
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+        >
+          {mutation.isPending ? 'Sending…' : 'Send request'}
+        </Button>
+      </div>
       {mutation.isError && (
         <p role="alert" className="text-xs text-destructive">
           {mutation.error instanceof Error
@@ -153,7 +230,7 @@ const AskFounderCard: React.FC = () => {
             : 'Failed to send request'}
         </p>
       )}
-    </>
+    </div>
   );
 };
 
@@ -284,13 +361,13 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
         <div className="flex flex-col gap-2 pt-1">
           {stripeEnabled && (
             <>
+              {/* Opens the add-credits modal on top of the gate (#1099) */}
               <OptionCard
-                to="/credits"
                 icon={<CreditCard className="size-4" />}
-                title="Buy Credits"
-                description="Pay as you go. Auto top-up keeps you generating."
+                title="Add credits"
+                description="Pay as you go. Auto-reload keeps you generating."
                 variant="primary"
-                onClick={handleNav}
+                onClick={openAddCreditsDialog}
               />
 
               <AskFounderCard />
@@ -369,5 +446,27 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
         </div>
       </DialogContent>
     </Dialog>
+  );
+};
+
+/**
+ * Globally-mounted gate instance (#1099), opened via `openBillingGate()` —
+ * including by the query client's global mutation error handler on
+ * INSUFFICIENT_CREDITS. The onboarding flow on /sequences/new keeps its own
+ * instance for its dismissal memory.
+ */
+export const GlobalBillingGateDialog: React.FC = () => {
+  const open = useBillingGateDialogOpen();
+  const { data } = useBillingGateQuery();
+
+  return (
+    <BillingGateDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) closeBillingGate();
+      }}
+      hasFalKey={data?.hasFalKey ?? false}
+      stripeEnabled={data?.stripeEnabled ?? true}
+    />
   );
 };

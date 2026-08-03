@@ -1,4 +1,3 @@
-import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -46,12 +45,8 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
   const [open, setOpen] = useState(false);
   const generateVariants = useGenerateVariants();
   const selectVariant = useSelectVariant();
-  const {
-    needsBillingSetup: falNeedsBillingSetup,
-    showGate: showFalGate,
-    gateProps: falGateProps,
-    stripeEnabled,
-  } = useFalBillingGate();
+  const { needsBillingSetup: falNeedsBillingSetup, showGate: showFalGate } =
+    useFalBillingGate();
 
   const isGenerating =
     generating ||
@@ -161,8 +156,6 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <BillingGateDialog {...falGateProps} stripeEnabled={stripeEnabled} />
     </>
   );
 };

@@ -96,8 +96,8 @@ export type ShotContext = TeamContext & {
 
 /**
  * Request logging middleware. Logs at:
- *   - error: every serverFn failure (always)
- *   - warn:  oversize request bodies (>6 MB) and slow successes (>2s)
+ *   - error: serverFn failures, except the expected rejections below
+ *   - warn:  EXPECTED_REJECTION_CODES, oversize bodies (>6 MB), slow (>2s)
  *   - info:  successes that crossed the SLOW_THRESHOLD_MS (>500ms)
  *   - debug: fast successes (kept silent at INFO+ to avoid drowning errors)
  *
@@ -107,6 +107,17 @@ export type ShotContext = TeamContext & {
 const SIZE_WARNING_BYTES = 6 * 1024 * 1024; // 6 MB
 const SLOW_THRESHOLD_MS = 500;
 const VERY_SLOW_THRESHOLD_MS = 2000;
+
+/**
+ * Error codes that represent a user-facing outcome rather than a fault, and so
+ * log at `warn`. Add a code here only when a spike of it would NOT be worth
+ * paging on — everything else must stay at `error`.
+ */
+const EXPECTED_REJECTION_CODES = new Set([
+  'INSUFFICIENT_CREDITS',
+  'VALIDATION_ERROR',
+  'NOT_FOUND',
+]);
 const serverFnLogger = getLogger(['openstory', 'serverFn']);
 const apiAuthLogger = getLogger(['openstory', 'api', 'auth']);
 
@@ -169,13 +180,28 @@ export const loggerMiddleware = createMiddleware({ type: 'function' }).server(
     } catch (error) {
       const durationMs = Math.round(performance.now() - start);
       const err = toErrorPayload(error);
-      fnLogger.error('serverFn {fnName} failed: {errCode} {errMessage}', {
+      const logPayload = {
         fnName,
         durationMs,
         errCode: err.code,
         errMessage: err.message,
         err,
-      });
+      };
+      // Expected business rejections are outcomes, not failures: warn, so prod
+      // error logs stay signal (#1099). Deliberately an allowlist of codes and
+      // NOT `statusCode < 500` — a status range would also silence 401 spikes
+      // (an auth incident) and anything a handler mislabels as a 4xx.
+      if (EXPECTED_REJECTION_CODES.has(err.code)) {
+        fnLogger.warn(
+          'serverFn {fnName} rejected: {errCode} {errMessage}',
+          logPayload
+        );
+      } else {
+        fnLogger.error(
+          'serverFn {fnName} failed: {errCode} {errMessage}',
+          logPayload
+        );
+      }
       throw error;
     }
   }

@@ -41,6 +41,7 @@ import {
 } from '@/functions/model-assets';
 import { getModelDetailFn, getModelFamilyFn } from '@/functions/model-catalog';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
+import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { isInsufficientCreditsError } from '@/lib/errors';
 import type { GeneratedAsset } from '@/lib/db/schema';
 import {
@@ -60,7 +61,6 @@ import { useNavigate } from '@tanstack/react-router';
 import { AlertCircle, ExternalLink, SearchX, Sparkles } from 'lucide-react';
 import type { FC } from 'react';
 import { Suspense, useState } from 'react';
-import { toast } from 'sonner';
 
 // ---------------------------------------------------------------------------
 // Detail fetch (with activity fallback when the search param is absent)
@@ -177,6 +177,7 @@ const ModelRunPanel: FC<{ detail: ModelDetail }> = ({ detail }) => {
   const { model, inputSchema } = detail;
   const queryClient = useQueryClient();
   const { requireAuth, isAuthenticated } = useAuthGate();
+  const { showGate: showBillingGate } = useFalBillingGate();
 
   const [values, setValues] = useState<Record<string, JsonValue>>(() =>
     seedFormValue(inputSchema)
@@ -204,15 +205,7 @@ const ModelRunPanel: FC<{ detail: ModelDetail }> = ({ detail }) => {
     },
     onError: (error) => {
       if (isInsufficientCreditsError(error)) {
-        toast.error('Insufficient credits', {
-          description: 'Add credits to run this model.',
-          action: {
-            label: 'Add Credits',
-            onClick: () => {
-              window.location.href = '/credits';
-            },
-          },
-        });
+        showBillingGate();
         void queryClient.invalidateQueries({ queryKey: BILLING_BALANCE_KEY });
       }
     },

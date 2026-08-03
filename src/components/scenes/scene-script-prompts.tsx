@@ -1,4 +1,3 @@
-import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
 import { ImageModelSelector } from '@/components/model/image-model-selector';
@@ -452,12 +451,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     },
     [shot, sequenceId, selectSegmentVideoVersion]
   );
-  const {
-    needsBillingSetup: falNeedsBillingSetup,
-    showGate: showFalGate,
-    gateProps: falGateProps,
-    stripeEnabled,
-  } = useFalBillingGate();
+  const { needsBillingSetup: falNeedsBillingSetup, showGate: showFalGate } =
+    useFalBillingGate();
 
   const { data: staleness, isError: isStalenessError } = useShotStaleness({
     sequenceId,
@@ -1947,8 +1942,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       <TabsContent value="music">
         <SceneMusicFacet sequenceId={sequenceId} editable={musicEditable} />
       </TabsContent>
-
-      <BillingGateDialog {...falGateProps} stripeEnabled={stripeEnabled} />
 
       {shot?.id && historyOpen && (
         <PromptHistorySheet

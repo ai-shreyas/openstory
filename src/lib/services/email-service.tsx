@@ -121,6 +121,7 @@ export async function sendFounderCreditRequestEmail(params: {
   userEmail: string;
   teamId: string;
   balanceDisplay: string;
+  message?: string;
 }): Promise<{ success: boolean; error?: string }> {
   return sendEmail({
     to: params.to,
@@ -132,6 +133,7 @@ export async function sendFounderCreditRequestEmail(params: {
         userEmail={params.userEmail}
         teamId={params.teamId}
         balanceDisplay={params.balanceDisplay}
+        message={params.message}
       />
     ),
   });

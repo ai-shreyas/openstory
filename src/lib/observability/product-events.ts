@@ -16,6 +16,7 @@ type ProductEventName =
   | 'user_signed_in'
   | 'sequence_generated'
   | 'founder_credits_requested'
+  | 'credits_added'
   | 'feedback_submitted';
 
 export type CaptureProductEventArgs = {
