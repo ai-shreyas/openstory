@@ -1,5 +1,5 @@
 import type { Shot } from '@/types/database';
-import type { Frame } from '@/lib/db/schema';
+import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -12,31 +12,8 @@ import { SceneListItem } from './scene-list-item';
 // `ShotWithImage` projection); mirror them back onto a concrete anchor `Frame`
 // (id == shot.id) so the row matches what `getShotsFn` returns.
 const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
-  const frame: Frame = {
-    id: shot.id,
-    shotId: shot.id,
-    sequenceId: shot.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    source: 'generated',
-    imageUrl: shot.thumbnailUrl,
-    previewImageUrl: shot.previewThumbnailUrl,
-    imagePath: shot.thumbnailPath,
-    imageStatus: shot.thumbnailStatus,
-    imageWorkflowRunId: shot.thumbnailWorkflowRunId,
-    imageGeneratedAt: shot.thumbnailGeneratedAt,
-    imageError: shot.thumbnailError,
-    imageModel: shot.imageModel,
-    imagePrompt: shot.imagePrompt,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    imageInputHash: shot.thumbnailInputHash,
-    visualPromptInputHash: shot.visualPromptInputHash,
-    createdAt: shot.createdAt,
-    updatedAt: shot.updatedAt,
-  };
-  return projectShotWithImage(shot, frame, {
+  const { frame, selectedVersion } = frameFixtureFor(shot);
+  return projectShotWithImage(shot, frame, selectedVersion, {
     url: shot.variantImageUrl,
     status: shot.variantImageStatus,
   });
@@ -59,9 +36,8 @@ const mockShot: ShotWithImage = toShotWithImage({
   thumbnailStatus: 'completed',
   videoStatus: 'pending',
   thumbnailWorkflowRunId: null,
-  thumbnailGeneratedAt: null,
+  imageModel: null,
   thumbnailError: null,
-  imageModel: 'nano_banana',
   imagePrompt: null,
   videoWorkflowRunId: null,
   videoGeneratedAt: null,

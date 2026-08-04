@@ -55,7 +55,6 @@ const generateMockShot = (
       'failed',
     ]),
     thumbnailWorkflowRunId: faker.string.ulid(),
-    thumbnailGeneratedAt: faker.date.recent(),
     thumbnailError: null,
     imageModel: faker.helpers.arrayElement([
       'nano_banana_2',
@@ -139,19 +138,17 @@ const generateMockShot = (
     orderIndex: 0,
     role: 'first',
     source: 'generated',
-    imageUrl: shotBase.thumbnailUrl,
     previewImageUrl: shotBase.previewThumbnailUrl,
-    imagePath: shotBase.thumbnailPath,
     imageStatus: shotBase.thumbnailStatus,
     imageWorkflowRunId: shotBase.thumbnailWorkflowRunId,
-    imageGeneratedAt: shotBase.thumbnailGeneratedAt,
     imageError: shotBase.thumbnailError,
-    imageModel: shotBase.imageModel,
     imagePrompt: shotBase.imagePrompt,
+    // The still is a `frame_variants` row now (#1067). Mocks build the shot
+    // fields directly, so the pointer stays null and the version is synthesized
+    // below only to carry the url/model/hash the projection would have read.
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    imageInputHash: shotBase.thumbnailInputHash,
     visualPromptInputHash: shotBase.visualPromptInputHash,
     createdAt: shotBase.createdAt,
     updatedAt: shotBase.updatedAt,

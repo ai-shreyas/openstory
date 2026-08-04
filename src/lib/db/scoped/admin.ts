@@ -10,6 +10,7 @@ import { generateId } from '@/lib/db/id';
 import { user } from '@/lib/db/schema/auth';
 import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
+import { frameVariants } from '@/lib/db/schema/frame-variants';
 import { frames } from '@/lib/db/schema/frames';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
@@ -29,6 +30,7 @@ import {
   desc,
   eq,
   exists,
+  isNull,
   like,
   not,
   or,
@@ -226,11 +228,19 @@ export function createAdminMethods(db: Database) {
         frames,
         and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
       )
+      // The still lives on the SELECTED version (#1067).
+      .leftJoin(
+        frameVariants,
+        and(
+          eq(frameVariants.id, frames.selectedImageVersionId),
+          isNull(frameVariants.discardedAt)
+        )
+      )
       .where(eq(shots.sequenceId, sequenceId))
       .orderBy(asc(shots.orderIndex));
     return rows.map((row) =>
       row.frames
-        ? projectShotWithImage(row.shots, row.frames)
+        ? projectShotWithImage(row.shots, row.frames, row.frame_variants)
         : projectShotMissingFrame(row.shots)
     );
   }

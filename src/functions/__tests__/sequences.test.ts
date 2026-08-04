@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Frame, Shot } from '@/lib/db/schema';
+import { selectedVersionFixture } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -70,24 +71,28 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     orderIndex: 0,
     role: 'first',
     source: 'generated',
-    imageUrl: 'https://cdn/thumb.jpg',
     previewImageUrl: null,
-    imagePath: null,
     imageStatus: 'completed',
     imageWorkflowRunId: null,
-    imageGeneratedAt: null,
     imageError: null,
-    imageModel: 'nano_banana_2',
     imagePrompt: null,
-    selectedImageVersionId: null,
+    selectedImageVersionId: 'fv-1',
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    imageInputHash: null,
     visualPromptInputHash: null,
     createdAt: NOW,
     updatedAt: NOW,
   };
-  return { ...projectShotWithImage(shot, frame), ...overrides };
+  // The still is the selected version, not a frame column (#1067).
+  const selectedVersion = selectedVersionFixture({
+    frameId: frame.id,
+    sequenceId,
+    url: 'https://cdn/thumb.jpg',
+  });
+  return {
+    ...projectShotWithImage(shot, frame, selectedVersion),
+    ...overrides,
+  };
 }
 
 describe('assertModelNotAlreadyAdded (#547)', () => {

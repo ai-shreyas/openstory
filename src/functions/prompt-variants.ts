@@ -17,6 +17,7 @@ import {
   type SequenceMusicPromptVersion,
 } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
+import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { simpleHash } from '@/lib/utils/hash';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
@@ -305,7 +306,7 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
           sequence,
           scene,
           // No-op for visual; the motion hash folds in the rendered still.
-          startingFrameImageUrl: frame.imageUrl,
+          startingFrameImageUrl: await getFrameImageUrl(scopedDb, frame.id),
         });
         const narrowed = narrowShotPromptContext(ctx);
         inputHash =
@@ -490,8 +491,8 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
       // Motion prompts are conditioned on the rendered still (#929); feeding
       // its URL here keeps this regen-bail check in lockstep with the
       // generation-time stamp and the staleness verify. No-op for visual. The
-      // still lives on the anchor frame now (#989).
-      startingFrameImageUrl: frame.imageUrl,
+      // still lives on the anchor frame's selected version now (#989/#1067).
+      startingFrameImageUrl: await getFrameImageUrl(scopedDb, frame.id),
     });
 
     // Bail if the cached input hash already matches the live recompute —
@@ -649,12 +650,16 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
             )
           : // Snapshot the rendered still at trigger time (#929) so the motion
             // workflow never looks it up mid-run (a concurrent re-render could
-            // swap it). The still lives on the anchor frame now (#989).
+            // swap it). The still lives on the anchor frame's selected
+            // version now (#989/#1067).
             await triggerWorkflow<MotionPromptWorkflowInput>(
               '/motion-prompt',
               {
                 ...commonInput,
-                startingFrameImageUrl: frame.imageUrl,
+                startingFrameImageUrl: await getFrameImageUrl(
+                  scopedDb,
+                  frame.id
+                ),
                 sceneBefore,
                 sceneAfter,
                 targetVersionId: claim.id,

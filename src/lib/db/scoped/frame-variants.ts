@@ -12,10 +12,10 @@
  * switch-model is a {@link select} repoint. `discardedAt` soft-hides a version
  * (undoable); there is no `divergedAt` (retired in the redesign).
  *
- * Every mutation commits its state change (the frame mirror for {@link select},
- * the `discardedAt` write for discard / undiscard) and its `sequence_events`
- * row in the SAME `db.batch()` (see {@link buildEventInsert}), so the change and
- * its activity entry are atomic.
+ * Every mutation commits its state change (the pointer repoint for
+ * {@link select}, the `discardedAt` write for discard / undiscard) and its
+ * `sequence_events` row in the SAME `db.batch()` (see {@link buildEventInsert}),
+ * so the change and its activity entry are atomic.
  *
  * See docs/architecture/scene-shot-frame-redesign.md.
  */
@@ -35,7 +35,7 @@ import {
   or,
 } from 'drizzle-orm';
 import { LIVE_PENDING_STATUSES } from './frame-prompt-versions';
-import { buildFrameImageMirror, type CompletedFrameVariant } from './frames';
+import { buildFrameImageSelection, type CompletedFrameVariant } from './frames';
 import { buildEventInsert } from './sequence-events';
 
 function readStringProp(value: object, key: string): string | null {
@@ -592,6 +592,27 @@ export function createFrameVariantsMethods(db: Database) {
     },
 
     /**
+     * Batch {@link getSelected}, keyed by frameId. Same exclusions (no pointer,
+     * dangling, discarded → absent), so `map.get(id) ?? null` matches it.
+     */
+    getSelectedByFrameIds: async (
+      frameIds: string[]
+    ): Promise<Map<string, FrameVariant>> => {
+      if (frameIds.length === 0) return new Map();
+      const rows = await db
+        .select({ frameId: frames.id, version: frameVariants })
+        .from(frames)
+        .innerJoin(
+          frameVariants,
+          eq(frameVariants.id, frames.selectedImageVersionId)
+        )
+        .where(
+          and(inArray(frames.id, frameIds), isNull(frameVariants.discardedAt))
+        );
+      return new Map(rows.map((r) => [r.frameId, r.version]));
+    },
+
+    /**
      * The newest FAILED version for a frame, or null. The single-shot analog of
      * {@link listLastFailedModelsBySequence}.
      */
@@ -660,7 +681,11 @@ export function createFrameVariantsMethods(db: Database) {
         ...version,
         status: 'completed',
       };
-      const mirrorUpdate = buildFrameImageMirror(db, frameId, completedVersion);
+      const mirrorUpdate = buildFrameImageSelection(
+        db,
+        frameId,
+        completedVersion
+      );
 
       const [frame] = await db
         .select({

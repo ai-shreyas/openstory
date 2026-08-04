@@ -17,7 +17,7 @@ import {
 } from '@/lib/ai/prompt-context';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { Frame, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
 import { getLogger } from '@/lib/observability/logger';
@@ -98,10 +98,16 @@ export async function computeShotStaleness(args: {
   sequence: ShotPromptContextSequence & { aspectRatio: AspectRatio };
   shot: Shot;
   frame: Frame;
+  /**
+   * The `frame_variants` row the frame's selection points at — the still's
+   * url / model / inputHash live there since #1067, not on the frame. Passed in
+   * (not looked up here) so the batch caller resolves them all in one read.
+   */
+  selectedImage: FrameVariant | null;
   scene: Scene | null;
   refs?: ShotStalenessRefs;
 }): Promise<ShotStalenessResult> {
-  const { scopedDb, sequence, shot, frame, scene, refs } = args;
+  const { scopedDb, sequence, shot, frame, selectedImage, scene, refs } = args;
   const shotForHash = scene ? { ...shot, metadata: scene } : shot;
 
   const liveHashes: ShotLiveHashes = {
@@ -116,14 +122,13 @@ export async function computeShotStaleness(args: {
   // shots both populate it — the old `metadata.prompts.visual` fallback is gone.
   const effectivePrompt = frame.imagePrompt;
   if (effectivePrompt) {
-    // Distinguish "stored hash absent" from "stored hash matches". A null
-    // stored hash means the image predates hash tracking (or was generated
-    // by a pre-fix `generateShotImageFn` that didn't pass a sceneSnapshot)
-    // — we genuinely have no opinion, so 'untracked' rather than lying with
-    // 'fresh'. Once the user regenerates the image once under the new code
-    // path, this column populates and the live-vs-stored comparison takes
-    // over.
-    if (frame.imageInputHash === null) {
+    // Distinguish "stored hash absent" from "stored hash matches". No selected
+    // version, or a version with a null hash (the image predates hash tracking,
+    // or came from a pre-fix `generateShotImageFn` that didn't pass a
+    // sceneSnapshot), means we genuinely have no opinion — so 'untracked'
+    // rather than lying with 'fresh'. Once the user regenerates once under the
+    // new path the version carries a hash and the comparison takes over.
+    if (selectedImage?.inputHash == null) {
       thumbnail = 'untracked';
     } else {
       try {
@@ -142,7 +147,7 @@ export async function computeShotStaleness(args: {
           locations,
           elements,
           imageModel: safeTextToImageModel(
-            frame.imageModel,
+            selectedImage.model,
             DEFAULT_IMAGE_MODEL
           ),
           aspectRatio: sequence.aspectRatio,
@@ -150,7 +155,7 @@ export async function computeShotStaleness(args: {
 
         liveHashes.thumbnail = snapshot.snapshotInputHash;
         thumbnail =
-          snapshot.snapshotInputHash !== frame.imageInputHash
+          snapshot.snapshotInputHash !== selectedImage.inputHash
             ? 'stale'
             : 'fresh';
       } catch (error) {
@@ -231,7 +236,7 @@ export async function computeShotStaleness(args: {
           sequence,
           scene,
           analysisModelOverride: latest?.analysisModel ?? null,
-          startingFrameImageUrl: frame.imageUrl,
+          startingFrameImageUrl: selectedImage?.url ?? null,
           refs,
         });
         const liveHash = await computeMotionPromptInputHash(ctx);

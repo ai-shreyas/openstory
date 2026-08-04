@@ -81,6 +81,11 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         ),
         loadSelectedScriptsBySequence(scopedDb, sequence.id),
       ]);
+    // The still lives on the selected `frame_variants` row (#1067) — one batch
+    // read keyed by frame id, so projecting the sequence stays O(1) queries.
+    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+      anchorRows.map((f) => f.id)
+    );
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
     return shotRows.map((rawShot) => {
       const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
@@ -104,7 +109,13 @@ export const getShotsFn = createServerFn({ method: 'GET' })
       const gridSheet: ShotGridSheet | null = sheet
         ? { url: sheet.url, status: sheet.status }
         : null;
-      return projectShotWithImage(shot, frame, gridSheet, motionPromptData);
+      return projectShotWithImage(
+        shot,
+        frame,
+        selectedByFrame.get(frame.id) ?? null,
+        gridSheet,
+        motionPromptData
+      );
     });
   });
 
@@ -138,14 +149,16 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    const [sheet, selectedMotion] = await Promise.all([
+    const [sheet, selectedMotion, selectedImage] = await Promise.all([
       context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
       context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
+      context.scopedDb.frameVariants.getSelected(context.frame.id),
     ]);
     const shot = projectShotForClient(context.shot, context.script);
     return projectShotWithImage(
       shot,
       context.frame,
+      selectedImage,
       sheet ? { url: sheet.url, status: sheet.status } : null,
       selectedMotion ? motionPromptFromVersion(selectedMotion) : null
     );
@@ -607,7 +620,14 @@ export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const { shot, frame, sequence, scopedDb, scene } = context;
     return toWireStaleness(
-      await computeShotStaleness({ scopedDb, sequence, shot, frame, scene })
+      await computeShotStaleness({
+        scopedDb,
+        sequence,
+        shot,
+        frame,
+        selectedImage: await scopedDb.frameVariants.getSelected(frame.id),
+        scene,
+      })
     );
   });
 
@@ -666,6 +686,11 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
         : Promise.resolve(null),
     ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+    // Stills live on the selected `frame_variants` rows (#1067) — batched here
+    // alongside `refs` for the same reason: one read, not one per shot.
+    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+      anchorRows.map((f) => f.id)
+    );
     const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
     const entries = await Promise.all(
@@ -691,6 +716,7 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
                   sequence,
                   shot,
                   frame,
+                  selectedImage: selectedByFrame.get(frame.id) ?? null,
                   scene,
                   refs,
                 })

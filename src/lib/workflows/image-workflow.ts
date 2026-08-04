@@ -243,10 +243,12 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         if (!input.variantOnly) {
           await scopedDb.frames.setImageGenerationStatus(
             frame.id,
+            // No `imageModel` — the in-flight model is recorded on the
+            // version row this step just appended (#1067); the frame only
+            // tracks that a primary render is running.
             {
               imageStatus: 'generating',
               imageWorkflowRunId: workflowRunId,
-              imageModel: model,
             },
             { throwOnMissing: false }
           );
@@ -512,11 +514,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         const updatedFrame = anchor
           ? await scopedDb.frames.setImageGenerationStatus(
               anchor.id,
-              {
-                previewImageUrl: imageUrl,
-                imageGeneratedAt: new Date(),
-                imageError: null,
-              },
+              { previewImageUrl: imageUrl, imageError: null },
               { throwOnMissing: false }
             )
           : null;

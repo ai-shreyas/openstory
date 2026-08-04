@@ -9,8 +9,11 @@
  * cache already read. The raw `frame` is also exposed for callers that want the
  * real shape (version pickers, etc.).
  *
- * `variantImageUrl` / `variantImageStatus` are the 3×3 grid sheet, now a
- * `kind:'framing'` `frame_variants` version rather than a shots column.
+ * `variantImageUrl` / `variantImageStatus` are the 3×3 grid sheet, a
+ * `kind:'framing'` `frame_variants` version.
+ *
+ * The still's url/path/model/hash come from the SELECTED `frame_variants` row;
+ * this file is the only place that knows that.
  */
 
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
@@ -24,16 +27,16 @@ export type ShotGridSheet = {
 };
 
 export type ShotWithImage = Shot & {
-  thumbnailUrl: Frame['imageUrl'];
+  thumbnailUrl: FrameVariant['url'];
   previewThumbnailUrl: Frame['previewImageUrl'];
-  thumbnailPath: Frame['imagePath'];
+  thumbnailPath: FrameVariant['storagePath'];
   thumbnailStatus: Frame['imageStatus'];
   thumbnailWorkflowRunId: Frame['imageWorkflowRunId'];
-  thumbnailGeneratedAt: Frame['imageGeneratedAt'];
   thumbnailError: Frame['imageError'];
-  imageModel: Frame['imageModel'];
+  /** Null when never generated — absent means absent, not a default. */
+  imageModel: FrameVariant['model'] | null;
   imagePrompt: Frame['imagePrompt'];
-  thumbnailInputHash: Frame['imageInputHash'];
+  thumbnailInputHash: FrameVariant['inputHash'];
   visualPromptInputHash: Frame['visualPromptInputHash'];
   variantImageUrl: string | null;
   variantImageStatus: ShotGridSheet['status'] | null;
@@ -69,48 +72,43 @@ export function projectShotMissingFrame(shot: Shot): ShotWithImage {
     orderIndex: 0,
     role: 'first',
     source: 'generated',
-    imageUrl: null,
     previewImageUrl: null,
-    imagePath: null,
     imageStatus: null,
     imageWorkflowRunId: null,
-    imageGeneratedAt: null,
     imageError: null,
-    // Must match the `frames.imageModel` SQL column default (a deliberately
-    // frozen literal — see schema/frames.ts on why it is NOT the mutable
-    // DEFAULT_IMAGE_MODEL constant). Irrelevant in practice: a frameless shot
-    // has no image, so this never-relied-on fallback is just shape-filling.
-    imageModel: 'nano_banana_2',
     imagePrompt: null,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    imageInputHash: null,
     visualPromptInputHash: null,
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,
   };
-  return projectShotWithImage(shot, frame);
+  return projectShotWithImage(shot, frame, null);
 }
 
+/**
+ * `selectedVersion` is required (not optional) so a new read path can't
+ * silently project a null image surface onto a frame that has one.
+ */
 export function projectShotWithImage(
   shot: Shot,
   frame: Frame,
+  selectedVersion: FrameVariant | null,
   gridSheet?: ShotGridSheet | null,
   motionPromptData?: AssemblableMotionPrompt | null
 ): ShotWithImage {
   return {
     ...shot,
-    thumbnailUrl: frame.imageUrl,
+    thumbnailUrl: selectedVersion?.url ?? null,
     previewThumbnailUrl: frame.previewImageUrl,
-    thumbnailPath: frame.imagePath,
+    thumbnailPath: selectedVersion?.storagePath ?? null,
     thumbnailStatus: frame.imageStatus,
     thumbnailWorkflowRunId: frame.imageWorkflowRunId,
-    thumbnailGeneratedAt: frame.imageGeneratedAt,
     thumbnailError: frame.imageError,
-    imageModel: frame.imageModel,
+    imageModel: selectedVersion?.model ?? null,
     imagePrompt: frame.imagePrompt,
-    thumbnailInputHash: frame.imageInputHash,
+    thumbnailInputHash: selectedVersion?.inputHash ?? null,
     visualPromptInputHash: frame.visualPromptInputHash,
     variantImageUrl: gridSheet?.url ?? null,
     variantImageStatus: gridSheet?.status ?? null,

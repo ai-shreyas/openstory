@@ -138,10 +138,12 @@ describe('shots anchor-frame materialization', () => {
   it('preserves an existing anchor frame and its image on replay', async () => {
     const methods = createShotsMethods(db);
     const shot = await methods.upsert({ sequenceId, orderIndex: 0 });
-    // Simulate a generated image landing on the anchor between writes.
+    // Simulate a generated image landing on the anchor between writes. The
+    // still is a selected `frame_variants` row (#1067); the frame keeps the
+    // pointer, so replay must not clear it.
     await db
       .update(frames)
-      .set({ imageUrl: 'https://example.test/anchor.png' })
+      .set({ selectedImageVersionId: 'anchor-version-1' })
       .where(eq(frames.id, shot.anchorFrameId));
 
     await methods.upsert({ sequenceId, orderIndex: 0 });
@@ -150,6 +152,6 @@ describe('shots anchor-frame materialization', () => {
       .select()
       .from(frames)
       .where(eq(frames.id, shot.anchorFrameId));
-    expect(anchor?.imageUrl).toBe('https://example.test/anchor.png');
+    expect(anchor?.selectedImageVersionId).toBe('anchor-version-1');
   });
 });

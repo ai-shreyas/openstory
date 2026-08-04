@@ -50,6 +50,7 @@ export const sequences = snakeCase.table(
       .references(() => teams.id, { onDelete: 'cascade' }),
     title: text({ length: 500 }).notNull(),
     script: text(),
+    // used to track the status of the sequence
     status: text().$type<SequenceStatus>().default('draft').notNull(),
     statusError: text(),
     // CF Workflows instance id of the most recent /storyboard run. Lets the
@@ -76,6 +77,8 @@ export const sequences = snakeCase.table(
       .$type<AspectRatio>()
       .default(DEFAULT_ASPECT_RATIO)
       .notNull(),
+
+    // TB-20260804: DB-Audit: I don't love that there's a default here and that it's a specific model identifier
     analysisModel: text({ length: 100 })
       .default('anthropic/claude-haiku-4.5')
       .notNull(),
@@ -100,6 +103,7 @@ export const sequences = snakeCase.table(
     videoModel: text({ length: 100 }).default('kling_v3_pro').notNull(),
     workflow: text({ length: 100 }),
 
+    // TB-20260804: DB-Audit: music* should not be stored on the sequence directly and instead should point to a variant / version table
     // Music track fields (sequence-level background music)
     musicUrl: text(),
     musicPath: text(),
@@ -122,9 +126,11 @@ export const sequences = snakeCase.table(
     includeMusic: integer({ mode: 'boolean' }).default(true).notNull(),
 
     // Poster image (sequence-level preview from script, ephemeral CDN URL)
+    // TB-20260804: DB-Audit: posterUrl should be stored - not ephemeral
     posterUrl: text(),
 
     // Auto-generation flags (set at sequence creation, read by UI for phase display)
+    // TB-20260804: DB-Audit: autoGenerateMotion and autoGenerateMusic should not be stored. They should be set when the workflow is initiated.
     autoGenerateMotion: integer({ mode: 'boolean' }).default(false).notNull(),
     autoGenerateMusic: integer({ mode: 'boolean' }).default(false).notNull(),
 

@@ -75,20 +75,13 @@ export const frames = snakeCase.table(
     role: text().$type<FrameRole>().notNull().default('first'),
     source: text().$type<FrameSource>().notNull().default('generated'),
 
-    // Primary still (was shots.thumbnail*).
-    imageUrl: text(),
-    previewImageUrl: text(), // Fast preview CDN URL (URL may expire; column persists)
-    imagePath: text(), // R2 storage path (not signed URL)
+    // The still lives on the SELECTED `frame_variants` row, never here. What
+    // remains is frame-owned: the turbo stand-in shown before any variant
+    // exists, and the primary render's in-flight lifecycle.
+    previewImageUrl: text(), // URL may expire; column persists
     imageStatus: text().$type<FrameGenerationStatus>().default('pending'),
     imageWorkflowRunId: text(),
-    imageGeneratedAt: integer({ mode: 'timestamp' }),
     imageError: text(),
-    // SQL default is a frozen literal, NOT the DEFAULT_IMAGE_MODEL constant — a
-    // mutable imported default drifts from the deployed column default on the
-    // next model bump and forces a full-table rebuild (CASCADE trap; see
-    // schema/sequences.ts). The frame-create path resolves the real default in
-    // app code; this literal is just a never-relied-on fallback.
-    imageModel: text({ length: 100 }).default('nano_banana_2').notNull(),
     imagePrompt: text(), // Mirror of the selected prompt version's text (read-path convenience)
 
     // Selection pointers (soft references — plain columns, no FK — to avoid a
@@ -104,8 +97,6 @@ export const frames = snakeCase.table(
     // still points at the finishing version.
     pendingPromoteVersionId: text(), // → frame_variants.id
 
-    // SHA-256 staleness mirrors of the selected image / prompt version.
-    imageInputHash: text(),
     visualPromptInputHash: text(),
 
     createdAt: integer({ mode: 'timestamp' })

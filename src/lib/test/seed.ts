@@ -252,6 +252,10 @@ export async function createTestShot(
   // frame gets its OWN id (id-reuse was migration-only); it's resolved by
   // (shotId, orderIndex 0).
   const anchorFrameId = generateId();
+  // The still itself is a `frame_variants` version the frame SELECTS (#1067) —
+  // there is no `frames.imageUrl` to write. Seed the version first so the
+  // frame's pointer has a target.
+  const primaryVersionId = thumbnailUrl === null ? null : generateId();
   await db.insert(frames).values({
     id: anchorFrameId,
     shotId,
@@ -259,11 +263,25 @@ export async function createTestShot(
     orderIndex: 0,
     role: 'first',
     source: 'generated',
-    imageUrl: thumbnailUrl,
     imageStatus: 'completed',
+    selectedImageVersionId: primaryVersionId,
     createdAt: now,
     updatedAt: now,
   });
+  if (primaryVersionId !== null) {
+    await db.insert(frameVariants).values({
+      id: primaryVersionId,
+      frameId: anchorFrameId,
+      sequenceId,
+      kind: 'model',
+      model: 'nano_banana_2',
+      url: thumbnailUrl,
+      status: 'completed',
+      generatedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
 
   // The 3×3 grid sheet (was shots.variantImage*) is a kind:'framing'
   // frame_variants version with no sourceVariantId.
@@ -696,10 +714,14 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
   const frameRows = await db
     .select({
       shotId: frames.shotId,
-      imageUrl: frames.imageUrl,
+      imageUrl: frameVariants.url,
       imageStatus: frames.imageStatus,
     })
     .from(frames)
+    .leftJoin(
+      frameVariants,
+      eq(frameVariants.id, frames.selectedImageVersionId)
+    )
     .where(and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0)));
   const framesByShot = new Map(frameRows.map((f) => [f.shotId, f]));
   return rows
@@ -732,8 +754,12 @@ export async function getTestShot(shotId: string): Promise<{
   // (shotId, orderIndex 0) — never by id-reuse; the variant grid sheet is the
   // latest kind:'framing' frame_variants version on that frame.
   const [frame] = await db
-    .select({ id: frames.id, imageUrl: frames.imageUrl })
+    .select({ id: frames.id, imageUrl: frameVariants.url })
     .from(frames)
+    .leftJoin(
+      frameVariants,
+      eq(frameVariants.id, frames.selectedImageVersionId)
+    )
     .where(and(eq(frames.shotId, shotId), eq(frames.orderIndex, 0)));
 
   if (!frame) return null;

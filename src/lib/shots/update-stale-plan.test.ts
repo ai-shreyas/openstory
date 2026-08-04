@@ -7,7 +7,7 @@
  * clean one.
  */
 
-import type { Frame, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { ShotStalenessResult } from '@/lib/shots/shot-staleness';
@@ -42,9 +42,23 @@ function makeFrame(overrides: Partial<Frame> = {}): Frame {
   return {
     id: 'frame-1',
     shotId: 'shot-1',
-    imageUrl: 'https://example.com/a.jpg',
+    // The still lives on the selected version (#1067); a set pointer is what
+    // "this shot already has an image" means. Null it for a still-less shot.
+    selectedImageVersionId: 'fv-1',
     ...overrides,
   } as unknown as Frame;
+}
+
+/** The selected `frame_variants` row `getSelectedByFrameIds` would return. */
+function makeSelectedImage(frame: Frame): FrameVariant {
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal FrameVariant stub exposing only what computePlan reads
+  return {
+    id: frame.selectedImageVersionId,
+    frameId: frame.id,
+    url: `https://example.com/${frame.id}.jpg`,
+    model: 'nano_banana_2',
+    inputHash: 'stored-thumb',
+  } as unknown as FrameVariant;
 }
 
 /** Staleness keyed by shot id; anything unlisted reads fresh. */
@@ -147,6 +161,16 @@ function buildScopedDb(
       listAnchorsBySequence: () => Promise.resolve(frames),
       listBySequence: () => Promise.resolve(opts.video?.segFrames ?? []),
     },
+    frameVariants: {
+      getSelectedByFrameIds: () =>
+        Promise.resolve(
+          new Map(
+            frames
+              .filter((f) => f.selectedImageVersionId)
+              .map((f) => [f.id, makeSelectedImage(f)])
+          )
+        ),
+    },
     characters: { listWithSheets: () => Promise.resolve([]) },
     sequenceLocations: { listWithReferences: () => Promise.resolve([]) },
     sequenceElements: { list: () => Promise.resolve([]) },
@@ -224,7 +248,10 @@ describe('computePlan — what gets regenerated', () => {
 
   it('never renders a first still: a stale thumbnail on a shot with no image is not a target', async () => {
     stalenessByShot.set('shot-1', { ...FRESH, thumbnail: 'stale' });
-    const result = await plan([makeShot()], [makeFrame({ imageUrl: null })]);
+    const result = await plan(
+      [makeShot()],
+      [makeFrame({ selectedImageVersionId: null })]
+    );
     expect(result.targets).toEqual([]);
   });
 

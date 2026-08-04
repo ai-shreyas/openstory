@@ -1,6 +1,6 @@
-import type { Frame } from '@/lib/db/schema';
 import type { Style } from '@/lib/db/schema/libraries';
 import type { Sequence } from '@/lib/db/schema/sequences';
+import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -64,9 +64,8 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     thumbnailPath: null,
     thumbnailStatus: 'pending',
     thumbnailWorkflowRunId: null,
-    thumbnailGeneratedAt: null,
     thumbnailError: null,
-    imageModel: 'nano_banana_2',
+    imageModel: null,
     imagePrompt: null,
     variantImageUrl: null,
     variantImageStatus: 'pending',
@@ -99,32 +98,12 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     updatedAt: new Date(),
     ...overrides,
   };
-  const frame: Frame = {
-    id: `frame-${base.id}`,
-    shotId: base.id,
-    sequenceId: base.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    source: 'generated',
-    imageUrl: base.thumbnailUrl,
-    previewImageUrl: base.previewThumbnailUrl,
-    imagePath: base.thumbnailPath,
-    imageStatus: base.thumbnailStatus,
-    imageWorkflowRunId: base.thumbnailWorkflowRunId,
-    imageGeneratedAt: base.thumbnailGeneratedAt,
-    imageError: base.thumbnailError,
-    imageModel: base.imageModel,
-    imagePrompt: base.imagePrompt,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    imageInputHash: base.thumbnailInputHash,
-    visualPromptInputHash: base.visualPromptInputHash,
-    createdAt: base.createdAt,
-    updatedAt: base.updatedAt,
-  };
-  return { ...base, frame };
+  return { ...base, frame: anchorFixture(base).frame };
 }
+
+/** The two DB rows `buildSequenceState` projects a shot's image surface from. */
+const anchorFixture = (shot: Omit<ShotWithImage, 'frame'>) =>
+  frameFixtureFor(shot, `frame-${shot.id}`);
 
 function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   return {
@@ -204,11 +183,21 @@ function depsWithShots(
   shots: ShotWithImage[],
   style: Style | null = makeStyle()
 ) {
+  // The image surface lives on each shot's anchor frame now (#989), and the
+  // still itself on that frame's SELECTED version (#1067); the source projects
+  // `ShotWithImage` from all three.
+  const anchors = shots.map((s) => anchorFixture(s));
   return {
     shots: { listBySequence: async () => shots },
-    // The image surface lives on each shot's anchor frame now (#989); the source
-    // projects `ShotWithImage` from `shots` + `frames`.
-    frames: { listAnchorsBySequence: async () => shots.map((s) => s.frame) },
+    frames: { listAnchorsBySequence: async () => anchors.map((a) => a.frame) },
+    frameVariants: {
+      getSelectedByFrameIds: async () =>
+        new Map(
+          anchors.flatMap((a) =>
+            a.selectedVersion ? [[a.frame.id, a.selectedVersion]] : []
+          )
+        ),
+    },
     styles: { getById: async () => style },
   };
 }

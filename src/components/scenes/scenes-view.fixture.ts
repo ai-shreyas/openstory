@@ -1,7 +1,8 @@
 // AUTO-GENERATED Storybook fixture — real rows from local D1 (sequence 01KT2TPG5WYQ15H79SAV88EH45),
 // media URLs swapped for public placeholders. Do NOT hand-edit.
 // Regenerate via: bun scripts/generate-scenes-view-fixture.ts
-import { dbSceneId, type Frame, type SceneRow } from '@/lib/db/schema';
+import { dbSceneId, type SceneRow } from '@/lib/db/schema';
+import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -374,7 +375,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:11.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -458,7 +458,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:08.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -541,7 +540,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:07.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -625,7 +623,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:13.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -709,7 +706,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:17.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -793,7 +789,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:11.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -877,7 +872,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId:
       'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_nano_banana_pro_rewldhr',
-    thumbnailGeneratedAt: new Date('2026-06-02T00:12:16.000Z'),
     thumbnailError: null,
     imageModel: 'nano_banana_pro',
     imagePrompt:
@@ -949,31 +943,8 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
  * returns at runtime.
  */
 export const fixtureShots: ShotWithImage[] = fixtureShotRows.map((shot) => {
-  const frame: Frame = {
-    id: shot.id,
-    shotId: shot.id,
-    sequenceId: shot.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    source: 'generated',
-    imageUrl: shot.thumbnailUrl,
-    previewImageUrl: shot.previewThumbnailUrl,
-    imagePath: shot.thumbnailPath,
-    imageStatus: shot.thumbnailStatus,
-    imageWorkflowRunId: shot.thumbnailWorkflowRunId,
-    imageGeneratedAt: shot.thumbnailGeneratedAt,
-    imageError: shot.thumbnailError,
-    imageModel: shot.imageModel,
-    imagePrompt: shot.imagePrompt,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    imageInputHash: shot.thumbnailInputHash,
-    visualPromptInputHash: shot.visualPromptInputHash,
-    createdAt: shot.createdAt,
-    updatedAt: shot.updatedAt,
-  };
-  return projectShotWithImage(shot, frame, {
+  const { frame, selectedVersion } = frameFixtureFor(shot);
+  return projectShotWithImage(shot, frame, selectedVersion, {
     url: shot.variantImageUrl,
     status: shot.variantImageStatus,
   });

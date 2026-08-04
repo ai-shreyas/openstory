@@ -38,6 +38,35 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Check migration chain + schema drift
+        # Two different failures, both silent until they bite:
+        #
+        # 1. `db:check` — drizzle-kit's own journal validation (duplicate
+        #    indices / conflicting prefixes from parallel branches).
+        #
+        # 2. The regenerate-and-diff below is the one that catches SNAPSHOT
+        #    drift, which `db:check` does NOT detect. drizzle-kit diffs the
+        #    schema against the latest `snapshot.json`; when branches merge, git
+        #    merges the migration files cleanly but the snapshot is a DERIVED
+        #    artifact and the later-timestamped one silently wins. #1085's
+        #    snapshots predated #1069's `model_pricing` tables, so the merged
+        #    baseline lost three tables and the next `db:generate` tried to
+        #    CREATE them again — which would fail on prod, rolling back the
+        #    whole migration body with it.
+        #
+        #    If schema and snapshot agree, `db:generate` is a no-op and the tree
+        #    stays clean. Anything appearing here means either a stale snapshot
+        #    or a schema edit committed without its migration (the column-default
+        #    rebuild trap in CLAUDE.md).
+        run: |
+          bun db:check
+          bun db:generate
+          if [ -n "$(git status --porcelain drizzle/migrations)" ]; then
+            echo "::error::Schema and migrations are out of sync. Run 'bun db:generate' locally and commit the result (see CLAUDE.md § schema-drift trap)."
+            git status --porcelain drizzle/migrations
+            exit 1
+          fi
+
       - name: Run type checking
         run: bun typecheck
 

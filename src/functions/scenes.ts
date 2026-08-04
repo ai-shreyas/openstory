@@ -140,6 +140,10 @@ async function bootstrapMotionHashesForScene({
   const anchorByShot = await scopedDb.frames.getAnchorsByShots(
     shots.map((shot) => shot.id)
   );
+  // The i2v still lives on each anchor's SELECTED version (#1067).
+  const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+    [...anchorByShot.values()].map((frame) => frame.id)
+  );
 
   for (const shot of shots) {
     if (!shot.metadata) continue;
@@ -153,7 +157,10 @@ async function bootstrapMotionHashesForScene({
           analysisModel: sequence.analysisModel,
         },
         scene: overlaySceneScript(shot.metadata, preEditScript),
-        startingFrameImageUrl: anchorByShot.get(shot.id)?.imageUrl ?? null,
+        startingFrameImageUrl: (() => {
+          const anchor = anchorByShot.get(shot.id);
+          return anchor ? (selectedByFrame.get(anchor.id)?.url ?? null) : null;
+        })(),
       });
       await scopedDb.shots.update(shot.id, {
         motionPromptInputHash: await computeMotionPromptInputHash(ctx),
