@@ -1,6 +1,9 @@
 /**
  * Sequences E2E Tests
- * Tests sequence creation and viewing flows
+ * Tests sequence creation and viewing flows.
+ *
+ * Runs under the chromium project with storageState (signed-in). Anonymous
+ * routing for `/` and `/sequences/new` is covered in auth.spec.ts.
  */
 
 import { test, expect } from 'playwright/test';
@@ -12,9 +15,7 @@ test.describe('Sequences', () => {
     await expect(page).toHaveURL(/\/sequences/);
   });
 
-  test('home page has script input for anonymous visitors', async ({
-    page,
-  }) => {
+  test('home page has script input', async ({ page }) => {
     await page.goto('/');
 
     await expect(page).toHaveURL('/');
@@ -25,9 +26,13 @@ test.describe('Sequences', () => {
     await expect(editor).toBeVisible();
   });
 
-  test('anonymous /sequences/new redirects to login', async ({ page }) => {
+  test('signed-in user can access /sequences/new', async ({ page }) => {
+    // chromium project loads e2e/.auth/user.json — this is the logged-in alias
+    // of the home composer (#1104). Anonymous redirect is in auth.spec.ts.
     await page.goto('/sequences/new');
 
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL('/sequences/new');
+    const editor = page.locator('[data-slot="markdown-editor"]');
+    await expect(editor).toBeVisible();
   });
 });
