@@ -714,17 +714,17 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       throw new Error(`Image model "${model}" has already been added`);
     }
     const allShots = await scopedDb.shots.listBySequence(sequence.id);
-    // The image prompt lives on the anchor frame now (#989); load frames so each
-    // shot's stored prompt can seed its `/image` run.
     await scopedDb.shots.ensureAnchorFrames(allShots);
     // Keyed by shotId: frame ids are NOT shot ids (#989), and the lookup below
     // holds a shot.
+    const imageFrames = await scopedDb.frames.listBySequence(sequence.id);
     const imageFramesByShotId = new Map(
-      (await scopedDb.frames.listBySequence(sequence.id)).map((fr) => [
-        fr.shotId,
-        fr,
-      ])
+      imageFrames.map((fr) => [fr.shotId, fr])
     );
+    const promptByFrameId =
+      await scopedDb.framePromptVersions.getSelectedByFrameIds(
+        imageFrames.map((fr) => fr.id)
+      );
     const [characters, locations, elements, imageSceneContext] =
       await Promise.all([
         scopedDb.characters.listWithSheets(sequence.id),
@@ -748,7 +748,9 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         characters,
         locations,
         elements,
-        imagePrompt: imageFramesByShotId.get(f.id)?.imagePrompt ?? null,
+        imagePrompt:
+          promptByFrameId.get(imageFramesByShotId.get(f.id)?.id ?? '')?.text ??
+          null,
         // Adding a model never repoints the primary — it lands as an alternate
         // variant only. Promote later with "Set". (#547)
         variantOnly: true,

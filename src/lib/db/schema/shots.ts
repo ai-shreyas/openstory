@@ -59,10 +59,9 @@ export const shots = snakeCase.table(
     // segment's `video_variants` rows by `projectShotWithImage`. Rendering is
     // segment-scoped, so shot-scoped video state could never be more than a
     // fan-out of one render's.
-    // DB-Audit: drop after backfilling version rows for pre-#713 shots — mirror of the selected `shot_prompt_versions.text`, written only by `mirrorSelection` and read only as the legacy fallback when the pointer is null.
-    // Soft pointer (no FK) to the selected `shot_prompt_versions` row. Written
-    // by `mirrorSelection` on every prompt write; the render manifest snapshots
-    // it, so a null here means the manifest records no prompt.
+    // Soft pointer (no FK) to the selected `shot_prompt_versions` row — the
+    // only source of the motion prompt. The render manifest snapshots it, so a
+    // null here means the manifest records no prompt.
     selectedMotionPromptVersionId: text(),
     // The render segment this shot belongs to (#990) — a scene's video is tiled
     // into ≤cap segments (`render_segments`); per-shot rendering is the
@@ -74,13 +73,6 @@ export const shots = snakeCase.table(
     // A shot owns no audio columns (#1067): per-shot audio was never built —
     // music is sequence-level (`sequences.music*`) and dialogue rides inside
     // the video.
-    // SHA-256 of the upstream context that produced the cached motion prompt
-    // (scene metadata + style config + character/location bible + analysis
-    // model + starting-frame image). When upstream context changes, the prompt
-    // itself is flagged stale independently of the rendered video. Null when no
-    // AI prompt has been generated yet, or when the most recent version was a
-    // user-edit (which has no upstream input surface). The visual (image) prompt
-    // equivalent moved to `frames.visualPromptInputHash` in #989.
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())
       .notNull(),

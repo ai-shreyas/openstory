@@ -87,14 +87,12 @@ const generateMockShot = (
     imageStatus: shotBase.thumbnailStatus,
     imageWorkflowRunId: shotBase.thumbnailWorkflowRunId,
     imageError: shotBase.thumbnailError,
-    imagePrompt: shotBase.imagePrompt,
     // The still is a `frame_variants` row now (#1067). Mocks build the shot
     // fields directly, so the pointer stays null and the version is synthesized
     // below only to carry the url/model/hash the projection would have read.
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    visualPromptInputHash: shotBase.visualPromptInputHash,
     createdAt: shotBase.createdAt,
     updatedAt: shotBase.updatedAt,
   };

@@ -90,10 +90,27 @@ async function seed() {
   await db.insert(shots).values({ id: shotId, sequenceId, orderIndex: 0 });
 }
 
+// #1067 drops the mirror columns this backfill reads, so drizzle can no longer
+// write them: re-add them when the migrated DB lacks them and seed with raw
+// SQL. The migration file itself is history and stays verbatim.
+async function ensureLegacyMirrorColumns(): Promise<void> {
+  const info = await client.execute('PRAGMA table_info(`frames`)');
+  const present = new Set(
+    info.rows.flatMap((row) => (typeof row.name === 'string' ? [row.name] : []))
+  );
+  for (const column of ['image_prompt', 'visual_prompt_input_hash']) {
+    if (present.has(column)) continue;
+    await client.execute(
+      `ALTER TABLE \`frames\` ADD COLUMN \`${column}\` text`
+    );
+  }
+}
+
 beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: './drizzle/migrations' });
+  await ensureLegacyMirrorColumns();
 });
 
 afterAll(() => {
@@ -110,11 +127,20 @@ async function insertFrame(values: {
   visualPromptInputHash?: string | null;
   selectedImagePromptVersionId?: string | null;
 }) {
+  const {
+    imagePrompt = null,
+    visualPromptInputHash = null,
+    ...frameValues
+  } = values;
   const [frame] = await db
     .insert(frames)
-    .values({ shotId, sequenceId, role: 'first', ...values })
+    .values({ shotId, sequenceId, role: 'first', ...frameValues })
     .returning();
   if (!frame) throw new Error('seed: frame insert returned nothing');
+  await client.execute({
+    sql: 'UPDATE `frames` SET `image_prompt` = ?, `visual_prompt_input_hash` = ? WHERE `id` = ?',
+    args: [imagePrompt, visualPromptInputHash, frame.id],
+  });
   return frame;
 }
 

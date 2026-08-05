@@ -11,6 +11,7 @@ import type {
   SequenceElement,
 } from '@/lib/db/schema';
 import {
+  framePromptVersions,
   frames,
   renderSegments,
   scenes,
@@ -291,16 +292,25 @@ export function createSequenceElementsMethods(db: Database) {
         .select({
           id: frames.id,
           shotId: frames.shotId,
-          imagePrompt: frames.imagePrompt,
+          imagePrompt: framePromptVersions.text,
+          promptVersionId: framePromptVersions.id,
         })
         .from(frames)
+        .leftJoin(
+          framePromptVersions,
+          eq(framePromptVersions.id, frames.selectedImagePromptVersionId)
+        )
         .where(
           and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0))
         );
       const imagePromptByShot = new Map(
         frameRows.map((f) => [f.shotId, f.imagePrompt])
       );
-      const frameIdByShot = new Map(frameRows.map((f) => [f.shotId, f.id]));
+      const promptVersionIdByShot = new Map(
+        frameRows.flatMap((f) =>
+          f.promptVersionId ? [[f.shotId, f.promptVersionId]] : []
+        )
+      );
       // The motion prompt is the *selected* `shot_prompt_versions` row (#713):
       // both the token scan and the rewrite target that row.
       const selectedMotionRows = await db
@@ -382,7 +392,7 @@ export function createSequenceElementsMethods(db: Database) {
         const selectedMotionVersionId = selectedMotionVersionByShot.get(
           delta.shotId
         );
-        const anchorFrameId = frameIdByShot.get(delta.shotId);
+        const selectedPromptVersionId = promptVersionIdByShot.get(delta.shotId);
         return [
           ...(delta.motionPrompt !== undefined && selectedMotionVersionId
             ? [
@@ -392,12 +402,12 @@ export function createSequenceElementsMethods(db: Database) {
                   .where(eq(shotPromptVersions.id, selectedMotionVersionId)),
               ]
             : []),
-          ...(delta.imagePrompt !== undefined && anchorFrameId
+          ...(delta.imagePrompt !== undefined && selectedPromptVersionId
             ? [
                 db
-                  .update(frames)
-                  .set({ imagePrompt: delta.imagePrompt, updatedAt: now })
-                  .where(eq(frames.id, anchorFrameId)),
+                  .update(framePromptVersions)
+                  .set({ text: delta.imagePrompt })
+                  .where(eq(framePromptVersions.id, selectedPromptVersionId)),
               ]
             : []),
         ];

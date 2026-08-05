@@ -115,13 +115,19 @@ async function regenerateShotsIfNeeded(
       const framesByShot = await scopedDb.frames.getAnchorsByShots(
         shots.map((s) => s.id)
       );
+      const promptByFrameId =
+        await scopedDb.framePromptVersions.getSelectedByFrameIds(
+          [...framesByShot.values()].map((f) => f.id)
+        );
       const aspectRatio = sequence.aspectRatio;
       const shotSnapshots = await Promise.all(
         shots.map((shot) =>
           buildRegenerateShotSnapshot({
             shot,
             scene: resolveSceneForShot(shot, sceneContext).scene,
-            imagePrompt: framesByShot.get(shot.id)?.imagePrompt ?? null,
+            imagePrompt:
+              promptByFrameId.get(framesByShot.get(shot.id)?.id ?? '')?.text ??
+              null,
             characters,
             locations,
             elements,

@@ -57,11 +57,9 @@ export function frameFixtureFor(
     imageStatus: shot.thumbnailStatus,
     imageWorkflowRunId: shot.thumbnailWorkflowRunId,
     imageError: shot.thumbnailError,
-    imagePrompt: shot.imagePrompt,
     selectedImageVersionId: versionId,
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    visualPromptInputHash: shot.visualPromptInputHash,
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,
   };

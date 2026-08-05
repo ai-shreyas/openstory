@@ -131,18 +131,23 @@ async function buildRegeneratePayload(
       `[RecastCharacterWorkflow:cf] Missing shots for ${input.characterName}: ${missing.join(', ')}`
     );
   }
-  // The image prompt mirror lives on each shot's anchor frame (#989) — keyed by
-  // shotId (NOT id-reuse).
+  // Anchor frames keyed by shotId (NOT id-reuse, #989).
   const framesByShot = await scopedDb.frames.getAnchorsByShots(
     shots.map((s) => s.id)
   );
+  const promptByFrameId =
+    await scopedDb.framePromptVersions.getSelectedByFrameIds(
+      [...framesByShot.values()].map((f) => f.id)
+    );
   const aspectRatio = sequence.aspectRatio;
   const shotSnapshots = await Promise.all(
     shots.map((shot) =>
       buildRegenerateShotSnapshot({
         shot,
         scene: resolveSceneForShot(shot, sceneContext).scene,
-        imagePrompt: framesByShot.get(shot.id)?.imagePrompt ?? null,
+        imagePrompt:
+          promptByFrameId.get(framesByShot.get(shot.id)?.id ?? '')?.text ??
+          null,
         characters,
         locations,
         elements,

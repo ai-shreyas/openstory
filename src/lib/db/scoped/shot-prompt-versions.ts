@@ -1,15 +1,10 @@
 /**
  * Scoped Shot Prompt Versions Sub-module
  *
- * Appends a new revision row to `shot_prompt_versions` and updates the
- * cached pointer column on `shots` (`imagePrompt` for visual prompts,
- * `motionPrompt` for motion prompts) plus the matching
- * `*_prompt_input_hash` column. The two writes are sequential, not
- * transactional — see `write` for the durability story.
- *
- * Callers go through these helpers instead of writing the cached column
- * directly so prompt history is never lost. Read-path (read the cached
- * column) is unchanged. Renamed from `shot-prompt-variants` in #988.
+ * Appends a new revision row to `shot_prompt_versions` and points
+ * `shots.selectedMotionPromptVersionId` at it. The version row is the only
+ * source: its `text` is the prompt and its `inputHash` is the upstream context
+ * staleness compares against. Renamed from `shot-prompt-variants` in #988.
  *
  * See docs/architecture/workflow-snapshots-and-content-hash-staleness.md
  * § prompt versioning.
@@ -90,21 +85,17 @@ type WriteShotPromptVersionBase = {
 /**
  * `inputHash` represents the upstream context (scene + style + narrowed
  * bibles + aspectRatio + analysisModel) that this prompt is aligned with,
- * regardless of who authored the text. AI-generated and regenerated rows
- * carry a real hash at the call site so the partial unique index can dedupe
- * retries; the helper may downgrade the persisted hash to null on
- * the force-regen fallback path (see `write` for details). User-edits also
- * carry the live hash captured at edit time so staleness detection keeps
- * working after a hand-typed prompt; null is permitted only when the
- * upstream context was uncomputable at write time (e.g. style deleted), in
- * which case the staleness function falls back to an earlier non-null row.
+ * regardless of who authored the text. Every row persists it verbatim — it is
+ * what staleness compares against, so discarding it would silently freeze
+ * detection. User-edits carry the live hash captured at edit time; null is
+ * permitted only when the upstream context was uncomputable at write time
+ * (e.g. style deleted), in which case the staleness function falls back to an
+ * earlier non-null row.
  *
- * Restored rows carry the source version's hash + analysisModel verbatim so
- * the cached `*_prompt_input_hash` column keeps tracking the upstream context
- * that originally produced the prompt — restoring an old AI prompt must NOT
- * silently disable staleness detection. Both fields stay nullable for restored
- * rows to accommodate legacy user-edit rows written before this contract
- * landed (they have null hashes that we can't retroactively recompute).
+ * Restored rows carry the source version's hash + analysisModel verbatim, so
+ * restoring an old AI prompt does not disable staleness detection. Both fields
+ * stay nullable for restored rows to accommodate legacy user-edit rows written
+ * before this contract landed (null hashes we can't retroactively recompute).
  */
 export type WriteShotPromptVersionInput = WriteShotPromptVersionBase &
   (
@@ -125,9 +116,8 @@ export type WriteShotPromptVersionInput = WriteShotPromptVersionBase &
       }
   );
 
-// Visual (image) prompt versions moved to `frame_prompt_versions` (#989) — the
-// cached mirror lives on the anchor frame, not `shots`. Only the MOTION prompt
-// still mirrors onto `shots`, so every write through this module must be motion.
+// Visual (image) prompt versions moved to `frame_prompt_versions` (#989), so
+// every write through this module must be motion.
 const assertMotionPromptType = (promptType: ShotPromptType): void => {
   if (promptType === 'visual') {
     throw new Error(
@@ -138,15 +128,9 @@ const assertMotionPromptType = (promptType: ShotPromptType): void => {
 
 export function createShotPromptVersionsMethods(db: Database) {
   /**
-   * Mirror a selected motion version onto its shot: cached text + hash +
-   * `selectedMotionPromptVersionId` pointer, all set in lockstep. The pointer is
-   * what the render manifest references (motion prompt version snapshot, #990),
-   * so keeping the triple together is load-bearing — this single helper is the
-   * only place the three columns are written, so they can't drift.
-   *
-   * `text`/`inputHash` are passed explicitly (not read off `version`) because the
-   * force-regen path in `write` mirrors the real upstream `inputHash` while the
-   * version row itself carries a null hash — see `write`.
+   * Point the shot at `version`. The render manifest references this pointer
+   * (motion prompt version snapshot, #990), so a null here means the manifest
+   * records no prompt.
    */
   const selectVersion = (shotId: string, versionId: string) =>
     db
@@ -206,26 +190,17 @@ export function createShotPromptVersionsMethods(db: Database) {
 
   const methods = {
     /**
-     * Append a new prompt version row and update the cached pointer on
-     * `shots`. Returns the inserted (or pre-existing matching) row.
+     * Append a new prompt version row and point the shot at it. Returns the
+     * inserted (or pre-existing matching) row.
      *
-     * Durability: the insert + update pair is sequential, not transactional.
-     * The version row is the source of truth; the cached column on `shots`
-     * is a read-path optimization. To make retries safe, AI-generated
-     * rows are deduped by the unique partial index on
-     * `(shot_id, prompt_type, input_hash) WHERE input_hash IS NOT NULL AND
-     * source != 'restored'`: an insert that conflicts with an existing row
-     * no-ops, the existing row is fetched, and the cached pointer is updated as
-     * normal. (The `source != 'restored'` clause is load-bearing — it lets a
-     * restore append an audit row even when its hash matches an existing one.)
+     * Retry idempotency is `(shot, prompt_type, input_hash, text)` — same
+     * upstream context AND same output. A force-regen produces new text at an
+     * unchanged hash and so appends, keeping its real hash. A restore always
+     * appends its audit row.
      *
-     * Force-regeneration corner case: an explicit user-triggered regen runs
-     * the LLM against unchanged upstream inputs. The new completion's hash
-     * matches an existing row, so the unique-index insert no-ops — but the
-     * text genuinely differs. We append a fallback row with `input_hash =
-     * NULL` (excluded by the partial index) so history records the new text;
-     * the cached `*_prompt_input_hash` column still tracks the real
-     * `liveHash` so staleness detection stays correct.
+     * Durability: the insert + pointer update are sequential, not
+     * transactional; the append happens first so a crash can never leave a
+     * pointer with no row behind it.
      */
     write: async (
       input: WriteShotPromptVersionInput
@@ -235,69 +210,43 @@ export function createShotPromptVersionsMethods(db: Database) {
       const nextHash = input.inputHash;
       const analysisModel = input.analysisModel;
 
-      // Append first so a crash can't leave a stale pointer with no row
-      // behind it. The reverse order would be unrecoverable.
-      const [inserted] = await db
-        .insert(shotPromptVersions)
-        .values({
-          shotId: input.shotId,
-          promptType: input.promptType,
-          text: input.text,
-          components: input.components,
-          parameters: input.parameters,
-          dialogue: input.dialogue,
-          audio: input.audio,
-          source: input.source,
-          inputHash: nextHash,
-          analysisModel,
-          createdBy: input.createdBy ?? null,
-        })
-        .onConflictDoNothing()
-        .returning();
-
-      let version: ShotPromptVersion | undefined = inserted;
-      if (!version && nextHash !== null) {
-        const [existing] = await db
+      // A workflow step retry re-submits the same output for the same context.
+      // Same context but NEW text is a force-regen and must append.
+      let version: ShotPromptVersion | undefined;
+      // A restore always appends its audit row, even at identical content.
+      if (nextHash !== null && input.source !== 'restored') {
+        [version] = await db
           .select()
           .from(shotPromptVersions)
           .where(
             and(
               eq(shotPromptVersions.shotId, input.shotId),
               eq(shotPromptVersions.promptType, input.promptType),
-              eq(shotPromptVersions.inputHash, nextHash)
+              eq(shotPromptVersions.inputHash, nextHash),
+              eq(shotPromptVersions.text, input.text),
+              ne(shotPromptVersions.source, 'restored')
             )
           )
           .limit(1);
+      }
 
-        if (existing && existing.text !== input.text) {
-          // Same upstream hash but genuinely new text. Two ways to get here: a
-          // force-regen (AI runs against unchanged inputs) or a user-edit whose
-          // live hash matches the row it edits. Either way the new text must
-          // land in history, so bypass the partial unique index with a null
-          // `input_hash`; the cached hash below still tracks the real `liveHash`
-          // so staleness detection stays correct. (`restored` rows never reach
-          // this branch — the partial index excludes them, so they never
-          // conflict on insert.)
-          const [forced] = await db
-            .insert(shotPromptVersions)
-            .values({
-              shotId: input.shotId,
-              promptType: input.promptType,
-              text: input.text,
-              components: input.components,
-              parameters: input.parameters,
-              dialogue: input.dialogue,
-              audio: input.audio,
-              source: input.source,
-              inputHash: null,
-              analysisModel,
-              createdBy: input.createdBy ?? null,
-            })
-            .returning();
-          version = forced;
-        } else {
-          version = existing;
-        }
+      if (!version) {
+        [version] = await db
+          .insert(shotPromptVersions)
+          .values({
+            shotId: input.shotId,
+            promptType: input.promptType,
+            text: input.text,
+            components: input.components,
+            parameters: input.parameters,
+            dialogue: input.dialogue,
+            audio: input.audio,
+            source: input.source,
+            inputHash: nextHash,
+            analysisModel,
+            createdBy: input.createdBy ?? null,
+          })
+          .returning();
       }
 
       if (!version) {
@@ -516,7 +465,7 @@ export function createShotPromptVersionsMethods(db: Database) {
           parameters: input.parameters ?? null,
           dialogue: input.dialogue ?? null,
           audio: input.audio ?? null,
-          inputHash: conflicting ? null : input.inputHash,
+          inputHash: input.inputHash,
           analysisModel: input.analysisModel,
           status: 'completed',
         })
@@ -545,10 +494,9 @@ export function createShotPromptVersionsMethods(db: Database) {
     getSelectedMotion: async (
       shotId: string
     ): Promise<ShotPromptVersion | null> => {
-      // Left join (not inner) so we can tell "no pointer set" (legacy shot, falls
-      // back to the mirror) apart from "pointer set but the row is gone" — an
-      // orphaned pointer (broken FK / deleted version) that the mirror fallback
-      // would otherwise mask silently. Surface the latter so it's observable.
+      // Left join (not inner) so "no pointer set" is distinguishable from
+      // "pointer set but the row is gone" — an orphaned pointer (broken FK /
+      // deleted version) that an inner join would drop silently.
       const [row] = await db
         .select({
           pointer: shots.selectedMotionPromptVersionId,
@@ -563,7 +511,7 @@ export function createShotPromptVersionsMethods(db: Database) {
         .limit(1);
       if (row?.pointer && !row.version) {
         logger.warn(
-          `Shot ${shotId} points at motion prompt version ${row.pointer} but no row exists (orphaned pointer); falling back to the cached mirror`
+          `Shot ${shotId} points at motion prompt version ${row.pointer} but no row exists (orphaned pointer)`
         );
       }
       return row?.version ?? null;

@@ -122,11 +122,9 @@ export function projectShotMissingFrame(
     imageStatus: null,
     imageWorkflowRunId: null,
     imageError: null,
-    imagePrompt: null,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    visualPromptInputHash: null,
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,
   };

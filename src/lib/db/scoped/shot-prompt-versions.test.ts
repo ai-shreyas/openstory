@@ -308,7 +308,7 @@ describe('shot_prompt_variants helper', () => {
     expect(history).toHaveLength(1);
   });
 
-  it('force-regen at the same input_hash appends a null-hash history row with the new text and selects it', async () => {
+  it('force-regen at the same input_hash appends a distinct history row with the new text and selects it', async () => {
     // Mirrors the user-driven "Regenerate Prompt" path: the LLM is invoked
     // again against unchanged upstream inputs, so the new completion's hash
     // collides with the existing row. The helper must still record the new
@@ -337,8 +337,8 @@ describe('shot_prompt_variants helper', () => {
 
     // A distinct row was inserted (not the existing one returned verbatim).
     expect(forced.id).not.toBe(first.id);
-    // Bypasses the partial unique index via null `input_hash`.
-    expect(forced.inputHash).toBeNull();
+    // Keeps the real hash: the row itself is what staleness compares against.
+    expect(forced.inputHash).toBe('context-hash-1');
     expect(forced.source).toBe('regenerated');
     expect(forced.text).toBe('Fresh LLM completion against same inputs');
 

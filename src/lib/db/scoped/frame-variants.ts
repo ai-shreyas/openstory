@@ -774,8 +774,6 @@ export function createFrameVariantsMethods(db: Database) {
           db
             .update(frames)
             .set({
-              imagePrompt: linkedPrompt.text,
-              visualPromptInputHash: linkedPrompt.inputHash,
               selectedImagePromptVersionId: linkedPrompt.id,
               pendingPromoteVersionId: null,
               updatedAt: new Date(),
@@ -803,8 +801,6 @@ export function createFrameVariantsMethods(db: Database) {
           db
             .update(frames)
             .set({
-              imagePrompt: linkedPrompt.text,
-              visualPromptInputHash: linkedPrompt.inputHash,
               selectedImagePromptVersionId: linkedPrompt.id,
               updatedAt: new Date(),
             })

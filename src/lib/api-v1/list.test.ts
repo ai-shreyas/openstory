@@ -120,11 +120,9 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     imageStatus: base.thumbnailStatus,
     imageWorkflowRunId: base.thumbnailWorkflowRunId,
     imageError: base.thumbnailError,
-    imagePrompt: base.imagePrompt,
     selectedImageVersionId: null,
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    visualPromptInputHash: base.visualPromptInputHash,
     createdAt: base.createdAt,
     updatedAt: base.updatedAt,
   };

@@ -71,8 +71,6 @@ export const frames = snakeCase.table(
     imageStatus: text().$type<FrameGenerationStatus>().default('pending'),
     imageWorkflowRunId: text(),
     imageError: text(),
-    // DB-Audit: drop after backfilling version rows — mirror of the selected `frame_prompt_versions.text`, exactly as `shots.motionPrompt` mirrors the motion version.
-    imagePrompt: text(), // Mirror of the selected prompt version's text (read-path convenience)
 
     // Selection pointers (soft references — plain columns, no FK — to avoid a
     // cycle with frame_variants/frame_prompt_versions, which both reference
@@ -86,9 +84,6 @@ export const frames = snakeCase.table(
     // discard of that version clears it. Completion promotes only when this
     // still points at the finishing version.
     pendingPromoteVersionId: text(), // → frame_variants.id
-
-    // DB-Audit: drop with `imagePrompt` — mirror of `frame_prompt_versions.inputHash`, the image-side twin of `shots.motionPromptInputHash`.
-    visualPromptInputHash: text(),
 
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())

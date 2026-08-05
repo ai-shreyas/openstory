@@ -56,11 +56,9 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     imageStatus: 'completed',
     imageWorkflowRunId: null,
     imageError: null,
-    imagePrompt: null,
     selectedImageVersionId: 'fv-1',
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    visualPromptInputHash: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
