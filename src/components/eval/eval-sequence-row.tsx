@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import type React from 'react';
 import { AppImage } from '@/components/ui/app-image';
 import { EvalSequenceMetadata } from './eval-sequence-metadata';
 import { EvalSceneCell } from './eval-scene-cell';
 import type { DialogTab } from './eval-cell-dialog';
+import { useScenesBySequence, type SceneWithScript } from '@/hooks/use-scenes';
 import type { SequenceWithShots } from '@/hooks/use-sequences-with-shots';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
@@ -45,6 +47,13 @@ export const EvalSequenceRow: React.FC<EvalSequenceRowProps> = ({
 }) => {
   const aspectRatio: AspectRatio =
     (sequence.aspectRatio as AspectRatio | null) ?? DEFAULT_ASPECT_RATIO;
+
+  const { data: scenes } = useScenesBySequence(sequence.id);
+  const scenesById = useMemo(() => {
+    const map = new Map<string, SceneWithScript>();
+    for (const scene of scenes ?? []) map.set(scene.id, scene);
+    return map;
+  }, [scenes]);
 
   const previewUrl = sequence.shots[0]?.thumbnailUrl ?? sequence.posterUrl;
 
@@ -101,6 +110,7 @@ export const EvalSequenceRow: React.FC<EvalSequenceRowProps> = ({
           >
             <EvalSceneCell
               shot={shot}
+              scene={shot?.sceneId ? scenesById.get(shot.sceneId) : undefined}
               viewMode={viewMode}
               sceneNumber={i + 1}
               sequenceTitle={sequence.title}

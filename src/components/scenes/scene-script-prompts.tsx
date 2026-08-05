@@ -45,7 +45,7 @@ import {
   shotStalenessUnknown,
   useShotStaleness,
 } from '@/hooks/use-shot-staleness';
-import { useSaveSceneScript } from '@/hooks/use-scenes';
+import { useSaveSceneScript, type SceneWithScript } from '@/hooks/use-scenes';
 import { useSaveShotPrompt } from '@/hooks/use-prompt-variants';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import {
@@ -318,14 +318,13 @@ type SceneScriptPromptsProps = {
   /** Music facet editable only at sequence scope. */
   musicEditable?: boolean;
   /**
-   * The scene the Script facet edits — the selected shot's scene at shot scope,
-   * the selected scene at scene scope. Undefined when the selection spans
-   * several scenes (or none), which renders the facet read-only rather than
-   * picking a target for the user.
+   * The scene in focus — the selected shot's scene at shot scope, the selected
+   * scene at scene scope. Undefined when the selection spans several scenes (or
+   * none), which renders the Script facet read-only rather than picking a target
+   * for the user. Carries the selected script version (#1030) plus the
+   * continuity/location the prompt previews resolve references against.
    */
-  scriptSceneId?: string;
-  /** That scene's current script extract (selected version, #1030). */
-  scriptText?: string;
+  scene?: SceneWithScript;
   /**
    * The in-scope shots + their batched staleness (#1077) — the selected
    * scene's at scene scope, every shot at sequence scope. Drives the
@@ -367,13 +366,14 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   onCompareDivergent,
   facetShotIds = null,
   musicEditable = false,
-  scriptSceneId,
-  scriptText,
+  scene,
   scopeShots,
   scopeStaleness,
   scopeStalenessFailed,
   onSelectShot,
 }) => {
+  const scriptSceneId = scene?.id;
+  const scriptText = scene?.script?.extract;
   const divergentImageVariant = useMemo(
     () => shotDivergentVariants?.find((v) => v.variantType === 'image'),
     [shotDivergentVariants]
@@ -1035,7 +1035,21 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // The shot's selected motion prompt, projected from its version row (#713) —
   // metadata.prompts.motion no longer exists.
   const motionPromptData = shot?.motionPromptData ?? null;
-  const characterTags = shot?.metadata?.continuity?.characterTags;
+  const characterTags = scene?.continuity?.characterTags;
+  // The scene shape the reference resolvers read (continuity tags, script text,
+  // location) — the client mirror of what the workflows match against.
+  const sceneReference = useMemo(
+    () =>
+      scene
+        ? {
+            continuity: scene.continuity,
+            originalScript: scene.script,
+            metadata: { location: scene.location ?? '' },
+          }
+        : null,
+    [scene]
+  );
+  const sceneDescription = scene?.script?.extract ?? null;
 
   // Raw prompt for editing (just motion direction, no dialogue/audio)
   const rawMotionPrompt =
@@ -1058,7 +1072,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       {
         motionPrompt: mp,
         characterTags,
-        description: shot?.description ?? null,
+        description: sceneDescription,
       },
       effectiveMotionModel
     );
@@ -1067,7 +1081,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     rawMotionPrompt,
     motionPromptData,
     characterTags,
-    shot?.description,
+    sceneDescription,
     effectiveMotionModel,
   ]);
 
@@ -1104,7 +1118,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const motionRequestPreviews = useMemo((): ModelRequestPreview[] => {
     if (!shot) return [];
     const referenceImages = buildMotionReferenceImages({
-      scene: shot.metadata ?? null,
+      scene: sceneReference,
       characters: mentionCharacters ?? [],
       elements: mentionElements ?? [],
     }).map((ref) => ({
@@ -1126,7 +1140,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           {
             motionPrompt: mp,
             characterTags,
-            description: shot.description ?? null,
+            description: sceneDescription,
           },
           modelKey
         );
@@ -1138,7 +1152,6 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             duration: resolveShotDuration({
               explicit: undefined,
               durationMs: shot.durationMs,
-              metadataSeconds: shot.metadata?.metadata?.durationSeconds,
               model: modelKey,
             }),
             aspectRatio,
@@ -1165,6 +1178,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     });
   }, [
     shot,
+    sceneReference,
+    sceneDescription,
     mentionCharacters,
     mentionElements,
     editedMotionPrompt,
@@ -1185,7 +1200,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     const basePrompt = (editedImagePrompt || imagePrompt || '').trim();
     if (!basePrompt || !shot) return [];
     const referenceImages = buildShotImageReferenceImages({
-      scene: shot.metadata ?? null,
+      scene: sceneReference,
       characters: mentionCharacters ?? [],
       locations: mentionLocations ?? [],
       elements: mentionElements ?? [],
@@ -1229,6 +1244,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     editedImagePrompt,
     imagePrompt,
     shot,
+    sceneReference,
     mentionCharacters,
     mentionElements,
     mentionLocations,
@@ -1731,6 +1747,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             shot={shot}
             sequenceId={sequenceId}
             motionModel={effectiveMotionModel}
+            scriptExtract={scriptText}
           />
 
           {/* Thinking bar while the model reasons, before the regenerated

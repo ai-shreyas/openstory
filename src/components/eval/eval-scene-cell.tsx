@@ -1,5 +1,6 @@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
@@ -27,15 +28,18 @@ export function getMotionPrompt(shot: ShotWithImage): string | null {
 }
 
 /**
- * Get original script extract from shot
+ * Get the scene's selected script extract (#1030)
  */
-export function getSceneScript(shot: ShotWithImage): string | null {
-  const scene = shot.metadata;
-  return scene?.originalScript.extract || null;
+export function getSceneScript(
+  scene: SceneWithScript | undefined
+): string | null {
+  return scene?.script?.extract || null;
 }
 
 type EvalSceneCellProps = {
   shot: ShotWithImage | undefined;
+  /** The shot's scene — carries the script this cell renders. */
+  scene?: SceneWithScript | undefined;
   viewMode: ViewMode;
   sceneNumber: number;
   sequenceTitle: string;
@@ -52,6 +56,7 @@ type EvalSceneCellProps = {
 
 export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
   shot,
+  scene,
   viewMode,
   sceneNumber,
   sequenceTitle,
@@ -87,7 +92,7 @@ export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
 
   const prompt = getVisualPrompt(shot);
   const motionPrompt = getMotionPrompt(shot);
-  const script = getSceneScript(shot);
+  const script = getSceneScript(scene);
 
   const handleClick = () => onDialogOpenChange(true);
 
@@ -129,6 +134,7 @@ export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
           open={dialogOpen}
           onOpenChange={onDialogOpenChange}
           shot={shot}
+          scene={scene}
           sceneNumber={sceneNumber}
           sequenceTitle={sequenceTitle}
           aspectRatio={aspectRatio}
@@ -169,6 +175,7 @@ export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
           open={dialogOpen}
           onOpenChange={onDialogOpenChange}
           shot={shot}
+          scene={scene}
           sceneNumber={sceneNumber}
           sequenceTitle={sequenceTitle}
           aspectRatio={aspectRatio}
@@ -215,6 +222,7 @@ export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
               open={dialogOpen}
               onOpenChange={onDialogOpenChange}
               shot={shot}
+              scene={scene}
               sceneNumber={sceneNumber}
               sequenceTitle={sequenceTitle}
               aspectRatio={aspectRatio}
@@ -268,6 +276,7 @@ export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
           open={dialogOpen}
           onOpenChange={onDialogOpenChange}
           shot={shot}
+          scene={scene}
           sceneNumber={sceneNumber}
           sequenceTitle={sequenceTitle}
           aspectRatio={aspectRatio}
@@ -315,6 +324,7 @@ export const EvalSceneCell: React.FC<EvalSceneCellProps> = ({
         open={dialogOpen}
         onOpenChange={onDialogOpenChange}
         shot={shot}
+        scene={scene}
         sceneNumber={sceneNumber}
         sequenceTitle={sequenceTitle}
         aspectRatio={aspectRatio}

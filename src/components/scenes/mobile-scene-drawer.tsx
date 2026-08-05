@@ -9,6 +9,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
@@ -21,6 +22,8 @@ import { SceneThumbnail } from './scene-thumbnail';
 
 type MobileSceneDrawerProps = {
   shots?: ShotWithImage[];
+  /** Scenes the shots belong to — they carry the number, title and script. */
+  scenes?: SceneWithScript[];
   selectedShotId?: string;
   aspectRatio: AspectRatio;
   onSelectShot: (shotId: string) => void;
@@ -36,6 +39,7 @@ type MobileSceneDrawerProps = {
 
 export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   shots,
+  scenes,
   selectedShotId,
   aspectRatio,
   onSelectShot,
@@ -61,6 +65,12 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   }
 
   const totalShots = shots?.length ?? 0;
+
+  const scenesById = useMemo(() => {
+    const map = new Map<string, SceneWithScript>();
+    for (const scene of scenes ?? []) map.set(scene.id, scene);
+    return map;
+  }, [scenes]);
 
   // Get the currently selected shot
   const selectedShot = useMemo(
@@ -110,10 +120,13 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   };
 
   // Extract scene info for the collapsed bar
-  const sceneNumber =
-    selectedShot?.metadata?.sceneNumber ?? (selectedShot?.orderIndex ?? 0) + 1;
-  const sceneTitle =
-    selectedShot?.metadata?.metadata?.title ?? `Scene ${sceneNumber}`;
+  const selectedScene = selectedShot?.sceneId
+    ? scenesById.get(selectedShot.sceneId)
+    : undefined;
+  const sceneNumber = selectedScene
+    ? selectedScene.orderIndex + 1
+    : (selectedShot?.orderIndex ?? 0) + 1;
+  const sceneTitle = selectedScene?.title?.trim() || `Scene ${sceneNumber}`;
 
   const hasEligibleShots = eligibleShots.length > 0;
   const isMotionInProgress = regeneratingMotion.size > 0;
@@ -181,6 +194,9 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
                 <SceneListItem
                   key={shot.id}
                   shot={shot}
+                  scene={
+                    shot.sceneId ? scenesById.get(shot.sceneId) : undefined
+                  }
                   aspectRatio={aspectRatio}
                   isActive={shot.id === selectedShotId}
                   onSelect={() => handleSelectShot(shot.id)}

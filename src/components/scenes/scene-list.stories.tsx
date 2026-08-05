@@ -1,6 +1,7 @@
 import { generateMockShots } from '@/lib/mocks/data-generators';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
-import { dbSceneId, type DbSceneId, type SceneRow } from '@/lib/db/schema';
+import { dbSceneId, type DbSceneId } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import type {
   SegmentVideoVersion,
   SequenceSegment,
@@ -210,8 +211,9 @@ const perSegmentSegments: SequenceSegment[] = [
 const psScene = (
   id: DbSceneId,
   orderIndex: number,
-  title: string
-): SceneRow => ({
+  title: string,
+  extract: string
+): SceneWithScript => ({
   id,
   sequenceId: PS_SEQ,
   orderIndex,
@@ -222,15 +224,21 @@ const psScene = (
   continuity: null,
   musicDesign: null,
   originalScript: null,
+  script: { extract, dialogue: [] },
   selectedScriptVersionId: null,
   createdAt: PS_FIXED_DATE,
   updatedAt: PS_FIXED_DATE,
 });
 
-const perSegmentScenes: SceneRow[] = [
-  psScene(PS_SCENE_1, 0, 'Rooftop confrontation'),
-  psScene(PS_SCENE_2, 1, 'Neon alley escape'),
-  psScene(PS_SCENE_3, 2, 'Coda'),
+const perSegmentScenes: SceneWithScript[] = [
+  psScene(
+    PS_SCENE_1,
+    0,
+    'Rooftop confrontation',
+    'On the rooftop, the standoff breaks.'
+  ),
+  psScene(PS_SCENE_2, 1, 'Neon alley escape', 'They bolt down the neon alley.'),
+  psScene(PS_SCENE_3, 2, 'Coda', 'The city exhales.'),
 ];
 
 const defaultArgs = {

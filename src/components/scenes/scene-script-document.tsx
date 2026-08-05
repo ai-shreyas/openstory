@@ -21,9 +21,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSequenceMentionItems } from '@/hooks/use-mention-items';
-import { useSaveSceneScript } from '@/hooks/use-scenes';
-import type { SceneRow } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { useSaveSceneScript, type SceneWithScript } from '@/hooks/use-scenes';
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { useState } from 'react';
@@ -41,45 +39,23 @@ export type ScriptBlock = {
 /** The scene fields the document reads — kept minimal so the block builder is
  *  a pure function over a shape, not over a DB row. */
 export type ScriptBlockScene = Pick<
-  SceneRow,
-  'id' | 'orderIndex' | 'title' | 'originalScript'
+  SceneWithScript,
+  'id' | 'orderIndex' | 'title' | 'script'
 >;
-/** The shot fields the document reads: which scene it belongs to, and the
- *  script/title its metadata carries. */
-export type ScriptBlockShot = Pick<ShotWithImage, 'sceneId' | 'metadata'>;
 
-/**
- * Build the ordered blocks from the scenes and the shots that carry the
- * canonical script. The selected script version is already overlaid onto shot
- * metadata by `getShotsFn` (#1030), so a scene's text comes from any one of its
- * shots; the scene row's analysis-time script is the fallback for a scene whose
- * shots haven't loaded.
- */
+/** Build the ordered blocks from the scenes, each carrying its selected script
+ *  version (#1030). */
 export function buildScriptBlocks(
-  scenes: readonly ScriptBlockScene[],
-  shots: readonly ScriptBlockShot[]
+  scenes: readonly ScriptBlockScene[]
 ): ScriptBlock[] {
-  const shotBySceneId = new Map<string, ScriptBlockShot>();
-  for (const shot of shots) {
-    if (shot.sceneId && !shotBySceneId.has(shot.sceneId)) {
-      shotBySceneId.set(shot.sceneId, shot);
-    }
-  }
-
   return [...scenes]
     .sort((a, b) => a.orderIndex - b.orderIndex)
-    .map((scene, index) => {
-      const shot = shotBySceneId.get(scene.id);
-      return {
-        sceneId: scene.id,
-        sceneNumber: index + 1,
-        title: shot?.metadata?.metadata?.title ?? scene.title ?? '',
-        extract:
-          shot?.metadata?.originalScript.extract ??
-          scene.originalScript?.extract ??
-          '',
-      };
-    });
+    .map((scene, index) => ({
+      sceneId: scene.id,
+      sceneNumber: index + 1,
+      title: scene.title ?? '',
+      extract: scene.script?.extract ?? '',
+    }));
 }
 
 type SceneScriptBlockProps = {
@@ -197,8 +173,7 @@ const SceneScriptBlock: React.FC<SceneScriptBlockProps> = ({
 
 type SceneScriptDocumentProps = {
   sequenceId: string;
-  scenes: readonly SceneRow[] | undefined;
-  shots: readonly ShotWithImage[] | undefined;
+  scenes: readonly SceneWithScript[] | undefined;
   /** Scene ids highlighted by the current selection. */
   selectedSceneIds: readonly string[];
   onSelectScene: (sceneId: string) => void;
@@ -207,7 +182,6 @@ type SceneScriptDocumentProps = {
 export const SceneScriptDocument: React.FC<SceneScriptDocumentProps> = ({
   sequenceId,
   scenes,
-  shots,
   selectedSceneIds,
   onSelectScene,
 }) => {
@@ -223,7 +197,7 @@ export const SceneScriptDocument: React.FC<SceneScriptDocumentProps> = ({
     );
   }
 
-  const blocks = buildScriptBlocks(scenes, shots ?? []);
+  const blocks = buildScriptBlocks(scenes);
   const selected = new Set(selectedSceneIds);
 
   if (blocks.length === 0) {

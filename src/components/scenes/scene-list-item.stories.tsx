@@ -1,5 +1,5 @@
-import type { VideoVariant } from '@/lib/db/schema';
-import type { Shot } from '@/types/database';
+import { dbSceneId, type VideoVariant } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
@@ -119,6 +119,33 @@ const mockShot: ShotWithImage = toShotWithImage({
   updatedAt: new Date(),
 });
 
+const mockScene: SceneWithScript = {
+  id: dbSceneId('scene-1'),
+  sequenceId: 'seq-1',
+  orderIndex: 0,
+  location: 'Coffee Shop',
+  timeOfDay: 'Morning',
+  storyBeat: 'Establish protagonist stress and setting',
+  title: 'Coffee Shop Introduction',
+  continuity: null,
+  musicDesign: null,
+  originalScript: null,
+  script: {
+    extract:
+      'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',
+    dialogue: [
+      {
+        character: 'SARAH',
+        line: 'This deadline is going to kill me.',
+        tone: '',
+      },
+    ],
+  },
+  selectedScriptVersionId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
+
 const meta: Meta<typeof SceneListItem> = {
   title: 'Scenes/SceneListItem',
   component: SceneListItem,
@@ -133,6 +160,7 @@ const meta: Meta<typeof SceneListItem> = {
     ),
   ],
   args: {
+    scene: mockScene,
     onSelect: () => console.log('onSelect'),
   },
 };
@@ -204,38 +232,11 @@ export const Failed: Story = {
 
 export const LongTitle: Story = {
   args: {
-    shot: {
-      ...mockShot,
-      metadata: {
-        sceneId: mockShot.metadata?.sceneId ?? '',
-        sceneNumber: mockShot.metadata?.sceneNumber ?? 1,
-        originalScript: mockShot.metadata?.originalScript ?? {
-          extract: '',
-          dialogue: [],
-        },
-        metadata: {
-          title:
-            'An Extremely Long Scene Title That Should Wrap Properly Without Breaking Layout',
-          durationSeconds: mockShot.metadata?.metadata?.durationSeconds ?? 3,
-          location: mockShot.metadata?.metadata?.location ?? '',
-          timeOfDay: mockShot.metadata?.metadata?.timeOfDay ?? '',
-          storyBeat: mockShot.metadata?.metadata?.storyBeat ?? '',
-        },
-        audioDesign: mockShot.metadata?.audioDesign ?? {
-          music: { presence: 'none', style: '', mood: '', rationale: '' },
-          soundEffects: [],
-          dialogue: { presence: false, lines: [] },
-          ambient: { roomTone: '', atmosphere: '' },
-        },
-        continuity: mockShot.metadata?.continuity ?? {
-          characterTags: [],
-          environmentTag: '',
-          colorPalette: '',
-          lightingSetup: '',
-          styleTag: '',
-        },
-        sourceImageUrl: mockShot.metadata?.sourceImageUrl ?? '',
-      } satisfies Shot['metadata'],
+    shot: mockShot,
+    scene: {
+      ...mockScene,
+      title:
+        'An Extremely Long Scene Title That Should Wrap Properly Without Breaking Layout',
     },
     isActive: false,
   },
@@ -243,41 +244,14 @@ export const LongTitle: Story = {
 
 export const LongScript: Story = {
   args: {
-    shot: {
-      ...mockShot,
-      metadata: {
-        sceneId: mockShot.metadata?.sceneId ?? '',
-        sceneNumber: mockShot.metadata?.sceneNumber ?? 1,
-        originalScript: {
-          ...(mockShot.metadata?.originalScript ?? {
-            extract: '',
-            dialogue: [],
-          }),
-          extract:
-            'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte. The morning sun streams through large windows, casting long shadows across the wooden floor. Other patrons bustle about, ordering drinks and chatting, creating a backdrop of ambient noise that Sarah tries to tune out.',
-        },
-        metadata: mockShot.metadata?.metadata ?? {
-          title: '',
-          durationSeconds: 3,
-          location: '',
-          timeOfDay: '',
-          storyBeat: '',
-        },
-        audioDesign: mockShot.metadata?.audioDesign ?? {
-          music: { presence: 'none', style: '', mood: '', rationale: '' },
-          soundEffects: [],
-          dialogue: { presence: false, lines: [] },
-          ambient: { roomTone: '', atmosphere: '' },
-        },
-        continuity: mockShot.metadata?.continuity ?? {
-          characterTags: [],
-          environmentTag: '',
-          colorPalette: '',
-          lightingSetup: '',
-          styleTag: '',
-        },
-        sourceImageUrl: mockShot.metadata?.sourceImageUrl ?? '',
-      } satisfies Shot['metadata'],
+    shot: mockShot,
+    scene: {
+      ...mockScene,
+      script: {
+        extract:
+          'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte. The morning sun streams through large windows, casting long shadows across the wooden floor. Other patrons bustle about, ordering drinks and chatting, creating a backdrop of ambient noise that Sarah tries to tune out.',
+        dialogue: [],
+      },
     },
     isActive: false,
   },

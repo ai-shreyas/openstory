@@ -9,15 +9,6 @@ export type SceneSelection = {
 
 export type SelectionScope = 'sequence' | 'scenes' | 'shot';
 
-/** Union of continuity tags across shots in the current selection scope. */
-export type SelectionTags = {
-  characterTags: string[];
-  environmentTags: string[];
-  elementTags: string[];
-  /** Script extracts from scoped shots — used for element token matching. */
-  scriptExtracts: string[];
-};
-
 /**
  * The inspector facets/tabs — one shared token set, so the URL `facet` param
  * and the inspector's tab values never drift apart.
@@ -88,66 +79,12 @@ export function selectionToSearchParams(
   return params;
 }
 
-function isSelectionEmpty(selection: SceneSelection): boolean {
-  return selection.sceneIds.length === 0 && !selection.shotId;
-}
-
 export function selectionScope(selection: SceneSelection): SelectionScope {
   if (selection.shotId) return 'shot';
   if (selection.sceneIds.length > 0) return 'scenes';
   return 'sequence';
 }
 
-/**
- * Derive facet filter tags from selection. Returns `null` when nothing is
- * selected (whole sequence) so facets show the full library with no filter.
- */
-export function selectionTags(
-  selection: SceneSelection,
-  shots: ShotWithImage[]
-): SelectionTags | null {
-  if (isSelectionEmpty(selection)) return null;
-
-  let scopedShots: ShotWithImage[];
-  if (selection.shotId) {
-    const shot = shots.find((s) => s.id === selection.shotId);
-    scopedShots = shot ? [shot] : [];
-  } else {
-    const sceneIdSet = new Set(selection.sceneIds);
-    scopedShots = shots.filter(
-      (s) => s.sceneId != null && sceneIdSet.has(s.sceneId)
-    );
-  }
-
-  const characterTags = new Set<string>();
-  const environmentTags = new Set<string>();
-  const elementTags = new Set<string>();
-  const scriptExtracts: string[] = [];
-
-  for (const shot of scopedShots) {
-    const continuity = shot.metadata?.continuity;
-    for (const tag of continuity?.characterTags ?? []) {
-      characterTags.add(tag);
-    }
-    const envTag = continuity?.environmentTag;
-    if (envTag) environmentTags.add(envTag);
-    for (const tag of continuity?.elementTags ?? []) {
-      elementTags.add(tag);
-    }
-    const extract =
-      shot.metadata?.originalScript?.extract ?? shot.description ?? '';
-    if (extract) scriptExtracts.push(extract);
-  }
-
-  return {
-    characterTags: [...characterTags],
-    environmentTags: [...environmentTags],
-    elementTags: [...elementTags],
-    scriptExtracts,
-  };
-}
-
-/** Shots that belong to the current canvas playback scope. */
 export function selectionShots(
   selection: SceneSelection,
   shots: ShotWithImage[]

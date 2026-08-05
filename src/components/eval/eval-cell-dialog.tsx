@@ -20,6 +20,7 @@ import { HighlightedPrompt } from '@/components/text-editor/mention/highlighted-
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
@@ -49,6 +50,7 @@ type EvalCellDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   shot: ShotWithImage;
+  scene?: SceneWithScript | undefined;
   sceneNumber: number;
   sequenceTitle: string;
   aspectRatio: AspectRatio;
@@ -63,6 +65,7 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
   open,
   onOpenChange,
   shot,
+  scene,
   sceneNumber,
   sequenceTitle,
   aspectRatio,
@@ -74,7 +77,7 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
 }) => {
   const prompt = getVisualPrompt(shot);
   const motionPrompt = getMotionPrompt(shot);
-  const script = getSceneScript(shot);
+  const script = getSceneScript(scene);
   const [selectedTab, setSelectedTab] = useState<DialogTab>(initialTab);
 
   // Mention pills for the prompt text. Gated on `open` so the lists are only

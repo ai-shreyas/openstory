@@ -26,7 +26,7 @@ import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useSceneSelection } from '@/hooks/use-scene-selection';
 import { useSequenceSegments } from '@/hooks/use-segments';
-import { useScenesBySequence } from '@/hooks/use-scenes';
+import { useScenesBySequence, type SceneWithScript } from '@/hooks/use-scenes';
 import {
   shotIsStale,
   useSceneShotStaleness,
@@ -70,7 +70,7 @@ import {
   resolveVideoModel,
 } from '@/lib/ai/resolve-asset-models';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
-import type { FrameVariant, SceneRow, ShotVariant } from '@/lib/db/schema';
+import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
@@ -614,7 +614,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // identity lives on the selected frame_variants / video_variants row.
   const { data: scenes, error: scenesError } = useScenesBySequence(sequenceId);
   const scenesById = useMemo(() => {
-    const map = new Map<string, SceneRow>();
+    const map = new Map<string, SceneWithScript>();
     for (const scene of scenes ?? []) map.set(scene.id, scene);
     return map;
   }, [scenes]);
@@ -628,7 +628,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     if (scope === 'scenes') {
       return selection.sceneIds
         .map((id) => scenesById.get(id))
-        .filter((s): s is SceneRow => s != null);
+        .filter((s): s is SceneWithScript => s != null);
     }
     return [];
   }, [scope, selectedShot, selection.sceneIds, scenesById]);
@@ -639,17 +639,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // silently writing to whichever scene happened to be first.
   const scriptScene =
     selectedScenes.length === 1 ? selectedScenes[0] : undefined;
-  // Canonical text is the SELECTED script version, which `getShotsFn` already
-  // overlays onto each shot's metadata (#1030). Falls back to the scene row's
-  // analysis-time script for a scene whose shots haven't loaded yet.
-  const scriptText = useMemo(() => {
-    if (!scriptScene) return undefined;
-    const sceneShot = shots?.find((s) => s.sceneId === scriptScene.id);
-    return (
-      sceneShot?.metadata?.originalScript.extract ??
-      scriptScene.originalScript?.extract
-    );
-  }, [scriptScene, shots]);
 
   // Batched staleness for the in-focus scene's shots (#1077): feeds the scene
   // panel's stale-shot summary, the left-rail dots and the canvas chip, and
@@ -1308,6 +1297,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         <div className="md:hidden">
           <MobileSceneDrawer
             shots={shots}
+            scenes={scenes}
             selectedShotId={curSelectedShotId}
             aspectRatio={aspectRatio}
             onSelectShot={handleSelectShot}
@@ -1338,7 +1328,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               <SceneScriptDocument
                 sequenceId={sequenceId}
                 scenes={scenes}
-                shots={shots}
                 selectedSceneIds={selectedScenes.map((s) => s.id)}
                 onSelectScene={handleFocusScene}
               />
@@ -1346,6 +1335,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               <SceneCanvas
                 selection={selection}
                 shots={shots}
+                scenes={scenes}
                 loadError={shotsError}
                 playerShots={playerShots}
                 sequence={sequence}
@@ -1436,8 +1426,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   onCompareDivergent={(variant) => setCompareVariant(variant)}
                   facetShotIds={facetShotIds}
                   musicEditable={scope === 'sequence'}
-                  scriptSceneId={scriptScene?.id}
-                  scriptText={scriptText}
+                  scene={scriptScene}
                   scopeShots={scopeShots}
                   scopeStaleness={scopeStaleness}
                   scopeStalenessFailed={scopeStalenessFailed}
@@ -1491,8 +1480,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 onCompareDivergent={(variant) => setCompareVariant(variant)}
                 facetShotIds={facetShotIds}
                 musicEditable={scope === 'sequence'}
-                scriptSceneId={scriptScene?.id}
-                scriptText={scriptText}
+                scene={scriptScene}
                 scopeShots={scopeShots}
                 scopeStaleness={scopeStaleness}
                 scopeStalenessFailed={scopeStalenessFailed}

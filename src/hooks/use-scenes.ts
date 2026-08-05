@@ -3,6 +3,7 @@ import {
   getScenesFn,
   updateSceneScriptFn,
 } from '@/functions/scenes';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { SceneRow } from '@/lib/db/schema';
 import { sequenceKeys } from '@/hooks/use-sequences';
 import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
@@ -29,9 +30,17 @@ export function useComposedScript(sequenceId?: string) {
   });
 }
 
+/**
+ * A scene row plus its SELECTED script (#1030) — `originalScript` on the row is
+ * the split-time snapshot and goes stale on edit, so read `script`.
+ */
+export type SceneWithScript = SceneRow & {
+  script: Scene['originalScript'] | null;
+};
+
 /** Ordered scenes for a sequence — the editor groups shots under these (#909). */
 export function useScenesBySequence(sequenceId?: string) {
-  return useQuery<SceneRow[]>({
+  return useQuery<SceneWithScript[]>({
     queryKey: sceneKeys.list(sequenceId ?? ''),
     queryFn: async () => {
       if (!sequenceId) throw new Error('sequenceId is required');

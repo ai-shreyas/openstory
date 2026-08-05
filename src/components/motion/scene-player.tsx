@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useShotDownloadUrl } from '@/hooks/use-shot-download-url';
 import {
   type AspectRatio,
@@ -33,6 +34,8 @@ import { VideoStateOverlay } from './video-state-overlay';
 
 type ScenePlayerProps = {
   shots?: ShotWithImage[];
+  /** Scenes the shots belong to — the source of the displayed scene's title. */
+  scenes?: readonly SceneWithScript[];
   selectedShotId?: string;
   aspectRatio: AspectRatio;
   /**
@@ -81,6 +84,7 @@ type ScenePlayerProps = {
 
 export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   shots,
+  scenes,
   className,
   wrapperClassName,
   selectedShotId,
@@ -271,11 +275,16 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   }
 
   // Get scene title for alt text — match scene-list-item fallback
-  const sceneNumber =
-    currentShot.metadata?.sceneNumber ??
-    (currentShotIndex >= 0 ? currentShotIndex + 1 : undefined);
+  const currentScene = currentShot.sceneId
+    ? scenes?.find((s) => s.id === currentShot.sceneId)
+    : undefined;
+  const sceneNumber = currentScene
+    ? currentScene.orderIndex + 1
+    : currentShotIndex >= 0
+      ? currentShotIndex + 1
+      : undefined;
   const title =
-    currentShot.metadata?.metadata?.title ??
+    currentScene?.title?.trim() ||
     (sceneNumber ? `Scene ${sceneNumber}` : undefined);
 
   // Best available image: override (variant preview) → final thumbnail → fast preview → sequence poster

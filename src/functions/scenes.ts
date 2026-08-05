@@ -6,6 +6,7 @@ import { dbSceneId, type DbSceneId } from '@/lib/db/schema';
 import { NotFoundError } from '@/lib/errors';
 import {
   composeSequenceScriptFromDb,
+  loadSceneContextBySequence,
   overlaySceneScript,
 } from '@/lib/scenes/scene-script';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -22,7 +23,15 @@ const logger = getLogger(['openstory', 'serverFn', 'scenes']);
 export const getScenesFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.scopedDb.scenes.listBySequence(context.sequence.id);
+    // Each scene carries its SELECTED script, not the `originalScript` column
+    // snapshot — that column is the split-time copy and goes stale on edit.
+    const ctx = await loadSceneContextBySequence(
+      context.scopedDb,
+      context.sequence.id
+    );
+    return [...ctx.values()]
+      .map(({ scene, script }) => ({ ...scene, script }))
+      .sort((a, b) => a.orderIndex - b.orderIndex);
   });
 
 // NOTE: there is no `updateSceneModelFn` (#1066). A scene has no model of its

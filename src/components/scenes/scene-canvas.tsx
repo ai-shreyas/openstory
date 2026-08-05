@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useSetSequenceMusic } from '@/hooks/use-sequences';
 import type { TabValue } from '@/components/scenes/scene-script-prompts';
 import type { TextToImageModel } from '@/lib/ai/models';
@@ -31,6 +32,8 @@ import type { ExportProgress } from '@/lib/sequence-player/export';
 type SceneCanvasProps = {
   selection: SceneSelection;
   shots?: ShotWithImage[];
+  /** Scenes the shots belong to — the player reads the displayed shot's title. */
+  scenes?: SceneWithScript[];
   /** Shots query failure — shown instead of an indefinite skeleton. */
   loadError?: Error | null;
   playerShots?: ShotWithImage[];
@@ -153,6 +156,7 @@ const TheatreShareOverlay: React.FC<{ sequence: Sequence }> = ({
 export const SceneCanvas: React.FC<SceneCanvasProps> = ({
   selection,
   shots,
+  scenes,
   loadError,
   playerShots,
   sequence,
@@ -225,6 +229,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
       <CanvasMediaStage aspectRatio={aspectRatio}>
         <ScenePlayer
           shots={playerShots}
+          scenes={scenes}
           selectedShotId={selection.shotId}
           aspectRatio={aspectRatio}
           onSelectShot={onSelectShot}
@@ -258,6 +263,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         <CanvasMediaStage aspectRatio={aspectRatio}>
           <ScenePlayer
             shots={playerShots}
+            scenes={scenes}
             selectedShotId={stillShot.id}
             aspectRatio={aspectRatio}
             progressMessage={progressMessage}

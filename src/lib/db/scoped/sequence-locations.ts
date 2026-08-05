@@ -42,27 +42,6 @@ export function locationMatchesTag(
   return false;
 }
 
-/**
- * Match locations to a shot based on metadata
- * Used when generating shot images to include location references
- */
-export function matchLocationsToShot(
-  shot: Pick<Shot, 'metadata'>,
-  allLocations: SequenceLocation[]
-): SequenceLocation[] {
-  const environmentTag = shot.metadata?.continuity?.environmentTag ?? '';
-  const sceneLocation = shot.metadata?.metadata?.location ?? '';
-
-  if (!environmentTag && !sceneLocation) return [];
-
-  return allLocations.filter((location) => {
-    return (
-      (environmentTag && locationMatchesTag(location, environmentTag)) ||
-      (sceneLocation && locationMatchesTag(location, sceneLocation))
-    );
-  });
-}
-
 // ============================================================================
 // Factory function
 // ============================================================================

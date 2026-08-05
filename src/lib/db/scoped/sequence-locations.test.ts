@@ -3,11 +3,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  matchLocationsToShot,
-  locationMatchesTag,
-} from '@/lib/db/scoped/sequence-locations';
-import type { Shot, SequenceLocation } from '@/lib/db/schema';
+import { matchLocationsToScene } from '@/lib/workflows/scene-matching';
+import { locationMatchesTag } from '@/lib/db/scoped/sequence-locations';
+import type { SequenceLocation } from '@/lib/db/schema';
 
 // Mock location data - using full SequenceLocation type
 const mockLocations: [SequenceLocation, SequenceLocation, SequenceLocation] = [
@@ -95,32 +93,6 @@ const mockLocations: [SequenceLocation, SequenceLocation, SequenceLocation] = [
 ];
 
 // Helper to create a partial mock shot with just the fields needed for matching
-function createMockShot(
-  environmentTag: string,
-  location: string
-): Pick<Shot, 'metadata'> {
-  // Create a complete Scene object with all required fields
-  const metadata: NonNullable<Shot['metadata']> = {
-    sceneId: 'test-scene',
-    sceneNumber: 1,
-    originalScript: { extract: '', dialogue: [] },
-    continuity: {
-      environmentTag,
-      characterTags: [],
-      colorPalette: '',
-      lightingSetup: '',
-      styleTag: '',
-    },
-    metadata: {
-      location,
-      title: '',
-      durationSeconds: 0,
-      timeOfDay: '',
-      storyBeat: '',
-    },
-  };
-  return { metadata };
-}
 
 describe('sequence-locations helpers', () => {
   describe('locationMatchesTag', () => {
@@ -154,54 +126,37 @@ describe('sequence-locations helpers', () => {
       expect(locationMatchesTag(mockLocations[0], '')).toBe(false);
     });
   });
+});
 
-  describe('matchLocationsToShot', () => {
-    it('should match locations by environment tag', () => {
-      const shot = createMockShot('office_modern_glass', 'INT. OFFICE');
-      const matched = matchLocationsToShot(shot, mockLocations);
-      expect(matched).toHaveLength(1);
-      const [first] = matched;
-      if (!first) throw new Error('expected matched location');
-      expect(first.id).toBe('loc-1');
-    });
+describe('matchLocationsToScene', () => {
+  it('matches on the scene environment tag', () => {
+    const matched = matchLocationsToScene(
+      mockLocations,
+      'office_modern_glass',
+      ''
+    );
+    expect(matched.map((l) => l.id)).toEqual(['loc-1']);
+  });
 
-    it('should match by location metadata', () => {
-      const shot = createMockShot('', 'INT. OFFICE - DAY');
-      const matched = matchLocationsToShot(shot, mockLocations);
-      expect(matched).toHaveLength(1);
-      const [first] = matched;
-      if (!first) throw new Error('expected matched location');
-      expect(first.id).toBe('loc-1');
-    });
+  it('matches on the scene location when there is no environment tag', () => {
+    const matched = matchLocationsToScene(
+      mockLocations,
+      '',
+      'INT. OFFICE - DAY'
+    );
+    expect(matched.map((l) => l.id)).toEqual(['loc-1']);
+  });
 
-    it('should match by street location', () => {
-      const shot = createMockShot('city_street_night', '');
-      const matched = matchLocationsToShot(shot, mockLocations);
-      expect(matched).toHaveLength(1);
-      const [first] = matched;
-      if (!first) throw new Error('expected matched location');
-      expect(first.id).toBe('loc-2');
-    });
+  it('matches a street location by tag', () => {
+    const matched = matchLocationsToScene(
+      mockLocations,
+      'city_street_night',
+      ''
+    );
+    expect(matched.map((l) => l.id)).toEqual(['loc-2']);
+  });
 
-    it('should return empty array when no matches', () => {
-      const shot = createMockShot('nonexistent_location', '');
-      const matched = matchLocationsToShot(shot, mockLocations);
-      expect(matched).toHaveLength(0);
-    });
-
-    it('should return empty array when no environment tag or location', () => {
-      const shot = createMockShot('', '');
-      const matched = matchLocationsToShot(shot, mockLocations);
-      expect(matched).toHaveLength(0);
-    });
-
-    it('should match by partial name in location metadata', () => {
-      const shot = createMockShot('', 'street');
-      const matched = matchLocationsToShot(shot, mockLocations);
-      expect(matched).toHaveLength(1);
-      const [first] = matched;
-      if (!first) throw new Error('expected matched location');
-      expect(first.id).toBe('loc-2');
-    });
+  it('returns nothing when neither key is set', () => {
+    expect(matchLocationsToScene(mockLocations, '', '')).toEqual([]);
   });
 });

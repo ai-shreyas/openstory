@@ -102,12 +102,10 @@ export const SceneMusicFacet: React.FC<SceneMusicFacetProps> = ({
 
   const videoDuration = useMemo(() => {
     if (!shots?.length) return undefined;
-    return shots.reduce((sum, shot) => {
-      const seconds = shot.durationMs
-        ? shot.durationMs / 1000
-        : (shot.metadata?.metadata?.durationSeconds ?? 10);
-      return sum + seconds;
-    }, 0);
+    return shots.reduce(
+      (sum, shot) => sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
+      0
+    );
   }, [shots]);
 
   const generating = sequence?.musicStatus === 'generating';

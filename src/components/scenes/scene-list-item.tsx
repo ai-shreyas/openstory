@@ -6,6 +6,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
@@ -16,6 +17,8 @@ import { SceneThumbnail } from './scene-thumbnail';
 
 type SceneListItemProps = {
   shot?: ShotWithImage | undefined;
+  /** The shot's scene — carries the number, title and script the card shows. */
+  scene?: SceneWithScript | undefined;
   aspectRatio: AspectRatio;
   isActive?: boolean;
   onSelect?: () => void;
@@ -42,6 +45,7 @@ type SceneListItemProps = {
 
 const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   shot,
+  scene,
   aspectRatio,
   isActive = false,
   onSelect,
@@ -64,16 +68,15 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   const hasVideo = shot?.videoStatus === 'completed' && !!shot.videoUrl;
   const isGeneratingVideo =
     !!shot && (shot.videoStatus === 'generating' || isRegeneratingMotion);
-  // Extract scene data from shot metadata
-  const metadata = shot?.metadata;
-
-  const sceneNumber = metadata?.sceneNumber ?? (shot?.orderIndex ?? 0) + 1;
+  const sceneNumber = scene
+    ? scene.orderIndex + 1
+    : (shot?.orderIndex ?? 0) + 1;
   const title = !shot
     ? undefined
-    : (metadata?.metadata?.title ?? `Scene ${sceneNumber}`);
+    : scene?.title?.trim() || `Scene ${sceneNumber}`;
   const scriptPreview = !shot
     ? undefined
-    : stripMarkdown(metadata?.originalScript.extract ?? shot.description ?? '');
+    : stripMarkdown(scene?.script?.extract ?? '');
 
   // Skeleton state (no shot): suppress click handling and pointer cursor so
   // a click during the loading window does not invoke the (now-undefined)
@@ -233,6 +236,22 @@ const areEqual = (
     return false;
   }
 
+  // Scene fields used in render: number, title, script extract.
+  const prevScene = prevProps.scene;
+  const nextScene = nextProps.scene;
+  if (prevScene !== nextScene) {
+    if (!prevScene || !nextScene) {
+      return false;
+    }
+    if (
+      prevScene.orderIndex !== nextScene.orderIndex ||
+      prevScene.title !== nextScene.title ||
+      prevScene.script?.extract !== nextScene.script?.extract
+    ) {
+      return false;
+    }
+  }
+
   // If both shots are undefined, they're equal
   if (!prevProps.shot && !nextProps.shot) {
     return true;
@@ -269,33 +288,8 @@ const areEqual = (
     return false;
   }
 
-  // Check metadata fields used in render
+  // Fallback scene number when the shot has no scene row
   if (prevShot.orderIndex !== nextShot.orderIndex) {
-    return false;
-  }
-
-  if (prevShot.description !== nextShot.description) {
-    return false;
-  }
-
-  // Check metadata object (scene data)
-  const prevMetadata = prevShot.metadata;
-  const nextMetadata = nextShot.metadata;
-
-  if (!prevMetadata && !nextMetadata) {
-    return true;
-  }
-
-  if (!prevMetadata || !nextMetadata) {
-    return false;
-  }
-
-  // Compare the metadata fields we use: sceneNumber, title, script extract
-  if (
-    prevMetadata.sceneNumber !== nextMetadata.sceneNumber ||
-    prevMetadata.metadata?.title !== nextMetadata.metadata?.title ||
-    prevMetadata.originalScript.extract !== nextMetadata.originalScript.extract
-  ) {
     return false;
   }
 

@@ -4,7 +4,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { SceneRow, ShotVariant } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import type { ShotVariant } from '@/lib/db/schema';
 import type { SceneSelection } from '@/lib/scenes/scene-selection';
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
@@ -25,7 +26,7 @@ export type BatchGenerateMotionArgs = {
 
 type SceneListProps = {
   shots?: ShotWithImage[] | undefined;
-  scenes?: SceneRow[] | undefined;
+  scenes?: SceneWithScript[] | undefined;
   /** Render segments (#986) — bracket the shots sharing one video per scene. */
   segments?: SequenceSegment[] | undefined;
   /** Shots/scenes query failure — shown instead of the list (never skeletons). */
