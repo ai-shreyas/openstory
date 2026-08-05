@@ -112,19 +112,19 @@ export type MotionEmit = (
 ) => Promise<void>;
 
 /**
- * The legacy `shots.video*` write for `set-generating-status` — stamp the model
- * and run id (a last-write-wins default across models, kept for single-model
- * players / the "Mixed" mode). The per-model in-flight state now lives on the
- * `video_variants` version the workflow appends alongside this.
+ * The shot-owned in-flight write for `set-generating-status`. Model identity
+ * lives on the `video_variants` version the workflow appends alongside this
+ * (#1067 phase 2d dropped the `shots.motionModel` mirror; `resolve-asset-models`
+ * already forbade reading it). What stays here is the primary render's status +
+ * run id, which no selection pointer can carry — `videoVariants.select` only
+ * ever points at a `completed` version.
  */
 export function buildMotionGeneratingShotWrite(opts: {
-  model: string;
   workflowRunId: string;
 }): Partial<NewShot> {
   return {
     videoStatus: 'generating',
     videoWorkflowRunId: opts.workflowRunId,
-    motionModel: opts.model,
   };
 }
 

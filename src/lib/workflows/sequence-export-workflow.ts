@@ -72,16 +72,24 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
         });
         if (shots.length === 0) throw new Error('Sequence has no shots yet');
 
+        // Each shot's video is the version its render segment points at
+        // (#1067 phase 2d) — one batched read for the whole sequence.
+        const selectedVideoByShot =
+          await scopedDb.videoVariants.getSelectedByShotIds(
+            shots.map((s) => s.id)
+          );
+
         // Absolutize stored `/r2/...` URLs so the off-platform container can
         // fetch them (CDN domain in prod, else the worker origin).
         const origin = env.VITE_APP_URL;
         const scenes = shots
-          .filter((s): s is typeof s & { videoUrl: string } =>
-            Boolean(s.videoUrl)
-          )
+          .flatMap((s) => {
+            const url = selectedVideoByShot.get(s.id)?.url;
+            return url ? [{ orderIndex: s.orderIndex, url }] : [];
+          })
           .map((s) => ({
             orderIndex: s.orderIndex,
-            videoUrl: toShareableUrl(s.videoUrl, origin),
+            videoUrl: toShareableUrl(s.url, origin),
           }));
         if (scenes.length === 0) {
           throw new Error('No scene videos are ready yet');

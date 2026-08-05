@@ -20,18 +20,13 @@ const createTestShot = (overrides: Partial<Shot>): Shot => ({
   orderIndex: 0,
   description: null,
   durationMs: 3000,
-  videoUrl: null,
-  videoPath: null,
   videoStatus: 'pending',
   metadata: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   videoWorkflowRunId: null,
-  videoGeneratedAt: null,
   videoError: null,
-  motionModel: 'veo3',
   motionPrompt: null,
-  videoInputHash: null,
   motionPromptInputHash: null,
   selectedMotionPromptVersionId: null,
   renderSegmentId: null,
@@ -44,7 +39,6 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 5000,
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
         metadata: createTestScene({
           sceneNumber: 1,
@@ -61,7 +55,6 @@ describe('generateChaptersVTT', () => {
         id: '2',
         orderIndex: 1,
         durationMs: 3000,
-        videoUrl: 'https://example.com/video2.mp4',
         videoStatus: 'completed',
         metadata: createTestScene({
           sceneNumber: 2,
@@ -90,14 +83,12 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 3000,
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
       }),
       createTestShot({
         id: '2',
         orderIndex: 1,
         durationMs: 2000,
-        videoUrl: 'https://example.com/video2.mp4',
         videoStatus: 'completed',
       }),
     ];
@@ -113,7 +104,6 @@ describe('generateChaptersVTT', () => {
     const shots: Shot[] = [
       createTestShot({
         durationMs: null,
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
       }),
     ];
@@ -128,21 +118,18 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 5000,
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
       }),
       createTestShot({
         id: '2',
         orderIndex: 1,
         durationMs: 7000,
-        videoUrl: 'https://example.com/video2.mp4',
         videoStatus: 'completed',
       }),
       createTestShot({
         id: '3',
         orderIndex: 2,
         durationMs: 4000,
-        videoUrl: 'https://example.com/video3.mp4',
         videoStatus: 'completed',
       }),
     ];
@@ -162,14 +149,12 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 3600000,
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
       }),
       createTestShot({
         id: '2',
         orderIndex: 1,
         durationMs: 125000,
-        videoUrl: 'https://example.com/video2.mp4',
         videoStatus: 'completed',
       }),
     ];
@@ -196,7 +181,6 @@ describe('generateChaptersVTT', () => {
     const shots: Shot[] = [
       createTestShot({
         durationMs: 3000,
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
         metadata: createTestScene({
           sceneNumber: 5,
@@ -267,7 +251,6 @@ describe('generateChaptersVTT', () => {
     const shots: Shot[] = [
       createTestShot({
         durationMs: 1234, // 1.234 seconds
-        videoUrl: 'https://example.com/video1.mp4',
         videoStatus: 'completed',
       }),
     ];

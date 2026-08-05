@@ -12,12 +12,14 @@ import type {
 } from '@/lib/db/schema';
 import {
   frames,
+  renderSegments,
   scenes,
   sceneScriptVersions,
   shots,
   shotPromptVersions,
   sequenceElements,
   sequences,
+  videoVariants,
 } from '@/lib/db/schema';
 import {
   buildShotRenameDeltas,
@@ -29,7 +31,7 @@ import {
   scriptExtract,
 } from '@/lib/scenes/scene-script';
 import { matchElementsToScene } from '@/lib/workflows/scene-matching';
-import { and, eq, inArray, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 
 export function createSequenceElementsMethods(db: Database) {
   const update = async (
@@ -452,13 +454,32 @@ export function createSequenceElementsMethods(db: Database) {
       }
       if (allElements.length === 0) return counts;
 
-      const [allShotsRaw, scriptBySceneId] = await Promise.all([
-        db
-          .select()
-          .from(shots)
-          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
-      ]);
+      const [allShotsRaw, scriptBySceneId, shotIdsWithVideo] =
+        await Promise.all([
+          db
+            .select()
+            .from(shots)
+            .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+          loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+          // A shot "has video" when its render segment points at a live version
+          // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
+          db
+            .select({ shotId: shots.id })
+            .from(shots)
+            .innerJoin(
+              renderSegments,
+              eq(renderSegments.id, shots.renderSegmentId)
+            )
+            .innerJoin(
+              videoVariants,
+              and(
+                eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+                isNull(videoVariants.discardedAt)
+              )
+            )
+            .where(eq(shots.sequenceId, sequenceId))
+            .then((rows) => new Set(rows.map((r) => r.shotId))),
+        ]);
 
       for (const rawShot of allShotsRaw) {
         const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
@@ -469,7 +490,7 @@ export function createSequenceElementsMethods(db: Database) {
           elementTags,
           sceneScript
         );
-        const hasVideo = !!shot.videoUrl;
+        const hasVideo = shotIdsWithVideo.has(shot.id);
         for (const el of matched) {
           const entry = counts[el.id];
           if (!entry) continue;

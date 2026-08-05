@@ -29,6 +29,7 @@ type CallName =
   | 'frameVariants.update'
   | 'frames.getAnchorByShot'
   | 'frameVariants.select'
+  | 'renderSegments.clearSelectionByShot'
   | 'shots.update';
 
 function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
@@ -36,13 +37,21 @@ function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
   variantUpdates: VariantUpdateCall[];
   selects: SelectCall[];
   shotUpdates: ShotUpdateCall[];
+  clearedSelectionShotIds: string[];
   callOrder: CallName[];
 } {
   const variantUpdates: VariantUpdateCall[] = [];
   const selects: SelectCall[] = [];
   const shotUpdates: ShotUpdateCall[] = [];
+  const clearedSelectionShotIds: string[] = [];
   const callOrder: CallName[] = [];
   const scopedDb: PersistUpscaleScopedDb = {
+    renderSegments: {
+      clearSelectionByShot: async (shotId) => {
+        clearedSelectionShotIds.push(shotId);
+        callOrder.push('renderSegments.clearSelectionByShot');
+      },
+    },
     frameVariants: {
       update: async (versionId, data) => {
         variantUpdates.push({ versionId, data });
@@ -69,15 +78,28 @@ function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
       },
     },
   };
-  return { scopedDb, variantUpdates, selects, shotUpdates, callOrder };
+  return {
+    scopedDb,
+    variantUpdates,
+    selects,
+    shotUpdates,
+    clearedSelectionShotIds,
+    callOrder,
+  };
 }
 
 const NOW = new Date('2026-06-26T00:00:00Z');
 
 describe('persistUpscaleSelection', () => {
   it('completes the version, repoints the frame at it, resets video, emits completed', async () => {
-    const { scopedDb, variantUpdates, selects, shotUpdates, callOrder } =
-      buildScopedDbSpy();
+    const {
+      scopedDb,
+      variantUpdates,
+      selects,
+      shotUpdates,
+      clearedSelectionShotIds,
+      callOrder,
+    } = buildScopedDbSpy();
     const emits: Array<{
       shotId: string;
       status: string;
@@ -104,6 +126,7 @@ describe('persistUpscaleSelection', () => {
       'frameVariants.update',
       'frames.getAnchorByShot',
       'frameVariants.select',
+      'renderSegments.clearSelectionByShot',
       'shots.update',
     ]);
 
@@ -125,12 +148,14 @@ describe('persistUpscaleSelection', () => {
     expect(select.versionId).toBe('ver-1');
     expect(select.actorId).toBe('user-1');
 
-    // New still invalidates downstream video.
+    // New still invalidates downstream video: the segment's chosen render is
+    // dropped (#1067 phase 2d) and the shot's in-flight state resets.
+    expect(clearedSelectionShotIds).toEqual(['shot-1']);
     const [shotUpdate] = shotUpdates;
     if (!shotUpdate) throw new Error('expected shots.update call');
     expect(shotUpdate.shotId).toBe('shot-1');
     expect(shotUpdate.data.videoStatus).toBe('pending');
-    expect(shotUpdate.data.videoUrl).toBeNull();
+    expect(shotUpdate.data.videoError).toBeNull();
 
     expect(emits).toEqual([
       {

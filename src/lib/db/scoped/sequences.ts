@@ -9,7 +9,14 @@ import {
   DEFAULT_ASPECT_RATIO,
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
-import { frameVariants, frames, sequences, shots } from '@/lib/db/schema';
+import {
+  frameVariants,
+  frames,
+  renderSegments,
+  sequences,
+  shots,
+  videoVariants,
+} from '@/lib/db/schema';
 import type { NewSequence, Sequence, Shot, Style } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import {
@@ -170,6 +177,22 @@ function createSequencesReadMethods(db: Database, teamId: string) {
                 isNull(frameVariants.discardedAt)
               )
             )
+            // Same story for the video (#1067 phase 2d): the shot's render
+            // segment owns the selection pointer, and the chosen version holds
+            // the url/path/model. Both are left joins with `discardedAt` in the
+            // join condition, so a shot with no segment or a discarded
+            // selection still comes back — videoless, not missing.
+            .leftJoin(
+              renderSegments,
+              eq(renderSegments.id, shots.renderSegmentId)
+            )
+            .leftJoin(
+              videoVariants,
+              and(
+                eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+                isNull(videoVariants.discardedAt)
+              )
+            )
             .where(
               and(
                 inArray(shots.sequenceId, batch),
@@ -180,12 +203,11 @@ function createSequencesReadMethods(db: Database, teamId: string) {
             .then((rows) =>
               rows.map((row) =>
                 row.frames
-                  ? projectShotWithImage(
-                      row.shots,
-                      row.frames,
-                      row.frame_variants
-                    )
-                  : projectShotMissingFrame(row.shots)
+                  ? projectShotWithImage(row.shots, row.frames, {
+                      selectedImage: row.frame_variants,
+                      selectedVideo: row.video_variants,
+                    })
+                  : projectShotMissingFrame(row.shots, row.video_variants)
               )
             )
         )

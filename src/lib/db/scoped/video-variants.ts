@@ -9,9 +9,11 @@
  *
  * **Selection is a pointer, not a per-row flag.** A segment's chosen video is
  * whichever version `render_segments.selectedVideoVersionId` points at; {@link
- * createVideoVariantsMethods.select} repoints it (and mirrors the shot's
- * `video*` columns for playback) atomically. `discardedAt` soft-hides a version
- * (undoable); there is no `divergedAt` (retired in the redesign).
+ * createVideoVariantsMethods.select} repoints it atomically. Since #1067 phase
+ * 2d that pointer is also the READ path — playback, export and the API project
+ * the pointed-at version's url/path/model through `projectShotWithImage`
+ * instead of reading a cached copy on `shots`. `discardedAt` soft-hides a
+ * version (undoable); there is no `divergedAt` (retired in the redesign).
  *
  * Replaces the `variantType='video'` rows of `shot_variants` (retired for video
  * in this phase). Mirrors `scoped/frame-variants.ts` method-for-method.
@@ -22,10 +24,13 @@
 import type { Database } from '@/lib/db/client';
 import { renderSegments, shots, videoVariants } from '@/lib/db/schema';
 import type { NewVideoVariant, VideoVariant } from '@/lib/db/schema';
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { buildRenderSegmentSelect } from './render-segments';
 import { buildEventInsert } from './sequence-events';
-import { buildShotVideoMirror, type CompletedVideoVariant } from './shots';
+import {
+  buildShotVideoSelectionWrite,
+  type CompletedVideoVariant,
+} from './shots';
 
 /** The grouping key that makes a flat row set read as a "variant" (segment). */
 export type VideoVariantGroup = {
@@ -279,6 +284,32 @@ export function createVideoVariantsMethods(db: Database) {
     },
 
     /**
+     * Batch {@link getSelectedByShot}, keyed by shotId. Same exclusions (no
+     * segment, no pointer, dangling, discarded → absent), so
+     * `map.get(id) ?? null` matches the single-shot method.
+     *
+     * Shots of a MULTI-shot segment share one render, so they map to the same
+     * version row — the key is the shot because that is what read paths hold.
+     */
+    getSelectedByShotIds: async (
+      shotIds: string[]
+    ): Promise<Map<string, VideoVariant>> => {
+      if (shotIds.length === 0) return new Map();
+      const rows = await db
+        .select({ shotId: shots.id, version: videoVariants })
+        .from(shots)
+        .innerJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
+        .innerJoin(
+          videoVariants,
+          eq(videoVariants.id, renderSegments.selectedVideoVersionId)
+        )
+        .where(
+          and(inArray(shots.id, shotIds), isNull(videoVariants.discardedAt))
+        );
+      return new Map(rows.map((r) => [r.shotId, r.version]));
+    },
+
+    /**
      * The newest FAILED version for a shot's segment, or null. The single-shot
      * analog of {@link listLastFailedModelsBySequence}.
      */
@@ -383,7 +414,7 @@ export function createVideoVariantsMethods(db: Database) {
       if (shouldClearPending) {
         await db.batch([
           buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-          buildShotVideoMirror(db, shotId, completedVersion),
+          buildShotVideoSelectionWrite(db, shotId, completedVersion),
           db
             .update(renderSegments)
             .set({
@@ -409,7 +440,7 @@ export function createVideoVariantsMethods(db: Database) {
       } else {
         await db.batch([
           buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-          buildShotVideoMirror(db, shotId, completedVersion),
+          buildShotVideoSelectionWrite(db, shotId, completedVersion),
           buildEventInsert(db, {
             sequenceId: shot.sequenceId,
             actorId: opts.actorId,

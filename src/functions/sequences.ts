@@ -563,19 +563,20 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           fr,
         ])
       );
-      const selectedByFrame =
-        await scopedDb.frameVariants.getSelectedByFrameIds(
+      const [selectedByFrame, selectedVideoByShot] = await Promise.all([
+        scopedDb.frameVariants.getSelectedByFrameIds(
           [...anchorsByShot.values()].map((fr) => fr.id)
-        );
+        ),
+        scopedDb.videoVariants.getSelectedByShotIds(allShots.map((s) => s.id)),
+      ]);
       const shotsWithImage = allShots.flatMap((shot) => {
         const frame = anchorsByShot.get(shot.id);
         return frame
           ? [
-              projectShotWithImage(
-                shot,
-                frame,
-                selectedByFrame.get(frame.id) ?? null
-              ),
+              projectShotWithImage(shot, frame, {
+                selectedImage: selectedByFrame.get(frame.id) ?? null,
+                selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+              }),
             ]
           : [];
       });
@@ -850,14 +851,13 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
         });
         const ownerShotId = shotIdByFrame.get(frameId);
         if (ownerShotId) {
+          // A new still invalidates downstream video (#1067 phase 2d).
+          await scopedDb.renderSegments.clearSelectionByShot(ownerShotId);
           await scopedDb.shots.update(
             ownerShotId,
             {
-              videoUrl: null,
-              videoPath: null,
               videoStatus: 'pending',
               videoWorkflowRunId: null,
-              videoGeneratedAt: null,
               videoError: null,
             },
             { throwOnMissing: false }

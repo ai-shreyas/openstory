@@ -14,7 +14,7 @@
  * whose `selectedImageVersionId` was never set.
  */
 
-import type { Frame, FrameVariant } from '@/lib/db/schema';
+import type { Frame, FrameVariant, VideoVariant } from '@/lib/db/schema';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
 /** The flat client-shaped fields this helper splits back into two rows. */
@@ -81,6 +81,58 @@ export function frameFixtureFor(
       createdAt: shot.createdAt,
       updatedAt: shot.updatedAt,
     }),
+  };
+}
+
+/** The flat client-shaped video fields {@link videoFixtureFor} splits back out. */
+type FlatVideoSurface = Pick<
+  ShotWithImage,
+  | 'id'
+  | 'sequenceId'
+  | 'videoUrl'
+  | 'videoPath'
+  | 'videoGeneratedAt'
+  | 'videoInputHash'
+  | 'motionModel'
+  | 'durationMs'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+/**
+ * The video half of {@link frameFixtureFor} (#1067 phase 2d): rebuild the
+ * selected `video_variants` row that `projectShotWithImage` projects the
+ * `video*` surface from. Null when the shot has no video, matching a real
+ * segment whose `selectedVideoVersionId` was never set.
+ */
+export function videoFixtureFor(shot: FlatVideoSurface): VideoVariant | null {
+  if (shot.videoUrl === null) return null;
+  return {
+    id: `${shot.id}-vv1`,
+    // Fixture-only: the degenerate one-shot segment reuses the shot's id, the
+    // same idempotency key `renderSegments.ensureForShot` uses.
+    renderSegmentId: shot.id,
+    sequenceId: shot.sequenceId,
+    model: shot.motionModel ?? 'kling_25_turbo_pro',
+    manifest: [
+      {
+        shotId: shot.id,
+        motionPromptVersionId: null,
+        frameVersionId: null,
+        durationMs: shot.durationMs ?? 3000,
+      },
+    ],
+    url: shot.videoUrl,
+    storagePath: shot.videoPath,
+    previewUrl: null,
+    status: 'completed',
+    workflowRunId: null,
+    generatedAt: shot.videoGeneratedAt ?? shot.updatedAt,
+    error: null,
+    inputHash: shot.videoInputHash,
+    discardedAt: null,
+    createdAt: shot.createdAt,
+    updatedAt: shot.updatedAt,
   };
 }
 

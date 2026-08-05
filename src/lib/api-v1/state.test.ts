@@ -1,6 +1,6 @@
 import type { Style } from '@/lib/db/schema/libraries';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
+import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -175,9 +175,10 @@ function depsWithShots(
   shots: ShotWithImage[],
   style: Style | null = makeStyle()
 ) {
-  // The image surface lives on each shot's anchor frame now (#989), and the
-  // still itself on that frame's SELECTED version (#1067); the source projects
-  // `ShotWithImage` from all three.
+  // The image surface lives on each shot's anchor frame now (#989), the still
+  // itself on that frame's SELECTED version and the video on the SELECTED
+  // version of the shot's render segment (#1067); the source projects
+  // `ShotWithImage` from all of them.
   const anchors = shots.map((s) => anchorFixture(s));
   return {
     shots: { listBySequence: async () => shots },
@@ -188,6 +189,15 @@ function depsWithShots(
           anchors.flatMap((a) =>
             a.selectedVersion ? [[a.frame.id, a.selectedVersion]] : []
           )
+        ),
+    },
+    videoVariants: {
+      getSelectedByShotIds: async () =>
+        new Map(
+          shots.flatMap((s) => {
+            const selected = videoFixtureFor(s);
+            return selected ? [[s.id, selected]] : [];
+          })
         ),
     },
     styles: { getById: async () => style },

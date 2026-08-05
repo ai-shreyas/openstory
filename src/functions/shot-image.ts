@@ -472,13 +472,13 @@ export const setImageFromVariantFn = createServerFn({ method: 'POST' })
       actorId: context.user.id,
     });
 
-    // A new still invalidates downstream video (still on `shots` until Phase 3).
+    // A new still invalidates downstream video: drop the segment's chosen
+    // render (#1067 phase 2d — the video url/path now come from that pointer)
+    // and reset the shot-owned in-flight state.
+    await context.scopedDb.renderSegments.clearSelectionByShot(shot.id);
     await context.scopedDb.shots.update(shot.id, {
-      videoUrl: null,
-      videoPath: null,
       videoStatus: 'pending',
       videoWorkflowRunId: null,
-      videoGeneratedAt: null,
       videoError: null,
     });
 
@@ -677,12 +677,10 @@ export const selectFrameImageVersionFn = createServerFn({ method: 'POST' })
     );
 
     // A new still invalidates downstream video (same as setImageFromVariantFn).
+    await scopedDb.renderSegments.clearSelectionByShot(shot.id);
     await scopedDb.shots.update(shot.id, {
-      videoUrl: null,
-      videoPath: null,
       videoStatus: 'pending',
       videoWorkflowRunId: null,
-      videoGeneratedAt: null,
       videoError: null,
     });
 

@@ -328,6 +328,12 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
       [...liveFramesByShot.values()].map((f) => f.id)
     );
+    // Likewise for video: "this shot already has a video" is now a question
+    // about its render segment's selection pointer (#1067 phase 2d).
+    const selectedVideoByShot =
+      await scopedDb.videoVariants.getSelectedByShotIds(
+        liveShots.map((s) => s.id)
+      );
 
     // Flip every affected shot to `generating` and emit progress events
     // BEFORE fanning out per-shot edits. Otherwise the user can navigate to
@@ -352,7 +358,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
             })
           );
         }
-        if (shot.videoUrl) {
+        if (selectedVideoByShot.get(shot.id)?.url) {
           await scopedDb.shots.update(
             shot.id,
             { videoStatus: 'generating', videoError: null },
@@ -511,7 +517,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
       DEFAULT_VIDEO_MODEL
     );
     const shotsNeedingVideoRegen: Shot[] = liveShots.filter(
-      (f) => !!f.videoUrl && successByShotId.has(f.id)
+      (f) => !!selectedVideoByShot.get(f.id)?.url && successByShotId.has(f.id)
     );
 
     let videoSuccessCount = 0;

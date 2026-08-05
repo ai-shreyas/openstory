@@ -71,24 +71,21 @@ export const shots = snakeCase.table(
     // DB-Audit: drop once the prompt fallbacks read the scene script — this is the scene's `originalScript.extract` copied at split time, never regenerated, and only read as the last-resort prompt fallback and as `visualSummary` for music design.
     description: text(),
     durationMs: integer().default(3000),
-    // DB-Audit: these eight video columns LOOK like a mirror of `video_variants` but in prod they are still the PRIMARY record for most rows.
-    // DB-Audit: measured 2026-08-05 on openstory-prd — 3041 shots have video_url; 1041 have no render_segment_id at all, and 1887 more point at a segment whose selected_video_version_id is NULL (only 113 of 2074 segments carry a selection).
-    // DB-Audit: the #990 cutover (20260629001734_nostalgic_expediter) deferred this on purpose — "the segment's selection pointer stays NULL for legacy rows and the next render/select repoints it".
-    // DB-Audit: so re-routing reads through the segment pointer today would blank 2928 of 3041 videos. Backfill segments + selection to 3041/3041 FIRST, re-measure, and only then drop.
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.url`, written by `buildShotVideoMirror`.
-    videoUrl: text(),
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.storagePath`.
-    videoPath: text(), // R2 storage path (not signed URL)
-    // Video/motion generation status tracking
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.status`.
+    // The video MIRROR columns (`videoUrl`/`videoPath`/`videoGeneratedAt`/
+    // `videoInputHash`/`motionModel`) were dropped in #1067 phase 2d. They are
+    // now projected from the `video_variants` row the shot's render segment
+    // points at — see `projectShotWithImage`, the single place that knows it.
+    //
+    // These three are NOT a mirror and deliberately stay on the shot:
+    // `videoVariants.select` refuses any version that is not 'completed', so the
+    // selection pointer structurally cannot hold in-flight or failed state, and
+    // `persistMotionFailure` records a failure here only for a PRIMARY render
+    // (`!variantOnly`) — a distinction stored nowhere on the variant row, and
+    // `pendingPromoteVersionId` is cleared on failure so no pointer survives to
+    // carry it. Same reasoning that kept `frames.imageStatus`/`imageError`/
+    // `imageWorkflowRunId`. Do not re-flag them as droppable.
     videoStatus: text().$type<ShotGenerationStatus>().default('pending'),
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.workflowRunId`.
     videoWorkflowRunId: text(),
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.generatedAt`, and already write-only (nothing reads it today).
-    videoGeneratedAt: integer({
-      mode: 'timestamp',
-    }),
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.error`.
     videoError: text(),
     // DB-Audit: drop after backfilling version rows for pre-#713 shots — mirror of the selected `shot_prompt_versions.text`, written only by `mirrorSelection` and read only as the legacy fallback when the pointer is null.
     motionPrompt: text(), // User-updated motion prompt (overrides AI-generated prompt from metadata)
@@ -98,8 +95,6 @@ export const shots = snakeCase.table(
     // will repoint this. Additive groundwork in #988 — no write path populates
     // it yet (it stays null), so the repoint is wired in a later phase.
     selectedMotionPromptVersionId: text(),
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.model`; #1066 puts model identity on the version row and `resolve-asset-models` already forbids reading this.
-    motionModel: text({ length: 100 }), // Model used for motion/video generation (nullable - inherits from sequence if not set)
     // The render segment this shot belongs to (#990) — a scene's video is tiled
     // into ≤cap segments (`render_segments`); per-shot rendering is the
     // degenerate one-shot segment. Membership lives here (order from
@@ -112,11 +107,6 @@ export const shots = snakeCase.table(
     // A shot owns no audio columns (#1067): per-shot audio was never built —
     // music is sequence-level (`sequences.music*`) and dialogue rides inside
     // the video.
-    // SHA-256 of the inputs that produced each artifact; null when the
-    // artifact has never been generated. See
-    // docs/architecture/workflow-snapshots-and-content-hash-staleness.md.
-    // DB-Audit: NOT droppable yet — backfill first (see the block above); then it is a copy of `video_variants.inputHash`.
-    videoInputHash: text(),
     // SHA-256 of the upstream context that produced the cached motion prompt
     // (scene metadata + style config + character/location bible + analysis
     // model + starting-frame image). When upstream context changes, the prompt

@@ -32,7 +32,6 @@ import {
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
 import type { Database } from '@/lib/db/client';
-import { createShotsMethods, type ShotHashArtifact } from './shots';
 import { createShotVariantsMethods } from './shot-variants';
 
 let client: Client;
@@ -100,29 +99,11 @@ beforeEach(async () => {
   await seed();
 });
 
-describe('shots input-hash columns', () => {
-  // The still-image hash columns (thumbnail / variantImage) moved to `frames`
-  // in #989; only the shot-owned video artifact hash remains here.
-  it('default to null and persist when set', async () => {
-    const [shot] = await db
-      .insert(shots)
-      .values({ sequenceId, orderIndex: 0 })
-      .returning();
-    if (!shot) throw new Error('test setup: shot insert returned nothing');
-    expect(shot.videoInputHash).toBeNull();
-
-    await db
-      .update(shots)
-      .set({ videoInputHash: 'm' })
-      .where(eq(shots.id, shot.id));
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shot.id));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.videoInputHash).toBe('m');
-  });
-});
+// `shots` owns no input-hash column any more: the still-image hashes moved to
+// `frames` in #989, and #1067 phase 2d dropped `video_input_hash` along with the
+// rest of the `shots.video*` mirror. Video staleness is now checked against the
+// selected version's own hash — see the `videoVariants.isStale` coverage in
+// video-variants.test.ts.
 
 describe('shot_variants input-hash + diverged_at columns', () => {
   it('default to null and persist when set', async () => {
@@ -258,51 +239,13 @@ describe('talent_sheets.input_hash', () => {
   });
 });
 
-describe('shots.isStale', () => {
-  // `video` is the only shot-owned artifact hash (#1067 dropped the never-built
-  // per-shot audio columns).
-  const ARTIFACT: ShotHashArtifact = 'video';
-
-  it('throws when the shot does not exist', () => {
-    const m = createShotsMethods(db);
-    expect(m.isStale(generateId(), ARTIFACT, 'h')).rejects.toThrow(/not found/);
-  });
-
-  it('returns false when stored hash is null (legacy artifact)', async () => {
-    const [shot] = await db
-      .insert(shots)
-      .values({ sequenceId, orderIndex: 0 })
-      .returning();
-    if (!shot) throw new Error('test setup: shot insert returned nothing');
-    const m = createShotsMethods(db);
-    expect(await m.isStale(shot.id, ARTIFACT, 'anything')).toBe(false);
-  });
-
-  it('returns false when stored hash matches the current hash', async () => {
-    const [shot] = await db
-      .insert(shots)
-      .values({ sequenceId, orderIndex: 0, videoInputHash: 'h-match' })
-      .returning();
-    if (!shot) throw new Error('test setup: shot insert returned nothing');
-    const m = createShotsMethods(db);
-    expect(await m.isStale(shot.id, ARTIFACT, 'h-match')).toBe(false);
-  });
-
-  it('returns true when stored hash differs from the current hash', async () => {
-    const [shot] = await db
-      .insert(shots)
-      .values({ sequenceId, orderIndex: 0, videoInputHash: 'h-old' })
-      .returning();
-    if (!shot) throw new Error('test setup: shot insert returned nothing');
-    const m = createShotsMethods(db);
-    expect(await m.isStale(shot.id, ARTIFACT, 'h-new')).toBe(true);
-  });
-});
+// `shots.isStale` is gone with `video_input_hash` (#1067 phase 2d) — it was the
+// method's only remaining artifact, and it had no production callers.
 
 // `createSequenceLocationsMethods` is mocked process-wide by scoped.test.ts,
 // so the factory cannot be exercised here. The predicate is the same 4-line
-// shape as `shots.isStale` / `shotVariants.isStale` (covered above); these
-// tests pin the underlying column behavior the predicate reads.
+// shape as `shotVariants.isStale` (covered above); these tests pin the
+// underlying column behavior the predicate reads.
 describe('sequenceLocations.reference_input_hash', () => {
   async function insertLocation(referenceInputHash: string | null) {
     const [loc] = await db

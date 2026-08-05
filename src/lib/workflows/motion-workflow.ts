@@ -199,11 +199,10 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         }
 
         const generatingShotWrite = buildMotionGeneratingShotWrite({
-          model,
           workflowRunId,
         });
 
-        // Variant-only (#547): don't stamp the legacy `shots.video*` columns —
+        // Variant-only (#547): don't stamp the shot's in-flight columns —
         // read the shot instead. The per-model `video_variants` version (opened
         // below) carries the in-flight state; the primary video is left intact.
         const shot = input.variantOnly

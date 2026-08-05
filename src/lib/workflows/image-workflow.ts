@@ -458,15 +458,14 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
             await scopedDb.frameVariants.select(frame.id, versionId, {
               actorId: input.userId,
             });
-            // A new still invalidates the shot's downstream video.
+            // A new still invalidates the shot's downstream video: drop the
+            // segment's chosen render (#1067 phase 2d) and reset in-flight state.
+            await scopedDb.renderSegments.clearSelectionByShot(shotId);
             await scopedDb.shots.update(
               shotId,
               {
-                videoUrl: null,
-                videoPath: null,
                 videoStatus: 'pending',
                 videoWorkflowRunId: null,
-                videoGeneratedAt: null,
                 videoError: null,
               },
               { throwOnMissing: false }

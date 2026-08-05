@@ -14,10 +14,25 @@
  *
  * The still's url/path/model/hash come from the SELECTED `frame_variants` row;
  * this file is the only place that knows that.
+ *
+ * The VIDEO surface works the same way as of #1067 phase 2d: `videoUrl` /
+ * `videoPath` / `videoGeneratedAt` / `videoInputHash` / `motionModel` were
+ * columns on `shots` mirroring the selected render; they are now projected from
+ * the `video_variants` row `render_segments.selectedVideoVersionId` points at
+ * (a shot reaches its segment via `shots.renderSegmentId`). The projected names
+ * are unchanged, so the client and realtime cache contract is untouched.
+ *
+ * `videoStatus` / `videoError` / `videoWorkflowRunId` deliberately REMAIN real
+ * `shots` columns and are NOT projected: `videoVariants.select` refuses any
+ * version that is not `completed`, so the selection pointer structurally cannot
+ * carry in-flight or failed state, and `persistMotionFailure` records a failure
+ * on the shot only for a PRIMARY render (`!variantOnly`) — a distinction stored
+ * nowhere on the variant row. Same reasoning that kept `frames.imageStatus` /
+ * `imageError` / `imageWorkflowRunId`.
  */
 
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
-import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot, VideoVariant } from '@/lib/db/schema';
 
 export type ShotGridSheet = {
   url: string | null;
@@ -26,7 +41,35 @@ export type ShotGridSheet = {
   status: Frame['imageStatus'] | FrameVariant['status'];
 };
 
+/**
+ * The version rows a shot's surface is projected from. An object (not
+ * positional args) so adding a source can't silently re-bind an existing one,
+ * and so every read path names what it resolved.
+ *
+ * `selectedImage` and `selectedVideo` are REQUIRED (not optional) so a new read
+ * path can't silently project a null surface onto a shot that has one.
+ */
+export type ShotProjectionSources = {
+  /** The anchor frame's selected `frame_variants` row. */
+  selectedImage: FrameVariant | null;
+  /**
+   * The `video_variants` row the shot's segment points at
+   * (`render_segments.selectedVideoVersionId`), resolved via
+   * `videoVariants.getSelectedByShotIds` / `getSelectedByShot`.
+   */
+  selectedVideo: VideoVariant | null;
+  gridSheet?: ShotGridSheet | null;
+  motionPromptData?: AssemblableMotionPrompt | null;
+};
+
 export type ShotWithImage = Shot & {
+  /** Video surface — from the segment's selected version, not a shot column. */
+  videoUrl: VideoVariant['url'];
+  videoPath: VideoVariant['storagePath'];
+  videoGeneratedAt: VideoVariant['generatedAt'];
+  videoInputHash: VideoVariant['inputHash'];
+  /** Null when never rendered — absent means absent, not a default. */
+  motionModel: VideoVariant['model'] | null;
   thumbnailUrl: FrameVariant['url'];
   previewThumbnailUrl: Frame['previewImageUrl'];
   thumbnailPath: FrameVariant['storagePath'];
@@ -58,7 +101,10 @@ export type ShotWithImage = Shot & {
  * the list. Returns the shot with a null image surface (and a synthetic anchor
  * frame so the shape is uniform).
  */
-export function projectShotMissingFrame(shot: Shot): ShotWithImage {
+export function projectShotMissingFrame(
+  shot: Shot,
+  selectedVideo: VideoVariant | null
+): ShotWithImage {
   const frame: Frame = {
     // Synthetic in-memory placeholder ONLY — never persisted and never used for
     // a frame_variants lookup. `id: shot.id` deliberately resurrects the
@@ -83,31 +129,36 @@ export function projectShotMissingFrame(shot: Shot): ShotWithImage {
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,
   };
-  return projectShotWithImage(shot, frame, null);
+  // A frameless shot still has a video surface: video hangs off the shot's
+  // render segment, not off the frame.
+  return projectShotWithImage(shot, frame, {
+    selectedImage: null,
+    selectedVideo,
+  });
 }
 
-/**
- * `selectedVersion` is required (not optional) so a new read path can't
- * silently project a null image surface onto a frame that has one.
- */
 export function projectShotWithImage(
   shot: Shot,
   frame: Frame,
-  selectedVersion: FrameVariant | null,
-  gridSheet?: ShotGridSheet | null,
-  motionPromptData?: AssemblableMotionPrompt | null
+  sources: ShotProjectionSources
 ): ShotWithImage {
+  const { selectedImage, selectedVideo, gridSheet, motionPromptData } = sources;
   return {
     ...shot,
-    thumbnailUrl: selectedVersion?.url ?? null,
+    videoUrl: selectedVideo?.url ?? null,
+    videoPath: selectedVideo?.storagePath ?? null,
+    videoGeneratedAt: selectedVideo?.generatedAt ?? null,
+    videoInputHash: selectedVideo?.inputHash ?? null,
+    motionModel: selectedVideo?.model ?? null,
+    thumbnailUrl: selectedImage?.url ?? null,
     previewThumbnailUrl: frame.previewImageUrl,
-    thumbnailPath: selectedVersion?.storagePath ?? null,
+    thumbnailPath: selectedImage?.storagePath ?? null,
     thumbnailStatus: frame.imageStatus,
     thumbnailWorkflowRunId: frame.imageWorkflowRunId,
     thumbnailError: frame.imageError,
-    imageModel: selectedVersion?.model ?? null,
+    imageModel: selectedImage?.model ?? null,
     imagePrompt: frame.imagePrompt,
-    thumbnailInputHash: selectedVersion?.inputHash ?? null,
+    thumbnailInputHash: selectedImage?.inputHash ?? null,
     visualPromptInputHash: frame.visualPromptInputHash,
     variantImageUrl: gridSheet?.url ?? null,
     variantImageStatus: gridSheet?.status ?? null,

@@ -179,6 +179,7 @@ export async function buildSequenceState(
     shots: Pick<ScopedDb['shots'], 'listBySequence'>;
     frames: Pick<ScopedDb['frames'], 'listAnchorsBySequence'>;
     frameVariants: Pick<ScopedDb['frameVariants'], 'getSelectedByFrameIds'>;
+    videoVariants: Pick<ScopedDb['videoVariants'], 'getSelectedByShotIds'>;
     styles: Pick<ScopedDb['styles'], 'getById'>;
   },
   sequence: Sequence,
@@ -197,19 +198,20 @@ export async function buildSequenceState(
   // Project it back under the legacy thumbnail* names — keyed by shotId, never
   // by id-reuse — so the image-readiness reads below are unchanged.
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-  // The still itself comes from the selected `frame_variants` row (#1067).
-  const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
-    anchorRows.map((f) => f.id)
-  );
+  // The still comes from the selected `frame_variants` row and the video from
+  // the segment's selected `video_variants` row (#1067).
+  const [selectedByFrame, selectedVideoByShot] = await Promise.all([
+    scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+    scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
+  ]);
   const shotsWithImage = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
     return frame
       ? [
-          projectShotWithImage(
-            shot,
-            frame,
-            selectedByFrame.get(frame.id) ?? null
-          ),
+          projectShotWithImage(shot, frame, {
+            selectedImage: selectedByFrame.get(frame.id) ?? null,
+            selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+          }),
         ]
       : [];
   });

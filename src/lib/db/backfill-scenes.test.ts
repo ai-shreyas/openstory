@@ -8,8 +8,9 @@
  * verbatim from the shipped SQL file) and assert the result. Reading the real
  * SQL keeps the test honest: it exercises exactly what runs in prod.
  *
- * The staleness-compat test is the milestone's #1 QA risk: a freshly-backfilled
- * shot must still report isStale() === false.
+ * The last test guards the milestone's #1 QA risk: the backfill must write only
+ * sceneId + shotNumber and perturb nothing else on the shot. It asserted that
+ * through `shots.isStale`/`video_input_hash` until #1067 phase 2d dropped both.
  */
 
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
@@ -25,7 +26,6 @@ import {
   teams,
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
-import { createShotsMethods } from '@/lib/db/scoped/shots';
 import { type Client, createClient } from '@libsql/client';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
@@ -265,30 +265,24 @@ describe('backfill scenes migration', () => {
     expect(allShots.every((s) => s.sceneId === s.id)).toBe(true);
   });
 
-  it('staleness compat: a freshly-backfilled shot is NOT stale', async () => {
-    // A shot whose video artifact has a recorded input hash — the real path
-    // where staleness matters. Backfill must not perturb it.
-    const knownHash = 'abc123-video-input-hash';
+  it('leaves the shot’s other columns untouched', async () => {
+    // The backfill writes only sceneId + shotNumber. This pinned the video
+    // artifact's input hash until #1067 phase 2d dropped `video_input_hash`
+    // (with `shots.isStale`, whose only artifact it was); the surviving
+    // video-owned columns carry the same guarantee.
     const shot = await insertShot({
       orderIndex: 0,
       metadata: sceneFixture(),
-      videoInputHash: knownHash,
+      videoStatus: 'completed',
+      videoWorkflowRunId: 'run-abc',
+      durationMs: 4200,
     });
 
     await runBackfill();
 
-    const shotsMethods = createShotsMethods(db);
-    // Same hash → not stale. Backfill touched only sceneId + shotNumber, so the
-    // stored videoInputHash is unchanged.
-    expect(await shotsMethods.isStale(shot.id, 'video', knownHash)).toBe(false);
-
-    // Sanity: a different hash WOULD be stale, proving the check is live.
-    expect(await shotsMethods.isStale(shot.id, 'video', 'different')).toBe(
-      true
-    );
-
-    // And the stored hash itself survived the backfill untouched.
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.videoInputHash).toBe(knownHash);
+    expect(reread?.videoStatus).toBe('completed');
+    expect(reread?.videoWorkflowRunId).toBe('run-abc');
+    expect(reread?.durationMs).toBe(4200);
   });
 });

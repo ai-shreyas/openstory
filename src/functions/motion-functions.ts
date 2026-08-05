@@ -215,19 +215,22 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         (f) => [f.shotId, f]
       )
     );
-    const selectedByFrame =
-      await context.scopedDb.frameVariants.getSelectedByFrameIds(
+    const [selectedByFrame, selectedVideoByShot] = await Promise.all([
+      context.scopedDb.frameVariants.getSelectedByFrameIds(
         [...anchorsByShot.values()].map((f) => f.id)
-      );
+      ),
+      context.scopedDb.videoVariants.getSelectedByShotIds(
+        rawShots.map((s) => s.id)
+      ),
+    ]);
     const allShots = rawShots.flatMap((s) => {
       const frame = anchorsByShot.get(s.id);
       return frame
         ? [
-            projectShotWithImage(
-              s,
-              frame,
-              selectedByFrame.get(frame.id) ?? null
-            ),
+            projectShotWithImage(s, frame, {
+              selectedImage: selectedByFrame.get(frame.id) ?? null,
+              selectedVideo: selectedVideoByShot.get(s.id) ?? null,
+            }),
           ]
         : [];
     });

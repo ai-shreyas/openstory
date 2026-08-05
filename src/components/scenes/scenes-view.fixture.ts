@@ -2,7 +2,7 @@
 // media URLs swapped for public placeholders. Do NOT hand-edit.
 // Regenerate via: bun scripts/generate-scenes-view-fixture.ts
 import { dbSceneId, type SceneRow } from '@/lib/db/schema';
-import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
+import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -832,8 +832,12 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
  */
 export const fixtureShots: ShotWithImage[] = fixtureShotRows.map((shot) => {
   const { frame, selectedVersion } = frameFixtureFor(shot);
-  return projectShotWithImage(shot, frame, selectedVersion, {
-    url: shot.variantImageUrl,
-    status: shot.variantImageStatus,
+  return projectShotWithImage(shot, frame, {
+    selectedImage: selectedVersion,
+    selectedVideo: videoFixtureFor(shot),
+    gridSheet: {
+      url: shot.variantImageUrl,
+      status: shot.variantImageStatus,
+    },
   });
 });

@@ -14,7 +14,10 @@ import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { sceneKeys } from '@/hooks/use-scenes';
 import { shotKeys } from '@/hooks/use-shots';
 import type { Frame, Shot } from '@/lib/db/schema';
-import { selectedVersionFixture } from '@/lib/mocks/frame-fixtures';
+import {
+  selectedVersionFixture,
+  videoFixtureFor,
+} from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -39,17 +42,12 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
-    videoUrl: OLD_VIDEO,
-    videoPath: null,
     videoStatus: 'completed',
     videoWorkflowRunId: null,
-    videoGeneratedAt: null,
     videoError: null,
     motionPrompt: null,
-    motionModel: 'veo3',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    videoInputHash: null,
     motionPromptInputHash: null,
     metadata: null,
     createdAt: new Date(),
@@ -73,14 +71,31 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  // The still is the selected version, not a frame column (#1067).
+  // The still is the selected version, not a frame column (#1067) — and the
+  // live video is the selected version of the shot's render segment, not a
+  // shot column.
   const selectedVersion = selectedVersionFixture({
     frameId: frame.id,
     sequenceId: SEQ,
     url: OLD_THUMB,
   });
+  const selectedVideo = videoFixtureFor({
+    id: shot.id,
+    sequenceId: SEQ,
+    videoUrl: OLD_VIDEO,
+    videoPath: null,
+    videoGeneratedAt: null,
+    videoInputHash: null,
+    motionModel: 'veo3',
+    durationMs: shot.durationMs,
+    createdAt: shot.createdAt,
+    updatedAt: shot.updatedAt,
+  });
   return {
-    ...projectShotWithImage(shot, frame, selectedVersion),
+    ...projectShotWithImage(shot, frame, {
+      selectedImage: selectedVersion,
+      selectedVideo,
+    }),
     ...overrides,
   };
 }

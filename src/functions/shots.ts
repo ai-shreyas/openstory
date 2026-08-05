@@ -9,7 +9,7 @@ import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import { getWorkflowRunOutcome } from '@/lib/workflow/run-outcome';
 import { workflowNameFromRunId } from '@/lib/workflow/trigger-bindings';
-import type { ShotVariant, NewShot } from '@/lib/db/schema';
+import type { NewShot } from '@/lib/db/schema';
 import {
   computeShotStaleness,
   UNTRACKED_STALENESS,
@@ -25,7 +25,6 @@ import {
   projectShotMissingFrame,
   type ShotGridSheet,
 } from '@/lib/shots/shot-with-image';
-import { getGenerationChannel } from '@/lib/realtime';
 import { getVideoDownloadUrl } from '@/lib/motion/video-storage';
 import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { projectVideoVariants } from '@/lib/motion/video-variant-projection';
@@ -81,11 +80,13 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         ),
         loadSelectedScriptsBySequence(scopedDb, sequence.id),
       ]);
-    // The still lives on the selected `frame_variants` row (#1067) — one batch
-    // read keyed by frame id, so projecting the sequence stays O(1) queries.
-    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
-      anchorRows.map((f) => f.id)
-    );
+    // The still lives on the selected `frame_variants` row and the video on the
+    // segment's selected `video_variants` row (#1067) — one batch read each, so
+    // projecting the sequence stays O(1) queries.
+    const [selectedByFrame, selectedVideoByShot] = await Promise.all([
+      scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+      scopedDb.videoVariants.getSelectedByShotIds(shotRows.map((s) => s.id)),
+    ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
     return shotRows.map((rawShot) => {
       const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
@@ -102,20 +103,22 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         logger.error(
           `getShotsFn: shot ${shot.id} has no anchor frame after ensureAnchorFrames`
         );
-        return projectShotMissingFrame(shot);
+        return projectShotMissingFrame(
+          shot,
+          selectedVideoByShot.get(shot.id) ?? null
+        );
       }
       // Grid sheets are keyed by frame id (#989), resolved from the anchor.
       const sheet = gridSheets.get(frame.id);
       const gridSheet: ShotGridSheet | null = sheet
         ? { url: sheet.url, status: sheet.status }
         : null;
-      return projectShotWithImage(
-        shot,
-        frame,
-        selectedByFrame.get(frame.id) ?? null,
+      return projectShotWithImage(shot, frame, {
+        selectedImage: selectedByFrame.get(frame.id) ?? null,
+        selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
         gridSheet,
-        motionPromptData
-      );
+        motionPromptData,
+      });
     });
   });
 
@@ -149,19 +152,22 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    const [sheet, selectedMotion, selectedImage] = await Promise.all([
-      context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
-      context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
-      context.scopedDb.frameVariants.getSelected(context.frame.id),
-    ]);
+    const [sheet, selectedMotion, selectedImage, selectedVideo] =
+      await Promise.all([
+        context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
+        context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
+        context.scopedDb.frameVariants.getSelected(context.frame.id),
+        context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
+      ]);
     const shot = projectShotForClient(context.shot, context.script);
-    return projectShotWithImage(
-      shot,
-      context.frame,
+    return projectShotWithImage(shot, context.frame, {
       selectedImage,
-      sheet ? { url: sheet.url, status: sheet.status } : null,
-      selectedMotion ? motionPromptFromVersion(selectedMotion) : null
-    );
+      selectedVideo,
+      gridSheet: sheet ? { url: sheet.url, status: sheet.status } : null,
+      motionPromptData: selectedMotion
+        ? motionPromptFromVersion(selectedMotion)
+        : null,
+    });
   });
 
 export const getSequenceImageModelsFn = createServerFn({ method: 'GET' })
@@ -197,59 +203,22 @@ export const getDivergentVariantsFn = createServerFn({ method: 'GET' })
     );
   });
 
-type PromoteProgressEvent = 'video:progress';
-type PromoteProgressUrlField = 'videoUrl';
-
 /**
- * Build the per-variantType `shots` update payload and matching realtime
- * progress event metadata for a promote-variant operation. Exported (and
- * pure) for unit testing — the server-fn handler wraps this in auth +
- * persistence.
+ * Promote a divergent `shot_variants` alternate to the live primary.
  *
- * Image promotion is retired (#989): image variants live in `frame_variants`
- * and selection is a pointer repoint via `setImageFromVariantFn` /
- * `frameVariants.select`, not a divergent-alternate promote. Per-shot audio
- * was never built (#1067) — music is sequence-level on `sequences.music*` — so
- * video is the only promotable variant type.
- */
-export function buildPromoteUpdate(variant: ShotVariant): {
-  update: Partial<NewShot>;
-  progressEvent: PromoteProgressEvent;
-  progressUrlField: PromoteProgressUrlField;
-} {
-  const update: Partial<NewShot> = {};
-
-  switch (variant.variantType) {
-    case 'image':
-      throw new Error(
-        'Image variants are not promoted — select via frameVariants.select (#989)'
-      );
-    case 'audio':
-      throw new Error(
-        'Audio variants are not promoted — per-shot audio does not exist (#1067)'
-      );
-    case 'video':
-      update.videoUrl = variant.url;
-      update.videoPath = variant.storagePath;
-      update.videoStatus = 'completed';
-      update.videoError = null;
-      update.videoInputHash = variant.inputHash;
-      break;
-  }
-
-  return {
-    update,
-    progressEvent: 'video:progress',
-    progressUrlField: 'videoUrl',
-  };
-}
-
-/**
- * Promote a divergent alternate to be the live primary for its variant type.
- * Copies the variant's url/path into the matching shots column, updates the
- * matching `*_input_hash` so the live row reflects the alternate's inputs,
- * soft-deletes the variant, and emits a synthetic `*:progress` event so any
- * listeners refresh.
+ * Every variant type this once served has since moved off `shot_variants`, so
+ * there is nothing left to promote:
+ * - image → `frame_variants`, selected by pointer (#989)
+ * - video → `video_variants`, selected by the segment pointer (#990); #1067
+ *   phase 2d then dropped the `shots.video*` columns this wrote into, so the
+ *   copy-onto-the-shot model has no target at all
+ * - audio → never existed per-shot; music is sequence-level (#1067)
+ *
+ * Divergence itself is retired with them: `projectVideoVariants` hardcodes
+ * `divergedAt: null`, so `listDivergentBySequence` can only ever surface rows
+ * written before those cutovers. Deleting the remaining `shot_variants` surface
+ * is explicitly out of scope for #1067, so the endpoint stays (the client still
+ * imports it) and fails loudly rather than silently doing nothing.
  */
 export const promoteVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
@@ -262,47 +231,10 @@ export const promoteVariantFn = createServerFn({ method: 'POST' })
       })
     )
   )
-  .handler(async ({ data, context }) => {
-    const { shot, scopedDb } = context;
-    const variant = await scopedDb.shotVariants.getById(data.variantId);
-    if (!variant || variant.shotId !== shot.id) {
-      throw new Error('Variant not found for this shot');
-    }
-    if (variant.divergedAt === null || variant.discardedAt !== null) {
-      throw new Error('Variant is not a live divergent alternate');
-    }
-    if (!variant.url) {
-      throw new Error('Variant has no asset to promote');
-    }
-
-    const { update, progressEvent, progressUrlField } =
-      buildPromoteUpdate(variant);
-
-    // Atomic: a partial failure can't leave the live primary updated with the
-    // variant still appearing in the divergent list (or vice versa).
-    const { shot: updatedShot } = await scopedDb.shotVariants.promoteAtomically(
-      shot.id,
-      update,
-      variant.id
+  .handler(async () => {
+    throw new Error(
+      'Promoting a divergent alternate is retired — pick a version from the shot’s video history instead (selectSegmentVideoVersionFn), or a model via setVideoFromVariantFn.'
     );
-
-    // Realtime emit is purely cache-busting — TanStack Query refetches on the
-    // mutation onSuccess invalidation regardless. A failed emit must not
-    // surface to the user as "promote failed" when the DB already committed.
-    const channel = getGenerationChannel(data.sequenceId);
-    try {
-      const url = updatedShot[progressUrlField] ?? variant.url;
-      await channel.emit(`generation.${progressEvent}`, {
-        shotId: shot.id,
-        status: 'completed',
-        videoUrl: url,
-        model: variant.model,
-      });
-    } catch (error) {
-      logger.error('realtime emit failed', { err: error });
-    }
-
-    return { shot: updatedShot, variantId: variant.id };
   });
 
 export const discardVariantFn = createServerFn({ method: 'POST' })
@@ -867,20 +799,22 @@ export const getShotDownloadUrlFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
-    const { shot } = context;
+    const { shot, scopedDb } = context;
 
-    if (!shot.videoPath) {
+    // The downloadable file is whichever version the shot's segment points at
+    // (#1067 phase 2d) — `shots.videoPath` is gone.
+    const selectedVideo = await scopedDb.videoVariants.getSelectedByShot(
+      shot.id
+    );
+    const storagePath = selectedVideo?.storagePath;
+    if (!storagePath) {
       throw new Error('Shot does not have a video');
     }
 
     const filename =
-      shot.videoPath.split('/').pop() || `scene-${shot.id}_openstory.mp4`;
+      storagePath.split('/').pop() || `scene-${shot.id}_openstory.mp4`;
 
-    const downloadUrl = await getVideoDownloadUrl(
-      shot.videoPath,
-      filename,
-      3600
-    );
+    const downloadUrl = await getVideoDownloadUrl(storagePath, filename, 3600);
 
     return { downloadUrl, filename };
   });

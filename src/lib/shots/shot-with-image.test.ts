@@ -9,8 +9,9 @@
  * frame→thumbnail mapping regression on their own.
  */
 
-import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot, VideoVariant } from '@/lib/db/schema';
 import { generateMockShots } from '@/lib/mocks/data-generators';
+import { videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import { describe, expect, it } from 'vitest';
 import {
   projectShotMissingFrame,
@@ -77,15 +78,34 @@ function makeVersion(
   };
 }
 
+/** The `video_variants` row the shot's render segment points at. */
+function makeVideo(shot: Shot): VideoVariant {
+  const video = videoFixtureFor({
+    id: shot.id,
+    sequenceId: shot.sequenceId,
+    videoUrl: 'https://cdn/render.mp4',
+    videoPath: 'r2/render.mp4',
+    videoGeneratedAt: new Date('2026-06-27T00:00:00Z'),
+    videoInputHash: 'vid-hash',
+    motionModel: 'kling_25_turbo_pro',
+    durationMs: shot.durationMs,
+    createdAt: shot.createdAt,
+    updatedAt: shot.updatedAt,
+  });
+  if (!video) throw new Error('test setup: videoFixtureFor returned null');
+  return video;
+}
+
 describe('projectShotWithImage', () => {
   it('projects the still off the SELECTED version, not the frame (#1067)', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
     const version = makeVersion(shot);
 
-    const projected = projectShotWithImage(shot, frame, version, {
-      url: 'https://cdn/grid.png',
-      status: 'completed',
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: version,
+      selectedVideo: null,
+      gridSheet: { url: 'https://cdn/grid.png', status: 'completed' },
     });
 
     // From the version — the row that recorded the generation.
@@ -108,7 +128,10 @@ describe('projectShotWithImage', () => {
     const shot = makeShot();
     const frame = makeFrame(shot, { selectedImageVersionId: null });
 
-    const projected = projectShotWithImage(shot, frame, null);
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: null,
+      selectedVideo: null,
+    });
 
     expect(projected.thumbnailUrl).toBeNull();
     expect(projected.thumbnailPath).toBeNull();
@@ -124,9 +147,10 @@ describe('projectShotWithImage', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
 
-    const projected = projectShotWithImage(shot, frame, makeVersion(shot), {
-      url: 'https://cdn/grid.png',
-      status: 'generating',
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: makeVersion(shot),
+      selectedVideo: null,
+      gridSheet: { url: 'https://cdn/grid.png', status: 'generating' },
     });
 
     expect(projected.variantImageUrl).toBe('https://cdn/grid.png');
@@ -137,10 +161,54 @@ describe('projectShotWithImage', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
 
-    const projected = projectShotWithImage(shot, frame, makeVersion(shot));
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: makeVersion(shot),
+      selectedVideo: null,
+    });
 
     expect(projected.variantImageUrl).toBeNull();
     expect(projected.variantImageStatus).toBeNull();
+  });
+
+  // The video surface moved off `shots` the same way the still did (#1067
+  // phase 2d) — and for the same reason as the block comment above, every
+  // other suite builds its shots THROUGH this projection, so a video→shot
+  // mapping regression is only visible here.
+  it('projects the video off the segment’s SELECTED version (#1067)', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+    const video = makeVideo(shot);
+
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: makeVersion(shot),
+      selectedVideo: video,
+    });
+
+    expect(projected.videoUrl).toBe(video.url);
+    expect(projected.videoPath).toBe(video.storagePath);
+    expect(projected.videoGeneratedAt).toBe(video.generatedAt);
+    expect(projected.videoInputHash).toBe(video.inputHash);
+    expect(projected.motionModel).toBe('kling_25_turbo_pro');
+    // Not projected — these stay real `shots` columns.
+    expect(projected.videoStatus).toBe(shot.videoStatus);
+    expect(projected.videoError).toBe(shot.videoError);
+  });
+
+  it('nulls the video surface when the segment has no selected version', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: makeVersion(shot),
+      selectedVideo: null,
+    });
+
+    expect(projected.videoUrl).toBeNull();
+    expect(projected.videoPath).toBeNull();
+    expect(projected.videoGeneratedAt).toBeNull();
+    expect(projected.videoInputHash).toBeNull();
+    // Like imageModel: null, NOT a default — nothing was ever rendered.
+    expect(projected.motionModel).toBeNull();
   });
 });
 
@@ -148,7 +216,7 @@ describe('projectShotMissingFrame', () => {
   it('preserves a frameless shot with a null image surface (never drops it)', () => {
     const shot = makeShot();
 
-    const projected = projectShotMissingFrame(shot);
+    const projected = projectShotMissingFrame(shot, null);
 
     expect(projected.id).toBe(shot.id);
     expect(projected.thumbnailUrl).toBeNull();
@@ -159,5 +227,16 @@ describe('projectShotMissingFrame', () => {
     // selected version → no model, rather than a made-up default (#1067).
     expect(projected.frame.shotId).toBe(shot.id);
     expect(projected.imageModel).toBeNull();
+  });
+
+  it('still projects the video surface — it hangs off the segment, not the frame', () => {
+    const shot = makeShot();
+    const video = makeVideo(shot);
+
+    const projected = projectShotMissingFrame(shot, video);
+
+    expect(projected.videoUrl).toBe(video.url);
+    expect(projected.motionModel).toBe('kling_25_turbo_pro');
+    expect(projected.thumbnailUrl).toBeNull();
   });
 });

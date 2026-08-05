@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Storybook mock data uses intentional type assertions */
 import type { Shot } from '@/types/database';
-import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
+import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -25,9 +25,13 @@ type Story = StoryObj<typeof ScenePlayer>;
 // `Frame` (id == shot.id) so each row matches what `getShotsFn` returns.
 const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
   const { frame, selectedVersion } = frameFixtureFor(shot);
-  return projectShotWithImage(shot, frame, selectedVersion, {
-    url: shot.variantImageUrl,
-    status: shot.variantImageStatus,
+  return projectShotWithImage(shot, frame, {
+    selectedImage: selectedVersion,
+    selectedVideo: videoFixtureFor(shot),
+    gridSheet: {
+      url: shot.variantImageUrl,
+      status: shot.variantImageStatus,
+    },
   });
 };
 

@@ -17,6 +17,7 @@ import {
   shots,
   locationLibrary,
   locationSheets,
+  renderSegments,
   sequences,
   session,
   styles,
@@ -27,6 +28,7 @@ import {
   teams,
   user,
   verification,
+  videoVariants,
 } from '@/lib/db/schema';
 import { getDb } from '#db-client';
 import { and, desc, eq, isNull, like, sql } from 'drizzle-orm';
@@ -699,10 +701,21 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
     columns: {
       id: true,
       orderIndex: true,
-      videoUrl: true,
       videoStatus: true,
     },
   });
+  // The video lives on the version the shot's render segment points at (#1067
+  // phase 2d); project it back under the legacy videoUrl name.
+  const videoRows = await db
+    .select({ shotId: shots.id, videoUrl: videoVariants.url })
+    .from(shots)
+    .innerJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
+    .innerJoin(
+      videoVariants,
+      eq(videoVariants.id, renderSegments.selectedVideoVersionId)
+    )
+    .where(eq(shots.sequenceId, sequenceId));
+  const videoByShot = new Map(videoRows.map((v) => [v.shotId, v.videoUrl]));
   // The still-image surface lives on each shot's anchor frame now (#989);
   // project it back under the legacy thumbnail* names — keyed by shotId
   // (orderIndex 0), never by id-reuse.
@@ -727,7 +740,7 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
         orderIndex: row.orderIndex,
         thumbnailUrl: frame?.imageUrl ?? null,
         thumbnailStatus: frame?.imageStatus ?? null,
-        videoUrl: row.videoUrl,
+        videoUrl: videoByShot.get(row.id) ?? null,
         videoStatus: row.videoStatus,
       };
     })

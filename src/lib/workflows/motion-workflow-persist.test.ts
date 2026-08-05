@@ -31,13 +31,12 @@ const upload = {
 const NOW = new Date('2026-06-02T00:00:00Z');
 
 describe('buildMotionGeneratingShotWrite', () => {
-  it('stamps the legacy columns with the model + run id', () => {
-    expect(
-      buildMotionGeneratingShotWrite({ model: 'veo3', workflowRunId: 'run-1' })
-    ).toEqual({
+  it('stamps the shot-owned in-flight state with the run id', () => {
+    // No `motionModel`: model identity lives on the `video_variants` version
+    // the workflow appends alongside this (#1067 phase 2d dropped the mirror).
+    expect(buildMotionGeneratingShotWrite({ workflowRunId: 'run-1' })).toEqual({
       videoStatus: 'generating',
       videoWorkflowRunId: 'run-1',
-      motionModel: 'veo3',
     });
   });
 });

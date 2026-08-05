@@ -12,6 +12,8 @@ import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
 import { frameVariants } from '@/lib/db/schema/frame-variants';
 import { frames } from '@/lib/db/schema/frames';
+import { renderSegments } from '@/lib/db/schema/render-segments';
+import { videoVariants } from '@/lib/db/schema/video-variants';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
@@ -236,12 +238,25 @@ export function createAdminMethods(db: Database) {
           isNull(frameVariants.discardedAt)
         )
       )
+      // The video lives on the version the shot's render segment points at
+      // (#1067 phase 2d).
+      .leftJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
+      .leftJoin(
+        videoVariants,
+        and(
+          eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+          isNull(videoVariants.discardedAt)
+        )
+      )
       .where(eq(shots.sequenceId, sequenceId))
       .orderBy(asc(shots.orderIndex));
     return rows.map((row) =>
       row.frames
-        ? projectShotWithImage(row.shots, row.frames, row.frame_variants)
-        : projectShotMissingFrame(row.shots)
+        ? projectShotWithImage(row.shots, row.frames, {
+            selectedImage: row.frame_variants,
+            selectedVideo: row.video_variants,
+          })
+        : projectShotMissingFrame(row.shots, row.video_variants)
     );
   }
 

@@ -4,8 +4,13 @@
  *
  * Pins the append-only version store + selection-as-pointer contract: append
  * (with generating-retry idempotency), list-by-group ordering / discard
- * filtering, `select` (segment pointer + `shots.video*` mirror + `video.selected`
- * event, all atomic), discard/undiscard, and staleness.
+ * filtering, `select` (segment pointer + the shot's in-flight state +
+ * `video.selected` event, all atomic), discard/undiscard, and staleness.
+ *
+ * Since #1067 phase 2d the pointer is also the READ path — the whole video
+ * surface is projected through `getSelectedByShotIds`, so its exclusions
+ * (no segment / no pointer / discarded) are pinned here too: each one is a
+ * video silently appearing or vanishing in the UI if it drifts.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -29,6 +34,7 @@ import {
   type NewVideoVariant,
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
+import { createRenderSegmentsMethods } from './render-segments';
 import { createVideoVariantsMethods } from './video-variants';
 
 let client: Client;
@@ -266,21 +272,103 @@ describe('listBySegment (#1070)', () => {
   });
 });
 
-describe('select', () => {
-  it('repoints the segment, mirrors shot video*, and logs the event', async () => {
+// The batched read the whole video surface is projected through (#1067 phase
+// 2d). Its exclusions must match `getSelectedByShot` exactly, or a read path
+// would silently show a video the single-shot path hides.
+describe('getSelectedByShotIds (#1067)', () => {
+  it('returns empty for an empty id list without querying', async () => {
+    expect(await methods.getSelectedByShotIds([])).toEqual(new Map());
+  });
+
+  it('omits a shot whose segment has no selection pointer', async () => {
+    await methods.appendVersion(versionInput());
+    // Version exists, but nothing was selected — the mirror-era bug was
+    // treating "has a version" as "has a video".
+    expect(await methods.getSelectedByShotIds([shotId])).toEqual(new Map());
+    expect(await methods.getSelectedByShot(shotId)).toBeNull();
+  });
+
+  it('omits a shot whose selected version was discarded', async () => {
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+    await methods.discard(v.id, { actorId: ACTOR });
+
+    expect(await methods.getSelectedByShotIds([shotId])).toEqual(new Map());
+    expect(await methods.getSelectedByShot(shotId)).toBeNull();
+  });
+
+  it('omits a shot with no render segment at all', async () => {
+    await db
+      .update(shots)
+      .set({ renderSegmentId: null })
+      .where(eq(shots.id, shotId));
+    expect(await methods.getSelectedByShotIds([shotId])).toEqual(new Map());
+  });
+
+  it('agrees with the single-shot getter for a live selection', async () => {
     const v = await methods.appendVersion(versionInput());
     await methods.select(shotId, v.id, { actorId: ACTOR });
 
+    const single = await methods.getSelectedByShot(shotId);
+    expect(single?.id).toBe(v.id);
+    expect(await methods.getSelectedByShotIds([shotId])).toEqual(
+      new Map([[shotId, single]])
+    );
+  });
+});
+
+describe('renderSegments.clearSelectionByShot (#1067)', () => {
+  it('drops the chosen video but keeps the version rows', async () => {
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+    expect(await methods.getSelectedByShot(shotId)).not.toBeNull();
+
+    await createRenderSegmentsMethods(db).clearSelectionByShot(shotId);
+
+    // No video resolves any more — the read path sees it as unrendered…
+    expect(await methods.getSelectedByShot(shotId)).toBeNull();
+    expect(await methods.getSelectedByShotIds([shotId])).toEqual(new Map());
+    // …but history survives, so the old render stays re-selectable.
+    expect((await methods.listBySegment(segmentId)).map((r) => r.id)).toEqual([
+      v.id,
+    ]);
+  });
+
+  it('is a no-op for a shot with no render segment', async () => {
+    await db
+      .update(shots)
+      .set({ renderSegmentId: null })
+      .where(eq(shots.id, shotId));
+    await expect(
+      createRenderSegmentsMethods(db).clearSelectionByShot(shotId)
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('select', () => {
+  it('repoints the segment, clears the shot in-flight state, and logs the event', async () => {
+    const v = await methods.appendVersion(versionInput());
+    await methods.select(shotId, v.id, { actorId: ACTOR });
+
+    // The url/path/model are NOT copied onto the shot any more (#1067 phase
+    // 2d) — the pointer below is the only record, and reads project through it.
     const [shot] = await db.select().from(shots).where(eq(shots.id, shotId));
-    expect(shot?.videoUrl).toBe('https://r2/v.mp4');
     expect(shot?.videoStatus).toBe('completed');
-    expect(shot?.motionModel).toBe('veo3_1');
+    expect(shot?.videoError).toBeNull();
 
     const [segment] = await db
       .select()
       .from(renderSegments)
       .where(eq(renderSegments.id, segmentId));
     expect(segment?.selectedVideoVersionId).toBe(v.id);
+
+    // What a read path resolves through that pointer.
+    const selected = await methods.getSelectedByShot(shotId);
+    expect(selected?.url).toBe('https://r2/v.mp4');
+    expect(selected?.model).toBe('veo3_1');
+    expect(await methods.getSelectedByShotIds([shotId])).toEqual(
+      new Map([[shotId, selected]])
+    );
 
     const [event] = await db
       .select()

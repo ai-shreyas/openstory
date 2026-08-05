@@ -40,17 +40,12 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
-    videoUrl: null,
-    videoPath: null,
     videoStatus: 'pending',
     videoWorkflowRunId: null,
-    videoGeneratedAt: null,
     videoError: null,
     motionPrompt: null,
-    motionModel: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    videoInputHash: null,
     motionPromptInputHash: null,
     metadata: null,
     createdAt: NOW,
@@ -81,7 +76,12 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     url: 'https://cdn/thumb.jpg',
   });
   return {
-    ...projectShotWithImage(shot, frame, selectedVersion),
+    // These fixtures exercise the IMAGE-readiness helpers only, so the shot's
+    // segment has no selected render (#1067).
+    ...projectShotWithImage(shot, frame, {
+      selectedImage: selectedVersion,
+      selectedVideo: null,
+    }),
     ...overrides,
   };
 }
