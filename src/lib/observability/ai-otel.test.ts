@@ -110,6 +110,36 @@ describe('aiObservabilityMiddleware', () => {
     expect(capturedOptions().captureContent).toBe(true);
   });
 
+  describe('metrics', () => {
+    it('passes a meter so the gen_ai.client.* histograms are emitted', async () => {
+      // Without `meter`, otelMiddleware emits spans only and silently drops
+      // gen_ai.client.operation.duration / gen_ai.client.token.usage.
+      const { aiObservabilityMiddleware } = await importAiOtel({
+        token: 'phc_test',
+      });
+
+      aiObservabilityMiddleware({ userId: 'user-1' });
+
+      expect(capturedOptions().meter).toBeDefined();
+    });
+
+    it('does not create a meter when PostHog is unconfigured', async () => {
+      // The meter provider owns an exporter and a periodic timer; building
+      // one when there is nowhere to send data would leave a timer running
+      // in every isolate for no reason.
+      const { aiObservabilityMiddleware } = await importAiOtel();
+
+      expect(aiObservabilityMiddleware({ userId: 'user-1' })).toEqual([]);
+      expect(mockOtelMiddleware).not.toHaveBeenCalled();
+    });
+
+    it('flushing is a no-op when PostHog is unconfigured', async () => {
+      const { flushAIObservability } = await importAiOtel();
+
+      await expect(flushAIObservability()).resolves.toBeUndefined();
+    });
+  });
+
   it('disables analytics instead of throwing when the host is malformed', async () => {
     // Regression: `new URL('us.i.posthog.com')` (no scheme) throws. That must
     // disable analytics — not fail the chat() call — and must be cached so

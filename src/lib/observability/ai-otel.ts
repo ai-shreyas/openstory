@@ -20,8 +20,17 @@
  * `$ai_session_id`, `$ai_span_name`, and `$ai_tags` are set.
  */
 
-import type { AttributeValue, Tracer } from '@opentelemetry/api';
+import type { AttributeValue, Meter, Tracer } from '@opentelemetry/api';
+import {
+  AggregationTemporalityPreference,
+  OTLPMetricExporter,
+} from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import {
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from '@opentelemetry/sdk-metrics';
 import {
   BasicTracerProvider,
   BatchSpanProcessor,
@@ -34,16 +43,38 @@ import { getLogger, toErrorPayload } from './logger';
 const logger = getLogger(['openstory', 'observability', 'ai-otel']);
 
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
-
-let provider: BasicTracerProvider | null | undefined;
+const SERVICE_NAME = 'openstory';
 
 /**
- * Lazily build the tracer provider exporting to PostHog. Returns null (and
- * stays null) when PostHog is not configured. Wrapped in
- * `createServerOnlyFn` so the OTel exporter never lands in a client chunk.
+ * Metrics export interval. Cloudflare isolates don't reliably run timers
+ * between requests, so the periodic reader is not what gets data out —
+ * `flushAIObservability()` is (see flush-scheduler + base-workflow). The
+ * interval is set high so the timer is effectively a backstop rather than a
+ * second, redundant export path.
  */
-const getAITracer = createServerOnlyFn((): Tracer | null => {
-  if (provider === undefined) {
+const METRIC_EXPORT_INTERVAL_MS = 300_000;
+
+type Telemetry = {
+  tracer: Tracer;
+  meter: Meter;
+  traceProvider: BasicTracerProvider;
+  meterProvider: MeterProvider;
+};
+
+let telemetry: Telemetry | null | undefined;
+
+/**
+ * Lazily build the tracer + meter providers exporting to PostHog. Returns
+ * null (and stays null) when PostHog is not configured. Wrapped in
+ * `createServerOnlyFn` so the OTel exporters never land in a client chunk.
+ *
+ * Traces and metrics go to *different* PostHog endpoints: spans to the AI
+ * endpoint (`/i/v0/ai/otel`, which converts `gen_ai.*` spans into
+ * `$ai_generation`), metric points to the general OTLP metrics endpoint
+ * (`/i/v1/metrics`). Same project token authenticates both.
+ */
+const getAITelemetry = createServerOnlyFn((): Telemetry | null => {
+  if (telemetry === undefined) {
     const projectToken =
       process.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN ||
       import.meta.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN;
@@ -54,30 +85,63 @@ const getAITracer = createServerOnlyFn((): Tracer | null => {
           process.env.VITE_PUBLIC_POSTHOG_HOST ||
           import.meta.env.VITE_PUBLIC_POSTHOG_HOST ||
           DEFAULT_POSTHOG_HOST;
-        const exporter = new OTLPTraceExporter({
-          url: `${new URL(host).origin}/i/v0/ai/otel`,
-          headers: { Authorization: `Bearer ${projectToken}` },
+        const origin = new URL(host).origin;
+        const headers = { Authorization: `Bearer ${projectToken}` };
+
+        const traceProvider = new BasicTracerProvider({
+          spanProcessors: [
+            new BatchSpanProcessor(
+              new OTLPTraceExporter({
+                url: `${origin}/i/v0/ai/otel`,
+                headers,
+              })
+            ),
+          ],
         });
-        provider = new BasicTracerProvider({
-          spanProcessors: [new BatchSpanProcessor(exporter)],
+
+        const meterProvider = new MeterProvider({
+          resource: resourceFromAttributes({ 'service.name': SERVICE_NAME }),
+          readers: [
+            new PeriodicExportingMetricReader({
+              exportIntervalMillis: METRIC_EXPORT_INTERVAL_MS,
+              exporter: new OTLPMetricExporter({
+                url: `${origin}/i/v1/metrics`,
+                headers,
+                // DELTA, not the SDK default of CUMULATIVE. A cumulative
+                // histogram reports a running total per process, but every
+                // Cloudflare isolate is a fresh short-lived process that
+                // would restart its counts at zero — so the series would be
+                // a sawtooth that sums wrong. Delta reports only what this
+                // isolate observed, which composes correctly across them.
+                temporalityPreference: AggregationTemporalityPreference.DELTA,
+              }),
+            }),
+          ],
         });
+
+        telemetry = {
+          tracer: traceProvider.getTracer(SERVICE_NAME),
+          meter: meterProvider.getMeter(SERVICE_NAME),
+          traceProvider,
+          meterProvider,
+        };
       } catch (error) {
         // Bad config (e.g. a malformed VITE_PUBLIC_POSTHOG_HOST) must
         // disable analytics, not fail the chat() call this factory runs in.
         // Cache the failure so it isn't re-thrown on every call.
-        provider = null;
+        telemetry = null;
         logger.error('PostHog LLM analytics disabled: invalid config', {
           err: toErrorPayload(error),
         });
       }
     } else {
-      provider = null;
+      telemetry = null;
       logger.warn(
         'PostHog LLM analytics disabled — VITE_PUBLIC_POSTHOG_PROJECT_TOKEN unset'
       );
     }
   }
-  return provider ? provider.getTracer('openstory') : null;
+  return telemetry ?? null;
 });
 
 export type AIObservabilityMeta = {
@@ -126,12 +190,19 @@ function buildAttributes(
 export function aiObservabilityMiddleware(
   meta: AIObservabilityMeta = {}
 ): Array<ChatMiddleware & GenerationMiddleware> {
-  const tracer = getAITracer();
-  if (!tracer) return [];
+  const active = getAITelemetry();
+  if (!active) return [];
   const { observationName } = meta;
   return [
     otelMiddleware({
-      tracer,
+      tracer: active.tracer,
+      // Emits `gen_ai.client.operation.duration` and
+      // `gen_ai.client.token.usage` histograms. Their attributes are a fixed
+      // low-cardinality set the middleware controls (system, operation,
+      // model, token type) — `attributeEnricher` below applies to spans
+      // only, so per-user `posthog.distinct_id` never reaches a metric
+      // series. That matters: PostHog bills and guards metrics per series.
+      meter: active.meter,
       captureContent: true,
       ...(observationName && {
         spanNameFormatter: (info) =>
@@ -145,9 +216,25 @@ export function aiObservabilityMiddleware(
 }
 
 /**
- * Force-flush pending AI spans to PostHog. Call before a serverless isolate
- * suspends (see flush-scheduler).
+ * Force-flush pending AI spans and metric points to PostHog. Call before a
+ * serverless isolate suspends (see flush-scheduler + base-workflow).
+ *
+ * `allSettled` so a failing span export can't strand the metric export, or
+ * vice versa — but any rejection is then rethrown so `flushAnalytics` still
+ * logs it. Swallowing here would make a permanently broken exporter look
+ * exactly like a healthy one.
  */
 export async function flushAIObservability(): Promise<void> {
-  if (provider) await provider.forceFlush();
+  if (!telemetry) return;
+  const results = await Promise.allSettled([
+    telemetry.traceProvider.forceFlush(),
+    telemetry.meterProvider.forceFlush(),
+  ]);
+  const failed = results.filter((r) => r.status === 'rejected');
+  if (failed.length > 0) {
+    throw new AggregateError(
+      failed.map((r) => r.reason),
+      'AI observability flush failed'
+    );
+  }
 }
