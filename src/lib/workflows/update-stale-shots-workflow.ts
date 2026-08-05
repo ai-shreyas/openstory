@@ -938,10 +938,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                   Math.round(
                     shots.reduce(
                       (sum, s) =>
-                        sum +
-                        (s.durationMs
-                          ? s.durationMs / 1000
-                          : (s.metadata?.metadata?.durationSeconds ?? 10)),
+                        sum + (s.durationMs ? s.durationMs / 1000 : 10),
                       0
                     )
                   ) || 30;
