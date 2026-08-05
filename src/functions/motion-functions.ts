@@ -133,7 +133,6 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
     const duration = resolveShotDuration({
       explicit: data.duration,
       durationMs: shot.durationMs,
-      metadataSeconds: shot.metadata?.metadata?.durationSeconds,
       model,
     });
 
@@ -326,12 +325,10 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         throw new Error('No music prompt or tags found');
       }
 
-      const totalDuration = allShots.reduce((sum, shot) => {
-        const seconds = shot.durationMs
-          ? shot.durationMs / 1000
-          : (shot.metadata?.metadata?.durationSeconds ?? 10);
-        return sum + seconds;
-      }, 0);
+      const totalDuration = allShots.reduce(
+        (sum, shot) => sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
+        0
+      );
 
       musicConfig = {
         prompt: sequence.musicPrompt,
@@ -369,11 +366,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
           ),
           model: shotModel,
           duration:
-            data.duration ??
-            (shot.durationMs
-              ? shot.durationMs / 1000
-              : shot.metadata?.metadata?.durationSeconds) ??
-            3,
+            data.duration ?? (shot.durationMs ? shot.durationMs / 1000 : 3),
           fps: data.fps,
           motionBucket: data.motionBucket,
           aspectRatio: sequence.aspectRatio,

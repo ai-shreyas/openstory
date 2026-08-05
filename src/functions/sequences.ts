@@ -405,14 +405,12 @@ export function selectEligibleVideoShots(
  * paths; callers apply their own empty-sequence floor (`|| 30`).
  */
 export function sumShotDurationsSeconds(
-  shots: ReadonlyArray<Pick<Shot, 'durationMs' | 'metadata'>>
+  shots: ReadonlyArray<Pick<Shot, 'durationMs'>>
 ): number {
-  return shots.reduce((sum, shot) => {
-    const seconds = shot.durationMs
-      ? shot.durationMs / 1000
-      : (shot.metadata?.metadata?.durationSeconds ?? 10);
-    return sum + seconds;
-  }, 0);
+  return shots.reduce(
+    (sum, shot) => sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
+    0
+  );
 }
 
 /**
@@ -667,9 +665,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
             model,
             motionPrompt,
             characterTags: f.metadata?.continuity?.characterTags,
-            duration: f.durationMs
-              ? f.durationMs / 1000
-              : (f.metadata?.metadata?.durationSeconds ?? 3),
+            duration: f.durationMs ? f.durationMs / 1000 : 3,
             aspectRatio: sequence.aspectRatio,
           };
         }),

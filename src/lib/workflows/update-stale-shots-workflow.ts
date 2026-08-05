@@ -459,7 +459,6 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
           });
           const duration = resolveShotDuration({
             durationMs: shot.durationMs,
-            metadataSeconds: shot.metadata?.metadata?.durationSeconds,
             model,
           });
           try {

@@ -10,7 +10,6 @@ describe('resolveShotDuration', () => {
     const result = resolveShotDuration({
       explicit: 7,
       durationMs: 3000,
-      metadataSeconds: 4,
       model: 'veo3_1',
     });
     // 7 is equidistant from 6 and 8; current snap tie-break keeps the earlier value.
@@ -20,28 +19,9 @@ describe('resolveShotDuration', () => {
   it('falls back to durationMs/1000 when explicit is undefined', () => {
     const result = resolveShotDuration({
       durationMs: 5000,
-      metadataSeconds: 9,
       model: 'kling_v3_pro',
     });
     expect(result).toBe(5);
-  });
-
-  it('treats durationMs of 0 as unset and falls through to metadataSeconds', () => {
-    const result = resolveShotDuration({
-      durationMs: 0,
-      metadataSeconds: 7,
-      model: 'kling_v3_pro',
-    });
-    expect(result).toBe(7);
-  });
-
-  it('falls back to metadataSeconds when durationMs is null', () => {
-    const result = resolveShotDuration({
-      durationMs: null,
-      metadataSeconds: 9,
-      model: 'kling_v3_pro',
-    });
-    expect(result).toBe(9);
   });
 
   it('falls back to a valid model duration when nothing is stored', () => {
