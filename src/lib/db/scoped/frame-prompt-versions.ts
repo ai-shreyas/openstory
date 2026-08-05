@@ -22,7 +22,10 @@ import type { Database } from '@/lib/db/client';
 import { framePromptVersions, frames, user } from '@/lib/db/schema';
 import type { FramePromptVersion } from '@/lib/db/schema';
 import { and, desc, eq, gt, inArray, isNotNull, ne } from 'drizzle-orm';
+import { getLogger } from '@/lib/observability/logger';
 import { buildEventInsert } from './sequence-events';
+
+const logger = getLogger(['openstory', 'db', 'frame-prompt-versions']);
 
 /** Statuses of an in-flight pending claim — not yet terminal. */
 export const LIVE_PENDING_STATUSES = ['pending', 'generating'] as const;
@@ -61,6 +64,22 @@ export type WriteFramePromptVersionInput = WriteFramePromptVersionBase &
         analysisModel: string | null;
       }
   );
+
+async function getSelectedImagePromptsByFrameIds(
+  db: Database,
+  frameIds: string[]
+): Promise<Map<string, FramePromptVersion>> {
+  if (frameIds.length === 0) return new Map();
+  const rows = await db
+    .select({ frameId: frames.id, version: framePromptVersions })
+    .from(frames)
+    .innerJoin(
+      framePromptVersions,
+      eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
+    )
+    .where(inArray(frames.id, frameIds));
+  return new Map(rows.map((r) => [r.frameId, r.version]));
+}
 
 export function createFramePromptVersionsMethods(db: Database) {
   /** Point the frame at `version` and mirror its text/hash onto the frame. */
@@ -558,6 +577,41 @@ export function createFramePromptVersionsMethods(db: Database) {
         .limit(1);
       return row ?? null;
     },
+
+    /**
+     * The version `frames.selectedImagePromptVersionId` points at, or null.
+     * The image-side twin of `shotPromptVersions.getSelectedMotion`.
+     */
+    getSelected: async (
+      frameId: string
+    ): Promise<FramePromptVersion | null> => {
+      // Left join so "no pointer" is distinguishable from "pointer set, row
+      // gone" — the latter is a broken reference worth surfacing.
+      const [row] = await db
+        .select({
+          pointer: frames.selectedImagePromptVersionId,
+          version: framePromptVersions,
+        })
+        .from(frames)
+        .leftJoin(
+          framePromptVersions,
+          eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
+        )
+        .where(eq(frames.id, frameId))
+        .limit(1);
+      if (row?.pointer && !row.version) {
+        logger.warn(
+          `Frame ${frameId} points at image prompt version ${row.pointer} but no row exists (orphaned pointer)`
+        );
+      }
+      return row?.version ?? null;
+    },
+
+    /** @see getSelectedImagePromptsByFrameIds */
+    getSelectedByFrameIds: (
+      frameIds: string[]
+    ): Promise<Map<string, FramePromptVersion>> =>
+      getSelectedImagePromptsByFrameIds(db, frameIds),
 
     /** Most recent completed version, or null. In-flight/failed rows are
      * placeholders, not content — every "latest" reader wants completed. */
