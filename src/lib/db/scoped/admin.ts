@@ -10,6 +10,7 @@ import { generateId } from '@/lib/db/id';
 import { user } from '@/lib/db/schema/auth';
 import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
+import { framePromptVersions } from '@/lib/db/schema/frame-prompt-versions';
 import { frameVariants } from '@/lib/db/schema/frame-variants';
 import { frames } from '@/lib/db/schema/frames';
 import { renderSegments } from '@/lib/db/schema/render-segments';
@@ -241,6 +242,10 @@ export function createAdminMethods(db: Database) {
           isNull(frameVariants.discardedAt)
         )
       )
+      .leftJoin(
+        framePromptVersions,
+        eq(framePromptVersions.id, frames.selectedImagePromptVersionId)
+      )
       // The video lives on the version the shot's render segment points at
       // (#1067 phase 2d).
       .leftJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
@@ -270,6 +275,7 @@ export function createAdminMethods(db: Database) {
       return row.frames
         ? projectShotWithImage(row.shots, row.frames, {
             selectedImage: row.frame_variants,
+            selectedImagePrompt: row.frame_prompt_versions,
             ...video,
           })
         : projectShotMissingFrame(row.shots, video);

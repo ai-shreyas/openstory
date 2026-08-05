@@ -1,5 +1,6 @@
 import { dbSceneId, type SceneRow, type VideoVariant } from '@/lib/db/schema';
 import type { Style } from '@/lib/db/schema/libraries';
+import type { FramePromptVersion } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
@@ -219,6 +220,9 @@ function depsWithShots(
   return {
     shots: { listBySequence: async () => shots },
     frames: { listAnchorsBySequence: async () => anchors.map((a) => a.frame) },
+    framePromptVersions: {
+      getSelectedByFrameIds: async () => new Map<string, FramePromptVersion>(),
+    },
     frameVariants: {
       getSelectedByFrameIds: async () =>
         new Map(

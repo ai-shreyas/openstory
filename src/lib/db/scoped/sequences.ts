@@ -13,6 +13,7 @@ import { getPrimaryVideoByShotIds } from './video-variants';
 import { getSelectedMotionByShotIds } from './shot-prompt-versions';
 import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import {
+  framePromptVersions,
   frameVariants,
   frames,
   renderSegments,
@@ -180,6 +181,10 @@ function createSequencesReadMethods(db: Database, teamId: string) {
                 isNull(frameVariants.discardedAt)
               )
             )
+            .leftJoin(
+              framePromptVersions,
+              eq(framePromptVersions.id, frames.selectedImagePromptVersionId)
+            )
             // Same story for the video (#1067 phase 2d): the shot's render
             // segment owns the selection pointer, and the chosen version holds
             // the url/path/model. Both are left joins with `discardedAt` in the
@@ -221,6 +226,7 @@ function createSequencesReadMethods(db: Database, teamId: string) {
                 return row.frames
                   ? projectShotWithImage(row.shots, row.frames, {
                       selectedImage: row.frame_variants,
+                      selectedImagePrompt: row.frame_prompt_versions,
                       ...video,
                     })
                   : projectShotMissingFrame(row.shots, video);

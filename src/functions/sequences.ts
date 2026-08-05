@@ -571,22 +571,29 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           fr,
         ])
       );
-      const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
-        await Promise.all([
-          scopedDb.frameVariants.getSelectedByFrameIds(
-            [...anchorsByShot.values()].map((fr) => fr.id)
-          ),
-          scopedDb.videoVariants.getSelectedByShotIds(
-            allShots.map((s) => s.id)
-          ),
-          scopedDb.videoVariants.getPrimaryByShotIds(allShots.map((s) => s.id)),
-        ]);
+      const [
+        selectedByFrame,
+        selectedPromptByFrame,
+        selectedVideoByShot,
+        primaryVideoByShot,
+      ] = await Promise.all([
+        scopedDb.frameVariants.getSelectedByFrameIds(
+          [...anchorsByShot.values()].map((fr) => fr.id)
+        ),
+        scopedDb.framePromptVersions.getSelectedByFrameIds(
+          [...anchorsByShot.values()].map((fr) => fr.id)
+        ),
+        scopedDb.videoVariants.getSelectedByShotIds(allShots.map((s) => s.id)),
+        scopedDb.videoVariants.getPrimaryByShotIds(allShots.map((s) => s.id)),
+      ]);
       const shotsWithImage = allShots.flatMap((shot) => {
         const frame = anchorsByShot.get(shot.id);
         return frame
           ? [
               projectShotWithImage(shot, frame, {
                 selectedImage: selectedByFrame.get(frame.id) ?? null,
+                selectedImagePrompt:
+                  selectedPromptByFrame.get(frame.id) ?? null,
                 selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
                 primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
               }),

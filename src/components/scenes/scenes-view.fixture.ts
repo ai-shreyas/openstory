@@ -640,6 +640,7 @@ export const fixtureShots: ShotWithImage[] = fixtureShotRows.map((shot) => {
   const { frame, selectedVersion } = frameFixtureFor(shot);
   return projectShotWithImage(shot, frame, {
     selectedImage: selectedVersion,
+    selectedImagePrompt: null,
     selectedVideo: videoFixtureFor(shot),
     primaryVideo: primaryVideoFixture(shot),
     gridSheet: {

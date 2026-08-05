@@ -102,8 +102,24 @@ describe('projectShotWithImage', () => {
     const frame = makeFrame(shot);
     const version = makeVersion(shot);
 
+    const promptVersion = {
+      id: 'fpv-1',
+      frameId: frame.id,
+      text: 'a prompt',
+      components: null,
+      source: 'ai-generated' as const,
+      inputHash: 'visual-hash',
+      analysisModel: null,
+      status: 'completed' as const,
+      pendingInputHash: null,
+      workflowRunId: null,
+      createdAt: new Date(),
+      createdBy: null,
+    };
+
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: version,
+      selectedImagePrompt: promptVersion,
       selectedVideo: null,
       primaryVideo: null,
       gridSheet: { url: 'https://cdn/grid.png', status: 'completed' },
@@ -119,8 +135,9 @@ describe('projectShotWithImage', () => {
     expect(projected.thumbnailStatus).toBe(frame.imageStatus);
     expect(projected.thumbnailWorkflowRunId).toBe(frame.imageWorkflowRunId);
     expect(projected.thumbnailError).toBe(frame.imageError);
+    // The prompt and its hash come from the selected prompt version, not the frame.
     expect(projected.imagePrompt).toBe('a prompt');
-    expect(projected.visualPromptInputHash).toBe(frame.visualPromptInputHash);
+    expect(projected.visualPromptInputHash).toBe('visual-hash');
     // The raw frame is carried verbatim for version-aware callers.
     expect(projected.frame).toBe(frame);
   });
@@ -131,6 +148,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: null,
+      selectedImagePrompt: null,
       selectedVideo: null,
       primaryVideo: null,
     });
@@ -151,6 +169,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
+      selectedImagePrompt: null,
       selectedVideo: null,
       primaryVideo: null,
       gridSheet: { url: 'https://cdn/grid.png', status: 'generating' },
@@ -166,6 +185,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
+      selectedImagePrompt: null,
       selectedVideo: null,
       primaryVideo: null,
     });
@@ -185,6 +205,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
+      selectedImagePrompt: null,
       selectedVideo: video,
       primaryVideo: null,
     });
@@ -219,6 +240,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
+      selectedImagePrompt: null,
       selectedVideo: selected,
       primaryVideo: primary,
     });
@@ -242,6 +264,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
+      selectedImagePrompt: null,
       selectedVideo: null,
       primaryVideo: primary,
     });
@@ -257,6 +280,7 @@ describe('projectShotWithImage', () => {
 
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
+      selectedImagePrompt: null,
       selectedVideo: null,
       primaryVideo: null,
     });

@@ -185,6 +185,37 @@ function makeContext(
         )
       )
   );
+  // The image prompt resolves from the frame's selected version (#1067); the
+  // backfill guarantees one exists wherever a prompt does.
+  const getSelectedPromptByFrameIds = vi.fn(
+    async () =>
+      new Map(
+        shots.flatMap((shot, i) => {
+          const frame = anchors[i]?.frame;
+          return frame && shot.imagePrompt
+            ? [
+                [
+                  frame.id,
+                  {
+                    id: `${frame.id}-ip`,
+                    frameId: frame.id,
+                    text: shot.imagePrompt,
+                    components: null,
+                    source: 'ai-generated' as const,
+                    inputHash: null,
+                    analysisModel: null,
+                    status: 'completed' as const,
+                    pendingInputHash: null,
+                    workflowRunId: null,
+                    createdAt: NOW,
+                    createdBy: null,
+                  },
+                ],
+              ]
+            : [];
+        })
+      )
+  );
   const listWithSheets = vi.fn(async () => []);
   // Model identity lives on the version that produced each asset (#1066); an
   // empty map means nothing has been rendered yet → shots inherit the sequence
@@ -252,6 +283,7 @@ function makeContext(
     sceneScriptVersions: {
       listSelectedBySequence: vi.fn(async () => []),
     },
+    framePromptVersions: { getSelectedByFrameIds: getSelectedPromptByFrameIds },
     frameVariants: {
       listSelectedModelsBySequence: listSelectedImageModels,
       listLastFailedModelsBySequence: listFailedImageModels,

@@ -81,14 +81,19 @@ export const getShotsFn = createServerFn({ method: 'GET' })
     // segment's selected `video_variants` row (#1067) — one batch read each, so
     // projecting the sequence stays O(1) queries.
     const shotIds = shotRows.map((s) => s.id);
-    const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
-      await Promise.all([
-        scopedDb.frameVariants.getSelectedByFrameIds(
-          anchorRows.map((f) => f.id)
-        ),
-        scopedDb.videoVariants.getSelectedByShotIds(shotIds),
-        scopedDb.videoVariants.getPrimaryByShotIds(shotIds),
-      ]);
+    const [
+      selectedByFrame,
+      selectedPromptByFrame,
+      selectedVideoByShot,
+      primaryVideoByShot,
+    ] = await Promise.all([
+      scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+      scopedDb.framePromptVersions.getSelectedByFrameIds(
+        anchorRows.map((f) => f.id)
+      ),
+      scopedDb.videoVariants.getSelectedByShotIds(shotIds),
+      scopedDb.videoVariants.getPrimaryByShotIds(shotIds),
+    ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
     return shotRows.map((shot) => {
       const frame = anchorsByShot.get(shot.id);
@@ -116,6 +121,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         : null;
       return projectShotWithImage(shot, frame, {
         selectedImage: selectedByFrame.get(frame.id) ?? null,
+        selectedImagePrompt: selectedPromptByFrame.get(frame.id) ?? null,
         selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
         primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
         gridSheet,
@@ -154,16 +160,24 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    const [sheet, selectedMotion, selectedImage, selectedVideo, primaryVideo] =
-      await Promise.all([
-        context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
-        context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
-        context.scopedDb.frameVariants.getSelected(context.frame.id),
-        context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
-        context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
-      ]);
+    const [
+      sheet,
+      selectedMotion,
+      selectedImage,
+      selectedImagePrompt,
+      selectedVideo,
+      primaryVideo,
+    ] = await Promise.all([
+      context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
+      context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
+      context.scopedDb.frameVariants.getSelected(context.frame.id),
+      context.scopedDb.framePromptVersions.getSelected(context.frame.id),
+      context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
+      context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
+    ]);
     return projectShotWithImage(context.shot, context.frame, {
       selectedImage,
+      selectedImagePrompt,
       selectedVideo,
       primaryVideo,
       gridSheet: sheet ? { url: sheet.url, status: sheet.status } : null,

@@ -227,24 +227,32 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
     );
     const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
       resolveSceneForShot(s, sceneContext).scene;
-    const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
-      await Promise.all([
-        context.scopedDb.frameVariants.getSelectedByFrameIds(
-          [...anchorsByShot.values()].map((f) => f.id)
-        ),
-        context.scopedDb.videoVariants.getSelectedByShotIds(
-          rawShots.map((s) => s.id)
-        ),
-        context.scopedDb.videoVariants.getPrimaryByShotIds(
-          rawShots.map((s) => s.id)
-        ),
-      ]);
+    const [
+      selectedByFrame,
+      selectedPromptByFrame,
+      selectedVideoByShot,
+      primaryVideoByShot,
+    ] = await Promise.all([
+      context.scopedDb.frameVariants.getSelectedByFrameIds(
+        [...anchorsByShot.values()].map((f) => f.id)
+      ),
+      context.scopedDb.framePromptVersions.getSelectedByFrameIds(
+        [...anchorsByShot.values()].map((f) => f.id)
+      ),
+      context.scopedDb.videoVariants.getSelectedByShotIds(
+        rawShots.map((s) => s.id)
+      ),
+      context.scopedDb.videoVariants.getPrimaryByShotIds(
+        rawShots.map((s) => s.id)
+      ),
+    ]);
     const allShots = rawShots.flatMap((s) => {
       const frame = anchorsByShot.get(s.id);
       return frame
         ? [
             projectShotWithImage(s, frame, {
               selectedImage: selectedByFrame.get(frame.id) ?? null,
+              selectedImagePrompt: selectedPromptByFrame.get(frame.id) ?? null,
               selectedVideo: selectedVideoByShot.get(s.id) ?? null,
               primaryVideo: primaryVideoByShot.get(s.id) ?? null,
             }),

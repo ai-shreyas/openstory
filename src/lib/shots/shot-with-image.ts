@@ -18,7 +18,13 @@
  */
 
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
-import type { Frame, FrameVariant, Shot, VideoVariant } from '@/lib/db/schema';
+import type {
+  Frame,
+  FramePromptVersion,
+  FrameVariant,
+  Shot,
+  VideoVariant,
+} from '@/lib/db/schema';
 
 export type ShotGridSheet = {
   url: string | null;
@@ -36,6 +42,8 @@ export type ShotGridSheet = {
 export type ShotProjectionSources = {
   /** The anchor frame's selected `frame_variants` row. */
   selectedImage: FrameVariant | null;
+  /** The anchor frame's selected `frame_prompt_versions` row. */
+  selectedImagePrompt: FramePromptVersion | null;
   /** The version `render_segments.selectedVideoVersionId` points at. */
   selectedVideo: VideoVariant | null;
   /**
@@ -68,9 +76,9 @@ export type ShotWithImage = Shot & {
   thumbnailError: Frame['imageError'];
   /** Null when never generated — absent means absent, not a default. */
   imageModel: FrameVariant['model'] | null;
-  imagePrompt: Frame['imagePrompt'];
+  imagePrompt: FramePromptVersion['text'] | null;
   thumbnailInputHash: FrameVariant['inputHash'];
-  visualPromptInputHash: Frame['visualPromptInputHash'];
+  visualPromptInputHash: FramePromptVersion['inputHash'] | null;
   variantImageUrl: string | null;
   variantImageStatus: ShotGridSheet['status'] | null;
   /** The anchor frame, verbatim — for version/variant-aware callers. */
@@ -123,7 +131,11 @@ export function projectShotMissingFrame(
     updatedAt: shot.updatedAt,
   };
   // A frameless shot still has a video surface: video hangs off the segment.
-  return projectShotWithImage(shot, frame, { selectedImage: null, ...video });
+  return projectShotWithImage(shot, frame, {
+    selectedImage: null,
+    selectedImagePrompt: null,
+    ...video,
+  });
 }
 
 export function projectShotWithImage(
@@ -133,6 +145,7 @@ export function projectShotWithImage(
 ): ShotWithImage {
   const {
     selectedImage,
+    selectedImagePrompt,
     selectedVideo,
     primaryVideo,
     gridSheet,
@@ -159,9 +172,9 @@ export function projectShotWithImage(
     thumbnailWorkflowRunId: frame.imageWorkflowRunId,
     thumbnailError: frame.imageError,
     imageModel: selectedImage?.model ?? null,
-    imagePrompt: frame.imagePrompt,
+    imagePrompt: selectedImagePrompt?.text ?? null,
     thumbnailInputHash: selectedImage?.inputHash ?? null,
-    visualPromptInputHash: frame.visualPromptInputHash,
+    visualPromptInputHash: selectedImagePrompt?.inputHash ?? null,
     variantImageUrl: gridSheet?.url ?? null,
     variantImageStatus: gridSheet?.status ?? null,
     frame,

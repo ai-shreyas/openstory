@@ -37,6 +37,7 @@ const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
   const { frame, selectedVersion } = frameFixtureFor(shot);
   return projectShotWithImage(shot, frame, {
     selectedImage: selectedVersion,
+    selectedImagePrompt: null,
     selectedVideo: videoFixtureFor(shot),
     primaryVideo: primaryVideoFixture(shot),
     gridSheet: {

@@ -87,6 +87,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
   return {
     ...projectShotWithImage(shot, frame, {
       selectedImage: selectedVersion,
+      selectedImagePrompt: null,
       selectedVideo,
       // That same render is the segment's primary, so the shot reads `completed`.
       primaryVideo: selectedVideo,

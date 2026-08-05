@@ -73,6 +73,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     // segment has no render at all (#1067).
     ...projectShotWithImage(shot, frame, {
       selectedImage: selectedVersion,
+      selectedImagePrompt: null,
       selectedVideo: null,
       primaryVideo: null,
     }),
