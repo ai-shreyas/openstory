@@ -53,14 +53,6 @@ function composeSceneForShot(
   };
 }
 
-export function overlaySceneScript(
-  scene: Scene,
-  script: Scene['originalScript'] | null | undefined
-): Scene {
-  if (!script) return scene;
-  return { ...scene, originalScript: script };
-}
-
 export function composeSequenceScript(
   rows: ReadonlyArray<{
     orderIndex: number;
@@ -71,18 +63,6 @@ export function composeSequenceScript(
     .sort((a, b) => a.orderIndex - b.orderIndex)
     .map((row) => row.content.extract)
     .join('\n\n');
-}
-
-export function enrichShotWithSceneScript<
-  T extends Pick<Shot, 'sceneId' | 'metadata'>,
->(shot: T, contextBySceneId: ReadonlyMap<string, SceneContext>): T {
-  if (!shot.sceneId || !shot.metadata) return shot;
-  const script = contextBySceneId.get(shot.sceneId)?.script;
-  if (!script) return shot;
-  return {
-    ...shot,
-    metadata: overlaySceneScript(shot.metadata, script),
-  };
 }
 
 type SceneContextSource =
@@ -128,14 +108,6 @@ export async function resolveSceneForShotFromDb(
     scene,
     script: selected?.content ?? scene.originalScript,
   });
-}
-
-/** Project canonical script onto a shot for client API responses (UI reads metadata). */
-export function projectShotForClient<
-  T extends Pick<Shot, 'sceneId' | 'metadata'>,
->(shot: T, script: Scene['originalScript'] | null | undefined): T {
-  if (!script || !shot.metadata) return shot;
-  return { ...shot, metadata: overlaySceneScript(shot.metadata, script) };
 }
 
 function buildSceneContext(

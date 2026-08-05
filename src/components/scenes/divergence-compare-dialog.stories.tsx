@@ -14,7 +14,6 @@ const baseShot: ShotWithImage = {
   sceneId: null,
   shotNumber: null,
   orderIndex: 0,
-  description: 'A wide shot.',
   durationMs: 3000,
   thumbnailUrl: 'https://images.unsplash.com/photo-1502872364588-894d7d6ddfab',
   previewThumbnailUrl: null,
@@ -41,7 +40,6 @@ const baseShot: ShotWithImage = {
   videoInputHash: null,
   visualPromptInputHash: null,
   motionPromptInputHash: null,
-  metadata: null,
   createdAt: NOW,
   updatedAt: NOW,
   frame: {

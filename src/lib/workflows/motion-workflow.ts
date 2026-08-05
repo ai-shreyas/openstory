@@ -217,7 +217,8 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           let userEditInputHash: string | null = null;
           let userEditAnalysisModel: string | null = null;
           try {
-            if (shot.metadata && input.sequenceId) {
+            const { scene } = await resolveSceneForShotFromDb(shot, scopedDb);
+            if (scene && input.sequenceId) {
               const sequence = await scopedDb.sequences.getById(
                 input.sequenceId
               );
@@ -230,7 +231,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
                     aspectRatio: sequence.aspectRatio,
                     analysisModel: sequence.analysisModel,
                   },
-                  scene: shot.metadata,
+                  scene,
                   // i2v anchor still lives on the anchor frame's selected
                   // version now (#989/#1067) — resolved by shotId, never by
                   // id-reuse.

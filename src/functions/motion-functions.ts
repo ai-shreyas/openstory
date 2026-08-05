@@ -88,7 +88,7 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       );
 
     // Auto-link any element/cast/location tags the user mentioned in their
-    // edited motion prompt into shot.metadata.continuity, so downstream
+    // edited motion prompt into the scene's continuity, so downstream
     // consumers (next image regenerate, shot-image reference attachment, and
     // the motion reference attachment below) see the new references.
     let effectiveContinuity = context.scene?.continuity;
@@ -118,8 +118,8 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       context.scopedDb.sequenceElements.list(sequence.id),
     ]);
     const referenceImages = buildMotionReferenceImages({
-      scene: shot.metadata
-        ? { ...shot.metadata, continuity: effectiveContinuity }
+      scene: context.scene
+        ? { ...context.scene, continuity: effectiveContinuity }
         : null,
       characters,
       elements,
@@ -352,6 +352,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       includeMusic,
       shots: eligibleShots.map((shot) => {
         const shotModel = resolveShotVideoModel(shot);
+        const scene = sceneOf(shot);
         return {
           shotId: shot.id,
           imageUrl: shot.thumbnailUrl ?? '',
@@ -359,8 +360,8 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
             selectedMotionByShot.get(shot.id),
             {
               motionPromptMirror: shot.motionPrompt,
-              characterTags: sceneOf(shot)?.continuity?.characterTags,
-              description: sceneOf(shot)?.originalScript.extract ?? null,
+              characterTags: scene?.continuity?.characterTags,
+              description: scene?.originalScript.extract ?? null,
             },
             shotModel
           ),
@@ -372,7 +373,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
           aspectRatio: sequence.aspectRatio,
           generateAudio: data.generateAudio,
           referenceImages: buildMotionReferenceImages({
-            scene: shot.metadata,
+            scene,
             characters,
             elements,
           }),

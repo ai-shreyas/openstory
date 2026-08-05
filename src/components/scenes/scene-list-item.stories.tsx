@@ -52,7 +52,6 @@ const mockShot: ShotWithImage = toShotWithImage({
   sceneId: null,
   shotNumber: null,
   orderIndex: 0,
-  description: 'A bustling coffee shop interior during morning rush hour',
   durationMs: 3000,
   thumbnailUrl: 'https://picsum.photos/seed/coffee/320/180',
   thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
@@ -79,42 +78,6 @@ const mockShot: ShotWithImage = toShotWithImage({
   visualPromptInputHash: null,
   motionPromptInputHash: null,
   previewThumbnailUrl: null,
-  metadata: {
-    sceneId: 'scene-1',
-    sceneNumber: 1,
-    originalScript: {
-      extract:
-        'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',
-      dialogue: [
-        {
-          character: 'SARAH',
-          line: 'This deadline is going to kill me.',
-          tone: '',
-        },
-      ],
-    },
-    metadata: {
-      title: 'Coffee Shop Introduction',
-      durationSeconds: 3,
-      location: 'Coffee Shop',
-      timeOfDay: 'Morning',
-      storyBeat: 'Establish protagonist stress and setting',
-    },
-    musicDesign: {
-      presence: 'none',
-      style: '',
-      mood: '',
-      atmosphere: '',
-    },
-    continuity: {
-      characterTags: [],
-      environmentTag: '',
-      colorPalette: '',
-      lightingSetup: '',
-      styleTag: '',
-    },
-    sourceImageUrl: '',
-  },
   createdAt: new Date(),
   updatedAt: new Date(),
 });

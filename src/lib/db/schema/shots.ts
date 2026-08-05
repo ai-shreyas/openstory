@@ -3,7 +3,6 @@
  * Individual shots within a sequence
  */
 
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import { type InferInsertModel, type InferSelectModel } from 'drizzle-orm';
 import {
   index,
@@ -25,26 +24,12 @@ export const SHOT_GENERATION_STATUSES = [
 ] as const;
 
 /**
- * Shots table
- * Individual shots within a sequence
- *
- * Each shot represents one scene from script analysis and stores:
- * - Motion/video content (videoUrl); the still IMAGE surface moved to
- *   `frames` in #989 (a shot is the VIDEO unit, a frame is the IMAGE unit).
- * - Scene data in metadata field (populated progressively across 5 phases)
- * - Generation tracking information
- *
- * @see src/lib/ai/scene-analysis.schema.ts for Scene structure
+ * A shot is authoring intent plus pointers: it owns no assets and no scene
+ * data. Scene context resolves through `sceneId`, the still through its anchor
+ * frame, the video through `renderSegmentId`, the motion prompt through
+ * `selectedMotionPromptVersionId`.
  */
-// DB-Audit: ideal shape — a shot is authoring intent plus pointers. It owns no assets.
-// DB-Audit: identity/placement — id, sequenceId, sceneId, and a hierarchical order: `scenes.orderIndex` for scene order, `shotNumber` for the shot's rank within its scene.
-// DB-Audit: `orderIndex` is 0-based within the SEQUENCE, so it re-encodes scene order — a second stored ordering that can disagree with the first, and that forces a renumber whenever a scene moves.
-// DB-Audit: authoring — durationMs, plus the shot-scoped framing/action/camera/sound fields once #910 emits them; a shot carries no scene metadata, it resolves scene context through `sceneId`.
-// DB-Audit: `metadata` is the whole analysis `Scene` copied onto every shot, and every field read off it (continuity, durationSeconds, location, title, sceneId, originalScript, musicDesign) is scene-scoped and already lives on `scenes`.
-// DB-Audit: membership — renderSegmentId; the segment owns the video selection, so the shot needs no video pointer of its own.
-// DB-Audit: prompt — selectedMotionPromptVersionId → `shot_prompt_versions` (text, components, dialogue, audio, inputHash, analysisModel).
-// DB-Audit: video — render_segments.selectedVideoVersionId → `video_variants` (url, storagePath, status, workflowRunId, generatedAt, error, model, inputHash).
-// DB-Audit: therefore no asset, status, model, or artifact-hash column belongs on the shot — each one is already a field on the version row that produced it.
+// DB-Audit: `orderIndex` is sequence-global, so it re-encodes scene order and forces a renumber whenever a scene moves — derivable from (scenes.orderIndex, shotNumber).
 export const shots = snakeCase.table(
   'shots',
   {
@@ -68,8 +53,6 @@ export const shots = snakeCase.table(
     // DB-Audit: drop once order is hierarchical — it re-encodes scene order, so it is derivable by ranking on `(scenes.orderIndex, shotNumber)`, and it forces a renumber of every later shot whenever a scene moves.
     // DB-Audit: blockers for that drop — re-key the upsert conflict target off `(sequence_id, order_index)`, re-sort every list query, and decide where orphaned shots sit (`sceneId` is nullable via ON DELETE set null).
     orderIndex: integer().notNull(),
-    // DB-Audit: drop once the prompt fallbacks read the scene script — this is the scene's `originalScript.extract` copied at split time, never regenerated, and only read as the last-resort prompt fallback and as `visualSummary` for music design.
-    description: text(),
     durationMs: integer().default(3000),
     // A shot owns no video columns (#1067 phase 2d). The whole surface —
     // url/path/model/hash AND status/error/run id — is projected from the
@@ -103,13 +86,6 @@ export const shots = snakeCase.table(
     // equivalent moved to `frames.visualPromptInputHash` in #989.
     // DB-Audit: drop with `motionPrompt` — mirror of `shot_prompt_versions.inputHash`, set in the same lockstep write.
     motionPromptInputHash: text(),
-    /**
-     * Stores Scene data at various stages of progressive analysis.
-     * Fields are populated progressively across 5 phases.
-     * @see src/lib/ai/scene-analysis.schema.ts for Scene structure
-     */
-    // DB-Audit: drop — this is scene metadata on a shot; no read of it is shot-scoped, so scene context should resolve via `sceneId` → `scenes` and durationSeconds via `durationMs`.
-    metadata: text({ mode: 'json' }).$type<Scene>(),
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())
       .notNull(),
@@ -129,13 +105,5 @@ export const shots = snakeCase.table(
   ]
 );
 
-// Override the inferred Shot type to use Scene for metadata
-type InferredShot = InferSelectModel<typeof shots>;
-export type Shot = Omit<InferredShot, 'metadata'> & {
-  metadata: Scene | null; // Nullable until script analysis completes, fields populate progressively
-};
-
-type InferredNewShot = InferInsertModel<typeof shots>;
-export type NewShot = Omit<InferredNewShot, 'metadata'> & {
-  metadata?: Scene | null; // Optional - can be null initially, populated during script analysis
-};
+export type Shot = InferSelectModel<typeof shots>;
+export type NewShot = InferInsertModel<typeof shots>;

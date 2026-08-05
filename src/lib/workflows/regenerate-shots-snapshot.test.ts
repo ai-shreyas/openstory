@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type {
   Character,
   Shot,
@@ -65,31 +66,35 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   const shot: Shot = {
     id: 'f1',
     sequenceId: 'seq1',
-    sceneId: null,
+    sceneId: 's1',
     shotNumber: null,
     orderIndex: 0,
-    description: null,
     durationMs: 3000,
     motionPrompt: null,
     motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    metadata: {
-      sceneId: 's1',
-      sceneNumber: 1,
-      originalScript: { extract: '', dialogue: [] },
-      continuity: {
-        characterTags: ['jack-the-pi'],
-        environmentTag: '',
-        colorPalette: '',
-        lightingSetup: '',
-        styleTag: '',
-      },
-    },
     createdAt: NOW,
     updatedAt: NOW,
   };
   return { ...shot, ...overrides };
+}
+
+/** The shot's scene, resolved by the caller since #1067. */
+function makeScene(overrides: Partial<Scene> = {}): Scene {
+  const scene: Scene = {
+    sceneId: 's1',
+    sceneNumber: 1,
+    originalScript: { extract: '', dialogue: [] },
+    continuity: {
+      characterTags: ['jack-the-pi'],
+      environmentTag: '',
+      colorPalette: '',
+      lightingSetup: '',
+      styleTag: '',
+    },
+  };
+  return { ...scene, ...overrides };
 }
 
 const NO_LOCATIONS: SequenceLocation[] = [];
@@ -126,6 +131,7 @@ describe('buildRegenerateShotSnapshot', () => {
 
     const snapshotA = await buildRegenerateShotSnapshot({
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters,
       locations: NO_LOCATIONS,
@@ -135,6 +141,7 @@ describe('buildRegenerateShotSnapshot', () => {
     });
     const snapshotB = await buildRegenerateShotSnapshot({
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters,
       locations: NO_LOCATIONS,
@@ -151,6 +158,7 @@ describe('buildRegenerateShotSnapshot', () => {
     const shot = makeShot();
     const before = await buildRegenerateShotSnapshot({
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter({ sheetInputHash: 'jack-hash-v1' })],
       locations: NO_LOCATIONS,
@@ -160,6 +168,7 @@ describe('buildRegenerateShotSnapshot', () => {
     });
     const after = await buildRegenerateShotSnapshot({
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter({ sheetInputHash: 'jack-hash-v2' })],
       locations: NO_LOCATIONS,
@@ -175,6 +184,7 @@ describe('buildRegenerateShotSnapshot', () => {
     const characters = [makeCharacter()];
     const before = await buildRegenerateShotSnapshot({
       shot: makeShot(),
+      scene: makeScene(),
       imagePrompt: 'Original prompt',
       characters,
       locations: NO_LOCATIONS,
@@ -184,6 +194,7 @@ describe('buildRegenerateShotSnapshot', () => {
     });
     const after = await buildRegenerateShotSnapshot({
       shot: makeShot(),
+      scene: makeScene(),
       imagePrompt: 'Edited prompt',
       characters,
       locations: NO_LOCATIONS,
@@ -198,6 +209,7 @@ describe('buildRegenerateShotSnapshot', () => {
     const shot = makeShot();
     const snapshot = await buildRegenerateShotSnapshot({
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter({ sheetInputHash: null })],
       locations: NO_LOCATIONS,
@@ -215,6 +227,7 @@ describe('buildRegenerateShotSnapshot', () => {
     expect(
       buildRegenerateShotSnapshot({
         shot: makeShot(),
+        scene: makeScene(),
         imagePrompt: null,
         characters: [makeCharacter()],
         locations: NO_LOCATIONS,
@@ -225,10 +238,11 @@ describe('buildRegenerateShotSnapshot', () => {
     ).rejects.toThrow(/has no visual prompt/);
   });
 
-  it('throws when imagePrompt is empty string and no metadata prompt', () => {
+  it('throws when imagePrompt is an empty string', () => {
     expect(
       buildRegenerateShotSnapshot({
         shot: makeShot(),
+        scene: makeScene(),
         imagePrompt: '',
         characters: [makeCharacter()],
         locations: NO_LOCATIONS,
@@ -242,20 +256,15 @@ describe('buildRegenerateShotSnapshot', () => {
   // #867 (image): a shot that references a product element must hash that
   // element's reference — verify previously hard-coded `[]`, so every
   // element-bearing shot reported permanently stale.
-  const shotMentioning = (token: string): Shot => {
-    const base = makeShot().metadata;
-    if (!base) throw new Error('test setup: metadata missing');
-    return makeShot({
-      metadata: {
-        ...base,
-        originalScript: { extract: `The ${token} sits here.`, dialogue: [] },
-      },
+  const sceneMentioning = (token: string): Scene =>
+    makeScene({
+      originalScript: { extract: `The ${token} sits here.`, dialogue: [] },
     });
-  };
 
   it('includes a referenced element’s reference hash in the snapshot', async () => {
     const snapshot = await buildRegenerateShotSnapshot({
-      shot: shotMentioning('BOTTLE'),
+      shot: makeShot(),
+      scene: sceneMentioning('BOTTLE'),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
@@ -270,7 +279,8 @@ describe('buildRegenerateShotSnapshot', () => {
 
   it('changes the snapshotInputHash when a referenced element image changes', async () => {
     const opts = {
-      shot: shotMentioning('BOTTLE'),
+      shot: makeShot(),
+      scene: sceneMentioning('BOTTLE'),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
@@ -294,7 +304,9 @@ describe('buildRegenerateShotSnapshot', () => {
 
   it('ignores elements the shot does not reference', async () => {
     const snapshot = await buildRegenerateShotSnapshot({
-      shot: makeShot(), // empty script + no elementTags → no element matches
+      shot: makeShot(),
+      // empty script + no elementTags → no element matches
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
@@ -312,6 +324,7 @@ describe('computeRegenerateShotsBatchHash', () => {
     const shot2 = makeShot({ id: 'f2', orderIndex: 1 });
     const characters = [makeCharacter()];
     const opts = {
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters,
       locations: NO_LOCATIONS,
@@ -342,6 +355,7 @@ describe('computeRegenerateShotsBatchHash', () => {
     const shot = makeShot();
     const opts = {
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -390,6 +404,7 @@ describe('computeRegenerateShotsBatchHash', () => {
     const shot = makeShot();
     const original = await buildRegenerateShotSnapshot({
       shot,
+      scene: makeScene(),
       imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,

@@ -447,7 +447,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
             {
               motionPromptMirror: shot.motionPrompt,
               characterTags: scene?.continuity?.characterTags,
-              description: shot.description,
+              description: scene?.originalScript.extract ?? null,
             },
             model
           );
@@ -530,7 +530,8 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
      * Materialise a prompt target's scenes. Kept out of the plan (see
      * `PlanTarget`) so the plan stays under the 1 MiB step-result cap; one
      * step per shot means each result carries a single shot's scenes.
-     * Neighbours are raw `shot.metadata`, matching regenerateShotPromptFn.
+     * Neighbours resolve through the same scene context, matching
+     * regenerateShotPromptFn.
      */
     const loadPromptScenes = (target: PlanTarget): Promise<PromptScenes> =>
       step.do(`prepare-prompt-${target.shotId}`, async () => {
@@ -557,16 +558,21 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
         const neighbours = await Promise.all(
           neighbourIds.map((id) => scopedDb.shots.getById(id))
         );
-        const byId = new Map(
-          neighbours.filter((s) => !!s).map((s) => [s.id, s])
+        const sceneById = new Map(
+          neighbours
+            .filter((s) => !!s)
+            .map((s) => [
+              s.id,
+              resolveSceneForShot(s, scriptBySceneId).scene ?? undefined,
+            ])
         );
         return {
           scene,
           sceneBefore: target.beforeShotId
-            ? (byId.get(target.beforeShotId)?.metadata ?? undefined)
+            ? sceneById.get(target.beforeShotId)
             : undefined,
           sceneAfter: target.afterShotId
-            ? (byId.get(target.afterShotId)?.metadata ?? undefined)
+            ? sceneById.get(target.afterShotId)
             : undefined,
         };
       });
@@ -836,9 +842,10 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               const musicPromptInputJson = await step.do(
                 'prepare-music-prompt',
                 async (): Promise<string | null> => {
-                  const [sequence, shots] = await Promise.all([
+                  const [sequence, shots, sceneContext] = await Promise.all([
                     scopedDb.sequences.getById(sequenceId),
                     scopedDb.shots.listBySequence(sequenceId),
+                    loadSceneContextBySequence(scopedDb, sequenceId),
                   ]);
                   if (!sequence) {
                     throw new NonRetryableError(
@@ -848,8 +855,8 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                   }
                   const sceneSummaries = buildMusicSceneSummaries(
                     shots
-                      .map((s) => s.metadata)
-                      .filter((m): m is NonNullable<typeof m> => m !== null)
+                      .map((s) => resolveSceneForShot(s, sceneContext).scene)
+                      .filter((s): s is NonNullable<typeof s> => s !== null)
                   );
                   const analysisModelId =
                     getAnalysisModelById(sequence.analysisModel)?.id ??

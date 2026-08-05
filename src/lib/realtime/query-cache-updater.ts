@@ -8,7 +8,7 @@ import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
 import { sequenceKeys } from '@/hooks/use-sequences';
-import type { Shot, Sequence } from '@/types/database';
+import type { Sequence } from '@/types/database';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { QueryClient } from '@tanstack/react-query';
 
@@ -27,23 +27,6 @@ function getOptionalString(
 ): string | undefined {
   const value = data[key];
   return typeof value === 'string' ? value : undefined;
-}
-
-/**
- * Type guard for Scene metadata from realtime events.
- * Performs minimal runtime validation since data is already Zod-validated upstream.
- */
-function isSceneMetadata(value: unknown): value is Shot['metadata'] {
-  if (value === null || value === undefined) return true;
-  if (typeof value !== 'object') return false;
-  // Check for required Scene fields using 'in' operator for type narrowing
-  return (
-    typeof value === 'object' &&
-    'sceneId' in value &&
-    typeof value.sceneId === 'string' &&
-    'sceneNumber' in value &&
-    typeof value.sceneNumber === 'number'
-  );
 }
 
 // Debounce invalidations per query key - multiple rapid events = one refetch
@@ -129,15 +112,14 @@ export function updateQueryCacheFromEvent(
       break;
 
     case 'generation.shot:updated': {
-      // Patch the cached scene metadata (title, continuity, music/audio design)
-      // in place. The realtime schema validated it upstream.
-      const metadata = data.metadata;
-      if (isSceneMetadata(metadata)) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) => old?.map((f) => (f.id === shotId ? { ...f, metadata } : f))
-        );
-      }
+      // Scene metadata (title, continuity, music/audio design) lives on the
+      // `scenes` row now (#1067), not on the shot — there is nothing left to
+      // patch in place on the cached shot, so refresh the scene spine instead.
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
       // Prompt regenerations no longer travel in `metadata` — the visual/motion
       // prompt now lives in `frame_prompt_versions` / `shot_prompt_versions`
       // and is mirrored onto `frame.imagePrompt` / `shot.motionPrompt`, then

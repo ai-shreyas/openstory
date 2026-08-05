@@ -40,13 +40,11 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     sceneId: null,
     shotNumber: null,
     orderIndex: 0,
-    description: 'A scene',
     durationMs: 3000,
     motionPrompt: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptInputHash: null,
-    metadata: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -340,20 +338,19 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(keys).toContainEqual(promptVariantKeys.shot('motion', 'shot-1'));
     });
 
-    it('a non-prompt updateType patches metadata in place without refetching the list', () => {
+    it('a non-prompt updateType refetches the scene spine, not the shots list', () => {
       const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:updated', {
         shotId: 'shot-1',
         updateType: 'music-design',
-        metadata: { sceneId: 'sc-1', sceneNumber: 2 },
       });
 
-      // Music/audio design still travels in metadata — patched in place, no
-      // refetch.
-      expect(getCachedShot(qc)?.metadata?.sceneNumber).toBe(2);
+      // Music/audio design lives on the scene row (#1067), so the scene spine
+      // refetches while the shots list stays put.
       vi.advanceTimersByTime(200);
       const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
       expect(keys).not.toContainEqual(shotKeys.list(SEQ));
       expect(keys).not.toContainEqual(
         promptVariantKeys.shot('visual', 'shot-1')

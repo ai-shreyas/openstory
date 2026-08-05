@@ -112,7 +112,6 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     sceneId: null,
     shotNumber: null,
     orderIndex: 0,
-    description: 'A scene',
     durationMs: 3000,
     thumbnailUrl: 'https://cdn/thumb.jpg',
     thumbnailPath: null,
@@ -139,7 +138,6 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     visualPromptInputHash: null,
     motionPromptInputHash: null,
     previewThumbnailUrl: null,
-    metadata: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -209,7 +207,7 @@ function makeContext(
   );
   // Motion prompt is resolved from the selected version now (#713); the retry
   // path reads it per shot. No selected version in these fixtures → resolution
-  // falls back to the shot description.
+  // falls back to the `motionPrompt` mirror.
   const getSelectedMotion = vi.fn(async () => null);
   const stub = {
     shots: { listBySequence, ensureAnchorFrames },
@@ -313,13 +311,11 @@ describe('executeSmartRetry — full retry fallback', () => {
 describe('executeSmartRetry — partial retry status reset', () => {
   test('nothing retriable → throws instead of silently marking the sequence completed', async () => {
     resetMocks();
-    // A failed image with no prompt anywhere (imagePrompt, metadata,
-    // description all empty) is detected as a failure but can't be retried.
+    // A failed image with no prompt anywhere (no imagePrompt, and no scene to
+    // fall back to) is detected as a failure but can't be retried.
     const shot = makeShot({
       thumbnailStatus: 'failed',
       imagePrompt: null,
-      metadata: null,
-      description: '',
     });
     const { context, updateStatus } = makeContext(makeSequence(), [shot]);
 
@@ -372,8 +368,6 @@ describe('executeSmartRetry — partial retry status reset', () => {
       orderIndex: 1,
       thumbnailStatus: 'failed',
       imagePrompt: null,
-      metadata: null,
-      description: '',
     });
     const { context, updateStatus } = makeContext(makeSequence(), [
       retriable,

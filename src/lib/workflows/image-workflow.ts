@@ -37,6 +37,7 @@ import {
 import { uploadImageToStorage } from '@/lib/image/image-storage';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
+import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { simpleHash } from '@/lib/utils/hash';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -153,7 +154,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           let userEditAnalysisModel: string | null = null;
           try {
             const shot = await scopedDb.shots.getById(input.shotId);
-            if (shot?.metadata) {
+            const scene = shot
+              ? (await resolveSceneForShotFromDb(shot, scopedDb)).scene
+              : null;
+            if (scene) {
               const sequence = await scopedDb.sequences.getById(
                 input.sequenceId
               );
@@ -166,7 +170,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
                     aspectRatio: sequence.aspectRatio,
                     analysisModel: sequence.analysisModel,
                   },
-                  scene: shot.metadata,
+                  scene,
                 });
                 userEditInputHash = await computeVisualPromptInputHash(ctx);
                 userEditAnalysisModel = ctx.analysisModel;

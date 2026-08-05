@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import {
   ascendSelection,
   parseSelectionFromSearch,
@@ -10,26 +9,8 @@ import {
 
 const shot = (
   id: string,
-  sceneId: string,
-  tags: Partial<{
-    characterTags: string[];
-    environmentTag: string;
-    elementTags: string[];
-  }>
-): ShotWithImage =>
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- minimal fixture: selectionScope reads only sceneId
-  ({
-    id,
-    sceneId,
-    metadata: {
-      continuity: {
-        characterTags: tags.characterTags ?? [],
-        environmentTag: tags.environmentTag ?? '',
-        elementTags: tags.elementTags ?? [],
-      },
-      originalScript: { extract: `script-${id}` },
-    },
-  }) as ShotWithImage;
+  sceneId: string
+): { id: string; sceneId: string | null } => ({ id, sceneId });
 
 describe('scene-selection', () => {
   it('parses URL search params', () => {
@@ -97,7 +78,7 @@ describe('scene-selection', () => {
   });
 
   it('ascends shot → scene → sequence', () => {
-    const shots = [shot('s1', 'sc1', {}), shot('s2', 'sc2', {})];
+    const shots = [shot('s1', 'sc1'), shot('s2', 'sc2')];
     expect(ascendSelection({ sceneIds: [], shotId: 's1' }, shots)).toEqual({
       sceneIds: ['sc1'],
     });
@@ -112,9 +93,7 @@ describe('scene-selection', () => {
 
   it('ascends to sequence when shot has no parent scene', () => {
     expect(
-      ascendSelection({ sceneIds: [], shotId: 'missing' }, [
-        shot('s1', 'sc1', {}),
-      ])
+      ascendSelection({ sceneIds: [], shotId: 'missing' }, [shot('s1', 'sc1')])
     ).toEqual({ sceneIds: [] });
   });
 });

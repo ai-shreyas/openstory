@@ -1,5 +1,6 @@
 import { ScenesView } from '@/components/scenes/scenes-view';
-import type { SceneRow } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import { dbSceneId } from '@/lib/db/schema';
 import type { Sequence, Shot, Style } from '@/types/database';
 import type { Meta, StoryObj } from '@storybook/react';
 import {
@@ -70,7 +71,7 @@ const meta = {
       // accept them). `context.parameters` is loosely typed (any), so annotate the
       // locals rather than assert — avoids an unsafe-from-any type assertion.
       const shots: Shot[] = context.parameters.shots ?? [];
-      const scenes: SceneRow[] = context.parameters.scenes ?? [];
+      const scenes: SceneWithScript[] = context.parameters.scenes ?? [];
       const style: Style | undefined = context.parameters.style;
       const sequenceId = context.args.sequenceId || 'mock-sequence';
       const sequenceOverrides: Partial<Sequence> =
@@ -149,7 +150,12 @@ export const RealSequence: Story = {
   },
   parameters: {
     sequence: fixtureSequence,
-    scenes: fixtureScenes,
+    // The fixture rows are `SceneRow`s; the editor reads the SELECTED script,
+    // which for this snapshot is the split-time one.
+    scenes: fixtureScenes.map((scene) => ({
+      ...scene,
+      script: scene.originalScript,
+    })),
     shots: fixtureShots,
     style: fixtureStyle,
     docs: {
@@ -161,13 +167,33 @@ export const RealSequence: Story = {
   },
 };
 
+/**
+ * A shot's number, title and script come from its scene (#1067), so each mock
+ * shot points at one of these by `sceneId: 'scene-<n>'`.
+ */
+const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
+  id: dbSceneId(`scene-${orderIndex + 1}`),
+  sequenceId: 'seq-1',
+  orderIndex,
+  location: 'Forest',
+  timeOfDay: 'Dawn',
+  storyBeat: 'Introduction',
+  title,
+  continuity: null,
+  musicDesign: null,
+  originalScript: null,
+  script: { extract: 'Sample scene text', dialogue: [] },
+  selectedScriptVersionId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+});
+
 // Mock shot base — all Shot fields included
 const mockShotBase = {
   sequenceId: 'seq-1',
   sceneId: null,
   shotNumber: null,
   orderIndex: 0,
-  description: 'A scene from the storyboard',
   durationMs: 5000,
   thumbnailWorkflowRunId: null,
   thumbnailGeneratedAt: null,
@@ -185,28 +211,6 @@ const mockShotBase = {
   variantImageGeneratedAt: null,
   variantImageError: null,
   previewThumbnailUrl: null,
-  metadata: {
-    sceneId: 'scene-1',
-    sceneNumber: 1,
-    originalScript: {
-      extract: 'Sample scene text',
-      dialogue: [],
-    },
-    metadata: {
-      title: 'Opening Scene',
-      durationSeconds: 5,
-      location: 'Forest',
-      timeOfDay: 'Dawn',
-      storyBeat: 'Introduction',
-    },
-    continuity: {
-      characterTags: ['hero'],
-      environmentTag: 'forest',
-      colorPalette: 'cool',
-      lightingSetup: 'natural',
-      styleTag: '',
-    },
-  } satisfies Shot['metadata'],
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -228,14 +232,7 @@ export const MixedStates: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Opening Scene',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -248,14 +245,7 @@ export const MixedStates: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/2/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'The Journey',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -267,11 +257,7 @@ export const MixedStates: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Climax' },
-        },
+        sceneId: 'scene-3',
       },
       {
         ...mockShotBase,
@@ -283,14 +269,7 @@ export const MixedStates: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'generating',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 4,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Resolution',
-          },
-        },
+        sceneId: 'scene-4',
       },
       {
         ...mockShotBase,
@@ -302,15 +281,15 @@ export const MixedStates: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 5,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Epilogue',
-          },
-        },
+        sceneId: 'scene-5',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Opening Scene'),
+      mockScene(1, 'The Journey'),
+      mockScene(2, 'Climax'),
+      mockScene(3, 'Resolution'),
+      mockScene(4, 'Epilogue'),
     ],
     docs: {
       description: {
@@ -338,11 +317,7 @@ export const AllCompleted: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 1' },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -355,11 +330,7 @@ export const AllCompleted: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/2/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 2' },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -372,12 +343,13 @@ export const AllCompleted: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/3/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 3' },
-        },
+        sceneId: 'scene-3',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Scene 1'),
+      mockScene(1, 'Scene 2'),
+      mockScene(2, 'Scene 3'),
     ],
     docs: {
       description: {
@@ -404,14 +376,7 @@ export const AllPending: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Waiting for Video 1',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -423,14 +388,7 @@ export const AllPending: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Waiting for Video 2',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -442,15 +400,13 @@ export const AllPending: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Waiting for Video 3',
-          },
-        },
+        sceneId: 'scene-3',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Waiting for Video 1'),
+      mockScene(1, 'Waiting for Video 2'),
+      mockScene(2, 'Waiting for Video 3'),
     ],
     docs: {
       description: {
@@ -478,14 +434,7 @@ export const ShotsGenerating: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 1 - Ready',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -497,14 +446,7 @@ export const ShotsGenerating: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 2 - Shot Ready',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -516,14 +458,7 @@ export const ShotsGenerating: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 3 - Generating Shot',
-          },
-        },
+        sceneId: 'scene-3',
       },
       {
         ...mockShotBase,
@@ -535,15 +470,14 @@ export const ShotsGenerating: Story = {
         videoPath: null,
         thumbnailStatus: 'pending',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 4,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 4 - Shot Pending',
-          },
-        },
+        sceneId: 'scene-4',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Scene 1 - Ready'),
+      mockScene(1, 'Scene 2 - Shot Ready'),
+      mockScene(2, 'Scene 3 - Generating Shot'),
+      mockScene(3, 'Scene 4 - Shot Pending'),
     ],
     docs: {
       description: {
@@ -570,14 +504,7 @@ export const GenerationInProgress: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'generating',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Video Generating',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -589,14 +516,7 @@ export const GenerationInProgress: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Shot Generating',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -608,15 +528,13 @@ export const GenerationInProgress: Story = {
         videoPath: null,
         thumbnailStatus: 'pending',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Shot Pending',
-          },
-        },
+        sceneId: 'scene-3',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Video Generating'),
+      mockScene(1, 'Shot Generating'),
+      mockScene(2, 'Shot Pending'),
     ],
     docs: {
       description: {
@@ -644,14 +562,7 @@ export const PreviewMode: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Generating Full Image',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -664,14 +575,7 @@ export const PreviewMode: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Still Processing',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -684,15 +588,13 @@ export const PreviewMode: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Final Image Ready',
-          },
-        },
+        sceneId: 'scene-3',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Preview - Generating Full Image'),
+      mockScene(1, 'Preview - Still Processing'),
+      mockScene(2, 'Final Image Ready'),
     ],
     docs: {
       description: {
@@ -721,14 +623,7 @@ export const PreviewModePortrait: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Generating Full Image',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -741,14 +636,7 @@ export const PreviewModePortrait: Story = {
         videoPath: null,
         thumbnailStatus: 'generating',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Still Processing',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -761,15 +649,13 @@ export const PreviewModePortrait: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Final Image Ready',
-          },
-        },
+        sceneId: 'scene-3',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Preview - Generating Full Image'),
+      mockScene(1, 'Preview - Still Processing'),
+      mockScene(2, 'Final Image Ready'),
     ],
     docs: {
       description: {
@@ -797,14 +683,7 @@ export const WithFailures: Story = {
         videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
         thumbnailStatus: 'completed',
         videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Successful Scene',
-          },
-        },
+        sceneId: 'scene-1',
       },
       {
         ...mockShotBase,
@@ -816,14 +695,7 @@ export const WithFailures: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'failed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Failed Generation',
-          },
-        },
+        sceneId: 'scene-2',
       },
       {
         ...mockShotBase,
@@ -835,15 +707,13 @@ export const WithFailures: Story = {
         videoPath: null,
         thumbnailStatus: 'completed',
         videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Pending Scene',
-          },
-        },
+        sceneId: 'scene-3',
       },
+    ],
+    scenes: [
+      mockScene(0, 'Successful Scene'),
+      mockScene(1, 'Failed Generation'),
+      mockScene(2, 'Pending Scene'),
     ],
     docs: {
       description: {

@@ -1,35 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  composeSequenceScript,
-  enrichShotWithSceneScript,
-  overlaySceneScript,
-  projectShotForClient,
-  resolveSceneForShot,
-} from './scene-script';
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import { composeSequenceScript, resolveSceneForShot } from './scene-script';
 import { dbSceneId, type SceneRow } from '@/lib/db/schema';
-
-const sceneFixture = (overrides: Partial<Scene> = {}): Scene => ({
-  sceneId: 'scene-1',
-  sceneNumber: 1,
-  originalScript: { extract: 'INT. OFFICE - DAY', dialogue: [] },
-  metadata: {
-    title: 'Office',
-    location: 'Office',
-    timeOfDay: 'DAY',
-    storyBeat: 'setup',
-    durationSeconds: 5,
-  },
-  continuity: {
-    characterTags: [],
-    environmentTag: '',
-    elementTags: [],
-    colorPalette: '',
-    lightingSetup: '',
-    styleTag: '',
-  },
-  ...overrides,
-});
 
 describe('composeSequenceScript', () => {
   it('joins extracts in orderIndex order', () => {
@@ -44,17 +15,6 @@ describe('composeSequenceScript', () => {
       },
     ]);
     expect(composed).toBe('Scene one.\n\nScene two.');
-  });
-});
-
-describe('overlaySceneScript', () => {
-  it('replaces originalScript on the scene object', () => {
-    const scene = sceneFixture();
-    const next = overlaySceneScript(scene, {
-      extract: 'Updated.',
-      dialogue: [],
-    });
-    expect(next.originalScript.extract).toBe('Updated.');
   });
 });
 
@@ -119,50 +79,5 @@ describe('resolveSceneForShot', () => {
       scene: null,
       script: null,
     });
-  });
-});
-
-describe('projectShotForClient', () => {
-  it('projects canonical script onto shot metadata for API responses', () => {
-    const shot = {
-      id: 'shot-1',
-      sceneId: 'scene-row-1',
-      metadata: sceneFixture({
-        originalScript: { extract: 'Legacy.', dialogue: [] },
-      }),
-    } as const;
-    const projected = projectShotForClient(shot, {
-      extract: 'For UI.',
-      dialogue: [],
-    });
-    expect(projected.metadata?.originalScript.extract).toBe('For UI.');
-    expect(shot.metadata.originalScript.extract).toBe('Legacy.');
-  });
-});
-
-describe('enrichShotWithSceneScript', () => {
-  it('overlays selected script onto shot metadata', () => {
-    const shot = {
-      id: 'shot-1',
-      sceneId: 'scene-row-1',
-      metadata: sceneFixture({
-        originalScript: { extract: 'Legacy shot copy.', dialogue: [] },
-      }),
-    } as const;
-    const enriched = enrichShotWithSceneScript(
-      shot,
-      new Map([
-        [
-          'scene-row-1',
-          {
-            scene: sceneRowFixture(),
-            script: { extract: 'Canonical scene copy.', dialogue: [] },
-          },
-        ],
-      ])
-    );
-    expect(enriched.metadata?.originalScript.extract).toBe(
-      'Canonical scene copy.'
-    );
   });
 });

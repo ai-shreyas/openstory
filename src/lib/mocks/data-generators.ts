@@ -12,22 +12,12 @@ faker.seed(123);
 const generateMockShot = (
   overrides?: Partial<ShotWithImage>
 ): ShotWithImage => {
-  const settings = [
-    'City Street',
-    'Forest',
-    'Office',
-    'Beach',
-    'Mountains',
-    'Space Station',
-  ];
-
   const shotBase: Omit<ShotWithImage, 'frame'> = {
     id: faker.string.ulid(),
     sequenceId: faker.string.ulid(),
     sceneId: null,
     shotNumber: null,
     orderIndex: faker.number.int({ min: 1, max: 10 }),
-    description: faker.lorem.paragraph(),
     thumbnailUrl: `https://picsum.photos/seed/${faker.helpers.arrayElement([
       '1478720568477-152d9b164e26', // Cinema scene
       '1485846234645-a62644f84728', // Film production
@@ -87,40 +77,6 @@ const generateMockShot = (
     previewThumbnailUrl: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
-    metadata: {
-      sceneId: faker.string.ulid(),
-      sceneNumber: faker.number.int({ min: 1, max: 20 }),
-      originalScript: {
-        extract: faker.lorem.paragraph(),
-        dialogue: [],
-      },
-      metadata: {
-        title: faker.lorem.words(3),
-        durationSeconds: faker.number.int({ min: 2, max: 10 }),
-        location: faker.helpers.arrayElement(settings),
-        timeOfDay: faker.helpers.arrayElement([
-          'morning',
-          'afternoon',
-          'evening',
-          'night',
-        ]),
-        storyBeat: faker.lorem.sentence(),
-      },
-      musicDesign: {
-        presence: 'none',
-        style: '',
-        mood: '',
-        atmosphere: '',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: '',
-        colorPalette: '',
-        lightingSetup: '',
-        styleTag: '',
-      },
-      sourceImageUrl: '',
-    },
   };
   const frame: Frame = {
     // Own id — the anchor frame is NOT the shot (#989); only shotId links them.

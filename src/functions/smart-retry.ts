@@ -282,11 +282,12 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     // reported as retried (and must not clear the failed flag on their own).
     let triggeredImages = 0;
     for (const shot of failedImageShots) {
-      const prompt = shot.imagePrompt || shot.description;
+      const scene = sceneOf(shot);
+      const prompt = shot.imagePrompt || scene?.originalScript.extract;
 
       if (!prompt) continue;
 
-      const characterTags = sceneOf(shot)?.continuity?.characterTags ?? [];
+      const characterTags = scene?.continuity?.characterTags ?? [];
       const referenceImages = getSceneCharacterReferenceImages(
         allCharacters,
         characterTags
@@ -320,6 +321,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       if (!shot.thumbnailUrl) continue;
 
       const shotVideoModel = videoModelFor(shot);
+      const scene = sceneOf(shot);
       const selectedMotion =
         await context.scopedDb.shotPromptVersions.getSelectedMotion(shot.id);
       const workflowInput: MotionWorkflowInput = {
@@ -332,8 +334,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
           selectedMotion,
           {
             motionPromptMirror: shot.motionPrompt,
-            characterTags: sceneOf(shot)?.continuity?.characterTags,
-            description: shot.description,
+            characterTags: scene?.continuity?.characterTags,
+            description: scene?.originalScript.extract ?? null,
           },
           shotVideoModel
         ),

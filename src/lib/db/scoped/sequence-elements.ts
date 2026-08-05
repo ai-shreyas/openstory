@@ -24,9 +24,9 @@ import {
 import {
   buildShotRenameDeltas,
   replaceTokenInText,
+  renameTokenInContinuity,
 } from '@/lib/sequence-elements/cascade-rename';
 import {
-  enrichShotWithSceneScript,
   loadSceneContextBySequenceFromDb,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
@@ -217,9 +217,9 @@ export function createSequenceElementsMethods(db: Database) {
 
     /**
      * Rename an element's token and rewrite every reference to the old token
-     * across the sequence: `sequences.script`, per-shot `metadata` (continuity
-     * tags, originalScript extract, prompt strings) and the user-edit
-     * `imagePrompt`/`motionPrompt` overrides on `shots`.
+     * across the sequence: `sequences.script`, `scenes.continuity` +
+     * the selected `scene_script_versions` extract, and the user-edit
+     * `imagePrompt`/`motionPrompt` overrides on the anchor frame / shot.
      *
      * All writes (element row, script, shot deltas) run in a single
      * `db.batch()` — one transaction — so a mid-cascade failure can't leave
@@ -281,16 +281,10 @@ export function createSequenceElementsMethods(db: Database) {
                 .where(eq(sequences.id, sequenceId)),
             ];
 
-      const [allShotsRaw, scriptBySceneId] = await Promise.all([
-        db
-          .select()
-          .from(shots)
-          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSceneContextBySequenceFromDb(db, sequenceId),
-      ]);
-      const allShots = allShotsRaw.map((shot) =>
-        enrichShotWithSceneScript(shot, scriptBySceneId)
-      );
+      const allShots = (await db
+        .select()
+        .from(shots)
+        .where(eq(shots.sequenceId, sequenceId))) as Shot[];
       // The image prompt lives on each shot's anchor frame now (#989) — keyed
       // by shotId (orderIndex 0), never by id-reuse.
       const frameRows = await db
@@ -333,6 +327,28 @@ export function createSequenceElementsMethods(db: Database) {
           eq(scenes.selectedScriptVersionId, sceneScriptVersions.id)
         )
         .where(eq(scenes.sequenceId, sequenceId));
+      // Element tags live on the scene's continuity now, so the token rewrite
+      // targets `scenes.continuity` rather than a per-shot copy.
+      const sceneRows = await db
+        .select()
+        .from(scenes)
+        .where(eq(scenes.sequenceId, sequenceId));
+      const sceneContinuityStatements = sceneRows.flatMap((scene) => {
+        if (!scene.continuity) return [];
+        const rewritten = renameTokenInContinuity(
+          scene.continuity,
+          oldToken,
+          newToken
+        );
+        if (!rewritten) return [];
+        return [
+          db
+            .update(scenes)
+            .set({ continuity: rewritten, updatedAt: now })
+            .where(eq(scenes.id, scene.id)),
+        ];
+      });
+
       const sceneScriptStatements = selectedScriptRows.flatMap(
         ({ version }) => {
           const extract = version.content.extract;
@@ -352,7 +368,6 @@ export function createSequenceElementsMethods(db: Database) {
 
       const shotStatements = deltas.flatMap((delta) => {
         const set: Record<string, unknown> = { updatedAt: now };
-        if (delta.metadata !== undefined) set.metadata = delta.metadata;
         if (delta.motionPrompt !== undefined)
           set.motionPrompt = delta.motionPrompt;
         const selectedMotionVersionId = selectedMotionVersionByShot.get(
@@ -385,6 +400,7 @@ export function createSequenceElementsMethods(db: Database) {
       const [elementRows] = await db.batch([
         elementUpdate,
         ...scriptStatements,
+        ...sceneContinuityStatements,
         ...sceneScriptStatements,
         ...shotStatements,
       ]);

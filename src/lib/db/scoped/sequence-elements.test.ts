@@ -20,7 +20,6 @@ import { drizzle } from 'drizzle-orm/libsql';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
-import type { Shot } from '@/lib/db/schema';
 import {
   dbSceneId,
   scenes,
@@ -88,31 +87,12 @@ beforeEach(async () => {
   await seed();
 });
 
-function shotMetadata(args: {
-  sceneId: string;
-  elementTags: string[];
-  extract: string;
-}): NonNullable<Shot['metadata']> {
-  return {
-    sceneId: args.sceneId,
-    sceneNumber: 1,
-    originalScript: { extract: args.extract, dialogue: [] },
-    continuity: {
-      environmentTag: '',
-      characterTags: [],
-      elementTags: args.elementTags,
-      colorPalette: '',
-      lightingSetup: '',
-      styleTag: '',
-    },
-  };
-}
-
 /** Continuity + script live on `scenes` (#1067); shots point at them. */
 async function insertSceneWithShot(args: {
   orderIndex: number;
   elementTags: string[];
   extract: string;
+  motionPrompt?: string;
 }) {
   const [scene] = await db
     .insert(scenes)
@@ -136,6 +116,7 @@ async function insertSceneWithShot(args: {
     sequenceId,
     sceneId: scene.id,
     orderIndex: args.orderIndex,
+    motionPrompt: args.motionPrompt ?? null,
   });
   return scene;
 }
@@ -276,23 +257,16 @@ describe('cascadeRename', () => {
       .set({ script: 'The LOGO appears. Pan across the LOGO.' })
       .where(eq(sequences.id, sequenceId));
 
-    await db.insert(shots).values({
-      sequenceId,
+    const taggedScene = await insertSceneWithShot({
       orderIndex: 0,
-      metadata: shotMetadata({
-        sceneId: 's1',
-        elementTags: ['LOGO'],
-        extract: 'The LOGO appears on screen.',
-      }),
+      elementTags: ['LOGO'],
+      extract: 'The LOGO appears on screen.',
+      motionPrompt: 'Push in on the LOGO.',
     });
-    await db.insert(shots).values({
-      sequenceId,
+    await insertSceneWithShot({
       orderIndex: 1,
-      metadata: shotMetadata({
-        sceneId: 's2',
-        elementTags: [],
-        extract: 'No element here.',
-      }),
+      elementTags: [],
+      extract: 'No element here.',
     });
 
     const first = await methods.cascadeRename({
@@ -310,6 +284,18 @@ describe('cascadeRename', () => {
       .from(sequences)
       .where(eq(sequences.id, sequenceId));
     expect(seq?.script).toBe('The BRAND appears. Pan across the BRAND.');
+
+    const [renamedScene] = await db
+      .select({ continuity: scenes.continuity })
+      .from(scenes)
+      .where(eq(scenes.id, taggedScene.id));
+    expect(renamedScene?.continuity?.elementTags).toEqual(['BRAND']);
+
+    const [renamedShot] = await db
+      .select({ motionPrompt: shots.motionPrompt })
+      .from(shots)
+      .where(eq(shots.sceneId, taggedScene.id));
+    expect(renamedShot?.motionPrompt).toBe('Push in on the BRAND.');
 
     // Workflow-step replay: the cached pre-rename token is the oldToken.
     // Everything already carries BRAND, so the cascade must be a no-op.

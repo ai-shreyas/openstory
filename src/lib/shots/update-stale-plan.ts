@@ -534,9 +534,10 @@ async function computeMusicPlan(
   const none: MusicPlan = { regenPrompt: false, regenTrack: false };
   if (!sequence.musicPromptInputHash) return none;
 
+  const sceneContext = await loadSceneContextBySequence(scopedDb, sequence.id);
   const scenes = allShots
-    .map((s) => s.metadata)
-    .filter((m): m is NonNullable<typeof m> => m !== null);
+    .map((s) => resolveSceneForShot(s, sceneContext).scene)
+    .filter((s): s is NonNullable<typeof s> => s !== null);
   if (scenes.length === 0) return none;
 
   try {

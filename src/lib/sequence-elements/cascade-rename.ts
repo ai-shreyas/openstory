@@ -35,54 +35,27 @@ function textContainsToken(text: string, token: string): boolean {
   return tokenRegex(token).test(text);
 }
 
-/** Pure rewrite of one shot's Scene metadata. Returns null if nothing changed. */
-function renameTokenInScene(
-  scene: Scene,
+/**
+ * Rewrite an element token in a scene's continuity tags. Null when nothing
+ * referenced it. The scene's script text is rewritten separately, on its
+ * selected `scene_script_versions` row.
+ */
+export function renameTokenInContinuity(
+  continuity: NonNullable<Scene['continuity']>,
   oldToken: string,
   newToken: string
-): Scene | null {
+): NonNullable<Scene['continuity']> | null {
   if (oldToken === newToken) return null;
-
-  let changed = false;
-  const next: Scene = { ...scene };
-
-  // continuity.elementTags — uppercase tokens, exact match
-  if (scene.continuity) {
-    const oldTags = scene.continuity.elementTags ?? [];
-    const newTags = oldTags.map((tag) =>
-      tag.toUpperCase() === oldToken.toUpperCase() ? newToken : tag
-    );
-    const tagsDiffer = newTags.some((t, i) => t !== oldTags[i]);
-    if (tagsDiffer) {
-      next.continuity = { ...scene.continuity, elementTags: newTags };
-      changed = true;
-    }
-  }
-
-  // originalScript.extract — case-insensitive whole-word replace
-  if (scene.originalScript.extract) {
-    const rewritten = replaceTokenInText(
-      scene.originalScript.extract,
-      oldToken,
-      newToken
-    );
-    if (rewritten !== scene.originalScript.extract) {
-      next.originalScript = { ...scene.originalScript, extract: rewritten };
-      changed = true;
-    }
-  }
-
-  // The generated visual/motion prompts no longer live on `scene.prompts`
-  // (#713) — they're in `frame_prompt_versions` / `shot_prompt_versions`,
-  // mirrored on `frame.imagePrompt` / `shot.motionPrompt`. Those mirrors (and
-  // the selected motion version) are rewritten by the applier, not here.
-
-  return changed ? next : null;
+  const oldTags = continuity.elementTags ?? [];
+  const newTags = oldTags.map((tag) =>
+    tag.toUpperCase() === oldToken.toUpperCase() ? newToken : tag
+  );
+  if (!newTags.some((t, i) => t !== oldTags[i])) return null;
+  return { ...continuity, elementTags: newTags };
 }
 
 export type ShotRenameDelta = {
   shotId: string;
-  metadata?: Scene;
   imagePrompt?: string;
   motionPrompt?: string;
 };
@@ -105,14 +78,6 @@ export function buildShotRenameDeltas(
   for (const shot of shots) {
     const delta: ShotRenameDelta = { shotId: shot.id };
     let touched = false;
-
-    if (shot.metadata) {
-      const rewritten = renameTokenInScene(shot.metadata, oldToken, newToken);
-      if (rewritten) {
-        delta.metadata = rewritten;
-        touched = true;
-      }
-    }
 
     if (shot.imagePrompt && textContainsToken(shot.imagePrompt, oldToken)) {
       delta.imagePrompt = replaceTokenInText(

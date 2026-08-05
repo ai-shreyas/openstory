@@ -11,6 +11,11 @@
  * The last test guards the milestone's #1 QA risk: the backfill must write only
  * sceneId + shotNumber and perturb nothing else on the shot. It asserted that
  * through `shots.isStale`/`video_input_hash` until #1067 phase 2d dropped both.
+ *
+ * #1067 also dropped `shots.metadata`, the backfill's own input. The migrated
+ * DB therefore no longer has the column the shipped SQL reads, so the harness
+ * re-adds it and seeds it with raw SQL — the migration file itself is history
+ * and stays verbatim.
  */
 
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
@@ -152,12 +157,19 @@ async function seedSequence(): Promise<void> {
   });
 }
 
-async function insertShot(data: Partial<NewShot> & { orderIndex: number }) {
+async function insertShot(
+  data: Partial<NewShot> & { orderIndex: number },
+  metadata: Scene | null = null
+) {
   const [shot] = await db
     .insert(shots)
     .values({ sequenceId, ...data } satisfies NewShot)
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
+  await client.execute({
+    sql: 'UPDATE `shots` SET `metadata` = ? WHERE `id` = ?',
+    args: [metadata ? JSON.stringify(metadata) : null, shot.id],
+  });
   return shot;
 }
 
@@ -165,6 +177,7 @@ beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+  await client.execute('ALTER TABLE `shots` ADD COLUMN `metadata` text');
 });
 
 afterAll(() => {
@@ -182,11 +195,11 @@ beforeEach(async () => {
 
 describe('backfill scenes migration', () => {
   it('creates one scene per shot, reusing the shot id, linked with shotNumber=1', async () => {
-    const a = await insertShot({ orderIndex: 0, metadata: sceneFixture() });
-    const b = await insertShot({
-      orderIndex: 1,
-      metadata: sceneFixture({ sceneId: 'scene-2', sceneNumber: 2 }),
-    });
+    const a = await insertShot({ orderIndex: 0 }, sceneFixture());
+    const b = await insertShot(
+      { orderIndex: 1 },
+      sceneFixture({ sceneId: 'scene-2', sceneNumber: 2 })
+    );
 
     await runBackfill();
 
@@ -205,7 +218,7 @@ describe('backfill scenes migration', () => {
   });
 
   it('splits scene-level fields out of the shot metadata onto the scene row', async () => {
-    const shot = await insertShot({ orderIndex: 3, metadata: sceneFixture() });
+    const shot = await insertShot({ orderIndex: 3 }, sceneFixture());
     await runBackfill();
 
     const [scene] = await db
@@ -224,14 +237,12 @@ describe('backfill scenes migration', () => {
     expect(scene?.continuity?.characterTags).toEqual(['sarah']);
     expect(scene?.musicDesign?.presence).toBe('minimal');
     expect(scene?.originalScript?.extract).toBe('INT. OFFICE - DAY');
-
-    // The shot's metadata is left intact (transitional duplicate).
-    const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.metadata?.metadata?.location).toBe('INT. OFFICE - DAY');
+    // Dropped: the "shot metadata survives the backfill" assertion — #1067
+    // removed the column entirely.
   });
 
   it('backfills a null-metadata shot without crashing (null scene fields)', async () => {
-    const shot = await insertShot({ orderIndex: 0, metadata: null });
+    const shot = await insertShot({ orderIndex: 0 });
     await runBackfill();
 
     const [scene] = await db.select().from(scenes);
@@ -248,11 +259,8 @@ describe('backfill scenes migration', () => {
   });
 
   it('is idempotent: a second run creates no duplicate scenes', async () => {
-    await insertShot({ orderIndex: 0, metadata: sceneFixture() });
-    await insertShot({
-      orderIndex: 1,
-      metadata: sceneFixture({ sceneId: 'scene-2' }),
-    });
+    await insertShot({ orderIndex: 0 }, sceneFixture());
+    await insertShot({ orderIndex: 1 }, sceneFixture({ sceneId: 'scene-2' }));
 
     await runBackfill();
     expect(await db.select().from(scenes)).toHaveLength(2);
@@ -270,18 +278,18 @@ describe('backfill scenes migration', () => {
     // mirror until #1067 phase 2d dropped it (video state is derived from the
     // segment's `video_variants` now); the surviving columns carry the same
     // guarantee.
-    const shot = await insertShot({
-      orderIndex: 0,
-      metadata: sceneFixture(),
-      description: 'A shot description',
-      motionPrompt: 'A slow dolly in',
-      durationMs: 4200,
-    });
+    const shot = await insertShot(
+      {
+        orderIndex: 0,
+        motionPrompt: 'A slow dolly in',
+        durationMs: 4200,
+      },
+      sceneFixture()
+    );
 
     await runBackfill();
 
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.description).toBe('A shot description');
     expect(reread?.motionPrompt).toBe('A slow dolly in');
     expect(reread?.durationMs).toBe(4200);
   });

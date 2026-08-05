@@ -15,6 +15,7 @@ import {
   type ShotImageHashInput,
 } from '@/lib/ai/input-hash';
 import type { TextToImageModel } from '@/lib/ai/models';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type {
   Character,
@@ -36,7 +37,13 @@ import { resolveSceneShotImageReferences } from './sheet-snapshots';
  * time and (with current-state inputs) at write time for divergence checks.
  */
 export async function buildRegenerateShotSnapshot(params: {
-  shot: Pick<Shot, 'id' | 'metadata'>;
+  shot: Pick<Shot, 'id'>;
+  /**
+   * The shot's scene, composed from `scenes` + its selected script version
+   * (#1067). Callers resolve it via `resolveSceneForShot`; null degrades to the
+   * no-references path, as an absent `shot.metadata` did.
+   */
+  scene: Scene | null;
   /**
    * The frame's current image prompt (mirror of the selected prompt version).
    * Moved off `shots` onto the anchor frame in #989; callers pass
@@ -51,6 +58,7 @@ export async function buildRegenerateShotSnapshot(params: {
 }): Promise<RegenerateShotSnapshot> {
   const {
     shot,
+    scene,
     imagePrompt,
     characters,
     locations,
@@ -78,7 +86,7 @@ export async function buildRegenerateShotSnapshot(params: {
   // thumbnail hash stamped at generation. Omitting the element/location sets
   // here made every product-/location-bearing shot report stale. See #867.
   const refs = resolveSceneShotImageReferences({
-    scene: shot.metadata,
+    scene,
     characters,
     locations,
     elements,

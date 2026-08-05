@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Storybook mock data uses intentional type assertions */
-import type { VideoVariant } from '@/lib/db/schema';
-import type { Shot } from '@/types/database';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import { dbSceneId, type VideoVariant } from '@/lib/db/schema';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
@@ -64,12 +63,32 @@ const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
 // `string` through `.map` (which would break assignability to `ShotWithImage`).
 type MockShotRow = Omit<ShotWithImage, 'frame'>;
 
+/**
+ * The player takes its title from the shot's scene (#1067), so each mock shot
+ * points at one of these by `sceneId: 'scene-<n>'`.
+ */
+const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
+  id: dbSceneId(`scene-${orderIndex + 1}`),
+  sequenceId: 'seq-1',
+  orderIndex,
+  location: 'Forest',
+  timeOfDay: 'Dawn',
+  storyBeat: 'Introduction',
+  title,
+  continuity: null,
+  musicDesign: null,
+  originalScript: null,
+  script: { extract: 'Sample scene text', dialogue: [] },
+  selectedScriptVersionId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+});
+
 const mockShotBase = {
   sequenceId: 'seq-1',
   sceneId: null,
   shotNumber: null,
   orderIndex: 0,
-  description: 'A scene from the storyboard',
   durationMs: 5000,
   thumbnailWorkflowRunId: null,
   imageModel: null,
@@ -90,74 +109,6 @@ const mockShotBase = {
   variantImageUrl: null,
   variantImageStatus: 'pending' as const,
   previewThumbnailUrl: null,
-  metadata: {
-    sceneId: 'scene-1',
-    sceneNumber: 1,
-    originalScript: {
-      extract: 'Sample scene text',
-      dialogue: [],
-    },
-    metadata: {
-      title: 'Opening Scene',
-      durationSeconds: 5,
-      location: 'Forest',
-      timeOfDay: 'Dawn',
-      storyBeat: 'Introduction',
-    },
-    selectedVariant: {
-      cameraAngle: 'A1' as const,
-      movementStyle: 'B1' as const,
-      moodTreatment: 'C1' as const,
-      rationale: 'Sample rationale',
-    },
-    prompts: {
-      visual: {
-        fullPrompt: 'Sample visual prompt',
-        negativePrompt: '',
-        components: {
-          sceneDescription: 'Forest scene',
-          subject: 'Character',
-          environment: 'Forest',
-          lighting: 'Dawn light',
-          camera: 'Wide shot',
-          composition: 'Centered',
-          style: 'Cinematic',
-          technical: 'High detail',
-          atmosphere: 'Mysterious',
-        },
-        parameters: {
-          dimensions: { width: 1280, height: 720, aspectRatio: '16:9' },
-          quality: { steps: 30, guidance: 7.5 },
-          control: 0.8,
-        },
-      },
-      motion: {
-        fullPrompt: 'Sample motion prompt',
-        components: {
-          cameraMovement: 'Slow pan',
-          startPosition: 'Left',
-          endPosition: 'Right',
-          durationSeconds: 5,
-          speed: 'slow',
-          smoothness: 'smooth',
-          subjectTracking: 'follow',
-          equipment: 'slider',
-        },
-        parameters: {
-          durationSeconds: 5,
-          fps: 24,
-          motionAmount: 0.5,
-          cameraControl: 0.7,
-        },
-      },
-    },
-    continuity: {
-      characterTags: ['hero'],
-      environmentTag: 'forest',
-      colorPalette: 'cool',
-      lightingSetup: 'natural',
-    },
-  },
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -178,11 +129,7 @@ const mockShots: ShotWithImage[] = (
       thumbnailStatus: 'completed',
       videoStatus: 'completed',
       variantImageStatus: 'completed',
-      metadata: {
-        ...mockShotBase.metadata,
-        sceneNumber: 1,
-        metadata: { ...mockShotBase.metadata.metadata, title: 'Opening Scene' },
-      } as unknown as Shot['metadata'],
+      sceneId: 'scene-1',
     },
     {
       ...mockShotBase,
@@ -197,11 +144,7 @@ const mockShots: ShotWithImage[] = (
       thumbnailStatus: 'completed',
       videoStatus: 'completed',
       variantImageStatus: 'completed',
-      metadata: {
-        ...mockShotBase.metadata,
-        sceneNumber: 2,
-        metadata: { ...mockShotBase.metadata.metadata, title: 'The Journey' },
-      } as unknown as Shot['metadata'],
+      sceneId: 'scene-2',
     },
     {
       ...mockShotBase,
@@ -215,14 +158,16 @@ const mockShots: ShotWithImage[] = (
       thumbnailStatus: 'completed',
       videoStatus: 'pending',
       variantImageStatus: 'pending',
-      metadata: {
-        ...mockShotBase.metadata,
-        sceneNumber: 3,
-        metadata: { ...mockShotBase.metadata.metadata, title: 'Climax' },
-      } as unknown as Shot['metadata'],
+      sceneId: 'scene-3',
     },
   ] satisfies MockShotRow[]
 ).map(toShotWithImage);
+
+const mockScenes: SceneWithScript[] = [
+  mockScene(0, 'Opening Scene'),
+  mockScene(1, 'The Journey'),
+  mockScene(2, 'Climax'),
+];
 
 // Note: This component now shows ALL shots with completed thumbnails, not just completed videos.
 // Shots with pending/generating/failed video status show poster frame with status overlay.
@@ -231,6 +176,7 @@ export const WithMockSequence: Story = {
   args: {
     selectedShotId: '1',
     shots: mockShots,
+    scenes: mockScenes,
     aspectRatio: '16:9',
     onSelectShot: () => {},
   },
@@ -265,14 +211,7 @@ export const AllVideoStates: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'completed',
           variantImageStatus: 'completed',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 1,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Completed Video',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-1',
         },
         {
           ...mockShotBase,
@@ -287,14 +226,7 @@ export const AllVideoStates: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'pending',
           variantImageStatus: 'pending',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 2,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Pending Video',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-2',
         },
         {
           ...mockShotBase,
@@ -309,14 +241,7 @@ export const AllVideoStates: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'generating',
           variantImageStatus: 'generating',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 3,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Generating Video',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-3',
         },
         {
           ...mockShotBase,
@@ -331,17 +256,16 @@ export const AllVideoStates: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'failed',
           variantImageStatus: 'failed',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 4,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Failed Video',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-4',
         },
       ] satisfies MockShotRow[]
     ).map(toShotWithImage),
+    scenes: [
+      mockScene(0, 'Completed Video'),
+      mockScene(1, 'Pending Video'),
+      mockScene(2, 'Generating Video'),
+      mockScene(3, 'Failed Video'),
+    ],
   },
   parameters: {
     docs: {
@@ -373,14 +297,7 @@ export const OnlyPendingVideos: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'pending',
           variantImageStatus: 'pending',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 1,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Pending Scene 1',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-1',
         },
         {
           ...mockShotBase,
@@ -395,17 +312,11 @@ export const OnlyPendingVideos: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'pending',
           variantImageStatus: 'pending',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 2,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Pending Scene 2',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-2',
         },
       ] satisfies MockShotRow[]
     ).map(toShotWithImage),
+    scenes: [mockScene(0, 'Pending Scene 1'), mockScene(1, 'Pending Scene 2')],
   },
   parameters: {
     docs: {
@@ -438,17 +349,11 @@ export const FailedVideoWithThumbnail: Story = {
           videoStatus: 'failed',
           videoError: 'Model generation timeout',
           variantImageStatus: 'completed',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 1,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Failed Video Generation',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-1',
         },
       ] satisfies MockShotRow[]
     ).map(toShotWithImage),
+    scenes: [mockScene(0, 'Failed Video Generation')],
   },
   parameters: {
     docs: {
@@ -479,14 +384,7 @@ export const PreviewMode: Story = {
           thumbnailStatus: 'generating',
           videoStatus: 'pending',
           variantImageStatus: 'pending',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 1,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Preview - Generating Full Image',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-1',
         },
         {
           ...mockShotBase,
@@ -500,14 +398,7 @@ export const PreviewMode: Story = {
           thumbnailStatus: 'generating',
           videoStatus: 'pending',
           variantImageStatus: 'pending',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 2,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Preview - Still Processing',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-2',
         },
         {
           ...mockShotBase,
@@ -521,17 +412,15 @@ export const PreviewMode: Story = {
           thumbnailStatus: 'completed',
           videoStatus: 'pending',
           variantImageStatus: 'pending',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 3,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Final Image Ready',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-3',
         },
       ] satisfies MockShotRow[]
     ).map(toShotWithImage),
+    scenes: [
+      mockScene(0, 'Preview - Generating Full Image'),
+      mockScene(1, 'Preview - Still Processing'),
+      mockScene(2, 'Final Image Ready'),
+    ],
   },
   parameters: {
     docs: {
@@ -564,17 +453,11 @@ export const FailedVideoWithoutThumbnail: Story = {
           thumbnailError: 'Image generation failed',
           variantImageStatus: 'pending',
           videoError: 'Cannot generate video without thumbnail',
-          metadata: {
-            ...mockShotBase.metadata,
-            sceneNumber: 1,
-            metadata: {
-              ...mockShotBase.metadata.metadata,
-              title: 'Complete Failure',
-            },
-          } as unknown as Shot['metadata'],
+          sceneId: 'scene-1',
         },
       ] satisfies MockShotRow[]
     ).map(toShotWithImage),
+    scenes: [mockScene(0, 'Complete Failure')],
   },
   parameters: {
     docs: {

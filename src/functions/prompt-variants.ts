@@ -17,6 +17,10 @@ import {
   type SequenceMusicPromptVersion,
 } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { simpleHash } from '@/lib/utils/hash';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -627,8 +631,16 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
         idx >= 0 && idx < shotsInSeq.length - 1
           ? shotsInSeq[idx + 1]
           : undefined;
-      sceneBefore = prevShot?.metadata ?? undefined;
-      sceneAfter = nextShot?.metadata ?? undefined;
+      const sceneContext = await loadSceneContextBySequence(
+        scopedDb,
+        sequence.id
+      );
+      sceneBefore = prevShot
+        ? (resolveSceneForShot(prevShot, sceneContext).scene ?? undefined)
+        : undefined;
+      sceneAfter = nextShot
+        ? (resolveSceneForShot(nextShot, sceneContext).scene ?? undefined)
+        : undefined;
     }
 
     let workflowRunId: string;
@@ -703,10 +715,13 @@ export const regenerateMusicPromptFn = createServerFn({ method: 'POST' })
   .handler(async ({ context }) => {
     const { sequence, scopedDb, user, teamId } = context;
 
-    const shots = await scopedDb.shots.listBySequence(sequence.id);
+    const [shots, sceneContext] = await Promise.all([
+      scopedDb.shots.listBySequence(sequence.id),
+      loadSceneContextBySequence(scopedDb, sequence.id),
+    ]);
     const scenes = shots
-      .map((f) => f.metadata)
-      .filter((m): m is NonNullable<typeof m> => m !== null);
+      .map((shot) => resolveSceneForShot(shot, sceneContext).scene)
+      .filter((scene): scene is Scene => scene !== null);
     if (scenes.length === 0) {
       throw new Error(
         'Sequence has no scenes to regenerate the music prompt from'
@@ -762,10 +777,13 @@ export const getMusicPromptStalenessFn = createServerFn({ method: 'GET' })
     }
 
     try {
-      const shots = await scopedDb.shots.listBySequence(sequence.id);
+      const [shots, sceneContext] = await Promise.all([
+        scopedDb.shots.listBySequence(sequence.id),
+        loadSceneContextBySequence(scopedDb, sequence.id),
+      ]);
       const scenes = shots
-        .map((f) => f.metadata)
-        .filter((m): m is NonNullable<typeof m> => m !== null);
+        .map((shot) => resolveSceneForShot(shot, sceneContext).scene)
+        .filter((scene): scene is Scene => scene !== null);
       if (scenes.length === 0) {
         return { musicPrompt: 'untracked' as const };
       }

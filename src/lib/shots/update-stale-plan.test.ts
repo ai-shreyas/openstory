@@ -32,7 +32,6 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {
     id: 'shot-1',
     sceneId: 'scene-1',
-    metadata: scene,
     ...overrides,
   } as unknown as Shot;
 }
@@ -72,7 +71,7 @@ vi.doMock('@/lib/shots/shot-staleness', () => ({
 vi.doMock('@/lib/scenes/scene-script', () => ({
   loadSceneContextBySequence: vi.fn(() => Promise.resolve(new Map())),
   resolveSceneForShot: vi.fn((shot: Shot) => ({
-    scene: shot.metadata ?? null,
+    scene: shot.sceneId ? scene : null,
     script: null,
   })),
 }));
@@ -283,7 +282,7 @@ describe('computePlan — what gets regenerated', () => {
   });
 
   it('reports a shot still awaiting script analysis', async () => {
-    const result = await plan([makeShot({ metadata: null })], [makeFrame()]);
+    const result = await plan([makeShot({ sceneId: null })], [makeFrame()]);
     expect(result.skipped).toEqual([{ shotId: 'shot-1', reason: 'no-scene' }]);
   });
 });

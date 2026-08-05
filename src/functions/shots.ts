@@ -37,9 +37,7 @@ import { dbSceneId } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { typedFromEntries } from '@/lib/utils/typed-object';
 import {
-  enrichShotWithSceneScript,
   loadSceneContextBySequence,
-  projectShotForClient,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
@@ -72,15 +70,13 @@ export const getShotsFn = createServerFn({ method: 'GET' })
     // Guarantee every shot has its anchor frame, then project the image surface
     // (#989) back under the legacy thumbnail*/image* names so the UI is unchanged.
     await scopedDb.shots.ensureAnchorFrames(shotRows);
-    const [anchorRows, gridSheets, motionByShot, scriptBySceneId] =
-      await Promise.all([
-        scopedDb.frames.listAnchorsBySequence(sequence.id),
-        scopedDb.frameVariants.listLatestGridSheetsBySequence(sequence.id),
-        scopedDb.shotPromptVersions.getSelectedMotionByShots(
-          shotRows.map((s) => s.id)
-        ),
-        loadSceneContextBySequence(scopedDb, sequence.id),
-      ]);
+    const [anchorRows, gridSheets, motionByShot] = await Promise.all([
+      scopedDb.frames.listAnchorsBySequence(sequence.id),
+      scopedDb.frameVariants.listLatestGridSheetsBySequence(sequence.id),
+      scopedDb.shotPromptVersions.getSelectedMotionByShots(
+        shotRows.map((s) => s.id)
+      ),
+    ]);
     // The still lives on the selected `frame_variants` row and the video on the
     // segment's selected `video_variants` row (#1067) — one batch read each, so
     // projecting the sequence stays O(1) queries.
@@ -94,8 +90,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         scopedDb.videoVariants.getPrimaryByShotIds(shotIds),
       ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-    return shotRows.map((rawShot) => {
-      const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
+    return shotRows.map((shot) => {
       const frame = anchorsByShot.get(shot.id);
       const selectedMotion = motionByShot.get(shot.id);
       const motionPromptData = selectedMotion
@@ -167,8 +162,7 @@ export const getShotFn = createServerFn({ method: 'GET' })
         context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
         context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
       ]);
-    const shot = projectShotForClient(context.shot, context.script);
-    return projectShotWithImage(shot, context.frame, {
+    return projectShotWithImage(context.shot, context.frame, {
       selectedImage,
       selectedVideo,
       primaryVideo,
@@ -383,16 +377,8 @@ export const updateShotFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequenceId, shotId, ...updateData } = data;
 
-    // Scene-script edits route through `updateSceneScriptFn` (#1030). Reject
-    // legacy metadata.originalScript writes so the shot copy stays write-only.
-    if (updateData.metadata?.originalScript?.extract !== undefined) {
-      throw new Error(
-        'Scene script edits must use updateSceneScriptFn (#1030)'
-      );
-    }
-
     // When a user edits a prompt, auto-link any element/cast/location tags
-    // they mentioned by additively merging them into shot.metadata.continuity
+    // they mentioned by additively merging them into the scene's continuity
     // so the next generation pulls those references in (#683). Skip when the
     // prompt value hasn't actually changed, so plain saves stay a single
     // UPDATE with no extra reads.
@@ -469,35 +455,16 @@ const updateShotDurationSchema = z.object({
  *
  * A scene has no duration of its own — its duration is the sum of its shots'
  * (`tileSceneIntoSegments` reads exactly these values against the model cap).
- * The `metadata.metadata.durationSeconds` write is the legacy mirror kept in
- * step so the `resolveShotDuration` fallback can't read a stale value.
  */
 export const updateShotDurationFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(updateShotDurationSchema))
   .handler(async ({ data, context }) => {
-    const { shot, scene, script, scopedDb } = context;
-
-    const patch: Parameters<typeof scopedDb.shots.update>[1] = {
+    const { shot, scopedDb } = context;
+    const updated = await scopedDb.shots.update(shot.id, {
       durationMs: Math.round(data.durationSeconds * 1000),
-    };
-    if (scene) {
-      patch.metadata = {
-        ...scene,
-        metadata: {
-          ...(scene.metadata ?? {
-            title: '',
-            location: '',
-            timeOfDay: '',
-            storyBeat: '',
-          }),
-          durationSeconds: data.durationSeconds,
-        },
-      };
-    }
-
-    const updated = (await scopedDb.shots.update(shot.id, patch)) ?? shot;
-    return projectShotForClient(updated, script);
+    });
+    return updated ?? shot;
   });
 
 export const deleteShotFn = createServerFn({ method: 'POST' })

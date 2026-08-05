@@ -38,13 +38,11 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     sceneId: null,
     shotNumber: null,
     orderIndex: 0,
-    description: 'A scene',
     durationMs: 3000,
     motionPrompt: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptInputHash: null,
-    metadata: null,
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -173,10 +171,10 @@ describe('sumShotDurationsSeconds (#547)', () => {
     expect(sumShotDurationsSeconds(shots)).toBe(7.5);
   });
 
-  it('falls back to 10s per shot when durationMs and metadata are absent', () => {
+  it('falls back to 10s per shot when durationMs is absent', () => {
     const shots = [
-      makeShot({ id: 'unknown-1', durationMs: null, metadata: null }),
-      makeShot({ id: 'unknown-2', durationMs: null, metadata: null }),
+      makeShot({ id: 'unknown-1', durationMs: null }),
+      makeShot({ id: 'unknown-2', durationMs: null }),
     ];
     expect(sumShotDurationsSeconds(shots)).toBe(20);
   });

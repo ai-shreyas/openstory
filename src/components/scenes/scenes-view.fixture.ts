@@ -323,8 +323,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQ072YB92D8NWRQC5W9C6',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 0,
-    description:
-      'SCENE 1 — AWAKENING\nDURATION: ~5 SECONDS\n\nVISUAL:\nEXTREME MACRO. A single drop of luminous serum clings to the tip of a glass dropper, trembling almost imperceptibly. The background dissolves into a warm gradient wash — ivory (#F8E9DA) bleeding softly into the palest blush (#F4D5C5). The droplet catches a discreet edge light, igniting it from within like liquid amber. A gentle backlight halos the glass shaft, making the serum glow translucent gold.\n\nCAMERA:\nLocked probe-lens frame, positioned at eye level with the droplet. Ultra-slow-motion capture (120fps minimum). The drop releases — falling in a languid, weightless ribbon that stretches and narrows before vanishing below frame. The descent takes the full five seconds. Nothing rushes.\n\nSOUND:\nA single, resonant piano note. Low. Warm. It sustains beneath everything that follows.',
     durationMs: 4000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6/720/1280',
@@ -355,31 +353,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene1',
-      sceneNumber: 1,
-      originalScript: {
-        extract:
-          'SCENE 1 — AWAKENING\nDURATION: ~5 SECONDS\n\nVISUAL:\nEXTREME MACRO. A single drop of luminous serum clings to the tip of a glass dropper, trembling almost imperceptibly. The background dissolves into a warm gradient wash — ivory (#F8E9DA) bleeding softly into the palest blush (#F4D5C5). The droplet catches a discreet edge light, igniting it from within like liquid amber. A gentle backlight halos the glass shaft, making the serum glow translucent gold.\n\nCAMERA:\nLocked probe-lens frame, positioned at eye level with the droplet. Ultra-slow-motion capture (120fps minimum). The drop releases — falling in a languid, weightless ribbon that stretches and narrows before vanishing below frame. The descent takes the full five seconds. Nothing rushes.\n\nSOUND:\nA single, resonant piano note. Low. Warm. It sustains beneath everything that follows.',
-        dialogue: [],
-      },
-      metadata: {
-        title: 'Awakening',
-        durationSeconds: 5,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: 'Opening macro shot of serum drop falling',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_background',
-        elementTags: [],
-        colorPalette: '#F8E9DA #F4D5C5 #FFFFFF warm luminous',
-        lightingSetup:
-          'soft glowing key with discreet edge light and gentle backlight halo',
-        styleTag: 'macro_beauty_photography_luxurious',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:09.000Z'),
     updatedAt: new Date('2026-06-02T00:19:03.000Z'),
     previewThumbnailUrl:
@@ -398,8 +371,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 1,
-    description:
-      'SCENE 2 — THE TEXTURE\nDURATION: ~6 SECONDS\n\nVISUAL:\nCUT TO: A smooth porcelain surface — bone white, flawless. A generous curl of rich cream product is dispensed from below frame, coiling slowly onto the surface in a perfect, sculptural spiral. The cream is the color of warm magnolia (#F4D5C5), dense and velvety. Soft key light rakes across it at a low angle, throwing the ridges and peaks of the swirl into exquisite relief. Every texture fold is visible — intimate, almost architectural.\n\nCAMERA:\nSlow macro push-in descending from directly above, rotating two degrees clockwise as it moves. The cream fills the frame until its surface texture becomes an abstract landscape — peaks and valleys of pure indulgence.\n\nSOUND:\nBeneath the piano, a barely-there atmospheric hum rises — the faintest suggestion of warmth and depth. No words yet.',
     durationMs: 6000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC/720/1280',
@@ -430,30 +401,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene2',
-      sceneNumber: 2,
-      originalScript: {
-        extract:
-          'SCENE 2 — THE TEXTURE\nDURATION: ~6 SECONDS\n\nVISUAL:\nCUT TO: A smooth porcelain surface — bone white, flawless. A generous curl of rich cream product is dispensed from below frame, coiling slowly onto the surface in a perfect, sculptural spiral. The cream is the color of warm magnolia (#F4D5C5), dense and velvety. Soft key light rakes across it at a low angle, throwing the ridges and peaks of the swirl into exquisite relief. Every texture fold is visible — intimate, almost architectural.\n\nCAMERA:\nSlow macro push-in descending from directly above, rotating two degrees clockwise as it moves. The cream fills the frame until its surface texture becomes an abstract landscape — peaks and valleys of pure indulgence.\n\nSOUND:\nBeneath the piano, a barely-there atmospheric hum rises — the faintest suggestion of warmth and depth. No words yet.',
-        dialogue: [],
-      },
-      metadata: {
-        title: 'The Texture',
-        durationSeconds: 6,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: 'Macro of cream product texture',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_porcelain',
-        elementTags: [],
-        colorPalette: '#F8E9DA #F4D5C5 #FFFFFF',
-        lightingSetup: 'soft key raking low with edge light and backlight',
-        styleTag: 'macro_beauty_photography',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:12.000Z'),
     updatedAt: new Date('2026-06-02T00:14:57.000Z'),
     previewThumbnailUrl:
@@ -472,8 +419,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQ4BPDYFBAG7AHWAAY43C',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 2,
-    description:
-      'SCENE 3 — THE APPLICATION\nDURATION: ~7 SECONDS\n\nVISUAL:\nCUT TO: A close-up of a fingertip — skin rendered in extraordinary detail, every fine line and pore visible and celebrated. The pad of the finger presses gently into the cream. In slow motion, the product yields, blanching pale at the point of contact before spreading in a warm, even veil. The skin beneath flushes subtly — a living rose (#E2A8A1) bloom spreading outward from the touch.\n\nCAMERA:\nLow-angle macro, shooting almost parallel to the skin surface. A slight rotational drift — clockwise, imperceptibly slow — keeps the frame alive without distraction. The edge light catches the thin, luminous film of product on the skin, making it gleam like satin.\n\nSOUND:\nA second piano note joins the first — a soft, ascending interval. The atmosphere opens.',
     durationMs: 7000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C/720/1280',
@@ -504,31 +449,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene3',
-      sceneNumber: 3,
-      originalScript: {
-        extract:
-          'SCENE 3 — THE APPLICATION\nDURATION: ~7 SECONDS\n\nVISUAL:\nCUT TO: A close-up of a fingertip — skin rendered in extraordinary detail, every fine line and pore visible and celebrated. The pad of the finger presses gently into the cream. In slow motion, the product yields, blanching pale at the point of contact before spreading in a warm, even veil. The skin beneath flushes subtly — a living rose (#E2A8A1) bloom spreading outward from the touch.\n\nCAMERA:\nLow-angle macro, shooting almost parallel to the skin surface. A slight rotational drift — clockwise, imperceptibly slow — keeps the frame alive without distraction. The edge light catches the thin, luminous film of product on the skin, making it gleam like satin.\n\nSOUND:\nA second piano note joins the first — a soft, ascending interval. The atmosphere opens.',
-        dialogue: [],
-      },
-      metadata: {
-        title: 'The Application',
-        durationSeconds: 7,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: 'Application of cream onto skin',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_background',
-        elementTags: [],
-        colorPalette: '#F8E9DA #E2A8A1 #F4D5C5 #FFFFFF',
-        lightingSetup:
-          'Soft glowing key with discreet edge light and subtle bounce',
-        styleTag: 'macro_beauty_photography',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:14.000Z'),
     updatedAt: new Date('2026-06-02T00:15:17.000Z'),
     previewThumbnailUrl:
@@ -547,8 +467,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQ6B0MH3VDAXH16G54X33',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 3,
-    description:
-      "SCENE 4 — THE LIP\nDURATION: ~6 SECONDS\n\nVISUAL:\nCUT TO: A lipstick bullet — deep, burnished brown-rose (#3D2A24) — gliding in slow motion across the inside of a wrist. The product lays down a ribbon of saturated color, impossibly smooth, the pigment rich and dimensional. The wrist skin is luminous, dewy, lit from behind so the fine hairs catch the light like a halo. The color ribbon glistens.\n\nCAMERA:\nProbe-lens angle, positioned low and slightly ahead of the lipstick's path — the bullet moves toward camera in extreme slow motion, the color trail blooming behind it. Rack focus from the bullet tip to the color ribbon as it settles.\n\nSOUND:\nA soft, breathy vocal note — wordless, feminine — rises and holds over the piano. The composition breathes.",
     durationMs: 6000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33/720/1280',
@@ -579,31 +497,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene4',
-      sceneNumber: 4,
-      originalScript: {
-        extract:
-          "SCENE 4 — THE LIP\nDURATION: ~6 SECONDS\n\nVISUAL:\nCUT TO: A lipstick bullet — deep, burnished brown-rose (#3D2A24) — gliding in slow motion across the inside of a wrist. The product lays down a ribbon of saturated color, impossibly smooth, the pigment rich and dimensional. The wrist skin is luminous, dewy, lit from behind so the fine hairs catch the light like a halo. The color ribbon glistens.\n\nCAMERA:\nProbe-lens angle, positioned low and slightly ahead of the lipstick's path — the bullet moves toward camera in extreme slow motion, the color trail blooming behind it. Rack focus from the bullet tip to the color ribbon as it settles.\n\nSOUND:\nA soft, breathy vocal note — wordless, feminine — rises and holds over the piano. The composition breathes.",
-        dialogue: [],
-      },
-      metadata: {
-        title: 'The Lip',
-        durationSeconds: 6,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: 'Lipstick application on wrist',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_background',
-        elementTags: [],
-        colorPalette: '#F8E9DA #E2A8A1 #3D2A24 #F4D5C5 #FFFFFF',
-        lightingSetup:
-          'Soft glowing key with discreet edge light and subtle backlight',
-        styleTag: 'macro_beauty_photography',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:16.000Z'),
     updatedAt: new Date('2026-06-02T00:15:04.000Z'),
     previewThumbnailUrl:
@@ -622,8 +515,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQ8E692CA985WMB9SNXMX',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 4,
-    description:
-      'SCENE 5 — THE REVEAL\nDURATION: ~6 SECONDS\n\nVISUAL:\nCUT TO: A vertical portrait, centered in frame. A face — eyes closed, skin luminous, lit by a single soft key and a whisper of backlight that rims the cheekbones in warm gold. The complexion is dewy, flushed, alive. Lashes rest against the cheek. Lips — the same deep rose — are parted very slightly. There is complete stillness. Then, slowly, the eyes open. The gaze is direct, unhurried, sovereign.\n\nCAMERA:\nSlow, barely perceptible push-in. Centered. The face fills the 9:16 frame from chin to crown — a living portrait.\n\nSOUND:\nThe piano and vocal resolve to a single, resonant chord. Silence at the edges.',
     durationMs: 6000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX/720/1280',
@@ -654,31 +545,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene5',
-      sceneNumber: 5,
-      originalScript: {
-        extract:
-          'SCENE 5 — THE REVEAL\nDURATION: ~6 SECONDS\n\nVISUAL:\nCUT TO: A vertical portrait, centered in frame. A face — eyes closed, skin luminous, lit by a single soft key and a whisper of backlight that rims the cheekbones in warm gold. The complexion is dewy, flushed, alive. Lashes rest against the cheek. Lips — the same deep rose — are parted very slightly. There is complete stillness. Then, slowly, the eyes open. The gaze is direct, unhurried, sovereign.\n\nCAMERA:\nSlow, barely perceptible push-in. Centered. The face fills the 9:16 frame from chin to crown — a living portrait.\n\nSOUND:\nThe piano and vocal resolve to a single, resonant chord. Silence at the edges.',
-        dialogue: [],
-      },
-      metadata: {
-        title: 'The Reveal',
-        durationSeconds: 6,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: "Reveal of the model's face",
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_background',
-        elementTags: [],
-        colorPalette: '#F8E9DA #E2A8A1 #3D2A24 #F4D5C5 #FFFFFF',
-        lightingSetup:
-          'soft glowing key light from above with warm gold rim and edge light',
-        styleTag: 'macro_beauty_photography_luxurious',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:18.000Z'),
     updatedAt: new Date('2026-06-02T00:15:18.000Z'),
     previewThumbnailUrl:
@@ -697,8 +563,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQA9A3SYCK47G14S0YB8Y',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 5,
-    description:
-      "SCENE 6 — HERO PRODUCT\nDURATION: ~4 SECONDS\n\nVISUAL:\nCUT TO: The hero product — bottle, jar, or compact — centered on a pure warm-white (#FFFFFF) surface. Soft key light from the upper left. A discreet edge light on the right side traces the product's silhouette in gold. The background gradient shifts from ivory to the softest peach (#F8E9DA). The product sits still, perfect, inevitable.\n\nCAMERA:\nLocked frame. No movement. Let the product breathe.\n\nSOUND:\nSilence, then — a single clear piano note, like a signature.\n\nSUPER:\nBrand name. Clean serif. White. Centered.\nTagline fades in beneath — one line, unhurried.\n\nFADE TO WHITE.",
     durationMs: 4000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y/720/1280',
@@ -729,31 +593,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene6',
-      sceneNumber: 6,
-      originalScript: {
-        extract:
-          "SCENE 6 — HERO PRODUCT\nDURATION: ~4 SECONDS\n\nVISUAL:\nCUT TO: The hero product — bottle, jar, or compact — centered on a pure warm-white (#FFFFFF) surface. Soft key light from the upper left. A discreet edge light on the right side traces the product's silhouette in gold. The background gradient shifts from ivory to the softest peach (#F8E9DA). The product sits still, perfect, inevitable.\n\nCAMERA:\nLocked frame. No movement. Let the product breathe.\n\nSOUND:\nSilence, then — a single clear piano note, like a signature.\n\nSUPER:\nBrand name. Clean serif. White. Centered.\nTagline fades in beneath — one line, unhurried.\n\nFADE TO WHITE.",
-        dialogue: [],
-      },
-      metadata: {
-        title: 'Hero Product',
-        durationSeconds: 4,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: 'Hero product showcase',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_background',
-        elementTags: [],
-        colorPalette: '#F8E9DA #E2A8A1 #FFFFFF #F4D5C5',
-        lightingSetup:
-          'Soft glowing key from upper left with discreet golden edge light',
-        styleTag: 'macro_beauty_photography',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:20.000Z'),
     updatedAt: new Date('2026-06-02T00:14:32.000Z'),
     previewThumbnailUrl:
@@ -772,8 +611,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     id: '01KT2TQAY2YNXFX1GVKP7HK43K',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
     orderIndex: 6,
-    description:
-      'END CARD\nDURATION: ~1 SECOND\nBrand logo. White on warm ivory. Holds. Fades.',
     durationMs: 3000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K/720/1280',
@@ -804,30 +641,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     motionPromptData: null,
-    metadata: {
-      sceneId: 'scene7',
-      sceneNumber: 7,
-      originalScript: {
-        extract:
-          'END CARD\nDURATION: ~1 SECOND\nBrand logo. White on warm ivory. Holds. Fades.',
-        dialogue: [],
-      },
-      metadata: {
-        title: 'End Card',
-        durationSeconds: 3,
-        location: 'Abstract macro background',
-        timeOfDay: '',
-        storyBeat: 'Closing brand logo',
-      },
-      continuity: {
-        characterTags: [],
-        environmentTag: 'abstract_macro_background',
-        elementTags: [],
-        colorPalette: '#F8E9DA #FFFFFF #F4D5C5',
-        lightingSetup: 'soft_glowing_key_upper_left',
-        styleTag: 'macro_beauty_photography',
-      },
-    },
     createdAt: new Date('2026-06-02T00:11:20.000Z'),
     updatedAt: new Date('2026-06-02T00:14:18.000Z'),
     previewThumbnailUrl:

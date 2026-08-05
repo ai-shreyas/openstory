@@ -108,7 +108,6 @@ export async function computeShotStaleness(args: {
   refs?: ShotStalenessRefs;
 }): Promise<ShotStalenessResult> {
   const { scopedDb, sequence, shot, frame, selectedImage, scene, refs } = args;
-  const shotForHash = scene ? { ...shot, metadata: scene } : shot;
 
   const liveHashes: ShotLiveHashes = {
     thumbnail: null,
@@ -141,7 +140,8 @@ export async function computeShotStaleness(args: {
             ]);
 
         const snapshot = await buildRegenerateShotSnapshot({
-          shot: shotForHash,
+          shot,
+          scene,
           imagePrompt: frame.imagePrompt,
           characters,
           locations,

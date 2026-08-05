@@ -25,6 +25,10 @@
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getGenerationChannel } from '@/lib/realtime';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type { CloudflareEnv } from '@/lib/workflow/types';
@@ -91,12 +95,14 @@ async function regenerateShotsIfNeeded(
           `[RecastLocationWorkflow:cf] Sequence ${sequenceId} not found`
         );
       }
-      const [characters, locations, elements, shots] = await Promise.all([
-        scopedDb.characters.listWithSheets(sequenceId),
-        scopedDb.sequenceLocations.listWithReferences(sequenceId),
-        scopedDb.sequenceElements.list(sequenceId),
-        scopedDb.shots.getByIds(input.affectedShotIds),
-      ]);
+      const [characters, locations, elements, shots, sceneContext] =
+        await Promise.all([
+          scopedDb.characters.listWithSheets(sequenceId),
+          scopedDb.sequenceLocations.listWithReferences(sequenceId),
+          scopedDb.sequenceElements.list(sequenceId),
+          scopedDb.shots.getByIds(input.affectedShotIds),
+          loadSceneContextBySequence(scopedDb, sequenceId),
+        ]);
       if (shots.length !== input.affectedShotIds.length) {
         const found = new Set(shots.map((f) => f.id));
         const missing = input.affectedShotIds.filter((id) => !found.has(id));
@@ -114,6 +120,7 @@ async function regenerateShotsIfNeeded(
         shots.map((shot) =>
           buildRegenerateShotSnapshot({
             shot,
+            scene: resolveSceneForShot(shot, sceneContext).scene,
             imagePrompt: framesByShot.get(shot.id)?.imagePrompt ?? null,
             characters,
             locations,

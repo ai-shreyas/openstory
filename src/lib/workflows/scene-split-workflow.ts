@@ -95,9 +95,7 @@ async function persistStreamedSceneAndShot(
   return scopedDb.shots.upsert({
     sequenceId,
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-    description: scene.originalScript?.extract || '',
     orderIndex,
-    metadata: scene,
     durationMs: Math.round(
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
       (scene.metadata?.durationSeconds || 3) * 1000
@@ -498,9 +496,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
             ({
               sequenceId,
               // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-              description: scene.originalScript?.extract || '',
               orderIndex: index,
-              metadata: scene,
               durationMs: Math.round(
                 // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
                 (scene.metadata?.durationSeconds || 3) * 1000

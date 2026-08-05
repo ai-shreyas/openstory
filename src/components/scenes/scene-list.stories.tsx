@@ -36,8 +36,6 @@ type PsShotConfig = {
   sceneId: DbSceneId;
   shotNumber: number;
   segmentId: string;
-  title: string;
-  extract: string;
   img: string;
 };
 
@@ -46,64 +44,48 @@ const PS_SHOT_CONFIGS: PsShotConfig[] = [
     sceneId: PS_SCENE_1,
     shotNumber: 1,
     segmentId: 'seg-1a',
-    title: 'Wide establishing',
-    extract: 'EXT. ROOFTOP — NIGHT. The city sprawls out below.',
     img: 'https://v3b.fal.media/files/b/0aa07ce2/iFBVdtquvFO-l2vGJRVsC_mNFiZslo.png',
   },
   {
     sceneId: PS_SCENE_1,
     shotNumber: 2,
     segmentId: 'seg-1a',
-    title: 'Push-in on the hero',
-    extract: 'She steps to the ledge, jaw set against the wind.',
     img: 'https://v3b.fal.media/files/b/0aa07ce4/HgxEwVHNrUixbm-_dR8bc_2Bacz9wg.png',
   },
   {
     sceneId: PS_SCENE_1,
     shotNumber: 3,
     segmentId: 'seg-1a',
-    title: 'Reverse on the rival',
-    extract: 'He emerges from the stairwell shadow.',
     img: 'https://v3b.fal.media/files/b/0aa07ce4/iLS11FJRxRr8H_Iw9_H_O_1csN9Umz.png',
   },
   {
     sceneId: PS_SCENE_1,
     shotNumber: 4,
     segmentId: 'seg-1b',
-    title: 'Handheld chase',
-    extract: 'They break into a sprint across the gravel.',
     img: 'https://v3b.fal.media/files/b/0aa07ce5/_HAebb2kDrh97bR2DL6vu_yBeNTZZJ.png',
   },
   {
     sceneId: PS_SCENE_1,
     shotNumber: 5,
     segmentId: 'seg-1b',
-    title: 'Final standoff',
-    extract: 'Both freeze at the roof’s edge.',
     img: 'https://v3b.fal.media/files/b/0aa07ce5/BwTrjcxVX-Fs1We1l4IBM_QaK1Bd1n.png',
   },
   {
     sceneId: PS_SCENE_2,
     shotNumber: 1,
     segmentId: 'seg-2',
-    title: 'Dolly forward',
-    extract: 'INT. NEON ALLEY — CONTINUOUS. Rain hisses on the signage.',
     img: 'https://v3b.fal.media/files/b/0aa07ce6/NeohE6XI-Adf4a-6aDGGS_c85Jc7D1.png',
   },
   {
     sceneId: PS_SCENE_2,
     shotNumber: 2,
     segmentId: 'seg-2',
-    title: 'Tracking run',
-    extract: 'She weaves between the market stalls.',
     img: 'https://v3b.fal.media/files/b/0aa07cee/bV9Wx1jvwg27xsfwiqUU5_5ZLNhv3V.png',
   },
   {
     sceneId: PS_SCENE_2,
     shotNumber: 3,
     segmentId: 'seg-2',
-    title: 'Tilt to the sky',
-    extract: 'The camera lifts to the rain-streaked billboards.',
     img: 'https://v3b.fal.media/files/b/0aa07cee/S-dSgtIz6Coye0LHSs-Yc_thr2EVqB.png',
   },
   // Scene 3: a single shot — still bracketed so its video model shows.
@@ -111,8 +93,6 @@ const PS_SHOT_CONFIGS: PsShotConfig[] = [
     sceneId: PS_SCENE_3,
     shotNumber: 1,
     segmentId: 'seg-3',
-    title: 'Coda — fade to black',
-    extract: 'EXT. HORIZON — DAWN. A single figure against the light.',
     img: 'https://v3b.fal.media/files/b/0aa07cee/Xv31Iyg2Rdhkum7LB70DK_3Ui384QL.png',
   },
 ];
@@ -122,7 +102,6 @@ const psBases = generateMockShots(PS_SHOT_CONFIGS.length, PS_SEQ);
 const perSegmentShots: ShotWithImage[] = PS_SHOT_CONFIGS.map((cfg, index) => {
   const base = psBases[index];
   if (!base) throw new Error(`missing mock shot base at ${index}`);
-  const md = base.metadata;
   return {
     ...base,
     id: `shot-${index}`,
@@ -136,16 +115,6 @@ const perSegmentShots: ShotWithImage[] = PS_SHOT_CONFIGS.map((cfg, index) => {
     thumbnailError: null,
     videoUrl: PS_VIDEO_URL,
     videoStatus: 'completed',
-    description: cfg.title,
-    metadata: md
-      ? {
-          ...md,
-          ...(md.metadata
-            ? { metadata: { ...md.metadata, title: cfg.title } }
-            : {}),
-          originalScript: { ...md.originalScript, extract: cfg.extract },
-        }
-      : md,
   };
 });
 

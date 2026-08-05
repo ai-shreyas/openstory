@@ -7,7 +7,7 @@ import { NotFoundError } from '@/lib/errors';
 import {
   composeSequenceScriptFromDb,
   loadSceneContextBySequence,
-  overlaySceneScript,
+  resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { createServerFn } from '@tanstack/react-start';
@@ -154,8 +154,17 @@ async function bootstrapMotionHashesForScene({
     [...anchorByShot.values()].map((frame) => frame.id)
   );
 
+  const sceneContext = await loadSceneContextBySequence(scopedDb, sequence.id);
+
   for (const shot of shots) {
-    if (!shot.metadata) continue;
+    const ctxEntry = shot.sceneId ? sceneContext.get(shot.sceneId) : null;
+    if (!ctxEntry) continue;
+    // Hash against the script as it was BEFORE the edit.
+    const { scene } = resolveSceneForShot(shot, {
+      ...ctxEntry,
+      script: preEditScript ?? ctxEntry.script,
+    });
+    if (!scene) continue;
     try {
       const ctx = await loadNarrowShotPromptContext({
         scopedDb,
@@ -165,7 +174,7 @@ async function bootstrapMotionHashesForScene({
           aspectRatio: sequence.aspectRatio,
           analysisModel: sequence.analysisModel,
         },
-        scene: overlaySceneScript(shot.metadata, preEditScript),
+        scene,
         startingFrameImageUrl: (() => {
           const anchor = anchorByShot.get(shot.id);
           return anchor ? (selectedByFrame.get(anchor.id)?.url ?? null) : null;
