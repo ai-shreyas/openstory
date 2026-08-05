@@ -294,7 +294,12 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
               tags: logTags,
               metadata: logMetadata,
               sessionId: callContext.sequenceId,
-              userId: callContext.userId,
+              // Fall back to the scoped db's user. Callers reliably pass
+              // `scopedDb` (it resolves the LLM key and books the credit
+              // deduction) but often not `userId`, which silently produced
+              // anonymous generations — see the media-side note in
+              // image-generation.ts.
+              userId: callContext.userId ?? callContext.scopedDb?.userId,
             }),
             {
               onFinish: (_ctx: unknown, info: { usage?: TokenUsage }) => {
@@ -468,7 +473,8 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
             tags: logTags,
             metadata: logMetadata,
             sessionId: callContext.sequenceId,
-            userId: callContext.userId,
+            // Same scopedDb fallback as the non-streaming path above.
+            userId: callContext.userId ?? callContext.scopedDb?.userId,
           }),
           {
             onFinish: (_ctx: unknown, info: { usage?: TokenUsage }) => {
