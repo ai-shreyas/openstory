@@ -955,6 +955,17 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
     onRegenerateStart(shot.id, 'motion');
 
+    const withEditedPrompt = (
+      current: AssemblableMotionPrompt | null
+    ): AssemblableMotionPrompt | null =>
+      editedMotionPrompt
+        ? {
+            dialogue: current?.dialogue ?? null,
+            audio: current?.audio ?? null,
+            fullPrompt: editedMotionPrompt,
+          }
+        : current;
+
     // Optimistic update for shot list query
     queryClient.setQueryData<ShotWithImage[]>(
       shotKeys.list(shot.sequenceId),
@@ -965,7 +976,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             ? {
                 ...f,
                 videoStatus: 'generating' as const,
-                motionPrompt: editedMotionPrompt || f.motionPrompt,
+                motionPromptData: withEditedPrompt(f.motionPromptData),
                 motionModel: regenMotionModel,
               }
             : f
@@ -981,7 +992,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         return {
           ...oldShot,
           videoStatus: 'generating' as const,
-          motionPrompt: editedMotionPrompt || oldShot.motionPrompt,
+          motionPromptData: withEditedPrompt(oldShot.motionPromptData),
           motionModel: regenMotionModel,
         };
       }
@@ -1052,8 +1063,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const sceneDescription = scene?.script?.extract ?? null;
 
   // Raw prompt for editing (just motion direction, no dialogue/audio)
-  const rawMotionPrompt =
-    shot?.motionPrompt || motionPromptData?.fullPrompt || '';
+  const rawMotionPrompt = motionPromptData?.fullPrompt || '';
 
   // Assembled preview: exactly what resolveMotionPrompt produces on the server.
   // Overlay any unsaved edit onto the structured prompt so the dialogue/audio

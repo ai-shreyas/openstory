@@ -80,7 +80,6 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       resolveMotionPromptFromVersion(
         selectedMotion,
         {
-          motionPromptMirror: shot.motionPrompt,
           characterTags: context.scene?.continuity?.characterTags,
           description: context.scene?.originalScript.extract ?? null,
         },
@@ -359,7 +358,6 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
           prompt: resolveMotionPromptFromVersion(
             selectedMotionByShot.get(shot.id),
             {
-              motionPromptMirror: shot.motionPrompt,
               characterTags: scene?.continuity?.characterTags,
               description: scene?.originalScript.extract ?? null,
             },

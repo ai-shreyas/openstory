@@ -643,14 +643,9 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         variantOnly: true,
         shots: eligible.map((f) => {
           const selectedMotion = selectedMotionByShot.get(f.id);
-          // Prefer the selected version's structured prompt; fall back to the
-          // `shot.motionPrompt` mirror for legacy shots with no version pointer
-          // (#713) so they still animate with their existing motion prompt.
           const motionPrompt = selectedMotion
             ? motionPromptFromVersion(selectedMotion)
-            : f.motionPrompt
-              ? { fullPrompt: f.motionPrompt, dialogue: null, audio: null }
-              : undefined;
+            : undefined;
           return {
             shotId: f.id,
             imageUrl: f.thumbnailUrl ?? '',

@@ -99,9 +99,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   // Check if all eligible shots have motion prompts ready
   const motionPromptsReady = useMemo(() => {
     if (!eligibleShots.length) return true;
-    return eligibleShots.every(
-      (f) => f.motionPrompt || f.motionPromptData?.fullPrompt
-    );
+    return eligibleShots.every((f) => f.motionPromptData?.fullPrompt);
   }, [eligibleShots]);
 
   const handleGenerateMotion = async () => {

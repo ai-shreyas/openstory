@@ -445,7 +445,6 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
           const prompt = resolveMotionPromptFromVersion(
             selectedMotion,
             {
-              motionPromptMirror: shot.motionPrompt,
               characterTags: scene?.continuity?.characterTags,
               description: scene?.originalScript.extract ?? null,
             },

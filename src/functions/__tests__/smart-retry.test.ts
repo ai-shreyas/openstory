@@ -205,10 +205,40 @@ function makeContext(
   const listFailedVideoModels = vi.fn(
     async () => selectedModels.failedVideo ?? new Map<string, string>()
   );
-  // Motion prompt is resolved from the selected version now (#713); the retry
-  // path reads it per shot. No selected version in these fixtures → resolution
-  // falls back to the `motionPrompt` mirror.
-  const getSelectedMotion = vi.fn(async () => null);
+  // The motion prompt resolves from the shot's selected version (#713); the
+  // backfill guarantees one exists wherever a prompt does.
+  const motionVersionByShot = new Map(
+    shots.flatMap((s) =>
+      s.motionPrompt
+        ? [
+            [
+              s.id,
+              {
+                id: `${s.id}-mv`,
+                shotId: s.id,
+                promptType: 'motion' as const,
+                text: s.motionPrompt,
+                components: null,
+                parameters: null,
+                dialogue: null,
+                audio: null,
+                source: 'ai-generated' as const,
+                inputHash: null,
+                analysisModel: null,
+                status: 'completed' as const,
+                pendingInputHash: null,
+                workflowRunId: null,
+                createdAt: NOW,
+                createdBy: null,
+              },
+            ],
+          ]
+        : []
+    )
+  );
+  const getSelectedMotion = vi.fn(
+    async (shotId: string) => motionVersionByShot.get(shotId) ?? null
+  );
   const stub = {
     shots: { listBySequence, ensureAnchorFrames },
     frames: { listAnchorsBySequence },
@@ -409,7 +439,9 @@ describe('executeSmartRetry — partial retry status reset', () => {
         shotId: 'shot-1',
         sequenceId: 'seq_1',
         imageUrl: 'https://cdn/thumb.jpg',
-        prompt: 'slow pan across the lab',
+        // The selected version is assembled for the target model, so the
+        // stored text is carried rather than reproduced verbatim.
+        prompt: expect.stringContaining('slow pan across the lab'),
         duration: 5,
       }),
       expect.objectContaining({ label: expect.any(String) })

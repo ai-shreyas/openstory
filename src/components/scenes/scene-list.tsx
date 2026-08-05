@@ -123,9 +123,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
   // Check if all eligible shots have motion prompts ready
   const motionPromptsReady = useMemo(() => {
     if (!notStartedShots.length) return true;
-    return notStartedShots.every(
-      (f) => f.motionPrompt || f.motionPromptData?.fullPrompt
-    );
+    return notStartedShots.every((f) => f.motionPromptData?.fullPrompt);
   }, [notStartedShots]);
 
   const handleGenerateMotion = async () => {

@@ -20,11 +20,10 @@ export function getVisualPrompt(shot: ShotWithImage): string | null {
 
 /**
  * Get motion prompt from shot - client-safe utility.
- * `shot.motionPrompt` mirrors the selected motion version; fall back to the
- * projected structured prompt's `fullPrompt` (#713).
+ * Projected from the shot's selected motion version (#713).
  */
 export function getMotionPrompt(shot: ShotWithImage): string | null {
-  return shot.motionPrompt || shot.motionPromptData?.fullPrompt || null;
+  return shot.motionPromptData?.fullPrompt || null;
 }
 
 /**

@@ -333,7 +333,6 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         prompt: resolveMotionPromptFromVersion(
           selectedMotion,
           {
-            motionPromptMirror: shot.motionPrompt,
             characterTags: scene?.continuity?.characterTags,
             description: scene?.originalScript.extract ?? null,
           },

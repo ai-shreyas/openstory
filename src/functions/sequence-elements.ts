@@ -436,7 +436,6 @@ export const replaceSequenceElementFn = createServerFn({ method: 'POST' })
       motionPromptByShotId[shot.id] = resolveMotionPromptFromVersion(
         selectedMotionByShot.get(shot.id),
         {
-          motionPromptMirror: shot.motionPrompt,
           characterTags: scene?.continuity?.characterTags,
           description: scene?.originalScript.extract ?? null,
         },
