@@ -30,7 +30,7 @@ export const SITE_CONFIG = {
   // hand-uploaded R2 file.
   ogImage: `${APP_URL}/og.jpg`,
   ctaText: 'Get Started',
-  ctaHref: '/sequences/new',
+  ctaHref: '/',
   githubHref: 'https://github.com/openstory-so/openstory',
   xHref: 'https://x.com/openstory_so',
   youtubeHref:

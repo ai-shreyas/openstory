@@ -12,19 +12,22 @@ test.describe('Sequences', () => {
     await expect(page).toHaveURL(/\/sequences/);
   });
 
-  test('can access new sequence page', async ({ page }) => {
-    await page.goto('/sequences/new');
+  test('home page has script input for anonymous visitors', async ({
+    page,
+  }) => {
+    await page.goto('/');
 
-    await expect(page).toHaveURL('/sequences/new');
-  });
-
-  test('new sequence page has script input', async ({ page }) => {
-    await page.goto('/sequences/new');
-
+    await expect(page).toHaveURL('/');
     // The script field is a TipTap-backed contenteditable wrapped in the
     // MarkdownEditor component. Target it by data-slot so the assertion is
     // resilient to internal ProseMirror DOM shape.
     const editor = page.locator('[data-slot="markdown-editor"]');
     await expect(editor).toBeVisible();
+  });
+
+  test('anonymous /sequences/new redirects to login', async ({ page }) => {
+    await page.goto('/sequences/new');
+
+    await expect(page).toHaveURL(/\/login/);
   });
 });

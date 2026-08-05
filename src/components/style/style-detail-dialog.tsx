@@ -96,7 +96,7 @@ const SampleClip: FC<{
           className="absolute right-2 top-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity hover:opacity-100"
         >
           <Link
-            to="/sequences/new"
+            to="/"
             search={{ style: slug }}
             hash="compose"
             aria-label={`Try the ${styleName} style`}
@@ -123,7 +123,7 @@ const ConfigRow: FC<{ label: string; value: string }> = ({ label, value }) => (
  * Detail view for a style: its canonical sample video, the three preview
  * stills, description, and the full visual config (mood, lighting, camera,
  * palette, reference films, tags), plus a "Use this style" CTA that opens the
- * composer seeded with this style (`/sequences/new?style=<slug>#compose`, #956).
+ * composer seeded with this style (`/?style=<slug>#compose`, #956).
  * Opened from the styles page card.
  */
 export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
@@ -315,7 +315,7 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
         ) : (
           <Button asChild>
             <Link
-              to="/sequences/new"
+              to="/"
               search={{ style: styleSlug(style.name), prefill: 'style' }}
               hash="compose"
               aria-label={`Use the ${style.name} style`}

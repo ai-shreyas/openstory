@@ -38,7 +38,7 @@ type AuthFormProps = {
 
 export function AuthForm({
   emailEntered,
-  redirectTo = '/sequences/new',
+  redirectTo = '/',
   authOptions,
 }: AuthFormProps) {
   const navigate = useNavigate();

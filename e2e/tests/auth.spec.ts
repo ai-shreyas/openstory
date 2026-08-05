@@ -13,9 +13,12 @@ baseTest.describe('Route Protection', () => {
     async ({ page }) => {
       await page.goto('/');
 
-      // The app itself is the front page now — anonymous visitors land directly
-      // in the new-sequence composer rather than a marketing landing page.
-      await expect(page).toHaveURL(/\/sequences\/new/);
+      // The app itself is the front page — anonymous visitors land on `/` with
+      // the composer rather than a marketing landing page or /sequences/new.
+      await expect(page).toHaveURL('/');
+      await expect(
+        page.getByRole('heading', { name: 'Tell your whole story' })
+      ).toBeVisible();
     }
   );
 
@@ -35,7 +38,7 @@ baseTest.describe('Route Protection', () => {
   baseTest(
     'anonymous generate is intercepted by the login dialog',
     async ({ page }) => {
-      await page.goto('/sequences/new');
+      await page.goto('/');
 
       // Composing a draft is allowed while logged out… (the script input is a
       // TipTap contenteditable, not a <textarea> — same locator as
@@ -56,11 +59,11 @@ baseTest.describe('Route Protection', () => {
       await generate.click();
 
       // …but the action itself is gated: the auth gate opens the login dialog
-      // in place and bails — no sequence is created, we stay on the composer.
+      // in place and bails — no sequence is created, we stay on the home composer.
       const dialog = page.getByRole('dialog', { name: 'Sign in to continue' });
       await expect(dialog).toBeVisible();
       await expect(dialog.getByLabel('Email')).toBeVisible();
-      await expect(page).toHaveURL(/\/sequences\/new/);
+      await expect(page).toHaveURL('/');
     }
   );
 
@@ -74,6 +77,14 @@ baseTest.describe('Route Protection', () => {
       await expect(page.getByLabel('Email')).toBeVisible();
     }
   );
+
+  baseTest('anonymous /sequences/new redirects to login', async ({ page }) => {
+    // /sequences/new is the signed-in composer alias; home is at `/`.
+    await page.goto('/sequences/new');
+
+    await expect(page).toHaveURL(/\/login/);
+    await expect(page.getByLabel('Email')).toBeVisible();
+  });
 
   baseTest('login page is accessible', async ({ page }) => {
     await page.goto('/login');
@@ -111,7 +122,7 @@ test.describe('Authenticated User', () => {
   test('can access sequences page', async ({ authenticatedPage }) => {
     await authenticatedPage.goto('/sequences');
 
-    // Should not be redirected to login (may redirect to /sequences/new if no sequences)
+    // Should not be redirected to login
     await expect(authenticatedPage).toHaveURL(/\/sequences/);
     await expect(authenticatedPage).not.toHaveURL(/\/login/);
   });

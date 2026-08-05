@@ -33,7 +33,7 @@ export function SiteFooter() {
           size="lg"
           className="mt-8 rounded-full bg-background px-8 text-foreground hover:bg-background/90"
         >
-          <Link to="/sequences/new">Get Started</Link>
+          <Link to="/">Get Started</Link>
         </Button>
       </div>
 
