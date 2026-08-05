@@ -137,7 +137,17 @@ async function generateImageInternal(
     adapter,
     prompt,
     modelOptions,
-    middleware: aiObservabilityMiddleware(options?.observability),
+    middleware: aiObservabilityMiddleware({
+      // Attribution is DERIVED, not threaded. `scopedDb` is already built
+      // from (teamId, userId) and already passed by every call site that has
+      // a user, so defaulting from it means a new call site is attributed
+      // correctly without remembering to opt in — and there is no per-site
+      // boilerplate to drift. Explicit `observability` still wins, for the
+      // semantic bits (observationName, tags, sessionId) that only the
+      // caller knows.
+      userId: options?.scopedDb?.userId,
+      ...options?.observability,
+    }),
     debug: false,
   });
 

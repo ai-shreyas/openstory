@@ -161,7 +161,11 @@ export async function submitMotionJob(
     }),
     prompt: optimisedPrompt,
     modelOptions,
-    middleware: aiObservabilityMiddleware(options.observability),
+    middleware: aiObservabilityMiddleware({
+      // Derived from scopedDb — see the note in image-generation.ts.
+      userId: options.scopedDb?.userId,
+      ...options.observability,
+    }),
     debug: false,
   });
 
