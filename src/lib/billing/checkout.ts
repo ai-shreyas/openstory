@@ -4,7 +4,11 @@
  */
 
 import { ValidationError } from '@/lib/errors';
-import { MIN_TOPUP_AMOUNT_USD } from './constants';
+import {
+  formatPlatformFeePercent,
+  MIN_TOPUP_AMOUNT_USD,
+  splitCheckoutAmounts,
+} from './constants';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getStripeOrThrow } from './stripe';
 
@@ -62,7 +66,10 @@ export async function createCheckoutSession(
     await scopedDb.billing.saveStripeCustomerId(customerId);
   }
 
-  const amountCents = Math.round(amountUsd * 100);
+  const { creditUsd, feeUsd } = splitCheckoutAmounts(amountUsd);
+  const creditCents = Math.round(creditUsd * 100);
+  const feeCents = Math.round(feeUsd * 100);
+  const feeLabel = formatPlatformFeePercent();
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
@@ -76,10 +83,21 @@ export async function createCheckoutSession(
       {
         price_data: {
           currency: 'usd',
-          unit_amount: amountCents,
+          unit_amount: creditCents,
           product_data: {
-            name: `Credits — $${amountUsd.toFixed(2)}`,
-            description: `Add $${amountUsd.toFixed(2)} to your team wallet`,
+            name: `Credits — $${creditUsd.toFixed(2)}`,
+            description: `Add $${creditUsd.toFixed(2)} to your team wallet`,
+          },
+        },
+        quantity: 1,
+      },
+      {
+        price_data: {
+          currency: 'usd',
+          unit_amount: feeCents,
+          product_data: {
+            name: `Platform fee (${feeLabel})`,
+            description: `One-time platform fee on credit purchases. Generations deduct credits at lab rates with no extra fee.`,
           },
         },
         quantity: 1,

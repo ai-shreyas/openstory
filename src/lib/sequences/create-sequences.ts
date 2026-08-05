@@ -24,6 +24,7 @@ import {
 import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { estimateStoryboardCost } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -31,6 +32,7 @@ import type { Sequence } from '@/types/database';
 import type { CreateSequenceInput } from '@/lib/schemas/sequence.schemas';
 import { copySequenceElements } from '@/lib/sequence-elements/copy-sequence-elements';
 import { promoteTempElements } from '@/lib/sequence-elements/promote-temp-elements';
+import { captureProductEvent } from '@/lib/observability/product-events';
 import { bumpStylePopularity } from '@/lib/style/bump-style-popularity';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type { StoryboardWorkflowInput } from '@/lib/workflow/types';
@@ -152,6 +154,7 @@ export const createSequences = createServerOnlyFn(
         // inside motion-batch), so don't charge for music tracks that won't run.
         autoGenerateMusic: autoGenerateMotion && autoGenerateMusic,
         audioModels,
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -245,12 +248,34 @@ export const createSequences = createServerOnlyFn(
 
     // One click = one popularity bump + one analytics event, regardless of how
     // many analysis models the caller picked. Fire-and-forget — never block.
+    const sequenceIds = created.map((c) => c.sequence.id);
     bumpStylePopularity({
       scopedDb: context.scopedDb,
       styleId,
-      sequenceIds: created.map((c) => c.sequence.id),
+      sequenceIds,
       teamId,
       userId: context.user.id,
+    });
+
+    // Server-side so dashboard + public API both feed #product-alerts (#1088).
+    captureProductEvent({
+      distinctId: context.user.id,
+      event: 'sequence_generated',
+      properties: {
+        team_id: teamId,
+        style_id: styleId,
+        aspect_ratio: aspectRatio,
+        sequence_ids: sequenceIds,
+        sequence_count: sequenceIds.length,
+        analysis_model_count: analysisModels.length,
+        image_models: imageModels,
+        video_models: videoModels,
+        audio_models: audioModels,
+        auto_generate_motion: autoGenerateMotion,
+        auto_generate_music: autoGenerateMusic,
+        script_length: data.script.length,
+        source: sourceSequenceId ? 'regenerate' : 'create',
+      },
     });
 
     return {

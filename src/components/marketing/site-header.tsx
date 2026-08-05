@@ -22,6 +22,7 @@ function GitHubIcon({ className }: { className?: string }) {
 }
 
 const navLinks = [
+  { href: '/pricing', label: 'Pricing', external: false },
   { href: '/docs', label: 'Docs', external: false },
   { href: SITE_CONFIG.githubHref, label: 'GitHub', external: true, icon: true },
 ] as const;

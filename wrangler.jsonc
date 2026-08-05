@@ -5,9 +5,10 @@
   "compatibility_date": "2025-11-18",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": {
-    // Sweep stuck generating-status rows every 5 minutes. See
-    // src/lib/cron/reconcile-all.ts and issue #727.
-    "crons": ["*/5 * * * *"],
+    // Sweep stuck generating-status rows every 5 minutes (#727) and refresh
+    // the model_pricing table daily (#1069 — the expression must match
+    // FAL_PRICING_CRON in src/lib/cron/refresh-fal-pricing.ts).
+    "crons": ["*/5 * * * *", "17 3 * * *", "37 * * * *"],
   },
   "observability": {
     "enabled": true,
@@ -165,14 +166,14 @@
       "class_name": "UpscaleShotVariantWorkflow",
     },
     {
-      "name": "visual-prompt-scene-workflow",
-      "binding": "VISUAL_PROMPT_SCENE_WORKFLOW",
-      "class_name": "VisualPromptSceneWorkflow",
+      "name": "frame-prompt-workflow",
+      "binding": "FRAME_PROMPT_WORKFLOW",
+      "class_name": "FramePromptWorkflow",
     },
     {
-      "name": "motion-prompt-scene-workflow",
-      "binding": "MOTION_PROMPT_SCENE_WORKFLOW",
-      "class_name": "MotionPromptSceneWorkflow",
+      "name": "motion-prompt-workflow",
+      "binding": "MOTION_PROMPT_WORKFLOW",
+      "class_name": "MotionPromptWorkflow",
     },
     {
       "name": "music-prompt-workflow",
@@ -210,14 +211,14 @@
       "class_name": "LocationBibleWorkflow",
     },
     {
-      "name": "visual-prompt-workflow",
-      "binding": "VISUAL_PROMPT_WORKFLOW",
-      "class_name": "VisualPromptWorkflow",
+      "name": "frame-prompt-batch-workflow",
+      "binding": "FRAME_PROMPT_BATCH_WORKFLOW",
+      "class_name": "FramePromptBatchWorkflow",
     },
     {
-      "name": "motion-prompt-workflow",
-      "binding": "MOTION_PROMPT_WORKFLOW",
-      "class_name": "MotionPromptWorkflow",
+      "name": "motion-prompt-batch-workflow",
+      "binding": "MOTION_PROMPT_BATCH_WORKFLOW",
+      "class_name": "MotionPromptBatchWorkflow",
     },
     {
       "name": "motion-music-prompts-workflow",
@@ -228,6 +229,11 @@
       "name": "regenerate-shots-workflow",
       "binding": "REGENERATE_SHOTS_WORKFLOW",
       "class_name": "RegenerateShotsWorkflow",
+    },
+    {
+      "name": "update-stale-shots-workflow",
+      "binding": "UPDATE_STALE_SHOTS_WORKFLOW",
+      "class_name": "UpdateStaleShotsWorkflow",
     },
     {
       "name": "recast-location-workflow",
@@ -253,6 +259,16 @@
       "name": "analyze-script-workflow",
       "binding": "ANALYZE_SCRIPT_WORKFLOW",
       "class_name": "AnalyzeScriptWorkflow",
+    },
+    {
+      "name": "sequence-export-workflow",
+      "binding": "SEQUENCE_EXPORT_WORKFLOW",
+      "class_name": "SequenceExportWorkflow",
+    },
+    {
+      "name": "asset-generation-workflow",
+      "binding": "ASSET_WORKFLOW",
+      "class_name": "AssetGenerationWorkflow",
     },
   ],
   // Realtime broker (#802): one SQLite-backed Durable Object per channel holds
@@ -392,14 +408,14 @@
           "class_name": "UpscaleShotVariantWorkflow",
         },
         {
-          "name": "visual-prompt-scene-workflow",
-          "binding": "VISUAL_PROMPT_SCENE_WORKFLOW",
-          "class_name": "VisualPromptSceneWorkflow",
+          "name": "frame-prompt-workflow",
+          "binding": "FRAME_PROMPT_WORKFLOW",
+          "class_name": "FramePromptWorkflow",
         },
         {
-          "name": "motion-prompt-scene-workflow",
-          "binding": "MOTION_PROMPT_SCENE_WORKFLOW",
-          "class_name": "MotionPromptSceneWorkflow",
+          "name": "motion-prompt-workflow",
+          "binding": "MOTION_PROMPT_WORKFLOW",
+          "class_name": "MotionPromptWorkflow",
         },
         {
           "name": "music-prompt-workflow",
@@ -437,14 +453,14 @@
           "class_name": "LocationBibleWorkflow",
         },
         {
-          "name": "visual-prompt-workflow",
-          "binding": "VISUAL_PROMPT_WORKFLOW",
-          "class_name": "VisualPromptWorkflow",
+          "name": "frame-prompt-batch-workflow",
+          "binding": "FRAME_PROMPT_BATCH_WORKFLOW",
+          "class_name": "FramePromptBatchWorkflow",
         },
         {
-          "name": "motion-prompt-workflow",
-          "binding": "MOTION_PROMPT_WORKFLOW",
-          "class_name": "MotionPromptWorkflow",
+          "name": "motion-prompt-batch-workflow",
+          "binding": "MOTION_PROMPT_BATCH_WORKFLOW",
+          "class_name": "MotionPromptBatchWorkflow",
         },
         {
           "name": "motion-music-prompts-workflow",
@@ -455,6 +471,11 @@
           "name": "regenerate-shots-workflow",
           "binding": "REGENERATE_SHOTS_WORKFLOW",
           "class_name": "RegenerateShotsWorkflow",
+        },
+        {
+          "name": "update-stale-shots-workflow",
+          "binding": "UPDATE_STALE_SHOTS_WORKFLOW",
+          "class_name": "UpdateStaleShotsWorkflow",
         },
         {
           "name": "recast-location-workflow",
@@ -481,15 +502,43 @@
           "binding": "ANALYZE_SCRIPT_WORKFLOW",
           "class_name": "AnalyzeScriptWorkflow",
         },
+        {
+          "name": "sequence-export-workflow",
+          "binding": "SEQUENCE_EXPORT_WORKFLOW",
+          "class_name": "SequenceExportWorkflow",
+        },
+        {
+          "name": "asset-generation-workflow",
+          "binding": "ASSET_WORKFLOW",
+          "class_name": "AssetGenerationWorkflow",
+        },
+      ],
+      // Server-side video export (#968). The `VideoExportContainer` Durable
+      // Object fronts a Cloudflare Container (Node + @mediabunny/server) that
+      // stitches a sequence's scene MP4s for the API. Declared in PRODUCTION
+      // ONLY (not the default/test blocks) so `bun dev` and hermetic e2e need
+      // no Docker — the image is built only on deploy. The
+      // SequenceExportWorkflow tolerates the binding's absence outside prod.
+      "containers": [
+        {
+          "class_name": "VideoExportContainer",
+          "image": "./containers/video-export/Dockerfile",
+          "instance_type": "standard",
+          "max_instances": 3,
+        },
       ],
       // Realtime broker DO — redeclared because durable_objects + migrations
       // are non-inheritable across env blocks. Keep the `v1` migration tag in
-      // sync with the top-level block.
+      // sync with the top-level block. The container DO is production-only.
       "durable_objects": {
         "bindings": [
           {
             "name": "REALTIME",
             "class_name": "RealtimeChannel",
+          },
+          {
+            "name": "VIDEO_EXPORT_CONTAINER",
+            "class_name": "VideoExportContainer",
           },
         ],
       },
@@ -498,9 +547,13 @@
           "tag": "v1",
           "new_sqlite_classes": ["RealtimeChannel"],
         },
+        {
+          "tag": "v2",
+          "new_sqlite_classes": ["VideoExportContainer"],
+        },
       ],
       "triggers": {
-        "crons": ["*/5 * * * *"],
+        "crons": ["*/5 * * * *", "17 3 * * *", "37 * * * *"],
       },
       // Same forwarder as the top-level default — redeclared because
       // tail_consumers is non-inheritable across env blocks.
@@ -637,14 +690,14 @@
           "class_name": "UpscaleShotVariantWorkflow",
         },
         {
-          "name": "visual-prompt-scene-workflow",
-          "binding": "VISUAL_PROMPT_SCENE_WORKFLOW",
-          "class_name": "VisualPromptSceneWorkflow",
+          "name": "frame-prompt-workflow",
+          "binding": "FRAME_PROMPT_WORKFLOW",
+          "class_name": "FramePromptWorkflow",
         },
         {
-          "name": "motion-prompt-scene-workflow",
-          "binding": "MOTION_PROMPT_SCENE_WORKFLOW",
-          "class_name": "MotionPromptSceneWorkflow",
+          "name": "motion-prompt-workflow",
+          "binding": "MOTION_PROMPT_WORKFLOW",
+          "class_name": "MotionPromptWorkflow",
         },
         {
           "name": "music-prompt-workflow",
@@ -682,14 +735,14 @@
           "class_name": "LocationBibleWorkflow",
         },
         {
-          "name": "visual-prompt-workflow",
-          "binding": "VISUAL_PROMPT_WORKFLOW",
-          "class_name": "VisualPromptWorkflow",
+          "name": "frame-prompt-batch-workflow",
+          "binding": "FRAME_PROMPT_BATCH_WORKFLOW",
+          "class_name": "FramePromptBatchWorkflow",
         },
         {
-          "name": "motion-prompt-workflow",
-          "binding": "MOTION_PROMPT_WORKFLOW",
-          "class_name": "MotionPromptWorkflow",
+          "name": "motion-prompt-batch-workflow",
+          "binding": "MOTION_PROMPT_BATCH_WORKFLOW",
+          "class_name": "MotionPromptBatchWorkflow",
         },
         {
           "name": "motion-music-prompts-workflow",
@@ -700,6 +753,11 @@
           "name": "regenerate-shots-workflow",
           "binding": "REGENERATE_SHOTS_WORKFLOW",
           "class_name": "RegenerateShotsWorkflow",
+        },
+        {
+          "name": "update-stale-shots-workflow",
+          "binding": "UPDATE_STALE_SHOTS_WORKFLOW",
+          "class_name": "UpdateStaleShotsWorkflow",
         },
         {
           "name": "recast-location-workflow",
@@ -726,10 +784,22 @@
           "binding": "ANALYZE_SCRIPT_WORKFLOW",
           "class_name": "AnalyzeScriptWorkflow",
         },
+        {
+          "name": "sequence-export-workflow",
+          "binding": "SEQUENCE_EXPORT_WORKFLOW",
+          "class_name": "SequenceExportWorkflow",
+        },
+        {
+          "name": "asset-generation-workflow",
+          "binding": "ASSET_WORKFLOW",
+          "class_name": "AssetGenerationWorkflow",
+        },
       ],
       // Realtime broker DO — redeclared because durable_objects + migrations
       // are non-inheritable across env blocks. Keep the `v1` migration tag in
-      // sync with the top-level block.
+      // sync with the top-level block. No container here: e2e stays hermetic
+      // (Docker-free); without the binding the SequenceExportWorkflow fails the
+      // export cleanly (marks the row `failed`) rather than rendering.
       "durable_objects": {
         "bindings": [
           {

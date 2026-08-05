@@ -13,7 +13,11 @@
  *     `context.workflowRunId` (not needed for this workflow, but listed
  *     here for parity with the other CF ports). */
 
-import { describeElementImage } from '@/lib/ai/element-vision';
+import {
+  describeElementImage,
+  ELEMENT_VISION_MODEL,
+} from '@/lib/ai/element-vision';
+import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type {
@@ -50,17 +54,31 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
     });
 
     // Step 3: vision call (also returns a vision-suggested token).
-    const { description, consistencyTag, suggestedToken } = await step.do(
-      'describe-element',
-      async () => {
-        const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
-        return await describeElementImage({
-          imageUrl,
-          filename,
-          llmKey: llmKeyInfo,
-        });
-      }
-    );
+    const vision = await step.do('describe-element', async () => {
+      const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
+      return await describeElementImage({
+        imageUrl,
+        filename,
+        llmKey: llmKeyInfo,
+      });
+    });
+
+    await step.do('deduct-vision-credits', async () => {
+      await deductWorkflowCredits({
+        scopedDb,
+        costMicros: vision.costMicros,
+        usedOwnKey: vision.usedOwnKey,
+        description: `Element vision (${ELEMENT_VISION_MODEL})`,
+        idempotencyKey: `${event.instanceId}:vision`,
+        metadata: {
+          model: ELEMENT_VISION_MODEL,
+          elementId,
+        },
+        workflowName: 'ElementVisionWorkflow',
+      });
+    });
+
+    const { description, consistencyTag, suggestedToken } = vision;
 
     // Step 4: persist description + consistencyTag.
     await step.do('persist-vision', async () => {

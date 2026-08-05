@@ -1,24 +1,23 @@
 /**
- * Behavioural tests for the motion-workflow dual-write helpers (#545).
+ * Behavioural tests for the motion-workflow persist helpers (#545, re-routed to
+ * `video_variants` in #990).
  *
- * `MotionWorkflow` writes each model's output to the legacy `shots.video*`
- * columns AND a per-model `shot_variants` row. These tests pin the three
- * states the workflow transitions through:
+ * `MotionWorkflow` opens an append-only `video_variants` version in
+ * `set-generating-status`; these helpers finalize it:
  *
- *   - generating: open the variant row + stamp the legacy columns
- *   - completed:  stamp both, clearing any prior error (shot-deleted short-circuit)
- *   - failed:     record the error on both — updating the existing variant row
- *                 (preserving a completed url), falling back to UPSERT only when
- *                 no row exists so a pre-generating failure still lands a row
+ *   - completed: flip the version to `completed`, log `video.rendered`, and (for
+ *     a primary render) repoint the shot's selection via `videoVariants.select`
+ *     (which mirrors `shots.video*` + the render segment's selection pointer). A `variantOnly`
+ *     render skips the select. Shot-deleted mid-flight skips the select too.
+ *   - failed: mark the version failed by workflow run id and (primary only) flip
+ *     the legacy `shots.video*` status.
  */
 
 import { describe, expect, it } from 'vitest';
-import type { NewShot, NewShotVariant } from '@/lib/db/schema';
-import type { VariantType } from '@/lib/db/schema/shot-variants';
+import type { NewShot, NewVideoVariant } from '@/lib/db/schema';
+import type { RecordEventInput } from '@/lib/db/scoped/sequence-events';
 import {
-  buildMotionCompletedWrites,
-  buildMotionFailedWrites,
-  buildMotionGeneratingWrites,
+  buildMotionGeneratingShotWrite,
   type MotionVideoProgressPayload,
   persistMotionCompletion,
   persistMotionFailure,
@@ -31,144 +30,154 @@ const upload = {
 };
 const NOW = new Date('2026-06-02T00:00:00Z');
 
-describe('buildMotionGeneratingWrites', () => {
-  it('stamps the legacy columns with the model + run id and opens the variant row', () => {
-    const writes = buildMotionGeneratingWrites({
-      model: 'veo3',
-      workflowRunId: 'run-1',
-    });
-    expect(writes.shot).toEqual({
+describe('buildMotionGeneratingShotWrite', () => {
+  it('stamps the legacy columns with the model + run id', () => {
+    expect(
+      buildMotionGeneratingShotWrite({ model: 'veo3', workflowRunId: 'run-1' })
+    ).toEqual({
       videoStatus: 'generating',
       videoWorkflowRunId: 'run-1',
       motionModel: 'veo3',
     });
-    expect(writes.variant).toEqual({
-      status: 'generating',
-      workflowRunId: 'run-1',
-    });
   });
 });
 
-describe('buildMotionCompletedWrites', () => {
-  it('stamps the final video on both the shot and the variant and clears errors', () => {
-    const writes = buildMotionCompletedWrites({
-      upload,
-      durationMs: 5000,
-      promptHash: 'prompt-abc',
-      generatedAt: NOW,
-    });
-    expect(writes.shot).toEqual({
-      videoPath: upload.path,
-      videoUrl: upload.url,
-      durationMs: 5000,
-      videoStatus: 'completed',
-      videoGeneratedAt: NOW,
-      videoError: null,
-    });
-    expect(writes.variant).toEqual({
-      url: upload.url,
-      storagePath: upload.path,
-      status: 'completed',
-      generatedAt: NOW,
-      error: null,
-      durationMs: 5000,
-      promptHash: 'prompt-abc',
-    });
-  });
-
-  it('carries a null promptHash through unchanged', () => {
-    const writes = buildMotionCompletedWrites({
-      upload,
-      durationMs: 5000,
-      promptHash: null,
-      generatedAt: NOW,
-    });
-    expect(writes.variant.promptHash).toBeNull();
-  });
-});
-
-describe('buildMotionFailedWrites', () => {
-  it('records the error on both the shot and the variant', () => {
-    const writes = buildMotionFailedWrites({ error: 'fal 500' });
-    expect(writes.shot).toEqual({
-      videoStatus: 'failed',
-      videoError: 'fal 500',
-    });
-    expect(writes.variant).toEqual({ status: 'failed', error: 'fal 500' });
-  });
-});
-
-type ShotUpdateCall = { shotId: string; data: Partial<NewShot> };
-type VariantUpdateCall = {
-  shotId: string;
-  variantType: VariantType;
-  model: string;
-  data: Partial<NewShotVariant>;
-};
 type CallName =
-  | 'shots.update'
-  | 'shotVariants.updateByShotAndModel'
-  | 'shotVariants.upsert';
+  | 'videoVariants.update'
+  | 'videoVariants.select'
+  | 'videoVariants.markFailedByWorkflowRun'
+  | 'videoVariants.getById'
+  | 'renderSegments.getById'
+  | 'renderSegments.clearPending'
+  | 'sequenceEvents.record'
+  | 'shots.getById'
+  | 'shots.update';
 
 function buildScopedDbSpy(
-  opts: { shotMissing?: boolean; variantMissing?: boolean } = {}
+  opts: {
+    shotMissing?: boolean;
+    /** When set, completion promotes only if videoVersionId matches. */
+    pendingPromoteVersionId?: string | null;
+    segmentId?: string;
+  } = {}
 ): {
   scopedDb: PersistMotionScopedDb;
-  shotsUpdates: ShotUpdateCall[];
-  variantsUpdates: VariantUpdateCall[];
-  variantsUpserts: NewShotVariant[];
+  versionUpdates: Array<{ id: string; data: Partial<NewVideoVariant> }>;
+  selects: Array<{ shotId: string; versionId: string; actorId: string | null }>;
+  markFailed: Array<{ runId: string; error: string }>;
+  events: RecordEventInput[];
+  shotUpdates: Array<{ shotId: string; data: Partial<NewShot> }>;
   callOrder: CallName[];
+  pendingClears: string[];
 } {
-  const shotsUpdates: ShotUpdateCall[] = [];
-  const variantsUpdates: VariantUpdateCall[] = [];
-  const variantsUpserts: NewShotVariant[] = [];
+  const versionUpdates: Array<{ id: string; data: Partial<NewVideoVariant> }> =
+    [];
+  const selects: Array<{
+    shotId: string;
+    versionId: string;
+    actorId: string | null;
+  }> = [];
+  const markFailed: Array<{ runId: string; error: string }> = [];
+  const events: RecordEventInput[] = [];
+  const shotUpdates: Array<{ shotId: string; data: Partial<NewShot> }> = [];
   const callOrder: CallName[] = [];
+  const pendingClears: string[] = [];
+  const segmentId = opts.segmentId ?? 'seg-1';
+  // Default: claim matches completionArgs.videoVersionId so primary still promotes.
+  let pending =
+    opts.pendingPromoteVersionId === undefined
+      ? 'vv1'
+      : opts.pendingPromoteVersionId;
+
   const scopedDb: PersistMotionScopedDb = {
     shots: {
+      getById: async (id) => {
+        callOrder.push('shots.getById');
+        return opts.shotMissing ? null : { id, renderSegmentId: segmentId };
+      },
       update: async (shotId, data) => {
-        shotsUpdates.push({ shotId, data });
         callOrder.push('shots.update');
-        if (opts.shotMissing) return undefined;
+        shotUpdates.push({ shotId, data });
         return { id: shotId };
       },
     },
-    shotVariants: {
-      updateByShotAndModel: async (shotId, variantType, model, data) => {
-        variantsUpdates.push({ shotId, variantType, model, data });
-        callOrder.push('shotVariants.updateByShotAndModel');
-        // null = no matching primary row exists (caller decides whether to insert).
-        return opts.variantMissing ? null : { id: 'v1' };
+    videoVariants: {
+      update: async (versionId, data) => {
+        callOrder.push('videoVariants.update');
+        versionUpdates.push({ id: versionId, data });
+        return { id: versionId };
       },
-      upsert: async (data) => {
-        variantsUpserts.push(data);
-        callOrder.push('shotVariants.upsert');
-        return { id: 'v2' };
+      getById: async (versionId) => {
+        callOrder.push('videoVariants.getById');
+        return { id: versionId, workflowRunId: 'run-1' };
+      },
+      select: async (shotId, versionId, selectOpts) => {
+        callOrder.push('videoVariants.select');
+        selects.push({ shotId, versionId, actorId: selectOpts.actorId });
+        return { id: versionId };
+      },
+      markFailedByWorkflowRun: async (runId, error) => {
+        callOrder.push('videoVariants.markFailedByWorkflowRun');
+        markFailed.push({ runId, error });
+      },
+    },
+    renderSegments: {
+      getById: async (id) => {
+        callOrder.push('renderSegments.getById');
+        return {
+          id,
+          pendingPromoteVersionId: pending,
+        };
+      },
+      setPendingPromoteVersionId: async (_segmentId, versionId) => {
+        pending = versionId;
+      },
+      clearPendingPromoteVersionIdIf: async (_segmentId, versionId) => {
+        callOrder.push('renderSegments.clearPending');
+        pendingClears.push(versionId);
+        if (pending === versionId) pending = null;
+      },
+    },
+    sequenceEvents: {
+      record: async (input) => {
+        callOrder.push('sequenceEvents.record');
+        events.push(input);
+        return { id: 'evt' };
       },
     },
   };
+
   return {
     scopedDb,
-    shotsUpdates,
-    variantsUpdates,
-    variantsUpserts,
+    versionUpdates,
+    selects,
+    markFailed,
+    events,
+    shotUpdates,
     callOrder,
+    pendingClears,
   };
 }
 
+const completionArgs = {
+  shotId: 'f1',
+  sequenceId: 'seq1',
+  sceneId: 'scene1',
+  videoVersionId: 'vv1',
+  model: 'veo3',
+  upload,
+};
+
 describe('persistMotionCompletion', () => {
-  it('stamps the legacy columns + this model variant, emits completed, returns the url', async () => {
-    const { scopedDb, shotsUpdates, variantsUpdates, callOrder } =
-      buildScopedDbSpy();
+  it('primary: finalizes the version, logs video.rendered, repoints the shot, emits completed', async () => {
+    const spy = buildScopedDbSpy();
     const emits: Array<{ event: string; payload: MotionVideoProgressPayload }> =
       [];
 
     const outcome = await persistMotionCompletion({
-      scopedDb,
-      shotId: 'f1',
-      model: 'veo3',
-      upload,
-      durationMs: 5000,
-      promptHash: 'prompt-abc',
+      scopedDb: spy.scopedDb,
+      ...completionArgs,
+      actorId: 'user1',
       emit: async (event, payload) => {
         emits.push({ event, payload });
       },
@@ -176,25 +185,29 @@ describe('persistMotionCompletion', () => {
     });
 
     expect(outcome).toEqual({ status: 'completed', videoUrl: upload.url });
-    expect(callOrder).toEqual([
-      'shots.update',
-      'shotVariants.updateByShotAndModel',
+    expect(spy.callOrder).toEqual([
+      'videoVariants.update',
+      'sequenceEvents.record',
+      'shots.getById',
+      'renderSegments.getById',
+      'videoVariants.select',
     ]);
 
-    const [shotUpdate] = shotsUpdates;
-    if (!shotUpdate) throw new Error('expected shots.update call');
-    expect(shotUpdate.data.videoStatus).toBe('completed');
-    expect(shotUpdate.data.videoUrl).toBe(upload.url);
-    expect(shotUpdate.data.videoError).toBeNull();
+    const [versionUpdate] = spy.versionUpdates;
+    if (!versionUpdate) throw new Error('expected videoVariants.update');
+    expect(versionUpdate.id).toBe('vv1');
+    expect(versionUpdate.data).toEqual({
+      url: upload.url,
+      storagePath: upload.path,
+      status: 'completed',
+      generatedAt: NOW,
+      error: null,
+    });
 
-    const [variantUpdate] = variantsUpdates;
-    if (!variantUpdate) throw new Error('expected variant update call');
-    expect(variantUpdate.shotId).toBe('f1');
-    expect(variantUpdate.variantType).toBe('video');
-    expect(variantUpdate.model).toBe('veo3');
-    expect(variantUpdate.data.status).toBe('completed');
-    expect(variantUpdate.data.url).toBe(upload.url);
-
+    expect(spy.events[0]?.kind).toBe('video.rendered');
+    expect(spy.selects).toEqual([
+      { shotId: 'f1', versionId: 'vv1', actorId: 'user1' },
+    ]);
     expect(emits).toEqual([
       {
         event: 'generation.video:progress',
@@ -208,144 +221,14 @@ describe('persistMotionCompletion', () => {
     ]);
   });
 
-  it('shot deleted mid-flight: short-circuits without touching shot_variants or emitting', async () => {
-    const { scopedDb, shotsUpdates, variantsUpdates, callOrder } =
-      buildScopedDbSpy({ shotMissing: true });
+  it('variant-only: finalizes the version + logs, but never repoints the shot', async () => {
+    const spy = buildScopedDbSpy();
     const emits: MotionVideoProgressPayload[] = [];
 
     const outcome = await persistMotionCompletion({
-      scopedDb,
-      shotId: 'f1',
-      model: 'veo3',
-      upload,
-      durationMs: 5000,
-      promptHash: null,
-      emit: async (_event, payload) => {
-        emits.push(payload);
-      },
-      now: () => NOW,
-    });
-
-    expect(outcome).toEqual({ status: 'shot-deleted' });
-    expect(shotsUpdates.length).toBe(1);
-    expect(variantsUpdates).toEqual([]);
-    expect(emits).toEqual([]);
-    expect(callOrder).toEqual(['shots.update']);
-  });
-});
-
-describe('persistMotionFailure', () => {
-  it('updates the existing variant row to failed (preserving its url, no upsert), then emits', async () => {
-    const {
-      scopedDb,
-      shotsUpdates,
-      variantsUpdates,
-      variantsUpserts,
-      callOrder,
-    } = buildScopedDbSpy();
-    const emits: Array<{ event: string; payload: MotionVideoProgressPayload }> =
-      [];
-
-    await persistMotionFailure({
-      scopedDb,
-      shotId: 'f1',
-      sequenceId: 'seq1',
-      model: 'veo3',
-      error: 'fal 500',
-      workflowRunId: 'run-9',
-      emit: async (event, payload) => {
-        emits.push({ event, payload });
-      },
-    });
-
-    // A row exists: update only (status/error). No upsert — a blind upsert
-    // would null the completed url/storagePath from the failure payload.
-    expect(callOrder).toEqual([
-      'shots.update',
-      'shotVariants.updateByShotAndModel',
-    ]);
-    expect(variantsUpserts).toEqual([]);
-
-    const [shotUpdate] = shotsUpdates;
-    if (!shotUpdate) throw new Error('expected shots.update call');
-    expect(shotUpdate.data.videoStatus).toBe('failed');
-    expect(shotUpdate.data.videoError).toBe('fal 500');
-
-    const [variantUpdate] = variantsUpdates;
-    if (!variantUpdate) throw new Error('expected variant update call');
-    expect(variantUpdate.shotId).toBe('f1');
-    expect(variantUpdate.variantType).toBe('video');
-    expect(variantUpdate.model).toBe('veo3');
-    expect(variantUpdate.data).toEqual({ status: 'failed', error: 'fal 500' });
-    // The update payload carries no url/storagePath, so an existing completed
-    // artifact is left untouched.
-    expect(variantUpdate.data.url).toBeUndefined();
-    expect(variantUpdate.data.storagePath).toBeUndefined();
-
-    expect(emits).toEqual([
-      {
-        event: 'generation.video:progress',
-        payload: {
-          shotId: 'f1',
-          status: 'failed',
-          model: 'veo3',
-          // #881: the reason is now carried so the cache updater writes
-          // `videoError` live (non-variant path).
-          error: 'fal 500',
-        },
-      },
-    ]);
-  });
-
-  it('no existing variant row (pre-generating failure): UPSERTS a failed row so it stays visible', async () => {
-    const { scopedDb, variantsUpdates, variantsUpserts, callOrder } =
-      buildScopedDbSpy({ variantMissing: true });
-
-    await persistMotionFailure({
-      scopedDb,
-      shotId: 'f1',
-      sequenceId: 'seq1',
-      model: 'veo3',
-      error: 'Insufficient credits for motion generation',
-      workflowRunId: 'run-9',
-      emit: async () => {},
-    });
-
-    // Update first (no-op, returns null), then upsert to land a visible row.
-    expect(callOrder).toEqual([
-      'shots.update',
-      'shotVariants.updateByShotAndModel',
-      'shotVariants.upsert',
-    ]);
-    expect(variantsUpdates.length).toBe(1);
-
-    const [upserted] = variantsUpserts;
-    if (!upserted) throw new Error('expected shotVariants.upsert call');
-    expect(upserted).toMatchObject({
-      shotId: 'f1',
-      sequenceId: 'seq1',
-      variantType: 'video',
-      model: 'veo3',
-      status: 'failed',
-      error: 'Insufficient credits for motion generation',
-      workflowRunId: 'run-9',
-    });
-  });
-});
-
-describe('variant-only (#547)', () => {
-  it('persistMotionCompletion: writes only the variant row, never the legacy shots.video* columns', async () => {
-    const { scopedDb, shotsUpdates, variantsUpdates, callOrder } =
-      buildScopedDbSpy();
-    const emits: MotionVideoProgressPayload[] = [];
-
-    const outcome = await persistMotionCompletion({
-      scopedDb,
-      shotId: 'f1',
-      model: 'veo3',
-      upload,
-      durationMs: 5000,
-      promptHash: 'prompt-abc',
+      scopedDb: spy.scopedDb,
+      ...completionArgs,
+      actorId: 'user1',
       variantOnly: true,
       emit: async (_event, payload) => {
         emits.push(payload);
@@ -354,39 +237,30 @@ describe('variant-only (#547)', () => {
     });
 
     expect(outcome).toEqual({ status: 'completed', videoUrl: upload.url });
-    // The primary columns are untouched — only the per-model variant is written.
-    expect(shotsUpdates).toEqual([]);
-    expect(callOrder).toEqual(['shotVariants.updateByShotAndModel']);
-    const [variantUpdate] = variantsUpdates;
-    if (!variantUpdate) throw new Error('expected variant update call');
-    expect(variantUpdate.data.url).toBe(upload.url);
-    expect(variantUpdate.data.status).toBe('completed');
+    expect(spy.callOrder).toEqual([
+      'videoVariants.update',
+      'sequenceEvents.record',
+    ]);
+    expect(spy.selects).toEqual([]);
     expect(emits).toEqual([
       {
         shotId: 'f1',
         status: 'completed',
         videoUrl: upload.url,
         model: 'veo3',
-        // Flags the cache updater not to repoint the primary video (#547).
         variantOnly: true,
       },
     ]);
   });
 
-  it('persistMotionCompletion: variant-only shot-deleted (no variant row) short-circuits without emitting', async () => {
-    const { scopedDb, shotsUpdates, callOrder } = buildScopedDbSpy({
-      variantMissing: true,
-    });
+  it('shot deleted mid-flight: finalizes the version but skips the repoint + emit', async () => {
+    const spy = buildScopedDbSpy({ shotMissing: true });
     const emits: MotionVideoProgressPayload[] = [];
 
     const outcome = await persistMotionCompletion({
-      scopedDb,
-      shotId: 'f1',
-      model: 'veo3',
-      upload,
-      durationMs: 5000,
-      promptHash: null,
-      variantOnly: true,
+      scopedDb: spy.scopedDb,
+      ...completionArgs,
+      actorId: null,
       emit: async (_event, payload) => {
         emits.push(payload);
       },
@@ -394,19 +268,93 @@ describe('variant-only (#547)', () => {
     });
 
     expect(outcome).toEqual({ status: 'shot-deleted' });
-    expect(shotsUpdates).toEqual([]);
-    expect(callOrder).toEqual(['shotVariants.updateByShotAndModel']);
+    expect(spy.callOrder).toEqual([
+      'videoVariants.update',
+      'sequenceEvents.record',
+      'shots.getById',
+    ]);
+    expect(spy.selects).toEqual([]);
     expect(emits).toEqual([]);
   });
 
-  it('persistMotionFailure: records failed only on the variant, never the legacy columns', async () => {
-    const { scopedDb, shotsUpdates, variantsUpdates, callOrder } =
-      buildScopedDbSpy();
+  it('does not promote when pending claim moved to another version (#1070)', async () => {
+    const spy = buildScopedDbSpy({ pendingPromoteVersionId: 'vv-other' });
+    const emits: MotionVideoProgressPayload[] = [];
+
+    const outcome = await persistMotionCompletion({
+      scopedDb: spy.scopedDb,
+      ...completionArgs,
+      actorId: 'user1',
+      emit: async (_event, payload) => {
+        emits.push(payload);
+      },
+      now: () => NOW,
+    });
+
+    expect(outcome).toEqual({ status: 'completed', videoUrl: upload.url });
+    expect(spy.selects).toEqual([]);
+    expect(spy.pendingClears).toEqual(['vv1']);
+    expect(emits).toEqual([
+      {
+        shotId: 'f1',
+        status: 'completed',
+        videoUrl: upload.url,
+        model: 'veo3',
+        variantOnly: true,
+      },
+    ]);
+  });
+});
+
+describe('persistMotionFailure', () => {
+  it('primary: flips the legacy shot status + marks the version failed, emits with the reason', async () => {
+    const spy = buildScopedDbSpy();
+    const emits: Array<{ event: string; payload: MotionVideoProgressPayload }> =
+      [];
 
     await persistMotionFailure({
-      scopedDb,
+      scopedDb: spy.scopedDb,
       shotId: 'f1',
-      sequenceId: 'seq1',
+      model: 'veo3',
+      error: 'fal 500',
+      workflowRunId: 'run-9',
+      emit: async (event, payload) => {
+        emits.push({ event, payload });
+      },
+    });
+
+    expect(spy.callOrder).toEqual([
+      'shots.update',
+      'shots.getById',
+      'renderSegments.getById',
+      'videoVariants.getById',
+      // pending row's run id is 'run-1' in the spy, not 'run-9' — no clear
+      'videoVariants.markFailedByWorkflowRun',
+    ]);
+    expect(spy.shotUpdates[0]?.data).toEqual({
+      videoStatus: 'failed',
+      videoError: 'fal 500',
+    });
+    expect(spy.markFailed).toEqual([{ runId: 'run-9', error: 'fal 500' }]);
+    expect(emits).toEqual([
+      {
+        event: 'generation.video:progress',
+        payload: {
+          shotId: 'f1',
+          status: 'failed',
+          model: 'veo3',
+          error: 'fal 500',
+        },
+      },
+    ]);
+  });
+
+  it('variant-only: marks the version failed only, never touches the legacy columns', async () => {
+    const spy = buildScopedDbSpy();
+
+    await persistMotionFailure({
+      scopedDb: spy.scopedDb,
+      shotId: 'f1',
       model: 'veo3',
       error: 'fal 500',
       workflowRunId: 'run-9',
@@ -414,10 +362,8 @@ describe('variant-only (#547)', () => {
       emit: async () => {},
     });
 
-    expect(shotsUpdates).toEqual([]);
-    expect(callOrder).toEqual(['shotVariants.updateByShotAndModel']);
-    const [variantUpdate] = variantsUpdates;
-    if (!variantUpdate) throw new Error('expected variant update call');
-    expect(variantUpdate.data).toEqual({ status: 'failed', error: 'fal 500' });
+    expect(spy.shotUpdates).toEqual([]);
+    expect(spy.callOrder).toEqual(['videoVariants.markFailedByWorkflowRun']);
+    expect(spy.markFailed).toEqual([{ runId: 'run-9', error: 'fal 500' }]);
   });
 });

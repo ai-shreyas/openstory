@@ -5,33 +5,30 @@
  */
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { facetIdsForShots, useSceneFacetMaps } from '@/hooks/use-scene-facets';
 import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import type { SequenceElement } from '@/lib/db/schema';
-import { matchElementsToScene } from '@/lib/workflows/scene-matching';
-import type { Shot } from '@/types/database';
 import { Link } from '@tanstack/react-router';
 import { ImagePlus, Loader2 } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type SceneElementsTabProps = {
-  shot?: Shot;
   sequenceId: string;
+  /** `null` = whole sequence (show all elements). */
+  /** Shots in the current selection. `null` = whole sequence (show all). */
+  shotIds: string[] | null;
 };
 
 export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
-  shot,
   sequenceId,
+  shotIds,
 }) => {
   const { data: elements = [], isLoading } = useSequenceElements(sequenceId);
+  const { data: facetMaps } = useSceneFacetMaps(sequenceId);
 
-  const elementTags = shot?.metadata?.continuity?.elementTags ?? [];
-  const sceneScript = shot?.metadata?.originalScript.extract ?? '';
-
-  const matchedIds = new Set(
-    matchElementsToScene(elements, elementTags, sceneScript).map((el) => el.id)
-  );
-  const sceneElements: SequenceElement[] = elements.filter((el) =>
-    matchedIds.has(el.id)
-  );
+  const scopedIds = facetIdsForShots(facetMaps?.elementIdsByShot, shotIds);
+  const sceneElements: SequenceElement[] =
+    scopedIds === null ? elements : elements.filter((e) => scopedIds.has(e.id));
 
   if (isLoading) {
     return (
@@ -50,20 +47,10 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
           <ImagePlus className="h-8 w-8 text-muted-foreground/50" />
         </div>
         <p className="text-sm text-muted-foreground">
-          No elements in this scene
+          {shotIds === null
+            ? 'No elements yet'
+            : 'No elements in this selection'}
         </p>
-        {elementTags.length > 0 && (
-          <p className="mt-2 text-xs text-muted-foreground/70">
-            Looking for: {elementTags.join(', ')}
-          </p>
-        )}
-        <Link
-          to="/sequences/$id/elements"
-          params={{ id: sequenceId }}
-          className="mt-4 text-xs text-primary hover:underline"
-        >
-          Manage elements
-        </Link>
       </div>
     );
   }
@@ -71,7 +58,7 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-        <span>Scene Elements</span>
+        <span>{shotIds === null ? 'All Elements' : 'Elements'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>
           {sceneElements.length} reference
@@ -88,9 +75,11 @@ export const SceneElementsTab: React.FC<SceneElementsTabProps> = ({
             className="group relative block overflow-hidden rounded-lg bg-card"
           >
             <div className="relative aspect-square overflow-hidden bg-muted">
-              <img
+              <AppImage
                 src={el.imageUrl}
                 alt={el.token}
+                width={160}
+                height={160}
                 className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
               />
               <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 via-black/20 to-transparent p-3">

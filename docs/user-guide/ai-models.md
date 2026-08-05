@@ -11,21 +11,22 @@ OpenStory integrates with a wide range of AI models across four categories: scri
 
 These LLM models analyze your script, extract scenes, characters, and locations, and generate prompts. You can select multiple models to generate parallel sequences for comparison.
 
-| Model             | Provider  | Context Window | License                  |
-| ----------------- | --------- | -------------- | ------------------------ |
-| Grok 4.3          | xAI       | 1M tokens      | Proprietary              |
-| Claude Sonnet 4.6 | Anthropic | 1M tokens      | Proprietary              |
-| Grok 4.20         | xAI       | 2M tokens      | Proprietary              |
-| Claude Opus 4.6   | Anthropic | 1M tokens      | Proprietary              |
-| Mistral Small 4   | Mistral   | 262K tokens    | Open Source (Apache 2.0) |
-| DeepSeek V3.2     | DeepSeek  | 164K tokens    | Open Source (MIT)        |
-| GLM-5             | Z.ai      | 203K tokens    | Open Source (MIT)        |
-| Gemini 3.1 Pro    | Google    | 1M tokens      | Proprietary              |
-| GPT-5.4           | OpenAI    | 1M tokens      | Proprietary              |
-| Gemini 3 Flash    | Google    | 1M tokens      | Proprietary              |
-| GPT-5.4 Mini      | OpenAI    | 400K tokens    | Proprietary              |
-| Seed 2.0 Mini     | ByteDance | 262K tokens    | Proprietary              |
-| GPT-5.4 Nano      | OpenAI    | 400K tokens    | Proprietary              |
+| Model           | Provider  | Context Window | License                  |
+| --------------- | --------- | -------------- | ------------------------ |
+| Grok 4.5        | xAI       | 500K tokens    | Proprietary              |
+| Claude Fable 5  | Anthropic | 1M tokens      | Proprietary              |
+| Claude Sonnet 5 | Anthropic | 1M tokens      | Proprietary              |
+| Grok 4.20       | xAI       | 2M tokens      | Proprietary              |
+| Claude Opus 4.8 | Anthropic | 1M tokens      | Proprietary              |
+| Mistral Small 4 | Mistral   | 262K tokens    | Open Source (Apache 2.0) |
+| DeepSeek V3.2   | DeepSeek  | 164K tokens    | Open Source (MIT)        |
+| GLM-5.2         | Z.ai      | 1M tokens      | Open Source (MIT)        |
+| Gemini 3.1 Pro  | Google    | 1M tokens      | Proprietary              |
+| GPT-5.5         | OpenAI    | 1M tokens      | Proprietary              |
+| Gemini 3 Flash  | Google    | 1M tokens      | Proprietary              |
+| GPT-5.4 Mini    | OpenAI    | 400K tokens    | Proprietary              |
+| Seed 2.0 Mini   | ByteDance | 262K tokens    | Proprietary              |
+| GPT-5.4 Nano    | OpenAI    | 400K tokens    | Proprietary              |
 
 ## Image Generation Models
 

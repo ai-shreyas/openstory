@@ -23,9 +23,12 @@ import {
   resolveUserTeam,
   type ScopedDb,
 } from '@/lib/db/scoped';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { NotFoundError } from '@/lib/errors';
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
+import type { Frame } from '@/lib/db/schema';
 import type { Shot, Sequence } from '@/types/database';
 import { createMiddleware } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
@@ -70,6 +73,7 @@ type PartialSequence = {
   title: string;
   status: string;
   styleId: string | null;
+  imageModel: string;
   videoModel: string;
   aspectRatio: AspectRatio;
   analysisModel: string;
@@ -77,7 +81,12 @@ type PartialSequence = {
 
 export type ShotContext = TeamContext & {
   shot: Omit<Shot, 'sequence'>;
+  frame: Frame;
   sequence: PartialSequence;
+  /** Scene metadata with the selected script version overlaid (#1030). */
+  scene: Scene | null;
+  /** Selected scene script content, when available. */
+  script: Scene['originalScript'] | null;
 };
 
 // ============================================================================
@@ -86,8 +95,8 @@ export type ShotContext = TeamContext & {
 
 /**
  * Request logging middleware. Logs at:
- *   - error: every serverFn failure (always)
- *   - warn:  oversize request bodies (>6 MB) and slow successes (>2s)
+ *   - error: serverFn failures, except the expected rejections below
+ *   - warn:  EXPECTED_REJECTION_CODES, oversize bodies (>6 MB), slow (>2s)
  *   - info:  successes that crossed the SLOW_THRESHOLD_MS (>500ms)
  *   - debug: fast successes (kept silent at INFO+ to avoid drowning errors)
  *
@@ -97,6 +106,17 @@ export type ShotContext = TeamContext & {
 const SIZE_WARNING_BYTES = 6 * 1024 * 1024; // 6 MB
 const SLOW_THRESHOLD_MS = 500;
 const VERY_SLOW_THRESHOLD_MS = 2000;
+
+/**
+ * Error codes that represent a user-facing outcome rather than a fault, and so
+ * log at `warn`. Add a code here only when a spike of it would NOT be worth
+ * paging on — everything else must stay at `error`.
+ */
+const EXPECTED_REJECTION_CODES = new Set([
+  'INSUFFICIENT_CREDITS',
+  'VALIDATION_ERROR',
+  'NOT_FOUND',
+]);
 const serverFnLogger = getLogger(['openstory', 'serverFn']);
 const apiAuthLogger = getLogger(['openstory', 'api', 'auth']);
 
@@ -159,13 +179,28 @@ export const loggerMiddleware = createMiddleware({ type: 'function' }).server(
     } catch (error) {
       const durationMs = Math.round(performance.now() - start);
       const err = toErrorPayload(error);
-      fnLogger.error('serverFn {fnName} failed: {errCode} {errMessage}', {
+      const logPayload = {
         fnName,
         durationMs,
         errCode: err.code,
         errMessage: err.message,
         err,
-      });
+      };
+      // Expected business rejections are outcomes, not failures: warn, so prod
+      // error logs stay signal (#1099). Deliberately an allowlist of codes and
+      // NOT `statusCode < 500` — a status range would also silence 401 spikes
+      // (an auth incident) and anything a handler mislabels as a 4xx.
+      if (EXPECTED_REJECTION_CODES.has(err.code)) {
+        fnLogger.warn(
+          'serverFn {fnName} rejected: {errCode} {errMessage}',
+          logPayload
+        );
+      } else {
+        fnLogger.error(
+          'serverFn {fnName} failed: {errCode} {errMessage}',
+          logPayload
+        );
+      }
       throw error;
     }
   }
@@ -338,20 +373,29 @@ export const stripeWebhookMiddleware = createMiddleware().server(
         typeof obj.metadata !== 'object' ||
         obj.metadata === null
       ) {
-        throw new Error(`Stripe event ${event.id} missing metadata`);
+        throw Response.json(
+          { error: `Stripe event ${event.id} missing metadata` },
+          { status: 400 }
+        );
       }
       const metadata = obj.metadata;
       if (!('teamId' in metadata && 'userId' in metadata)) {
-        throw new Error(
-          `Stripe event ${event.id} missing teamId or userId in metadata`
+        throw Response.json(
+          {
+            error: `Stripe event ${event.id} missing teamId or userId in metadata`,
+          },
+          { status: 400 }
         );
       }
 
       const teamId = metadata.teamId;
       const userId = metadata.userId;
       if (typeof teamId !== 'string' || typeof userId !== 'string') {
-        throw new Error(
-          `Stripe event ${event.id} missing teamId or userId in metadata`
+        throw Response.json(
+          {
+            error: `Stripe event ${event.id} missing teamId or userId in metadata`,
+          },
+          { status: 400 }
         );
       }
       return next({
@@ -363,9 +407,9 @@ export const stripeWebhookMiddleware = createMiddleware().server(
         },
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('missing teamId')) {
-        throw Response.json({ error: error.message }, { status: 400 });
-      }
+      // Metadata validation throws Response above; rethrow as-is. Anything
+      // else (signature verify failure, malformed body) is an invalid webhook.
+      if (error instanceof Response) throw error;
       throw Response.json({ error: 'Invalid signature' }, { status: 400 });
     }
   }
@@ -519,16 +563,34 @@ export const shotAccessMiddleware = createMiddleware({ type: 'function' })
     // Extract sequence from shot data (using the partial sequence from the query)
     const { sequence: rawSequence, ...shot } = shotData;
 
+    // Anchor frame (#989) — the shot's IMAGE surface (was the shots.thumbnail*
+    // columns): its first frame (orderIndex 0), resolved by shotId, never by
+    // id-reuse. Every shot owns one (created at shot-create / backfilled by the
+    // Phase 2 migration); create it defensively if a legacy shot predates it.
+    let frame = await scopedDb.frames.getAnchorByShot(shot.id);
+    if (!frame) {
+      await scopedDb.shots.ensureAnchorFrames([shot]);
+      frame = await scopedDb.frames.getAnchorByShot(shot.id);
+    }
+    if (!frame) {
+      throw new NotFoundError('Shot is missing its anchor frame');
+    }
+
     // Type assertion needed because Drizzle's nested relation inference loses the $type<AspectRatio>() annotation
     const sequence: PartialSequence = {
       ...rawSequence,
       aspectRatio: rawSequence.aspectRatio satisfies AspectRatio,
     };
 
+    const { scene, script } = await resolveSceneForShotFromDb(shot, scopedDb);
+
     return next({
       context: {
         shot,
+        frame,
         sequence,
+        scene,
+        script,
         teamId,
         scopedDb,
       },

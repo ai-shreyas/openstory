@@ -17,10 +17,7 @@ const createShotSchema = createInsertSchema(shots, {
   description: (schema) => schema.min(1).max(5000),
   durationMs: (schema) => schema.min(1),
   metadata: () => sceneSchema.nullable().optional(),
-  thumbnailStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
   videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
-  variantImageStatus: () =>
-    z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
   audioStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 }).omit({
   id: true,
@@ -32,17 +29,19 @@ export const updateShotSchema = createUpdateSchema(shots, {
   description: (schema) => schema.min(1).max(5000),
   durationMs: (schema) => schema.min(1),
   metadata: () => sceneSchema.nullable().optional(),
-  thumbnailStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
   videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
-  variantImageStatus: () =>
-    z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
   audioStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
-}).omit({
-  id: true,
-  sequenceId: true,
-  createdAt: true,
-  updatedAt: true,
-});
+})
+  .omit({
+    id: true,
+    sequenceId: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  // The image prompt lives on the anchor frame since #989 (not a `shots`
+  // column). Accept it here as an explicit field; `updateShotFn` routes it to
+  // `frame_prompt_versions` rather than the shots UPDATE.
+  .extend({ imagePrompt: z.string().nullable().optional() });
 
 export const regenerateShotSchema = z.object({
   regenerateDescription: z.boolean().optional(),

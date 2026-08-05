@@ -6,7 +6,6 @@ import type { SequenceWithShots } from '@/hooks/use-sequences-with-shots';
 import { getImageModelById } from '@/lib/ai/models';
 import { getAspectRatioData } from '@/lib/constants/aspect-ratios';
 import { formatDistanceToNow } from '@/lib/format-date';
-import { Route as sequencesScenesRoute } from '@/routes/_app/sequences/$id/scenes';
 import { Link } from '@tanstack/react-router';
 import { AlertTriangle, Calendar, ImageIcon, Mail, User } from 'lucide-react';
 import { getCreatorIdentity } from './creator-identity';
@@ -37,7 +36,7 @@ export const EvalSequenceMetadata: React.FC<EvalSequenceMetadataProps> = ({
         />
       )}
       <Link
-        to={sequencesScenesRoute.fullPath}
+        to="/sequences/$id/scenes"
         params={{ id: sequence.id }}
         className="font-medium text-sm text-foreground line-clamp-2 hover:underline shrink-0 pr-4"
         title={sequence.title || 'Untitled Sequence'}

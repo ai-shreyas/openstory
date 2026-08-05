@@ -29,10 +29,6 @@ const meta: Meta<typeof StyleSelectionDialog> = {
       description: 'Callback fired when dialog open state changes',
       action: 'dialog state changed',
     },
-    selectedStyleId: {
-      description: 'ID of the currently selected style',
-      control: 'text',
-    },
     onStyleSelect: {
       description: 'Callback fired when a style is selected',
       action: 'style selected',
@@ -54,34 +50,24 @@ if (!mockStyle0 || !mockStyle1 || !mockStyle2) {
 
 // Interactive wrapper for stories
 function InteractiveStyleDialog(
-  props: Partial<React.ComponentProps<typeof StyleSelectionDialog>> & {
-    initialSelectedId?: string | null;
-  }
+  props: Partial<React.ComponentProps<typeof StyleSelectionDialog>>
 ) {
-  const { initialSelectedId = null, ...otherProps } = props;
   const [open, setOpen] = useState(true);
-  const [selectedStyleId, setSelectedStyleId] = useState<string | null>(
-    initialSelectedId
-  );
+  const [, setSelectedStyleId] = useState<string | null>(null);
 
   const { data: styles = [] } = useStyles();
-
-  const handleReopen = () => {
-    setOpen(true);
-  };
 
   return (
     <div className="flex flex-col gap-4">
       {!open && (
-        <Button onClick={handleReopen}>Open Visual Style Dialog</Button>
+        <Button onClick={() => setOpen(true)}>Open Visual Style Dialog</Button>
       )}
       <StyleSelectionDialog
         open={open}
         onOpenChange={setOpen}
         styles={styles}
-        selectedStyleId={selectedStyleId}
         onStyleSelect={setSelectedStyleId}
-        {...otherProps}
+        {...props}
       />
     </div>
   );
@@ -100,12 +86,11 @@ export const Default: Story = {
 };
 
 export const WithPreselection: Story = {
-  render: () => <InteractiveStyleDialog initialSelectedId={mockStyle2.id} />,
+  render: () => <InteractiveStyleDialog />,
   parameters: {
     docs: {
       description: {
-        story:
-          'Dialog with a pre-selected style showing the selected state with checkmark overlay.',
+        story: 'Dialog opened over the category-grouped browse view.',
       },
     },
   },
@@ -115,9 +100,7 @@ export const EmptyState: Story = {
   render: () => {
     const EmptyWrapper = () => {
       const [open, setOpen] = useState(true);
-      const [selectedStyleId, setSelectedStyleId] = useState<string | null>(
-        null
-      );
+      const [, setSelectedStyleId] = useState<string | null>(null);
 
       return (
         <div>
@@ -125,7 +108,6 @@ export const EmptyState: Story = {
           <StyleSelectionDialog
             open={open}
             onOpenChange={setOpen}
-            selectedStyleId={selectedStyleId}
             onStyleSelect={setSelectedStyleId}
           />
         </div>
@@ -263,7 +245,6 @@ export const InteractionFlow: Story = {
           <StyleSelectionDialog
             open={open}
             onOpenChange={setOpen}
-            selectedStyleId={selectedStyleId}
             onStyleSelect={setSelectedStyleId}
           />
         </div>
@@ -306,7 +287,6 @@ export const LoadingState: Story = {
           <StyleSelectionDialog
             open={open}
             onOpenChange={setOpen}
-            selectedStyleId={null}
             onStyleSelect={() => {}}
           />
         </div>

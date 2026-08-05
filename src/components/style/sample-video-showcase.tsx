@@ -19,8 +19,6 @@ import {
   type SampleEntry,
 } from '@/lib/style/sample-entries';
 import { cn } from '@/lib/utils';
-import { Route as GalleryRoute } from '@/routes/_app/gallery/index';
-import { Route as NewSequenceRoute } from '@/routes/_app/sequences/new';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight, Wand2 } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
@@ -59,7 +57,7 @@ export const SampleVideoShowcase: React.FC = () => {
     <section className="flex flex-col gap-4">
       <ShowcaseHeading />
       <Link
-        to={GalleryRoute.to}
+        to="/gallery"
         className="inline-flex items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground"
       >
         Browse the full gallery
@@ -158,7 +156,7 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
             className="absolute bottom-2 right-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity group-hover:opacity-100"
           >
             <Link
-              to={NewSequenceRoute.to}
+              to="/sequences/new"
               search={{ style: entry.slug }}
               hash="compose"
               aria-label={`Try the ${entry.styleName} style`}
@@ -194,7 +192,7 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
         {entry.hasBrief && (
           <Button asChild className="gap-1.5">
             <Link
-              to={NewSequenceRoute.to}
+              to="/sequences/new"
               search={{ style: entry.slug }}
               hash="compose"
             >

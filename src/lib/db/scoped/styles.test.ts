@@ -21,6 +21,7 @@ import {
   createStylesMethods,
 } from '@/lib/db/scoped/styles';
 import { ValidationError } from '@/lib/errors';
+import type { ServerManagedStyleColumn } from '@/lib/schemas/style.schemas';
 import { createClient, type Client } from '@libsql/client';
 import { asc, desc, eq, or, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
@@ -67,7 +68,7 @@ function makeStylesMethods(database: Database, teamId: string, userId: string) {
       return result[0] ?? null;
     },
     create: async (
-      data: Omit<NewStyle, 'teamId' | 'createdBy'>
+      data: Omit<NewStyle, ServerManagedStyleColumn>
     ): Promise<Style> => {
       const result = await database
         .insert(styles)
@@ -106,6 +107,12 @@ const baseConfig = {
   colorGrading: 'neutral',
 };
 
+// isPublic is server-managed (excluded from the scoped create/update types),
+// so tests publish a style the way admin paths do: a raw drizzle write.
+async function markPublic(styleId: string) {
+  await db.update(styles).set({ isPublic: true }).where(eq(styles.id, styleId));
+}
+
 async function seed() {
   await db.delete(styles);
   await db.delete(teams);
@@ -139,7 +146,6 @@ describe('createStylesMethods.incrementUsage', () => {
     const style = await methods.create({
       name: 'Bumped',
       config: baseConfig,
-      sortOrder: 1,
     });
     expect(style.usageCount).toBe(0);
 
@@ -169,20 +175,19 @@ describe("createStylesMethods.list({ orderBy: 'popular' })", () => {
   it('orders by usageCount desc when popular requested', async () => {
     const methods = makeStylesMethods(db, team.id, userRow.id);
 
+    // All three share the default sortOrder, so the sortOrder listing falls
+    // back to name asc (A, B, C).
     const a = await methods.create({
       name: 'A-cold',
       config: baseConfig,
-      sortOrder: 1,
     });
     const b = await methods.create({
       name: 'B-hot',
       config: baseConfig,
-      sortOrder: 2,
     });
     const c = await methods.create({
       name: 'C-warm',
       config: baseConfig,
-      sortOrder: 3,
     });
 
     await methods.incrementUsage(b.id);
@@ -209,18 +214,15 @@ describe("createStylesMethods.list({ orderBy: 'popular' })", () => {
     const mine = await ownMethods.create({
       name: 'Mine',
       config: baseConfig,
-      sortOrder: 1,
     });
     const theirsPublic = await otherMethods.create({
       name: 'TheirsPublic',
       config: baseConfig,
-      sortOrder: 2,
-      isPublic: true,
     });
+    await markPublic(theirsPublic.id);
     const theirsPrivate = await otherMethods.create({
       name: 'TheirsPrivate',
       config: baseConfig,
-      sortOrder: 3,
     });
 
     const visible = await ownMethods.list();
@@ -280,19 +282,55 @@ describe('createPublicStylesReadMethods', () => {
     const pub = await methods.create({
       name: 'Public',
       config: baseConfig,
-      sortOrder: 1,
-      isPublic: true,
     });
+    await markPublic(pub.id);
     const priv = await methods.create({
       name: 'Private',
       config: baseConfig,
-      sortOrder: 2,
     });
 
     const visible = await createPublicStylesReadMethods(db).list();
     const ids = visible.map((s) => s.id);
     expect(ids).toContain(pub.id);
     expect(ids).not.toContain(priv.id);
+  });
+});
+
+// Uses the REAL createStylesMethods: the Omit<> parameter types exclude
+// server-managed columns, but TypeScript's excess-property check applies only
+// to fresh object literals — a non-literal object with extra keys passes the
+// type checker, and drizzle would write any key matching a table column. The
+// runtime scrub in the write methods is the barrier these tests pin.
+describe('createStylesMethods server-managed column scrubbing (runtime)', () => {
+  it('drops a smuggled isPublic on create', async () => {
+    const methods = createStylesMethods(db, team.id, userRow.id);
+
+    const smuggled: {
+      name: string;
+      config: typeof baseConfig;
+      isPublic: boolean;
+    } = { name: 'Smuggled', config: baseConfig, isPublic: true };
+    const created = await methods.create(smuggled);
+
+    expect(created.isPublic).toBe(false);
+    const publicIds = (await createPublicStylesReadMethods(db).list()).map(
+      (s) => s.id
+    );
+    expect(publicIds).not.toContain(created.id);
+  });
+
+  it('drops a smuggled isPublic on update while applying the rest', async () => {
+    const methods = createStylesMethods(db, team.id, userRow.id);
+    const style = await methods.create({ name: 'Target', config: baseConfig });
+
+    const smuggled: { name: string; isPublic: boolean } = {
+      name: 'Renamed Target',
+      isPublic: true,
+    };
+    const updated = await methods.update(style.id, smuggled);
+
+    expect(updated?.name).toBe('Renamed Target');
+    expect(updated?.isPublic).toBe(false);
   });
 });
 
@@ -303,7 +341,6 @@ describe('createStylesMethods.create — new schema fields round-trip', () => {
     const created = await methods.create({
       name: 'Loaded',
       config: baseConfig,
-      sortOrder: 1,
       sampleVideos: [
         {
           url: 'https://example.com/v.mp4',
@@ -342,11 +379,11 @@ describe('createStylesMethods.create — new schema fields round-trip', () => {
 describe('createStylesMethods slug uniqueness (#956)', () => {
   it('rejects a new style whose slug collides with a public style', async () => {
     const methods = createStylesMethods(db, team.id, userRow.id);
-    await methods.create({
+    const noir = await methods.create({
       name: 'Cinematic Noir',
       config: baseConfig,
-      isPublic: true,
     });
+    await markPublic(noir.id);
     await expect(
       methods.create({ name: 'cinematic  noir!', config: baseConfig })
     ).rejects.toBeInstanceOf(ValidationError);

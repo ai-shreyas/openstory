@@ -5,6 +5,7 @@
 
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { openBillingGate } from './use-billing-gate-dialog';
 import { useBillingBalance } from './use-billing-balance';
 
 export function useLowBalanceWarning() {
@@ -32,15 +33,15 @@ export function useLowBalanceWarning() {
     // Balance decreased — check if we should warn
     if (hasWarnedRef.current) return;
 
+    // "Options" opens the billing gate — buying credits, asking the founder,
+    // fal.ai BYOK, and gift codes all live there (#1099).
     if (isZeroBalance) {
       hasWarnedRef.current = true;
       toast.error('Your credit balance is $0', {
         description: 'Generation is disabled until you add credits.',
         action: {
-          label: 'Add Credits',
-          onClick: () => {
-            window.location.href = '/credits';
-          },
+          label: 'Options',
+          onClick: openBillingGate,
         },
         duration: 10_000,
       });
@@ -49,10 +50,8 @@ export function useLowBalanceWarning() {
       toast.warning(`Balance is below $${lowBalanceThreshold}`, {
         description: `Your balance is $${balance.toFixed(2)}.`,
         action: {
-          label: 'Add Credits',
-          onClick: () => {
-            window.location.href = '/credits';
-          },
+          label: 'Options',
+          onClick: openBillingGate,
         },
         duration: 8_000,
       });

@@ -8,11 +8,14 @@
  */
 
 import type { ScopedDb } from '@/lib/db/scoped';
-import type { Shot } from '@/lib/db/schema/shots';
 import { SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
 import type { Style } from '@/lib/db/schema/libraries';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import { getLogger } from '@/lib/observability/logger';
+import {
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
 import { toShareableUrl } from '@/lib/storage/buckets';
 import type { Sequence } from '@/types/database';
 import { API_V1_BASE, type HalResource, waitLink, withLinks } from './hal';
@@ -94,8 +97,9 @@ export type SequenceState = SequenceSummary & {
 };
 
 /** The image URL a shot exposes once its still is ready (else null). */
-function shotImageUrl(shot: Shot): string | null {
-  // Shots track video status explicitly; image readiness is signalled by the
+function shotImageUrl(shot: ShotWithImage): string | null {
+  // The still IMAGE surface moved onto the anchor frame (#989); callers project
+  // it back via `projectShotWithImage`. Image readiness is signalled by the
   // presence of a thumbnail URL (the stored R2 url, else the fast preview CDN
   // url).
   return shot.thumbnailUrl ?? shot.previewThumbnailUrl ?? null;
@@ -105,7 +109,7 @@ function shotImageUrl(shot: Shot): string | null {
  * Readiness tallies over a sequence's shots — the single source of truth for
  * the `counts` block shared by the status document and the list summary.
  */
-export function summarizeShotCounts(shots: Shot[]): SequenceCounts {
+export function summarizeShotCounts(shots: ShotWithImage[]): SequenceCounts {
   let imagesReady = 0;
   let videosReady = 0;
   let videosFailed = 0;
@@ -173,6 +177,7 @@ export function buildSequenceSummary(params: {
 export async function buildSequenceState(
   scopedDb: {
     shots: Pick<ScopedDb['shots'], 'listBySequence'>;
+    frames: Pick<ScopedDb['frames'], 'listAnchorsBySequence'>;
     styles: Pick<ScopedDb['styles'], 'getById'>;
   },
   sequence: Sequence,
@@ -182,11 +187,22 @@ export async function buildSequenceState(
   // toShareableUrl.
   origin: string
 ): Promise<SequenceState> {
-  const [shots, style] = await Promise.all([
+  const [shots, anchorRows, style] = await Promise.all([
     scopedDb.shots.listBySequence(sequence.id),
+    scopedDb.frames.listAnchorsBySequence(sequence.id),
     scopedDb.styles.getById(sequence.styleId),
   ]);
-  const ordered = [...shots].sort((a, b) => a.orderIndex - b.orderIndex);
+  // The still IMAGE surface lives on each shot's anchor frame now (#989).
+  // Project it back under the legacy thumbnail* names — keyed by shotId, never
+  // by id-reuse — so the image-readiness reads below are unchanged.
+  const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+  const shotsWithImage = shots.flatMap((shot) => {
+    const frame = anchorsByShot.get(shot.id);
+    return frame ? [projectShotWithImage(shot, frame)] : [];
+  });
+  const ordered = [...shotsWithImage].sort(
+    (a, b) => a.orderIndex - b.orderIndex
+  );
   const share = (url: string | null): string | null =>
     url === null ? null : toShareableUrl(url, origin);
 
@@ -253,5 +269,17 @@ export function withSequenceStateLinks(
       href,
       'Long-poll until this sequence changes (e.g. ?wait=60s)'
     ),
+    exports: {
+      href: `${href}/exports`,
+      method: 'GET',
+      title: 'List server-side MP4 exports of this sequence',
+    },
+    'create-export': {
+      href: `${href}/exports`,
+      method: 'POST',
+      title: 'Start a server-side MP4 export of this sequence',
+      contentType: 'application/json',
+      examples: [{}],
+    },
   });
 }

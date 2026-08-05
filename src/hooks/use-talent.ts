@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   createTalentFn,
   deleteTalentFn,
@@ -110,6 +111,11 @@ export function useDeleteTalent() {
     mutationFn: (talentId: string) => deleteTalentFn({ data: { talentId } }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: talentKeys.lists() });
+    },
+    onError: (error) => {
+      toast.error('Failed to delete talent', {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      });
     },
   });
 }

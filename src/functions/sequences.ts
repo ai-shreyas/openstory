@@ -12,18 +12,27 @@ import {
   estimateImageCost,
   estimateStoryboardCost,
   estimateVideoCost,
+  gateEstimate,
 } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
-import type { Shot, ShotVariant, NewShot } from '@/lib/db/schema';
-import { buildPromoteUpdate } from '@/functions/shots';
+import type { Shot } from '@/lib/db/schema';
 import { buildShotImageWorkflowInput } from '@/lib/image/build-shot-image-input';
-import { resolveMotionPrompt } from '@/lib/motion/resolve-motion-prompt';
+import {
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
+import {
+  motionPromptFromVersion,
+  resolveMotionPrompt,
+} from '@/lib/motion/resolve-motion-prompt';
 import { VARIANT_TYPES, type VariantType } from '@/lib/db/schema/shot-variants';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createSequenceSchema,
+  MUSIC_REQUIRES_MOTION_ERROR,
   updateSequenceSchema,
 } from '@/lib/schemas/sequence.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -95,6 +104,19 @@ export const createSequenceFn = createServerFn({ method: 'POST' })
   });
 
 /**
+ * Music only generates inside the motion phase (#823), so an update whose
+ * merged flags leave music on without motion would strand music as a silent
+ * no-op on the next regeneration. The schema alone can't catch this — it
+ * doesn't see the persisted flags a partial update leaves untouched.
+ */
+export const musicWithoutMotion = (
+  update: { autoGenerateMusic?: boolean; autoGenerateMotion?: boolean },
+  existing: { autoGenerateMusic: boolean; autoGenerateMotion: boolean }
+): boolean =>
+  (update.autoGenerateMusic ?? existing.autoGenerateMusic) &&
+  !(update.autoGenerateMotion ?? existing.autoGenerateMotion);
+
+/**
  * Update a sequence.
  * Triggers storyboard regeneration if script/style/aspectRatio/model changes.
  */
@@ -105,6 +127,10 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
   )
   .handler(async ({ data, context }) => {
     const { sequenceId, ...updateData } = data;
+
+    if (musicWithoutMotion(updateData, context.sequence)) {
+      throw new Error(MUSIC_REQUIRES_MOTION_ERROR);
+    }
 
     const needsRegeneration =
       updateData.script !== undefined ||
@@ -150,6 +176,7 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
           videoModels: [
             safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
           ],
+          pricing: await getEffectiveFalPricing(),
         }),
         {
           providers: ['fal', 'openrouter'],
@@ -240,6 +267,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -284,7 +312,6 @@ export const archiveSequenceFn = createServerFn({ method: 'POST' })
 export function buildSceneSummaries(shots: Shot[]): MusicSceneSummary[] {
   return shots.map((shot) => {
     const md = shot.metadata?.musicDesign;
-    const prompts = shot.metadata?.prompts;
     const legacyMusic = shot.metadata?.audioDesign?.music;
     const meta = shot.metadata?.metadata;
     const durationSeconds = shot.durationMs
@@ -295,14 +322,16 @@ export function buildSceneSummaries(shots: Shot[]): MusicSceneSummary[] {
       sceneId: shot.id,
       location: meta?.location || '',
       timeOfDay: meta?.timeOfDay || '',
-      visualSummary: prompts?.visual?.components.sceneDescription || '',
+      // Visual context for the music prompt: the scene description. The
+      // structured visual prompt components moved to `frame_prompt_versions`
+      // (#713), so the shot's own description is the summary source here.
+      visualSummary: shot.description || '',
       title: meta?.title || 'Untitled Scene',
       storyBeat: meta?.storyBeat || '',
       durationSeconds,
       musicStyle: md?.style || legacyMusic?.style || '',
       musicMood: md?.mood || legacyMusic?.mood || '',
       musicPresence: md?.presence || legacyMusic?.presence || 'none',
-      atmosphere: prompts?.visual?.components.atmosphere,
     };
   });
 }
@@ -350,7 +379,11 @@ export function assertModelNotAlreadyAdded(
  * primary image to animate. A shot with no usable image is skipped — there is
  * nothing to feed image-to-video.
  */
-export function selectEligibleVideoShots(shots: readonly Shot[]): Shot[] {
+export function selectEligibleVideoShots(
+  // The still-image surface moved onto the anchor frame (#989); callers project
+  // it back via `projectShotWithImage` so the thumbnail* reads here are stable.
+  shots: readonly ShotWithImage[]
+): ShotWithImage[] {
   return shots.filter(
     (f) => f.thumbnailStatus === 'completed' && Boolean(f.thumbnailUrl)
   );
@@ -443,9 +476,16 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       const allShots = await scopedDb.shots.listBySequence(sequence.id);
       const totalDuration = sumShotDurationsSeconds(allShots) || 30;
 
-      await requireCredits(scopedDb, estimateAudioCost(model, totalDuration), {
-        errorMessage: 'Insufficient credits to add this audio model',
-      });
+      await requireCredits(
+        scopedDb,
+        gateEstimate(
+          estimateAudioCost(model, totalDuration, {
+            pricing: await getEffectiveFalPricing(),
+          }),
+          { model, operation: 'add-audio-model' }
+        ),
+        { errorMessage: 'Insufficient credits to add this audio model' }
+      );
 
       await scopedDb.sequenceVariants.upsertMusicPrimary({
         sequenceId: sequence.id,
@@ -509,33 +549,58 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       if (!isValidImageToVideoModel(model)) {
         throw new Error('Invalid video model');
       }
-      const existing = await scopedDb.shotVariants.listBySequence(
-        sequence.id,
-        'video'
-      );
+      // Video lives in `video_variants` now (#990); a row's covered shots are
+      // in its manifest, but the add-guard only needs (model, status).
+      const existing = await scopedDb.videoVariants.listBySequence(sequence.id);
       assertModelNotAlreadyAdded(existing, model, 'video');
       const allShots = await scopedDb.shots.listBySequence(sequence.id);
-      const eligible = selectEligibleVideoShots(allShots);
+      // Project each shot's anchor-frame image surface (#989) so eligibility and
+      // the per-shot `imageUrl` read below keep using the legacy field names.
+      await scopedDb.shots.ensureAnchorFrames(allShots);
+      const anchorsByShot = new Map(
+        (await scopedDb.frames.listAnchorsBySequence(sequence.id)).map((fr) => [
+          fr.shotId,
+          fr,
+        ])
+      );
+      const shotsWithImage = allShots.flatMap((shot) => {
+        const frame = anchorsByShot.get(shot.id);
+        return frame ? [projectShotWithImage(shot, frame)] : [];
+      });
+      const eligible = selectEligibleVideoShots(shotsWithImage);
       if (eligible.length === 0) {
         throw new Error('No shots have a completed image to animate yet');
       }
 
       await requireCredits(
         scopedDb,
-        multiplyMicros(estimateVideoCost(model, 5), eligible.length),
+        multiplyMicros(
+          gateEstimate(
+            estimateVideoCost(model, 5, {
+              pricing: await getEffectiveFalPricing(),
+            }),
+            { model, operation: 'add-video-model' }
+          ),
+          eligible.length
+        ),
         { errorMessage: 'Insufficient credits to add this video model' }
       );
 
-      for (const f of eligible) {
-        await scopedDb.shotVariants.upsert({
-          shotId: f.id,
-          sequenceId: sequence.id,
-          variantType: 'video',
-          model,
-          status: 'pending',
-        });
-      }
-
+      // No pre-seeded `video_variants` version here (mirrors the image branch
+      // below, #990): each shot's motion child opens its own in-flight
+      // `video_variants` version in `set-generating-status` (keyed by
+      // (renderSegmentId, model, workflowRunId), materializing the degenerate
+      // one-shot segment), and the workflow's `onFailure` marks it failed.
+      // Pre-seeding a `pending` row the workflow can't reconcile (it dedupes on
+      // the run id the pending row lacks) would orphan it and — being non-failed
+      // — permanently block re-adding the model via `assertModelNotAlreadyAdded`.
+      // Structured motion prompt now lives on the shot's selected
+      // `shot_prompt_versions` row (#713), not `metadata.prompts.motion`. Batch
+      // it once; `motion-batch` re-assembles per model from `motionPrompt`.
+      const selectedMotionByShot =
+        await scopedDb.shotPromptVersions.getSelectedMotionByShots(
+          eligible.map((f) => f.id)
+        );
       const workflowInput: BatchMotionMusicWorkflowInput = {
         ...baseCtx,
         includeMusic: false,
@@ -543,18 +608,36 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         // Adding a video model lands as an alternate only — never the primary
         // video. Promote later with "Set". (#547)
         variantOnly: true,
-        shots: eligible.map((f) => ({
-          shotId: f.id,
-          imageUrl: f.thumbnailUrl ?? '',
-          prompt: resolveMotionPrompt(f, model),
-          model,
-          motionPrompt: f.metadata?.prompts?.motion,
-          characterTags: f.metadata?.continuity?.characterTags,
-          duration: f.durationMs
-            ? f.durationMs / 1000
-            : (f.metadata?.metadata?.durationSeconds ?? 3),
-          aspectRatio: sequence.aspectRatio,
-        })),
+        shots: eligible.map((f) => {
+          const selectedMotion = selectedMotionByShot.get(f.id);
+          // Prefer the selected version's structured prompt; fall back to the
+          // `shot.motionPrompt` mirror for legacy shots with no version pointer
+          // (#713) so they still animate with their existing motion prompt.
+          const motionPrompt = selectedMotion
+            ? motionPromptFromVersion(selectedMotion)
+            : f.motionPrompt
+              ? { fullPrompt: f.motionPrompt, dialogue: null, audio: null }
+              : undefined;
+          return {
+            shotId: f.id,
+            imageUrl: f.thumbnailUrl ?? '',
+            prompt: resolveMotionPrompt(
+              {
+                motionPrompt: motionPrompt ?? null,
+                characterTags: f.metadata?.continuity?.characterTags,
+                description: f.description,
+              },
+              model
+            ),
+            model,
+            motionPrompt,
+            characterTags: f.metadata?.continuity?.characterTags,
+            duration: f.durationMs
+              ? f.durationMs / 1000
+              : (f.metadata?.metadata?.durationSeconds ?? 3),
+            aspectRatio: sequence.aspectRatio,
+          };
+        }),
       };
       try {
         const workflowRunId = await triggerWorkflow(
@@ -573,31 +656,15 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           failed: 0,
         } satisfies AddModelResult;
       } catch (error) {
+        // No compensating cleanup needed: nothing is pre-written, and a failed
+        // batch trigger means no motion child ran, so no `video_variants`
+        // version exists to mark failed (the model stays cleanly re-addable).
         logger.error('add-model: failed to trigger motion batch', {
           err: error,
           sequenceId: sequence.id,
           model,
           shots: eligible.length,
         });
-        // Mark the pre-stamped pending rows failed so the model can be re-added.
-        // Guard the compensating writes so they can't mask the original trigger
-        // error that we re-throw to the user.
-        try {
-          await Promise.all(
-            eligible.map((f) =>
-              scopedDb.shotVariants.updateByShotAndModel(f.id, 'video', model, {
-                status: 'failed',
-                error: 'Failed to trigger motion batch',
-              })
-            )
-          );
-        } catch (cleanupError) {
-          logger.error('add-model: failed to mark video rows failed', {
-            err: cleanupError,
-            sequenceId: sequence.id,
-            model,
-          });
-        }
         throw error;
       }
     }
@@ -606,12 +673,23 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     if (!isValidTextToImageModel(model)) {
       throw new Error('Invalid image model');
     }
-    const existingImage = await scopedDb.shotVariants.listBySequence(
-      sequence.id,
-      'image'
-    );
-    assertModelNotAlreadyAdded(existingImage, model, 'image');
+    // Image variants live in `frame_variants` now (#989) — check the models that
+    // already have a version there rather than the retired `shot_variants(image)`.
+    const existingImageModels =
+      await scopedDb.frameVariants.listModelsForSequence(sequence.id);
+    if (existingImageModels.includes(model)) {
+      throw new Error(`Image model "${model}" has already been added`);
+    }
     const allShots = await scopedDb.shots.listBySequence(sequence.id);
+    // The image prompt lives on the anchor frame now (#989); load frames so each
+    // shot's stored prompt can seed its `/image` run.
+    await scopedDb.shots.ensureAnchorFrames(allShots);
+    const imageFramesById = new Map(
+      (await scopedDb.frames.listBySequence(sequence.id)).map((fr) => [
+        fr.id,
+        fr,
+      ])
+    );
     const [characters, locations, elements] = await Promise.all([
       scopedDb.characters.listWithSheets(sequence.id),
       scopedDb.sequenceLocations.listWithReferences(sequence.id),
@@ -632,6 +710,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         characters,
         locations,
         elements,
+        imagePrompt: imageFramesById.get(f.id)?.imagePrompt ?? null,
         // Adding a model never repoints the primary — it lands as an alternate
         // variant only. Promote later with "Set". (#547)
         variantOnly: true,
@@ -645,7 +724,12 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     await requireCredits(
       scopedDb,
       multiplyMicros(
-        estimateImageCost(model, sequence.aspectRatio, 1),
+        gateEstimate(
+          estimateImageCost(model, sequence.aspectRatio, 1, {
+            pricing: await getEffectiveFalPricing(),
+          }),
+          { model, operation: 'add-image-model' }
+        ),
         inputs.length
       ),
       { errorMessage: 'Insufficient credits to add this image model' }
@@ -655,18 +739,12 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     // shouldn't abort the rest of the batch — mark that shot's pending row
     // failed (so it doesn't block a future re-add) and continue. Only throw if
     // every shot failed to trigger.
+    // No pre-seeded variant row: the IMAGE_WORKFLOW (variantOnly) appends the
+    // in-flight `frame_variants` 'model' version itself in set-generating-status,
+    // and its onFailure marks it failed — so there's nothing to pre-write here.
     let workflowRunId = '';
     let triggered = 0;
     for (const input of inputs) {
-      if (input.shotId) {
-        await scopedDb.shotVariants.upsert({
-          shotId: input.shotId,
-          sequenceId: sequence.id,
-          variantType: 'image',
-          model,
-          status: 'pending',
-        });
-      }
       try {
         workflowRunId = await triggerWorkflow('/image', input, {
           deduplicationId: `add-image-${input.shotId}-${model}-${Date.now()}`,
@@ -676,27 +754,13 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       } catch (error) {
         // Log every per-shot trigger failure so a systemic cause (e.g. a
         // transient binding issue hitting half the batch) leaves an aggregated
-        // Sentry trace rather than only a row's `error` column.
+        // Sentry trace rather than vanishing.
         logger.error('add-model: failed to trigger image workflow for shot', {
           err: error,
           sequenceId: sequence.id,
           shotId: input.shotId,
           model,
         });
-        if (input.shotId) {
-          await scopedDb.shotVariants.updateByShotAndModel(
-            input.shotId,
-            'image',
-            model,
-            {
-              status: 'failed',
-              error:
-                error instanceof Error
-                  ? error.message
-                  : 'Failed to trigger image generation',
-            }
-          );
-        }
       }
     }
     if (triggered === 0) {
@@ -710,54 +774,6 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       failed: inputs.length - triggered,
     } satisfies AddModelResult;
   });
-
-/**
- * Select the variant rows eligible to be promoted to the live primary for
- * `model` (#547). A row qualifies only when it is this model's LIVE completed
- * output: `status === 'completed'` with a `url`, and neither a divergent
- * (`divergedAt`) nor a user-discarded (`discardedAt`) alternate. Excluding
- * divergent/discarded is load-bearing — promoting one would resurrect an output
- * the user explicitly rejected onto the primary across the whole sequence.
- */
-export function selectPromotableVariants(
-  variants: readonly ShotVariant[],
-  model: string
-): ShotVariant[] {
-  return variants.filter(
-    (v) =>
-      v.model === model &&
-      v.status === 'completed' &&
-      Boolean(v.url) &&
-      v.divergedAt === null &&
-      v.discardedAt === null
-  );
-}
-
-/**
- * Build the primary-column update that promotes `variant` to the live primary
- * (#547). Reuses `buildPromoteUpdate` (which matches the per-scene
- * `setImageFromVariantFn` exactly for image, incl. clearing the now-stale
- * video). `buildPromoteUpdate`'s video case omits the motion-model / duration /
- * generated-at that `setVideoFromVariantFn` records, so layer those on for
- * parity. `now` is injectable for deterministic tests.
- */
-export function buildSequencePromoteUpdate(
-  variant: ShotVariant,
-  variantType: 'image' | 'video',
-  model: string,
-  now: () => Date = () => new Date()
-): Partial<NewShot> {
-  const { update } = buildPromoteUpdate(variant);
-  if (variantType === 'video') {
-    return {
-      ...update,
-      motionModel: model,
-      durationMs: variant.durationMs,
-      videoGeneratedAt: now(),
-    };
-  }
-  return update;
-}
 
 /**
  * Promote a model to the live primary across the WHOLE sequence (#547) — the
@@ -781,7 +797,7 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
     )
   )
   .handler(async ({ data, context }) => {
-    const { sequence, scopedDb } = context;
+    const { sequence, scopedDb, user } = context;
     const { variantType, model } = data;
 
     if (variantType === 'image' && !isValidTextToImageModel(model)) {
@@ -791,38 +807,118 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
       throw new Error('Invalid video model');
     }
 
-    const variants = await scopedDb.shotVariants.listBySequence(
-      sequence.id,
-      variantType
-    );
-    const promotable = selectPromotableVariants(variants, model);
-    if (promotable.length === 0) {
+    // Image variants live in `frame_variants` now (#989). The sequence-wide
+    // "Set" is a per-shot pointer repoint (the #677 fix applied in bulk): for
+    // every shot with a completed version for `model`, select it and reset that
+    // shot's now-stale video.
+    if (variantType === 'image') {
+      const versions = await scopedDb.frameVariants.listModelVersionsBySequence(
+        sequence.id
+      );
+      const latestByFrame = new Map<string, (typeof versions)[number]>();
+      for (const v of versions) {
+        if (v.model !== model || v.status !== 'completed' || !v.url) continue;
+        latestByFrame.set(v.frameId, v); // versions are asc id → last wins
+      }
+      if (latestByFrame.size === 0) {
+        throw new Error('That model has not generated anything to set');
+      }
+      // Resolve each frame's owning shot — frame ids are NOT shot ids (#989) —
+      // so the now-stale video reset targets the right shot row.
+      const shotIdByFrame = new Map(
+        (await scopedDb.frames.getByIds([...latestByFrame.keys()])).map((f) => [
+          f.id,
+          f.shotId,
+        ])
+      );
+      let imageCount = 0;
+      for (const [frameId, version] of latestByFrame) {
+        await scopedDb.frameVariants.select(frameId, version.id, {
+          actorId: user.id,
+        });
+        const ownerShotId = shotIdByFrame.get(frameId);
+        if (ownerShotId) {
+          await scopedDb.shots.update(
+            ownerShotId,
+            {
+              videoUrl: null,
+              videoPath: null,
+              videoStatus: 'pending',
+              videoWorkflowRunId: null,
+              videoGeneratedAt: null,
+              videoError: null,
+            },
+            { throwOnMissing: false }
+          );
+        }
+        imageCount++;
+      }
+      return { count: imageCount, variantType, model };
+    }
+
+    // Video lives in `video_variants` now (#990). The sequence-wide "Set" is a
+    // per-shot pointer repoint (the #677 fix applied in bulk, mirroring the
+    // image branch above): for every shot with a completed version for `model`,
+    // select it — `videoVariants.select` mirrors `shots.video*`, repoints the
+    // render segment's `selectedVideoVersionId` pointer, and logs the event.
+    const versions = await scopedDb.videoVariants.listBySequence(sequence.id);
+    const latestByShot = new Map<string, (typeof versions)[number]>();
+    for (const version of versions) {
+      if (
+        version.model !== model ||
+        version.status !== 'completed' ||
+        !version.url
+      ) {
+        continue;
+      }
+      // versions are asc id → last write wins (latest per shot).
+      for (const entry of version.manifest) {
+        latestByShot.set(entry.shotId, version);
+      }
+    }
+    if (latestByShot.size === 0) {
       throw new Error('That model has not generated anything to set');
     }
 
     let count = 0;
-    for (const variant of promotable) {
-      const shotUpdate = buildSequencePromoteUpdate(
-        variant,
-        variantType,
-        model
-      );
-      const updated = await scopedDb.shots.update(variant.shotId, shotUpdate, {
-        throwOnMissing: false,
-      });
-      if (updated) count++;
+    for (const [shotId, version] of latestByShot) {
+      try {
+        await scopedDb.videoVariants.select(shotId, version.id, {
+          actorId: user.id,
+        });
+        count++;
+      } catch (error) {
+        // Only a shot deleted mid-promotion is benign — skip just that shot.
+        // Every other failure (segment mismatch, missing version, DB/batch
+        // error) is a real problem: re-throw so it reaches the error boundary
+        // rather than being swallowed and reported as a successful "Set".
+        if (
+          error instanceof Error &&
+          error.message === `Shot ${shotId} not found`
+        ) {
+          logger.warn('set-model: skipped deleted shot during video set', {
+            sequenceId: sequence.id,
+            shotId,
+            model,
+          });
+          continue;
+        }
+        throw error;
+      }
     }
 
-    // A shot deleted mid-promotion is benign (throwOnMissing:false skips it),
-    // but a promoted count short of the promotable set otherwise points at a
-    // real problem (e.g. a scoping mismatch) — surface it rather than letting
-    // the lower count pass silently.
-    if (count !== promotable.length) {
+    // Every candidate shot was deleted mid-promotion — nothing was set, so don't
+    // present a no-op as success.
+    if (count === 0) {
+      throw new Error('That model has not generated anything to set');
+    }
+
+    if (count !== latestByShot.size) {
       logger.warn('set-model: promoted fewer shots than promotable', {
         sequenceId: sequence.id,
         model,
         variantType,
-        promotable: promotable.length,
+        promotable: latestByShot.size,
         promoted: count,
       });
     }
@@ -867,7 +963,7 @@ export const generateMusicFn = createServerFn({ method: 'POST' })
     // revision; the variants helper updates the cached columns on `sequences`
     // alongside the row insert so a tags-only edit isn't dropped.
     if (data.prompt !== undefined || data.tags !== undefined) {
-      await context.scopedDb.sequenceMusicPromptVariants.write({
+      await context.scopedDb.sequenceMusicPromptVersions.write({
         sequenceId: sequence.id,
         prompt: effectivePrompt,
         tags: effectiveTags,

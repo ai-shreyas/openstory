@@ -1,21 +1,29 @@
 /**
- * Dual-write builders + persist orchestration for `MotionWorkflow` (#545).
+ * Persist orchestration for `MotionWorkflow` (#545, re-routed to `video_variants`
+ * in #990).
  *
- * Motion generation writes each model's output in two places: the legacy
- * `shots.video*` columns (a last-write-wins default across models, kept so
- * single-model consumers and the "Mixed" player keep working) AND a per-model
- * `shot_variants` row (`variantType='video'`) that the scenes-view video-model
- * switcher resolves against.
+ * Motion generation now writes each render as an append-only `video_variants`
+ * **version** (keyed by `(renderSegmentId, model)`), replacing the retired
+ * `shot_variants` video slice. `set-generating-status` appends the in-flight
+ * version (built in the workflow, which has the scene/manifest context); these
+ * helpers finalize it:
  *
- * Pulled out of the workflow body — mirroring `image-workflow-snapshot.ts`'s
- * `persistImageResult` — so the generating → completed → failed state machine
- * is testable without bootstrapping a `WorkflowEntrypoint`. The workflow keeps
- * the `step.do` boundaries and the realtime-emit error handling; these helpers
- * own the write shapes and call sequence.
+ * - completion: flip the version to `completed`, then (for a primary, non
+ *   `variantOnly` render) repoint the shot's selection via
+ *   `videoVariants.select` — which mirrors `shots.video*` + repoints the render
+ *   segment's `selectedVideoVersionId` pointer + logs a `video.selected` event,
+ *   all atomically.
+ * - failure: mark the in-flight version `failed` (by workflow run id) and, for a
+ *   primary render, flip the legacy `shots.video*` status so the failure banner
+ *   shows on refetch.
+ *
+ * Pulled out of the workflow body (mirroring `image-workflow-snapshot.ts`'s
+ * `persistImageResult`) so the generating → completed → failed state machine is
+ * testable without bootstrapping a `WorkflowEntrypoint`.
  */
 
-import type { NewShot, NewShotVariant } from '@/lib/db/schema';
-import type { VariantType } from '@/lib/db/schema/shot-variants';
+import type { NewShot, NewVideoVariant } from '@/lib/db/schema';
+import type { RecordEventInput } from '@/lib/db/scoped/sequence-events';
 
 export type MotionStorageResult = { url: string; path: string };
 
@@ -27,20 +35,49 @@ export type MotionStorageResult = { url: string; path: string };
  */
 export type PersistMotionScopedDb = {
   shots: {
+    getById: (
+      id: string
+    ) => Promise<{ id: string; renderSegmentId: string | null } | null>;
     update: (
       id: string,
       data: Partial<NewShot>,
       opts?: { throwOnMissing?: boolean }
     ) => Promise<{ id: string } | undefined>;
   };
-  shotVariants: {
-    updateByShotAndModel: (
+  videoVariants: {
+    update: (
+      versionId: string,
+      data: Partial<NewVideoVariant>
+    ) => Promise<{ id: string }>;
+    getById: (
+      versionId: string
+    ) => Promise<{ id: string; workflowRunId: string | null } | null>;
+    select: (
       shotId: string,
-      type: VariantType,
-      model: string,
-      data: Partial<NewShotVariant>
-    ) => Promise<{ id: string } | null>;
-    upsert: (data: NewShotVariant) => Promise<{ id: string }>;
+      versionId: string,
+      opts: { actorId: string | null }
+    ) => Promise<{ id: string }>;
+    markFailedByWorkflowRun: (
+      workflowRunId: string,
+      error: string
+    ) => Promise<void>;
+  };
+  renderSegments: {
+    getById: (segmentId: string) => Promise<{
+      id: string;
+      pendingPromoteVersionId: string | null;
+    } | null>;
+    setPendingPromoteVersionId: (
+      segmentId: string,
+      versionId: string | null
+    ) => Promise<void>;
+    clearPendingPromoteVersionIdIf: (
+      segmentId: string,
+      versionId: string
+    ) => Promise<void>;
+  };
+  sequenceEvents: {
+    record: (input: RecordEventInput) => Promise<{ id: string }>;
   };
 };
 
@@ -74,73 +111,20 @@ export type MotionEmit = (
   payload: MotionVideoProgressPayload
 ) => Promise<void>;
 
-type MotionWrites = {
-  shot: Partial<NewShot>;
-  variant: Partial<NewShotVariant>;
-};
-
 /**
- * `set-generating-status` writes: stamp the legacy columns with the model and
- * run id, and open this model's `shot_variants` row in `generating`.
+ * The legacy `shots.video*` write for `set-generating-status` — stamp the model
+ * and run id (a last-write-wins default across models, kept for single-model
+ * players / the "Mixed" mode). The per-model in-flight state now lives on the
+ * `video_variants` version the workflow appends alongside this.
  */
-export function buildMotionGeneratingWrites(opts: {
+export function buildMotionGeneratingShotWrite(opts: {
   model: string;
   workflowRunId: string;
-}): MotionWrites {
+}): Partial<NewShot> {
   return {
-    shot: {
-      videoStatus: 'generating',
-      videoWorkflowRunId: opts.workflowRunId,
-      motionModel: opts.model,
-    },
-    variant: {
-      status: 'generating',
-      workflowRunId: opts.workflowRunId,
-    },
-  };
-}
-
-/** Completed writes: stamp the final video onto both the legacy columns and
- *  this model's variant row, clearing any prior `videoError`. */
-export function buildMotionCompletedWrites(opts: {
-  upload: MotionStorageResult;
-  durationMs: number;
-  promptHash: string | null;
-  generatedAt: Date;
-}): MotionWrites {
-  const { upload, durationMs, promptHash, generatedAt } = opts;
-  return {
-    shot: {
-      videoPath: upload.path,
-      videoUrl: upload.url,
-      durationMs,
-      videoStatus: 'completed',
-      videoGeneratedAt: generatedAt,
-      videoError: null,
-    },
-    variant: {
-      url: upload.url,
-      storagePath: upload.path,
-      status: 'completed',
-      generatedAt,
-      error: null,
-      durationMs,
-      promptHash,
-    },
-  };
-}
-
-/** Failed writes: record the error on both the legacy columns and the variant. */
-export function buildMotionFailedWrites(opts: { error: string }): MotionWrites {
-  return {
-    shot: {
-      videoStatus: 'failed',
-      videoError: opts.error,
-    },
-    variant: {
-      status: 'failed',
-      error: opts.error,
-    },
+    videoStatus: 'generating',
+    videoWorkflowRunId: opts.workflowRunId,
+    motionModel: opts.model,
   };
 }
 
@@ -149,26 +133,33 @@ export type PersistMotionOutcome =
   | { status: 'shot-deleted' };
 
 /**
- * Completed dual-write. Stamps the legacy `shots.video*` columns first; if the
- * shot was deleted mid-flight (`update` returns undefined) it short-circuits
- * without touching `shot_variants` or emitting — mirroring
- * `persistImageResult`. Otherwise updates this model's existing (generating)
- * variant row to `completed` and emits progress.
+ * Completed write. Flips the in-flight `video_variants` version to `completed`,
+ * then — for a primary render — repoints the shot's selection
+ * (`videoVariants.select` mirrors `shots.video*` + the render segment's
+ * `selectedVideoVersionId` pointer + logs `video.selected`). A `variantOnly`
+ * render (an added model, #547) only
+ * finalizes its version, leaving the primary selection untouched. A
+ * `video.rendered` activity event is logged either way.
+ *
+ * If the shot was deleted mid-flight (`getById` returns null), the version is
+ * still finalized (it is scene-scoped, not shot-cascaded) but the selection
+ * repoint is skipped — mirroring `persistImageResult`'s shot-deleted guard.
  *
  * `now` is injectable so tests can pin the `generatedAt` timestamp.
  */
 export async function persistMotionCompletion(opts: {
   scopedDb: PersistMotionScopedDb;
   shotId: string;
+  sequenceId: string;
+  sceneId: string;
+  videoVersionId: string;
   model: string;
   upload: MotionStorageResult;
-  durationMs: number;
-  promptHash: string | null;
+  actorId: string | null;
   emit: MotionEmit;
   /**
-   * Variant-only (#547): write only this model's `shot_variants` row, never
-   * the legacy `shots.video*` columns — adding a video model leaves the
-   * primary video intact.
+   * Variant-only (#547): only finalize this render's version; never repoint the
+   * shot's primary selection — adding a video model leaves the primary intact.
    */
   variantOnly?: boolean;
   now?: () => Date;
@@ -176,33 +167,41 @@ export async function persistMotionCompletion(opts: {
   const {
     scopedDb,
     shotId,
+    sequenceId,
+    sceneId,
+    videoVersionId,
     model,
     upload,
-    durationMs,
-    promptHash,
+    actorId,
     emit,
     variantOnly,
     now = () => new Date(),
   } = opts;
 
-  const writes = buildMotionCompletedWrites({
-    upload,
-    durationMs,
-    promptHash,
+  await scopedDb.videoVariants.update(videoVersionId, {
+    url: upload.url,
+    storagePath: upload.path,
+    status: 'completed',
     generatedAt: now(),
+    error: null,
+  });
+
+  await scopedDb.sequenceEvents.record({
+    sequenceId,
+    actorId,
+    kind: 'video.rendered',
+    targetType: 'shot',
+    targetId: shotId,
+    summary: `Rendered ${model} video`,
+    data: {
+      versionId: videoVersionId,
+      model,
+      sceneId,
+      variantOnly: !!variantOnly,
+    },
   });
 
   if (variantOnly) {
-    // Only this model's variant row; the primary `shots.video*` are untouched.
-    // A null update means the shot (and its cascade-deleted variant) is gone.
-    const updated = await scopedDb.shotVariants.updateByShotAndModel(
-      shotId,
-      'video',
-      model,
-      writes.variant
-    );
-    if (!updated) return { status: 'shot-deleted' };
-
     await emit('generation.video:progress', {
       shotId,
       status: 'completed',
@@ -211,93 +210,103 @@ export async function persistMotionCompletion(opts: {
       // Alternate model — the cache updater must not repoint the primary.
       variantOnly: true,
     });
-
     return { status: 'completed', videoUrl: upload.url };
   }
 
-  const updatedShot = await scopedDb.shots.update(shotId, writes.shot, {
-    throwOnMissing: false,
-  });
-  if (!updatedShot) return { status: 'shot-deleted' };
+  // A primary render: promote only if this version still holds the pending
+  // claim (#1070 last-kickoff + explicit select cancel).
+  const shot = await scopedDb.shots.getById(shotId);
+  if (!shot) return { status: 'shot-deleted' };
 
-  await scopedDb.shotVariants.updateByShotAndModel(
-    shotId,
-    'video',
-    model,
-    writes.variant
-  );
+  const segmentId = shot.renderSegmentId;
+  const segment = segmentId
+    ? await scopedDb.renderSegments.getById(segmentId)
+    : null;
+  const shouldPromote = segment?.pendingPromoteVersionId === videoVersionId;
 
-  await emit('generation.video:progress', {
-    shotId,
-    status: 'completed',
-    videoUrl: upload.url,
-    model,
-  });
+  if (shouldPromote) {
+    await scopedDb.videoVariants.select(shotId, videoVersionId, { actorId });
+    await emit('generation.video:progress', {
+      shotId,
+      status: 'completed',
+      videoUrl: upload.url,
+      model,
+    });
+  } else {
+    // History-only completion — leave the primary selection alone. Clear a
+    // stale self-claim if any (usually already cleared by a newer kickoff or
+    // user select).
+    if (segmentId) {
+      await scopedDb.renderSegments.clearPendingPromoteVersionIdIf(
+        segmentId,
+        videoVersionId
+      );
+    }
+    // Still emit completed so the variant list refreshes; primary video*
+    // columns stay as they are (cache updater must not overwrite when the
+    // client still has a different selected version — emit without
+    // forcing primary: videoUrl is present but selection is separate).
+    await emit('generation.video:progress', {
+      shotId,
+      status: 'completed',
+      videoUrl: upload.url,
+      model,
+      // Not selected as primary — treat like variant-only for cache primary.
+      variantOnly: true,
+    });
+  }
 
   return { status: 'completed', videoUrl: upload.url };
 }
 
 /**
- * Failure dual-write (called from the workflow's `onFailure`). Records `failed`
- * on the legacy columns and on this model's variant row, then emits.
- *
- * Flips an *existing* variant row to `failed` via `updateByShotAndModel` —
- * which only touches `status`/`error`, so a previously-completed `url`/
- * `storagePath` is preserved (a re-run that fails before producing a new video
- * must not erase the last good one). Falls back to `upsert` only when no row
- * exists yet — e.g. a failure before `set-generating-status` ran (an
- * insufficient-credit throw in `check-credits`, or the top-level imageUrl
- * guard) — so the `failed` state is still visible in the scenes-view switcher.
- * (A blind `upsert` would set `url`/`storagePath` from the failure payload,
- * i.e. NULL, silently dropping the completed artifact.)
+ * Failure write (called from the workflow's `onFailure`). Marks the in-flight
+ * `video_variants` version `failed` by workflow run id — which preserves a
+ * previously-completed version's url (a re-run that fails before producing a new
+ * video must not erase the last good one, since only the still-`generating` row
+ * is touched). For a primary render it also flips the legacy `shots.video*`
+ * status so the failure banner shows after a refetch.
  */
 export async function persistMotionFailure(opts: {
   scopedDb: PersistMotionScopedDb;
   shotId: string;
-  sequenceId: string;
   model: string;
   error: string;
   workflowRunId: string;
   emit: MotionEmit;
-  /** Variant-only (#547): record `failed` only on the variant, never the
-   * legacy `shots.video*` columns. */
+  /** Variant-only (#547): never touch the legacy `shots.video*` columns. */
   variantOnly?: boolean;
 }): Promise<void> {
-  const {
-    scopedDb,
-    shotId,
-    sequenceId,
-    model,
-    error,
-    workflowRunId,
-    emit,
-    variantOnly,
-  } = opts;
-
-  const writes = buildMotionFailedWrites({ error });
+  const { scopedDb, shotId, model, error, workflowRunId, emit, variantOnly } =
+    opts;
 
   if (!variantOnly) {
-    await scopedDb.shots.update(shotId, writes.shot, {
-      throwOnMissing: false,
-    });
+    await scopedDb.shots.update(
+      shotId,
+      { videoStatus: 'failed', videoError: error },
+      { throwOnMissing: false }
+    );
+    // Drop auto-promote if this run owned it (#1070).
+    const shot = await scopedDb.shots.getById(shotId);
+    if (shot?.renderSegmentId) {
+      const segment = await scopedDb.renderSegments.getById(
+        shot.renderSegmentId
+      );
+      if (segment?.pendingPromoteVersionId) {
+        const pending = await scopedDb.videoVariants.getById(
+          segment.pendingPromoteVersionId
+        );
+        if (pending?.workflowRunId === workflowRunId) {
+          await scopedDb.renderSegments.clearPendingPromoteVersionIdIf(
+            shot.renderSegmentId,
+            pending.id
+          );
+        }
+      }
+    }
   }
 
-  const updated = await scopedDb.shotVariants.updateByShotAndModel(
-    shotId,
-    'video',
-    model,
-    writes.variant
-  );
-  if (!updated) {
-    await scopedDb.shotVariants.upsert({
-      shotId,
-      sequenceId,
-      variantType: 'video',
-      model,
-      workflowRunId,
-      ...writes.variant,
-    });
-  }
+  await scopedDb.videoVariants.markFailedByWorkflowRun(workflowRunId, error);
 
   await emit('generation.video:progress', {
     shotId,

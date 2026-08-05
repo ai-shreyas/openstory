@@ -39,8 +39,9 @@ vi.doMock('@/lib/observability/ai-otel', () => ({
 // Dynamic import so vi.doMock above is in effect when llm-client (and its
 // `./create-adapter` import) resolves. Static imports are hoisted above
 // vi.doMock and would bypass the mocks.
-const { callLLM, callLLMStream, llmCostFromUsage } =
+const { callLLM, callLLMStream, llmCostFromUsage, RECOMMENDED_MODELS } =
   await import('./llm-client');
+const { DEFAULT_VISION_MODEL } = await import('./models.config');
 
 const usage = (cost?: number): TokenUsage => ({
   promptTokens: 0,
@@ -66,7 +67,7 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
@@ -93,7 +94,7 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
@@ -119,7 +120,7 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
         userId: 'user-123',
         sessionId: 'seq-456',
@@ -165,7 +166,7 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
@@ -186,7 +187,7 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
@@ -202,18 +203,18 @@ describe('llm-client', () => {
             type: 'RUN_ERROR',
             message: 'Provider returned error',
             code: 'provider-error',
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
           };
         })()
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
       return expect(drain(generator)).rejects.toThrow(
-        'LLM stream error [provider-error, model=anthropic/claude-sonnet-4.6]: Provider returned error'
+        'LLM stream error [provider-error, model=anthropic/claude-sonnet-5]: Provider returned error'
       );
     });
 
@@ -223,18 +224,18 @@ describe('llm-client', () => {
           yield {
             type: 'RUN_ERROR',
             message: 'Provider returned error',
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
           };
         })()
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
       return expect(drain(generator)).rejects.toThrow(
-        'LLM stream error [model=anthropic/claude-sonnet-4.6]: Provider returned error'
+        'LLM stream error [model=anthropic/claude-sonnet-5]: Provider returned error'
       );
     });
 
@@ -249,7 +250,7 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
@@ -262,7 +263,7 @@ describe('llm-client', () => {
           yield {
             type: 'RUN_ERROR',
             message: 'Provider returned error',
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
             rawEvent: {
               code: 400,
               message: 'Provider returned error',
@@ -280,12 +281,12 @@ describe('llm-client', () => {
       );
 
       const generator = callLLMStream({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
       return expect(drain(generator)).rejects.toThrow(
-        'LLM stream error [model=anthropic/claude-sonnet-4.6]: Provider returned error — provider=Anthropic output_config.format.schema: Invalid schema'
+        'LLM stream error [model=anthropic/claude-sonnet-5]: Provider returned error — provider=Anthropic output_config.format.schema: Invalid schema'
       );
     });
 
@@ -400,7 +401,7 @@ describe('llm-client', () => {
 
         const chunks = [];
         for await (const chunk of callLLMStream({
-          model: 'anthropic/claude-sonnet-4.6',
+          model: 'anthropic/claude-sonnet-5',
           messages: [{ role: 'user', content: 'test' }],
           responseSchema: schema,
         })) {
@@ -416,6 +417,188 @@ describe('llm-client', () => {
         const terminal = chunks.at(-1);
         if (!terminal || !terminal.done) throw new Error('expected terminal');
         expect(terminal.parsed).toEqual({ greeting: 'hi' });
+      });
+    });
+
+    describe('Anthropic large-schema json_object fallback', () => {
+      // A schema whose converted JSON exceeds ANTHROPIC_GRAMMAR_BUDGET_BYTES —
+      // Anthropic's grammar compiler rejects schemas this big, so the client
+      // must route it via json_object + schema-in-prompt instead.
+      const bigSchema = z.object(
+        Object.fromEntries(
+          Array.from({ length: 40 }, (_, i) => [
+            `field${i}`,
+            z
+              .string()
+              .optional()
+              .meta({ description: 'x'.repeat(60) }),
+          ])
+        )
+      );
+
+      it('routes big schemas on Anthropic models via json_object + prompt', async () => {
+        mockChat.mockReturnValue(
+          (async function* () {
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: '{"field0":' };
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: '"hi"}' };
+          })()
+        );
+
+        const chunks = [];
+        for await (const chunk of callLLMStream({
+          model: 'anthropic/claude-fable-5',
+          messages: [{ role: 'user', content: 'test' }],
+          responseSchema: bigSchema,
+        })) {
+          chunks.push(chunk);
+        }
+
+        const callArgs = mockChat.mock.calls[0]?.[0];
+        if (!callArgs) throw new Error('expected mockChat to have been called');
+        // No strict grammar on the wire…
+        expect(callArgs.outputSchema).toBeUndefined();
+        expect(callArgs.modelOptions.responseFormat).toEqual({
+          type: 'json_object',
+        });
+        // …the schema rides in the system prompt instead…
+        const lastPrompt = callArgs.systemPrompts.at(-1);
+        expect(lastPrompt).toContain('JSON Schema');
+        expect(lastPrompt).toContain('field39');
+        // …and the final text is validated into `parsed`.
+        const terminal = chunks.at(-1);
+        if (!terminal || !terminal.done) throw new Error('expected terminal');
+        expect(terminal.parsed).toEqual({ field0: 'hi' });
+      });
+
+      it('keeps big schemas on non-Anthropic models on the native path', async () => {
+        mockChat.mockReturnValue(
+          (async function* () {
+            yield {
+              type: 'CUSTOM',
+              name: 'structured-output.complete',
+              value: { object: { field0: 'hi' } },
+            };
+          })()
+        );
+
+        await drain(
+          callLLMStream({
+            model: 'x-ai/grok-4.5',
+            messages: [{ role: 'user', content: 'test' }],
+            responseSchema: bigSchema,
+          })
+        );
+
+        const callArgs = mockChat.mock.calls[0]?.[0];
+        if (!callArgs) throw new Error('expected mockChat to have been called');
+        expect(callArgs.outputSchema).toBe(bigSchema);
+        expect(callArgs.modelOptions.responseFormat).toBeUndefined();
+      });
+
+      it('fails loudly when the fallback text does not match the schema', () => {
+        // The old fallback was removed (#799) for silently dropping fields —
+        // the restored one must throw instead.
+        mockChat.mockReturnValue(
+          (async function* () {
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: '{"field0": 42}' };
+          })()
+        );
+
+        const generator = callLLMStream({
+          model: 'anthropic/claude-fable-5',
+          messages: [{ role: 'user', content: 'test' }],
+          responseSchema: bigSchema,
+        });
+
+        return expect(drain(generator)).rejects.toThrow();
+      });
+    });
+
+    describe('structured-output model lockstep', () => {
+      // DEFAULT_VISION_MODEL and every RECOMMENDED_MODELS entry get used with
+      // responseSchema calls, which throw for models outside the
+      // STRUCTURED_OUTPUT_MODELS set. Three literals in two files must move
+      // together on a model bump; this catches a bump that misses one.
+      const lockstepModels = [
+        ...new Set([
+          DEFAULT_VISION_MODEL,
+          ...Object.values(RECOMMENDED_MODELS),
+        ]),
+      ];
+
+      it.each(lockstepModels)('%s supports structured outputs', (model) => {
+        mockChat.mockReturnValue(
+          (async function* () {
+            yield {
+              type: 'CUSTOM',
+              name: 'structured-output.complete',
+              value: { object: { ok: true } },
+            };
+          })()
+        );
+
+        const generator = callLLMStream({
+          model,
+          messages: [{ role: 'user', content: 'test' }],
+          responseSchema: z.object({ ok: z.boolean() }),
+        });
+
+        return expect(drain(generator)).resolves.toBeUndefined();
+      });
+    });
+
+    describe('provider routing', () => {
+      const textStream = () =>
+        (async function* () {
+          yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'hi' };
+        })();
+
+      it('keeps Anthropic models off Azure by default', async () => {
+        // Azure-hosted Claude rejects our analysis schemas ("compiled grammar
+        // is too large"); Anthropic's own endpoint accepts them.
+        mockChat.mockReturnValue(textStream());
+
+        await drain(
+          callLLMStream({
+            model: 'anthropic/claude-fable-5',
+            messages: [{ role: 'user', content: 'test' }],
+          })
+        );
+
+        expect(mockChat.mock.calls[0]?.[0]?.modelOptions.provider).toEqual({
+          ignore: ['azure'],
+        });
+      });
+
+      it('leaves non-Anthropic models unrestricted', async () => {
+        mockChat.mockReturnValue(textStream());
+
+        await drain(
+          callLLMStream({
+            model: 'x-ai/grok-4.5',
+            messages: [{ role: 'user', content: 'test' }],
+          })
+        );
+
+        expect(
+          mockChat.mock.calls[0]?.[0]?.modelOptions.provider
+        ).toBeUndefined();
+      });
+
+      it('caller-supplied provider preferences win', async () => {
+        mockChat.mockReturnValue(textStream());
+
+        await drain(
+          callLLMStream({
+            model: 'anthropic/claude-sonnet-5',
+            messages: [{ role: 'user', content: 'test' }],
+            provider: { only: ['anthropic'] },
+          })
+        );
+
+        expect(mockChat.mock.calls[0]?.[0]?.modelOptions.provider).toEqual({
+          only: ['anthropic'],
+        });
       });
     });
 
@@ -435,7 +618,7 @@ describe('llm-client', () => {
         const answer: string[] = [];
         let finalAccumulated = '';
         for await (const chunk of callLLMStream({
-          model: 'anthropic/claude-sonnet-4.6',
+          model: 'anthropic/claude-sonnet-5',
           messages: [{ role: 'user', content: 'test' }],
           reasoning: { enabled: true, effort: 'medium' },
         })) {
@@ -456,7 +639,7 @@ describe('llm-client', () => {
 
         await drain(
           callLLMStream({
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
             messages: [{ role: 'user', content: 'test' }],
             reasoning: { enabled: true, effort: 'medium' },
           })
@@ -479,7 +662,7 @@ describe('llm-client', () => {
 
         await drain(
           callLLMStream({
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
             messages: [{ role: 'user', content: 'test' }],
           })
         );
@@ -500,7 +683,7 @@ describe('llm-client', () => {
 
         await drain(
           callLLMStream({
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
             messages: [{ role: 'user', content: 'test' }],
             webSearch: true,
           })
@@ -526,7 +709,7 @@ describe('llm-client', () => {
 
         await drain(
           callLLMStream({
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
             messages: [{ role: 'user', content: 'test' }],
           })
         );
@@ -555,7 +738,7 @@ describe('llm-client', () => {
       );
 
       const result = await callLLM({
-        model: 'anthropic/claude-sonnet-4.6',
+        model: 'anthropic/claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }],
       });
 
@@ -574,14 +757,14 @@ describe('llm-client', () => {
             message:
               'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
             code: '402',
-            model: 'anthropic/claude-sonnet-4.6',
+            model: 'anthropic/claude-sonnet-5',
           };
         })()
       );
 
       return expect(
         callLLM({
-          model: 'anthropic/claude-sonnet-4.6',
+          model: 'anthropic/claude-sonnet-5',
           messages: [{ role: 'user', content: 'test' }],
         })
       ).rejects.toThrow(/Insufficient credits/);

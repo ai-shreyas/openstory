@@ -28,16 +28,23 @@ open a focused PR that bumps it → leave everything green.
 
 ```bash
 bun models:check          # human-readable report
-bun models:check --json   # { hasUpdates, models[], packages[] } for scripting
+bun models:check --json   # { ok, errorCount, hasUpdates, models[], packages[] }
 ```
 
 `scripts/check-model-updates.ts` reads the registries and queries public,
 unauthenticated catalogs (fal.ai `/api/models`, OpenRouter `/api/v1/models`, npm
 registry). It is HTTP-only so it runs anywhere — no `FAL_KEY` or MCP needed.
+Behind a proxy it routes through `curl` (Bun's fetch can't traverse a
+TLS-intercepting proxy), so `curl` must be on PATH in that case.
 
 Candidates are **heuristic** (same brand, higher version number, same modality,
-not already adopted). Treat them as leads to verify, not facts. If
-`hasUpdates` is `false`, stop — nothing to do.
+not already adopted). Treat them as leads to verify, not facts.
+
+**Check `ok` before trusting the result.** `ok: false` (equivalently, a non-zero
+exit code or `errorCount > 0`) means one or more lookups FAILED — the report is
+INCOMPLETE, not "all current". Do not treat a failed run as "nothing to do":
+fix connectivity and re-run. Only when `ok` is `true` does `hasUpdates: false`
+genuinely mean every model is current — in that case, stop.
 
 ## 2. Verify each candidate is a genuine successor
 
@@ -104,6 +111,17 @@ Per class, edit and follow through:
   override path documented in that script and flag it in the PR.
 - **Packages:** bump the `@tanstack/ai*` range in `package.json`, then
   `bun install`. Skip major bumps (breaking) — open an issue for those instead.
+  **Catalog-lag prune (`@tanstack/ai-openrouter` bumps):** registry ids that
+  the adapter's generated model catalog doesn't know yet are bridged in
+  `CATALOG_LAG_MODELS` (`src/lib/ai/create-adapter.ts`). When a bump ships one
+  of those ids upstream, `bun typecheck` fails in
+  `src/lib/ai/catalog-lag.test.ts` naming the id — delete its entry from
+  `CATALOG_LAG_MODELS` in the same PR and note the prune in the PR body.
+  Conversely, when a text-model bump adopts an id the installed catalog lacks
+  (typecheck fails at the `createAdapter` call sites), add a `createModel`
+  entry for it to `CATALOG_LAG_MODELS` — correct `input` modalities, plus
+  `features: ['reasoning', 'structured_outputs']` when the model supports
+  them.
 
 ## 4. Quality gates (must pass before opening the PR)
 

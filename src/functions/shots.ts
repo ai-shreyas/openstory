@@ -4,22 +4,48 @@ import {
   isValidTextToImageModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
-import {
-  computeMotionPromptInputHash,
-  computeVisualPromptInputHash,
-} from '@/lib/ai/input-hash';
-import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
+import { requireCredits } from '@/lib/billing/preflight';
+import { getWorkflowRunOutcome } from '@/lib/workflow/run-outcome';
+import { workflowNameFromRunId } from '@/lib/workflow/trigger-bindings';
 import type { ShotVariant, NewShot } from '@/lib/db/schema';
+import {
+  computeShotStaleness,
+  UNTRACKED_STALENESS,
+  type ShotStalenessRefs,
+  type ShotStalenessResult,
+} from '@/lib/shots/shot-staleness';
+import {
+  DEFAULT_UPDATE_STALE_DEPTH,
+  UPDATE_STALE_DEPTHS,
+} from '@/lib/shots/update-stale-depth';
+import {
+  projectShotWithImage,
+  projectShotMissingFrame,
+  type ShotGridSheet,
+} from '@/lib/shots/shot-with-image';
 import { getGenerationChannel } from '@/lib/realtime';
 import { getVideoDownloadUrl } from '@/lib/motion/video-storage';
+import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import { projectVideoVariants } from '@/lib/motion/video-variant-projection';
 import {
   bulkShotSchema,
   singleShotSchema,
   updateShotSchema,
 } from '@/lib/schemas/shot.schemas';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
+import { typedFromEntries } from '@/lib/utils/typed-object';
+import {
+  enrichShotWithSceneScript,
+  loadSelectedScriptsBySequence,
+  projectShotForClient,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
-import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
+import { triggerWorkflow } from '@/lib/workflow/client';
+import { buildWorkflowLabel } from '@/lib/workflow/labels';
+import type { UpdateStaleShotsWorkflowInput } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
@@ -41,7 +67,45 @@ const shotIdInputSchema = z.object({
 export const getShotsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.scopedDb.shots.listBySequence(context.sequence.id);
+    const { scopedDb, sequence } = context;
+    const shotRows = await scopedDb.shots.listBySequence(sequence.id);
+    // Guarantee every shot has its anchor frame, then project the image surface
+    // (#989) back under the legacy thumbnail*/image* names so the UI is unchanged.
+    await scopedDb.shots.ensureAnchorFrames(shotRows);
+    const [anchorRows, gridSheets, motionByShot, scriptBySceneId] =
+      await Promise.all([
+        scopedDb.frames.listAnchorsBySequence(sequence.id),
+        scopedDb.frameVariants.listLatestGridSheetsBySequence(sequence.id),
+        scopedDb.shotPromptVersions.getSelectedMotionByShots(
+          shotRows.map((s) => s.id)
+        ),
+        loadSelectedScriptsBySequence(scopedDb, sequence.id),
+      ]);
+    const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+    return shotRows.map((rawShot) => {
+      const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
+      const frame = anchorsByShot.get(shot.id);
+      const selectedMotion = motionByShot.get(shot.id);
+      const motionPromptData = selectedMotion
+        ? motionPromptFromVersion(selectedMotion)
+        : null;
+      // `ensureAnchorFrames` above guarantees an anchor for every shot, so this
+      // is normally unreachable. If it ever isn't, preserve the shot with a null
+      // image surface (matching the sibling read paths in sequences/admin)
+      // rather than silently dropping it from the scenes list.
+      if (!frame) {
+        logger.error(
+          `getShotsFn: shot ${shot.id} has no anchor frame after ensureAnchorFrames`
+        );
+        return projectShotMissingFrame(shot);
+      }
+      // Grid sheets are keyed by frame id (#989), resolved from the anchor.
+      const sheet = gridSheets.get(frame.id);
+      const gridSheet: ShotGridSheet | null = sheet
+        ? { url: sheet.url, status: sheet.status }
+        : null;
+      return projectShotWithImage(shot, frame, gridSheet, motionPromptData);
+    });
   });
 
 /**
@@ -74,15 +138,24 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.shot;
+    const [sheet, selectedMotion] = await Promise.all([
+      context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
+      context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
+    ]);
+    const shot = projectShotForClient(context.shot, context.script);
+    return projectShotWithImage(
+      shot,
+      context.frame,
+      sheet ? { url: sheet.url, status: sheet.status } : null,
+      selectedMotion ? motionPromptFromVersion(selectedMotion) : null
+    );
   });
 
 export const getSequenceImageModelsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    const models = await context.scopedDb.shotVariants.listModelsForSequence(
-      context.sequence.id,
-      'image'
+    const models = await context.scopedDb.frameVariants.listModelsForSequence(
+      context.sequence.id
     );
     // Preview thumbnails are generated with a hidden internal model
     // (PREVIEW_IMAGE_MODEL = flux_2_turbo) and stored as image variants. Hide
@@ -97,9 +170,9 @@ export const getSequenceImageModelsFn = createServerFn({ method: 'GET' })
 export const getSequenceVideoModelsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.scopedDb.shotVariants.listModelsForSequence(
-      context.sequence.id,
-      'video'
+    // Video models now come from `video_variants` (#990).
+    return context.scopedDb.videoVariants.listModelsForSequence(
+      context.sequence.id
     );
   });
 
@@ -111,17 +184,19 @@ export const getDivergentVariantsFn = createServerFn({ method: 'GET' })
     );
   });
 
-type PromoteProgressEvent =
-  | 'image:progress'
-  | 'video:progress'
-  | 'audio:progress';
-type PromoteProgressUrlField = 'thumbnailUrl' | 'videoUrl' | 'audioUrl';
+type PromoteProgressEvent = 'video:progress' | 'audio:progress';
+type PromoteProgressUrlField = 'videoUrl' | 'audioUrl';
 
 /**
  * Build the per-variantType `shots` update payload and matching realtime
  * progress event metadata for a promote-variant operation. Exported (and
  * pure) for unit testing — the server-fn handler wraps this in auth +
  * persistence.
+ *
+ * Image promotion is retired (#989): image variants live in `frame_variants`
+ * and selection is a pointer repoint via `setImageFromVariantFn` /
+ * `frameVariants.select`, not a divergent-alternate promote. This only handles
+ * the video/audio variants that still live on `shot_variants`.
  */
 export function buildPromoteUpdate(variant: ShotVariant): {
   update: Partial<NewShot>;
@@ -134,23 +209,9 @@ export function buildPromoteUpdate(variant: ShotVariant): {
 
   switch (variant.variantType) {
     case 'image':
-      update.thumbnailUrl = variant.url;
-      update.thumbnailPath = variant.storagePath;
-      update.thumbnailStatus = 'completed';
-      update.thumbnailError = null;
-      update.thumbnailInputHash = variant.inputHash;
-      update.imageModel = variant.model;
-      // Downstream video is now misaligned with the new image — mark stale
-      // by clearing it; the user will regenerate.
-      update.videoUrl = null;
-      update.videoPath = null;
-      update.videoStatus = 'pending';
-      update.videoWorkflowRunId = null;
-      update.videoGeneratedAt = null;
-      update.videoError = null;
-      progressEvent = 'image:progress';
-      progressUrlField = 'thumbnailUrl';
-      break;
+      throw new Error(
+        'Image variants are not promoted — select via frameVariants.select (#989)'
+      );
     case 'video':
       update.videoUrl = variant.url;
       update.videoPath = variant.storagePath;
@@ -230,30 +291,13 @@ export const promoteVariantFn = createServerFn({ method: 'POST' })
               status: 'completed',
               audioUrl: url,
             }
-          : progressEvent === 'video:progress'
-            ? {
-                shotId: shot.id,
-                status: 'completed',
-                videoUrl: url,
-                model: variant.model,
-              }
-            : {
-                shotId: shot.id,
-                status: 'completed',
-                thumbnailUrl: url,
-                model: variant.model,
-              }
+          : {
+              shotId: shot.id,
+              status: 'completed',
+              videoUrl: url,
+              model: variant.model,
+            }
       );
-      // Promoting an image clears the downstream video — emit a paired
-      // video:progress event so listeners deriving motion-banner state from
-      // realtime (not just cache) reset immediately.
-      if (variant.variantType === 'image') {
-        await channel.emit('generation.video:progress', {
-          shotId: shot.id,
-          status: 'pending',
-          videoUrl: undefined,
-        });
-      }
     } catch (error) {
       logger.error('realtime emit failed', { err: error });
     }
@@ -304,19 +348,61 @@ export const undiscardVariantFn = createServerFn({ method: 'POST' })
 export const getSequenceImageVariantsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.scopedDb.shotVariants.listBySequence(
-      context.sequence.id,
-      'image'
+    // Image variants moved to `frame_variants` (#989). Each row carries its
+    // owning `shotId` (frame ids ≠ shot ids) so the client coverage logic keyed
+    // by shot keeps working.
+    return context.scopedDb.frameVariants.listModelVersionsBySequence(
+      context.sequence.id
     );
   });
 
 export const getSequenceVideoVariantsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.scopedDb.shotVariants.listBySequence(
-      context.sequence.id,
-      'video'
+    // Video lives in `video_variants` now (#990). Project it into the legacy
+    // per-(shot, model) `ShotVariant` shape so the scenes-view switcher /
+    // coverage keep reading the same fields (latest version per shot+model;
+    // `divergedAt` always null — selection is a pointer).
+    const versions = await context.scopedDb.videoVariants.listBySequence(
+      context.sequence.id
     );
+    return projectVideoVariants(versions);
+  });
+
+/**
+ * The model recorded on each shot's SELECTED image / video version (#1066).
+ * Model identity lives on the version row that produced the asset, so the
+ * editor resolves the model it shows (and generates with) from this — via the
+ * same `resolveImageModel`/`resolveVideoModel` the server write paths use.
+ * Shots with no selection are simply absent, and the caller falls back to the
+ * sequence default.
+ */
+export const getSequenceSelectedModelsFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .handler(async ({ context }) => {
+    const [image, video, failedImage, failedVideo] = await Promise.all([
+      context.scopedDb.frameVariants.listSelectedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.videoVariants.listSelectedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.frameVariants.listLastFailedModelsBySequence(
+        context.sequence.id
+      ),
+      context.scopedDb.videoVariants.listLastFailedModelsBySequence(
+        context.sequence.id
+      ),
+    ]);
+    // Plain records, not Maps — this crosses the server-fn JSON boundary.
+    return {
+      imageModelByShot: typedFromEntries([...image]),
+      videoModelByShot: typedFromEntries([...video]),
+      // The failed-attempt tier, so the editor shows the same model a retry
+      // would run (#1066) rather than the older selected one.
+      failedImageModelByShot: typedFromEntries([...failedImage]),
+      failedVideoModelByShot: typedFromEntries([...failedVideo]),
+    };
   });
 
 export const createShotFn = createServerFn({ method: 'POST' })
@@ -356,144 +442,12 @@ export const updateShotFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequenceId, shotId, ...updateData } = data;
 
-    // Scene-script edits (#684): when `originalScript.extract` changes,
-    // clear the parsed dialogue (now stale wrt the new text) and mirror the
-    // change into the parent `sequences.script` so script view stays in sync.
-    // Prompt-input-hash staleness handles the Image/Motion banners on its
-    // own — `originalScript.extract` is part of the hashed scene context, so
-    // the next `getShotStalenessFn` call will report `'stale'` without us
-    // touching the stored prompt hashes here.
-    const oldExtract = context.shot.metadata?.originalScript.extract ?? '';
-    const incomingExtract = updateData.metadata?.originalScript.extract;
-    const scriptChanged =
-      typeof incomingExtract === 'string' && incomingExtract !== oldExtract;
-    if (scriptChanged && updateData.metadata) {
-      updateData.metadata = {
-        ...updateData.metadata,
-        originalScript: {
-          extract: incomingExtract,
-          dialogue: [],
-        },
-      };
-
-      // Bootstrap missing prompt-input hashes. Shots that were generated
-      // before hash tracking landed have `imagePrompt` / `motionPrompt` set
-      // but null hashes and no `shot_prompt_variants` rows — so the
-      // `getLatestWithInputHash` fallback in `getShotStalenessFn` can't
-      // find a reference either, and staleness stays `'untracked'` forever.
-      // Compute the hash from the PRE-edit scene and stamp it on the shot
-      // now: the post-edit live hash will then differ → banner flips
-      // `'stale'`. One-shot per shot; subsequent edits hit the normal hash
-      // chain.
-      let preEditSequenceForSplice: Awaited<
-        ReturnType<typeof context.scopedDb.sequences.getById>
-      > | null = null;
-      if (context.shot.metadata) {
-        if (context.shot.imagePrompt && !context.shot.visualPromptInputHash) {
-          try {
-            preEditSequenceForSplice ??=
-              await context.scopedDb.sequences.getById(sequenceId);
-            if (preEditSequenceForSplice) {
-              const ctx = await loadNarrowShotPromptContext({
-                scopedDb: context.scopedDb,
-                sequence: {
-                  id: preEditSequenceForSplice.id,
-                  styleId: preEditSequenceForSplice.styleId,
-                  aspectRatio: preEditSequenceForSplice.aspectRatio,
-                  analysisModel: preEditSequenceForSplice.analysisModel,
-                },
-                scene: context.shot.metadata,
-              });
-              updateData.visualPromptInputHash =
-                await computeVisualPromptInputHash(ctx);
-            }
-          } catch (err) {
-            logger.warn(
-              `Could not bootstrap visual hash for shot ${shotId}; staleness will remain untracked for this prompt`,
-              { err }
-            );
-          }
-        }
-        if (context.shot.motionPrompt && !context.shot.motionPromptInputHash) {
-          try {
-            preEditSequenceForSplice ??=
-              await context.scopedDb.sequences.getById(sequenceId);
-            if (preEditSequenceForSplice) {
-              const ctx = await loadNarrowShotPromptContext({
-                scopedDb: context.scopedDb,
-                sequence: {
-                  id: preEditSequenceForSplice.id,
-                  styleId: preEditSequenceForSplice.styleId,
-                  aspectRatio: preEditSequenceForSplice.aspectRatio,
-                  analysisModel: preEditSequenceForSplice.analysisModel,
-                },
-                scene: context.shot.metadata,
-                startingFrameImageUrl: context.shot.thumbnailUrl,
-              });
-              updateData.motionPromptInputHash =
-                await computeMotionPromptInputHash(ctx);
-            }
-          } catch (err) {
-            logger.warn(
-              `Could not bootstrap motion hash for shot ${shotId}; staleness will remain untracked for this prompt`,
-              { err }
-            );
-          }
-        }
-      }
-
-      // Splice the new extract into the parent script. The naive
-      // `script.replace(oldExtract, …)` would corrupt the wrong scene
-      // whenever an extract appears more than once (recurring slug lines,
-      // "CUT TO BLACK.", duplicated cues). Instead, walk every shot in
-      // orderIndex order and locate each one's extract sequentially in
-      // `seq.script`; the target shot's match is the one we splice.
-      // Best-effort: if the walk falls out of sync (e.g. the parent was
-      // edited separately), leave the parent untouched — the shot still
-      // saves, the scene tab still reflects the new extract, and we avoid
-      // injecting into the wrong position. Read-then-write on
-      // `sequences.script` is racy under concurrent scene edits; accept
-      // that as the worst-case loss of one parent-script update.
-      // Reuse the sequence fetched above if the bootstrap path already
-      // loaded it.
-      const seq =
-        preEditSequenceForSplice ??
-        (await context.scopedDb.sequences.getById(sequenceId));
-      if (seq?.script && oldExtract) {
-        const siblings =
-          await context.scopedDb.shots.listBySequence(sequenceId);
-        let cursor = 0;
-        let targetStart = -1;
-        let targetLength = 0;
-        let walkDiverged = false;
-        for (const sibling of siblings) {
-          const siblingExtract = sibling.metadata?.originalScript.extract;
-          if (!siblingExtract) continue;
-          const pos = seq.script.indexOf(siblingExtract, cursor);
-          if (pos === -1) {
-            walkDiverged = true;
-            break;
-          }
-          if (sibling.id === shotId) {
-            targetStart = pos;
-            targetLength = siblingExtract.length;
-          }
-          cursor = pos + siblingExtract.length;
-        }
-        if (!walkDiverged && targetStart !== -1) {
-          await context.scopedDb.sequences.update({
-            id: sequenceId,
-            script:
-              seq.script.slice(0, targetStart) +
-              incomingExtract +
-              seq.script.slice(targetStart + targetLength),
-          });
-        } else {
-          logger.warn(
-            `Parent script walk could not locate shot ${shotId} for sequence ${sequenceId}; skipping parent script sync`
-          );
-        }
-      }
+    // Scene-script edits route through `updateSceneScriptFn` (#1030). Reject
+    // legacy metadata.originalScript writes so the shot copy stays write-only.
+    if (updateData.metadata?.originalScript?.extract !== undefined) {
+      throw new Error(
+        'Scene script edits must use updateSceneScriptFn (#1030)'
+      );
     }
 
     // When a user edits a prompt, auto-link any element/cast/location tags
@@ -503,7 +457,7 @@ export const updateShotFn = createServerFn({ method: 'POST' })
     // UPDATE with no extra reads.
     const imagePromptChanged =
       updateData.imagePrompt !== undefined &&
-      updateData.imagePrompt !== context.shot.imagePrompt;
+      updateData.imagePrompt !== context.frame.imagePrompt;
     const motionPromptChanged =
       updateData.motionPrompt !== undefined &&
       updateData.motionPrompt !== context.shot.motionPrompt;
@@ -534,7 +488,75 @@ export const updateShotFn = createServerFn({ method: 'POST' })
       }
     }
 
-    return context.scopedDb.shots.update(shotId, updateData);
+    // The image prompt lives on the anchor frame (#989), not a `shots` column.
+    // Persist a changed prompt as a user-edit `frame_prompt_versions` row (which
+    // mirrors it onto `frame.imagePrompt` + repoints the pointer), then drop it
+    // from the shots UPDATE.
+    const { imagePrompt: editedImagePrompt, ...shotUpdate } = updateData;
+    if (
+      imagePromptChanged &&
+      typeof editedImagePrompt === 'string' &&
+      editedImagePrompt.length > 0
+    ) {
+      await context.scopedDb.framePromptVersions.write({
+        frameId: context.frame.id,
+        text: editedImagePrompt,
+        source: 'user-edit',
+        inputHash: null,
+        analysisModel: null,
+        createdBy: context.user.id,
+      });
+    }
+
+    return context.scopedDb.shots.update(shotId, shotUpdate);
+  });
+
+const updateShotDurationSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  durationSeconds: z.number().positive(),
+});
+
+/**
+ * Set a shot's duration — a **video** parameter, not a prompt driver.
+ *
+ * `sceneInputContext` (input-hash.ts) deliberately allowlists `durationSeconds`
+ * OUT of the prompt hashes, so changing it re-stales the render
+ * (`computeShotVideoInputHash`) and nothing else. That's why this is its own
+ * endpoint rather than a field on `updateSceneScriptFn`: a duration edit must
+ * not append a `scene_script_versions` row or touch prompt staleness.
+ *
+ * A scene has no duration of its own — its duration is the sum of its shots'
+ * (`tileSceneIntoSegments` reads exactly these values against the model cap).
+ * The `metadata.metadata.durationSeconds` write is the legacy mirror kept in
+ * step so the `resolveShotDuration` fallback can't read a stale value.
+ */
+export const updateShotDurationFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(updateShotDurationSchema))
+  .handler(async ({ data, context }) => {
+    const { shot, scene, script, scopedDb } = context;
+
+    const patch: Parameters<typeof scopedDb.shots.update>[1] = {
+      durationMs: Math.round(data.durationSeconds * 1000),
+    };
+    if (scene) {
+      patch.metadata = {
+        ...scene,
+        metadata: {
+          ...(scene.metadata ?? {
+            title: '',
+            location: '',
+            timeOfDay: '',
+            storyBeat: '',
+          }),
+          durationSeconds: data.durationSeconds,
+        },
+      };
+    }
+
+    const updated = (await scopedDb.shots.update(shot.id, patch)) ?? shot;
+    return projectShotForClient(updated, script);
   });
 
 export const deleteShotFn = createServerFn({ method: 'POST' })
@@ -575,153 +597,253 @@ export const reorderShotsFn = createServerFn({ method: 'POST' })
 
 /**
  * Returns staleness state for a shot's artifacts. Covers the rendered
- * thumbnail plus the visual / motion prompts (stage 4). Each value is
- * computed by re-deriving the current input hash from live scoped state and
- * comparing it to the stored `*_input_hash` via the scoped helper.
- *
- * Three states per artifact:
- *   - `'stale'`     — stored hash diverges from the freshly computed one.
- *   - `'fresh'`     — stored hash matches.
- *   - `'untracked'` — no stored hash (legacy artifact, or never generated).
- *                     Distinct from `'fresh'` so the UI can suppress the
- *                     regenerate prompt without lying about the artifact's
- *                     freshness.
+ * thumbnail plus the visual / motion prompts (stage 4). See
+ * `computeShotStaleness` (lib/shots/shot-staleness.ts) for the comparison
+ * rules and the per-artifact states.
  */
 export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
-    const { shot, sequence, scopedDb } = context;
+    const { shot, frame, sequence, scopedDb, scene } = context;
+    return toWireStaleness(
+      await computeShotStaleness({ scopedDb, sequence, shot, frame, scene })
+    );
+  });
 
-    let thumbnail: 'stale' | 'fresh' | 'untracked' = 'untracked';
-    // Effective prompt: same fallback chain as `buildRegenerateShotSnapshot`
-    // and `generateShotImageFn`. `shot.imagePrompt` alone misses
-    // AI-generated shots (where `imagePrompt` stays null) and shots whose
-    // visual prompt was regenerated (which only updates metadata). See #713.
-    const effectivePrompt =
-      shot.imagePrompt || shot.metadata?.prompts?.visual?.fullPrompt;
-    if (effectivePrompt) {
-      // Distinguish "stored hash absent" from "stored hash matches". A null
-      // stored hash means the image predates hash tracking (or was generated
-      // by a pre-fix `generateShotImageFn` that didn't pass a sceneSnapshot)
-      // — we genuinely have no opinion, so 'untracked' rather than lying with
-      // 'fresh'. Once the user regenerates the image once under the new code
-      // path, this column populates and the live-vs-stored comparison takes
-      // over.
-      if (shot.thumbnailInputHash === null) {
-        thumbnail = 'untracked';
-      } else {
-        try {
-          const [characters, locations, elements] = await Promise.all([
-            scopedDb.characters.listWithSheets(sequence.id),
-            scopedDb.sequenceLocations.listWithReferences(sequence.id),
-            scopedDb.sequenceElements.list(sequence.id),
-          ]);
+/**
+ * The client-facing slice of a staleness result. `liveHashes` is a server-side
+ * convenience for the enqueue paths (#1085) and stays off the wire.
+ */
+const toWireStaleness = ({
+  thumbnail,
+  visualPrompt,
+  motionPrompt,
+}: ShotStalenessResult) => ({ thumbnail, visualPrompt, motionPrompt });
 
-          const snapshot = await buildRegenerateShotSnapshot({
-            shot,
-            characters,
-            locations,
-            elements,
-            imageModel: safeTextToImageModel(
-              shot.imageModel,
-              DEFAULT_IMAGE_MODEL
-            ),
-            aspectRatio: sequence.aspectRatio,
-          });
-
-          thumbnail =
-            snapshot.snapshotInputHash !== shot.thumbnailInputHash
-              ? 'stale'
-              : 'fresh';
-        } catch (error) {
-          // Mirror the visual/motion branches: a thumbnail-hash failure (e.g.
-          // transient D1 read, malformed element/location row) must not throw
-          // out of the whole handler — that would null the entire staleness
-          // result and silently suppress the visual/motion banners too. Stay
-          // 'untracked' (fail-open as 'fresh' would lie about freshness).
-          logger.warn(`thumbnail staleness uncomputable for shot ${shot.id}:`, {
-            err: error,
-          });
-        }
-      }
+/**
+ * Batched `getShotStalenessFn` (#1077): staleness for every shot in one scene
+ * (`sceneId` set) or the whole sequence (`sceneId` omitted), keyed by shot
+ * id. Feeds the Scene/Sequence panel's stale-shot summary and the left-rail
+ * dots, and lets the client prime the per-shot staleness cache entries in one
+ * round trip instead of N.
+ */
+export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .inputValidator(
+    zodValidator(
+      z.object({ sequenceId: ulidSchema, sceneId: ulidSchema.optional() })
+    )
+  )
+  .handler(async ({ data, context }) => {
+    const { scopedDb, sequence } = context;
+    const allShots = await scopedDb.shots.listBySequence(sequence.id);
+    const targetShots = data.sceneId
+      ? allShots.filter((shot) => shot.sceneId === data.sceneId)
+      : allShots;
+    if (targetShots.length === 0) {
+      return {};
     }
 
-    let visualPrompt: 'stale' | 'fresh' | 'untracked' = 'untracked';
-    let motionPrompt: 'stale' | 'fresh' | 'untracked' = 'untracked';
+    await scopedDb.shots.ensureAnchorFrames(targetShots);
+    // Loaded once here and threaded into every shot's comparison as `refs`;
+    // without that each shot would re-read all four for both prompt branches.
+    const [
+      anchorRows,
+      scriptBySceneId,
+      characters,
+      locations,
+      elements,
+      style,
+    ] = await Promise.all([
+      scopedDb.frames.listAnchorsBySequence(sequence.id),
+      loadSelectedScriptsBySequence(scopedDb, sequence.id),
+      scopedDb.characters.listWithSheets(sequence.id),
+      scopedDb.sequenceLocations.listWithReferences(sequence.id),
+      scopedDb.sequenceElements.list(sequence.id),
+      sequence.styleId
+        ? scopedDb.styles.getById(sequence.styleId)
+        : Promise.resolve(null),
+    ]);
+    const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+    const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
-    // Reference hash resolution: prefer the cached column on `shots`, but
-    // fall back to the most recent variant with a non-null `inputHash` for
-    // shots whose cached column was nulled by a pre-fix user-edit. Without
-    // the fallback, those shots are stuck at `'untracked'` permanently.
-    if (shot.metadata) {
-      let referenceHash = shot.visualPromptInputHash;
-      if (!referenceHash) {
-        const fallback =
-          await scopedDb.shotPromptVariants.getLatestWithInputHash(
-            shot.id,
-            'visual'
-          );
-        referenceHash = fallback?.inputHash ?? null;
-      }
-      if (referenceHash) {
-        try {
-          const latest = await scopedDb.shotPromptVariants.getLatest(
-            shot.id,
-            'visual'
-          );
-          const ctx = await loadNarrowShotPromptContext({
-            scopedDb,
-            sequence,
-            scene: shot.metadata,
-            analysisModelOverride: latest?.analysisModel ?? null,
-          });
-          const liveHash = await computeVisualPromptInputHash(ctx);
-          visualPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
-        } catch (error) {
-          // Context unavailable (e.g., style deleted mid-flight). Stay
-          // 'untracked' — fail-open as 'fresh' would silently lie to the user.
-          logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
-            err: error,
-          });
+    const entries = await Promise.all(
+      targetShots.map(
+        async (shot): Promise<[string, ReturnType<typeof toWireStaleness>]> => {
+          const frame = anchorsByShot.get(shot.id);
+          if (!frame) {
+            // ensureAnchorFrames guarantees an anchor; if it's somehow absent
+            // we have no image surface to compare, so report the shot
+            // untracked rather than dropping it from the result.
+            logger.error(
+              `getShotStalenessBatchFn: shot ${shot.id} has no anchor frame`
+            );
+            return [shot.id, toWireStaleness(UNTRACKED_STALENESS)];
+          }
+          const { scene } = resolveSceneForShot(shot, scriptBySceneId);
+          try {
+            return [
+              shot.id,
+              toWireStaleness(
+                await computeShotStaleness({
+                  scopedDb,
+                  sequence,
+                  shot,
+                  frame,
+                  scene,
+                  refs,
+                })
+              ),
+            ];
+          } catch (error) {
+            // Per-shot boundary: anything escaping computeShotStaleness must
+            // not reject the whole batch and blank the scene.
+            logger.error(
+              `getShotStalenessBatchFn: shot ${shot.id} staleness failed`,
+              { err: error }
+            );
+            return [shot.id, toWireStaleness(UNTRACKED_STALENESS)];
+          }
         }
-      }
-    }
+      )
+    );
+    return typedFromEntries(entries);
+  });
 
-    if (shot.metadata) {
-      let referenceHash = shot.motionPromptInputHash;
-      if (!referenceHash) {
-        const fallback =
-          await scopedDb.shotPromptVariants.getLatestWithInputHash(
-            shot.id,
-            'motion'
-          );
-        referenceHash = fallback?.inputHash ?? null;
-      }
-      if (referenceHash) {
-        try {
-          const latest = await scopedDb.shotPromptVariants.getLatest(
-            shot.id,
-            'motion'
-          );
-          const ctx = await loadNarrowShotPromptContext({
-            scopedDb,
-            sequence,
-            scene: shot.metadata,
-            analysisModelOverride: latest?.analysisModel ?? null,
-            startingFrameImageUrl: shot.thumbnailUrl,
-          });
-          const liveHash = await computeMotionPromptInputHash(ctx);
-          motionPrompt = liveHash !== referenceHash ? 'stale' : 'fresh';
-        } catch (error) {
-          logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
-            err: error,
-          });
-        }
-      }
+/**
+ * "Update all" (#1077, depth picker #1085): enqueue the durable
+ * `UpdateStaleShotsWorkflow` for a shot / scene / the whole sequence. The
+ * workflow recomputes staleness server-side and regenerates what reads stale
+ * up to the chosen `depth` cascade — at 'images' and above a regenerated
+ * prompt cascades into its still; at 'video'/'music' existing videos and
+ * music re-render behind their regenerated upstreams (never a FIRST render).
+ * Returns the run id; progress surfaces through the staleness indicators as
+ * artifacts land.
+ *
+ * Preflights credits before enqueuing. Inside the workflow an out-of-credits
+ * failure can only land in the run result, where it reads as "nothing
+ * happened" — throwing here is the one point where the client still gets an
+ * `InsufficientCreditsError` and can open the billing dialog.
+ */
+export const updateStaleShotsFn = createServerFn({ method: 'POST' })
+  .middleware([sequenceAccessMiddleware])
+  .inputValidator(
+    zodValidator(
+      z.object({
+        sequenceId: ulidSchema,
+        sceneId: ulidSchema.optional(),
+        shotId: ulidSchema.optional(),
+        depth: z.enum(UPDATE_STALE_DEPTHS).optional(),
+      })
+    )
+  )
+  .handler(async ({ data, context }) => {
+    const { sequence, teamId, user, scopedDb } = context;
+    const depth = data.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
+    // The plan isn't known yet, so this can't be the exact cost — it's a
+    // floor: a run that can't afford even one artifact of its most expensive
+    // level should never start. 'prompts' has no render cost; LLM spend is
+    // deducted inside the workflow as always.
+    if (depth !== 'prompts') {
+      const model = safeTextToImageModel(
+        sequence.imageModel,
+        DEFAULT_IMAGE_MODEL
+      );
+      await requireCredits(
+        scopedDb,
+        gateEstimate(
+          estimateImageCost(model, sequence.aspectRatio, 1, {
+            pricing: await getEffectiveFalPricing(),
+          }),
+          { model, operation: 'update-stale-shots' }
+        ),
+        { errorMessage: 'Insufficient credits to update out-of-date shots' }
+      );
     }
+    const workflowRunId = await triggerWorkflow<UpdateStaleShotsWorkflowInput>(
+      '/update-stale-shots',
+      {
+        userId: user.id,
+        teamId,
+        sequenceId: sequence.id,
+        sceneId: data.sceneId,
+        shotId: data.shotId,
+        depth,
+      },
+      {
+        label: buildWorkflowLabel(sequence.id),
+        // Embed the sequence id in the instance id (the timestamp+uuid tail
+        // keeps it unique per click) so `getUpdateStaleShotsRunFn` can verify
+        // a polled run id actually belongs to the sequence being authorized —
+        // without this, any authenticated user could read any run's output.
+        deduplicationId: `${sequence.id}-${Date.now()}-${crypto.randomUUID()}`,
+      }
+    );
+    return { workflowRunId };
+  });
 
-    return { thumbnail, visualPrompt, motionPrompt };
+/**
+ * Shape of `UpdateStaleShotsWorkflow`'s return value. Parsed rather than cast:
+ * it crosses the Cloudflare Workflows boundary as `unknown`, and a run from a
+ * previously-deployed version of the workflow can legitimately not match.
+ */
+const updateStaleShotsResultSchema = z.object({
+  totalShots: z.number(),
+  visualPrompts: z.number(),
+  motionPrompts: z.number(),
+  images: z.number(),
+  // Depth-picker levels (#1085). Defaulted so a run from a pre-picker
+  // deployment still parses during version skew.
+  videos: z.number().default(0),
+  musicPrompts: z.number().default(0),
+  musicTracks: z.number().default(0),
+  failures: z.array(
+    z.object({ shotId: z.string(), stage: z.string(), error: z.string() })
+  ),
+  skipped: z.array(z.object({ shotId: z.string(), reason: z.string() })),
+});
+
+/**
+ * Terminal outcome of an "Update all" run (#1077).
+ *
+ * The workflow isolates failures per shot so one bad shot never blocks its
+ * peers — which means a run can finish `complete` having regenerated nothing.
+ * Without this endpoint that result is written to a log nobody reads and the
+ * user just watches a spinner stop. The client polls this and reports what
+ * actually happened.
+ */
+export const getUpdateStaleShotsRunFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .inputValidator(
+    zodValidator(
+      z.object({ sequenceId: ulidSchema, workflowRunId: z.string().min(1) })
+    )
+  )
+  .handler(async ({ data, context }) => {
+    // The middleware authorizes the SEQUENCE; the run id is caller-supplied
+    // and would otherwise let any authenticated user read any run's output.
+    // `updateStaleShotsFn` embeds the sequence id in the instance id — require
+    // both the right workflow and the right sequence before reading anything.
+    if (
+      workflowNameFromRunId(data.workflowRunId) !== 'update-stale-shots' ||
+      !data.workflowRunId.includes(context.sequence.id)
+    ) {
+      return { state: 'unknown' as const };
+    }
+    const outcome = await getWorkflowRunOutcome(data.workflowRunId);
+    if (outcome.state !== 'complete') return outcome;
+    const parsed = updateStaleShotsResultSchema.safeParse(outcome.output);
+    // A complete run whose output we can't read is not a failure to report as
+    // one — fall back to 'unknown' so the UI defers to the staleness map.
+    if (!parsed.success) {
+      logger.error(
+        `getUpdateStaleShotsRunFn: unrecognised output for ${data.workflowRunId}`,
+        { issues: parsed.error.issues }
+      );
+      return { state: 'unknown' as const };
+    }
+    return { state: 'complete' as const, result: parsed.data };
   });
 
 /**

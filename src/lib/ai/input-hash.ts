@@ -148,6 +148,24 @@ export function computeShotVideoInputHash(
   });
 }
 
+/**
+ * Hash a video render's manifest → O(1) staleness for a `video_variants`
+ * version. The `VideoManifestEntry` rows ARE the snapshot: each referenced
+ * motion-prompt / anchor-frame version id (plus the value-snapshot duration)
+ * folds into the hash, so when a shot's selected prompt or frame version
+ * changes the render diverges → stale. The manifest is hashed directly (not
+ * field-by-field) so a future manifest field automatically participates in
+ * staleness instead of silently dropping out (cf. the #767 drift class).
+ * Order-sensitive (the manifest is ordered by render position), so entries are
+ * NOT sorted.
+ */
+export function computeVideoManifestInputHash(
+  manifest: readonly VideoManifestEntry[],
+  model: string
+): Promise<string> {
+  return sha256Hex({ artifact: 'video:manifest', model, manifest });
+}
+
 export type ShotAudioHashInput = {
   musicPrompt: string;
   /** Unordered set of music tags. */
@@ -298,7 +316,7 @@ import type {
   Scene,
 } from './scene-analysis.schema';
 import type { MusicSceneSummary } from '@/lib/workflow/types';
-import type { StyleConfig } from '@/lib/db/schema';
+import type { StyleConfig, VideoManifestEntry } from '@/lib/db/schema';
 
 export type PromptSceneContextHashInput = {
   /**

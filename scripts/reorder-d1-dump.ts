@@ -14,7 +14,9 @@
  *   bun scripts/reorder-d1-dump.ts <input.sql> <output.sql>
  *
  * The FK edge list below is a snapshot of pragma_foreign_key_list over the
- * 2026-06 schema (one-time cutover tooling, not kept in CI sync). The script
+ * schema as of the Scene→Shot→Frame redesign (#988: scenes/shots/shot_variants/
+ * shot_prompt_versions/frames/frame_variants/frame_prompt_versions/
+ * sequence_events). One-time cutover tooling, not kept in CI sync — the script
  * fails loudly on any dump table it doesn't know about — regenerate the list
  * from a migrated DB if that happens:
  *   SELECT m.name, f."table" FROM sqlite_master m,
@@ -40,11 +42,12 @@ const EDGES: Array<[string, string]> = [
   ['credit_batches', 'teams'],
   ['credit_batches', 'transactions'],
   ['credits', 'teams'],
-  ['frame_prompt_variants', 'frames'],
-  ['frame_prompt_variants', 'user'],
+  ['frame_prompt_versions', 'frames'],
+  ['frame_prompt_versions', 'user'],
   ['frame_variants', 'frames'],
   ['frame_variants', 'sequences'],
   ['frames', 'sequences'],
+  ['frames', 'shots'],
   ['gift_token_redemptions', 'gift_tokens'],
   ['gift_token_redemptions', 'teams'],
   ['gift_token_redemptions', 'user'],
@@ -53,17 +56,26 @@ const EDGES: Array<[string, string]> = [
   ['location_library', 'user'],
   ['location_sheets', 'location_library'],
   ['passkey', 'user'],
+  ['scenes', 'sequences'],
   ['sequence_elements', 'sequences'],
+  ['sequence_events', 'sequences'],
+  ['sequence_events', 'user'],
   ['sequence_exports', 'sequences'],
   ['sequence_locations', 'location_library'],
   ['sequence_locations', 'sequences'],
-  ['sequence_music_prompt_variants', 'sequences'],
-  ['sequence_music_prompt_variants', 'user'],
+  ['sequence_music_prompt_versions', 'sequences'],
+  ['sequence_music_prompt_versions', 'user'],
   ['sequence_music_variants', 'sequences'],
   ['sequences', 'styles'],
   ['sequences', 'teams'],
   ['sequences', 'user'],
   ['session', 'user'],
+  ['shot_prompt_versions', 'shots'],
+  ['shot_prompt_versions', 'user'],
+  ['shot_variants', 'sequences'],
+  ['shot_variants', 'shots'],
+  ['shots', 'scenes'],
+  ['shots', 'sequences'],
   ['styles', 'teams'],
   ['styles', 'user'],
   ['talent_media', 'talent'],
@@ -85,10 +97,13 @@ const EDGES: Array<[string, string]> = [
 ];
 
 // Tables that genuinely carry no FK constraints in the schema snapshot.
+// `location_sheet_variants` is polymorphic (`parent_type` + `parent_id`, no FK),
+// so it carries no insert-ordering constraint.
 const KNOWN_FK_FREE = new Set([
   'apikey',
   'app_metadata',
   'd1_migrations',
+  'location_sheet_variants',
   'user',
   'teams',
   'verification',

@@ -1,10 +1,15 @@
 import { characterSheetVariantKeys } from '@/hooks/use-character-sheet-variants';
+import { promptVariantKeys } from '@/hooks/use-prompt-variants';
+import { sceneKeys } from '@/hooks/use-scenes';
+import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
+import { segmentKeys } from '@/hooks/use-segments';
 import { shotKeys } from '@/hooks/use-shots';
 import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
 import { sequenceKeys } from '@/hooks/use-sequences';
 import type { Shot, Sequence } from '@/types/database';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { QueryClient } from '@tanstack/react-query';
 
 /**
@@ -77,7 +82,9 @@ function isValidMusicStatus(
   );
 }
 
-function isValidShotStatus(status: unknown): status is Shot['thumbnailStatus'] {
+function isValidShotStatus(
+  status: unknown
+): status is ShotWithImage['thumbnailStatus'] {
   return (
     status === 'pending' ||
     status === 'generating' ||
@@ -100,22 +107,61 @@ export function updateQueryCacheFromEvent(
 
   switch (eventName) {
     case 'generation.shot:created':
-      // Debounced invalidation - multiple rapid events = one refetch
+      // Debounced invalidation - multiple rapid events = one refetch.
+      // Stream-time scene-split now also writes a `scenes` row + sceneId
+      // link for each shot (#1072), so the spine list must refetch too.
+      // Composed-script + the Script/Scenes tab pair also key off scenes.
       debouncedInvalidate(
         queryClient,
         shotKeys.list(sequenceId),
         `shots:${sequenceId}`
       );
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.composedScript(sequenceId),
+        `composed-script:${sequenceId}`
+      );
       break;
 
     case 'generation.shot:updated': {
-      // Update shot metadata with prompts
-      // The metadata is validated by the realtime schema before reaching here
+      // Patch the cached scene metadata (title, continuity, music/audio design)
+      // in place. The realtime schema validated it upstream.
       const metadata = data.metadata;
       if (isSceneMetadata(metadata)) {
-        queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-          old?.map((f) => (f.id === shotId ? { ...f, metadata } : f))
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (old) => old?.map((f) => (f.id === shotId ? { ...f, metadata } : f))
         );
+      }
+      // Prompt regenerations no longer travel in `metadata` — the visual/motion
+      // prompt now lives in `frame_prompt_versions` / `shot_prompt_versions`
+      // and is mirrored onto `frame.imagePrompt` / `shot.motionPrompt`, then
+      // projected into `ShotWithImage` server-side (#713). The in-place
+      // `setQueryData(metadata)` above can't re-run that projection, so refetch
+      // the shots list to pick up the new mirrored prompt + `motionPromptData`,
+      // and invalidate the matching version-history query so an open prompt
+      // history sheet shows the freshly appended version (#991).
+      const updateType = getString(data, 'updateType');
+      if (updateType === 'visual-prompt' || updateType === 'motion-prompt') {
+        debouncedInvalidate(
+          queryClient,
+          shotKeys.list(sequenceId),
+          `shots:${sequenceId}`
+        );
+        if (shotId) {
+          const promptType =
+            updateType === 'visual-prompt' ? 'visual' : 'motion';
+          debouncedInvalidate(
+            queryClient,
+            promptVariantKeys.shot(promptType, shotId),
+            `prompt-variants:${promptType}:${shotId}`
+          );
+        }
       }
       break;
     }
@@ -135,29 +181,31 @@ export function updateQueryCacheFromEvent(
       // queries below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
       if (!variantOnly) {
-        queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-          old?.map((f) =>
-            f.id === shotId
-              ? {
-                  ...f,
-                  thumbnailUrl: thumbnailUrl ?? f.thumbnailUrl,
-                  previewThumbnailUrl:
-                    previewThumbnailUrl ?? f.previewThumbnailUrl,
-                  thumbnailStatus: isValidShotStatus(status)
-                    ? status
-                    : f.thumbnailStatus,
-                  // Surface the failure reason live (#881): set on `failed`,
-                  // clear when a new attempt starts/succeeds, and leave
-                  // untouched for status-less emits (e.g. preview-url).
-                  thumbnailError:
-                    status === 'failed'
-                      ? (errorMessage ?? f.thumbnailError)
-                      : isValidShotStatus(status)
-                        ? null
-                        : f.thumbnailError,
-                }
-              : f
-          )
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (old) =>
+            old?.map((f) =>
+              f.id === shotId
+                ? {
+                    ...f,
+                    thumbnailUrl: thumbnailUrl ?? f.thumbnailUrl,
+                    previewThumbnailUrl:
+                      previewThumbnailUrl ?? f.previewThumbnailUrl,
+                    thumbnailStatus: isValidShotStatus(status)
+                      ? status
+                      : f.thumbnailStatus,
+                    // Surface the failure reason live (#881): set on `failed`,
+                    // clear when a new attempt starts/succeeds, and leave
+                    // untouched for status-less emits (e.g. preview-url).
+                    thumbnailError:
+                      status === 'failed'
+                        ? (errorMessage ?? f.thumbnailError)
+                        : isValidShotStatus(status)
+                          ? null
+                          : f.thumbnailError,
+                  }
+                : f
+            )
         );
       }
       // Refresh variant data so model switcher and variant overlay stay current.
@@ -176,6 +224,21 @@ export function updateQueryCacheFromEvent(
           ['sequence-image-models', sequenceId],
           `image-models:${sequenceId}`
         );
+        // A convergent image write repoints `frames.selectedImageVersionId`,
+        // which is what the editor resolves its model from (#1066).
+        debouncedInvalidate(
+          queryClient,
+          ['sequence-selected-models', sequenceId],
+          `selected-models:${sequenceId}`
+        );
+        // Open history sheet (#1070) — new row + Current badge.
+        if (shotId) {
+          debouncedInvalidate(
+            queryClient,
+            shotKeys.imageVersions(shotId),
+            `image-versions:${shotId}`
+          );
+        }
       }
       break;
     }
@@ -191,25 +254,27 @@ export function updateQueryCacheFromEvent(
       // below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
       if (!variantOnly) {
-        queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-          old?.map((f) =>
-            f.id === shotId
-              ? {
-                  ...f,
-                  videoUrl: videoUrl ?? f.videoUrl,
-                  videoStatus: isValidShotStatus(status)
-                    ? status
-                    : f.videoStatus,
-                  // Surface the failure reason live (#881) — see image handler.
-                  videoError:
-                    status === 'failed'
-                      ? (errorMessage ?? f.videoError)
-                      : isValidShotStatus(status)
-                        ? null
-                        : f.videoError,
-                }
-              : f
-          )
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (old) =>
+            old?.map((f) =>
+              f.id === shotId
+                ? {
+                    ...f,
+                    videoUrl: videoUrl ?? f.videoUrl,
+                    videoStatus: isValidShotStatus(status)
+                      ? status
+                      : f.videoStatus,
+                    // Surface the failure reason live (#881) — see image handler.
+                    videoError:
+                      status === 'failed'
+                        ? (errorMessage ?? f.videoError)
+                        : isValidShotStatus(status)
+                          ? null
+                          : f.videoError,
+                  }
+                : f
+            )
         );
       }
       // Refresh video variant data so the model switcher and per-model overlay
@@ -228,6 +293,32 @@ export function updateQueryCacheFromEvent(
           ['sequence-video-models', sequenceId],
           `video-models:${sequenceId}`
         );
+        // A convergent video write repoints the render segment's
+        // `selectedVideoVersionId` — the editor's model source (#1066).
+        debouncedInvalidate(
+          queryClient,
+          ['sequence-selected-models', sequenceId],
+          `selected-models:${sequenceId}`
+        );
+        // Open history sheet (#1070) — new row + Current badge.
+        if (shotId) {
+          debouncedInvalidate(
+            queryClient,
+            shotKeys.videoVersions(shotId),
+            `video-versions:${shotId}`
+          );
+        }
+        // Version chips on the Video tab read `segments`, not history and not
+        // the shots list. History was invalidated above (#1070) but segments
+        // were not — after primary completion we also flip `shots.videoStatus`
+        // off `generating`, which stops the 2s segment poll, so a chip can
+        // stay on the pre-complete "generating" snapshot forever while history
+        // already shows completed (#1076).
+        debouncedInvalidate(
+          queryClient,
+          segmentKeys.list(sequenceId),
+          `segments:${sequenceId}`
+        );
       }
       break;
     }
@@ -235,18 +326,20 @@ export function updateQueryCacheFromEvent(
     case 'generation.variant-image:progress': {
       const variantImageUrl = getOptionalString(data, 'variantImageUrl');
       const status = data.status;
-      queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-        old?.map((f) =>
-          f.id === shotId
-            ? {
-                ...f,
-                variantImageUrl: variantImageUrl ?? f.variantImageUrl,
-                variantImageStatus: isValidShotStatus(status)
-                  ? status
-                  : f.variantImageStatus,
-              }
-            : f
-        )
+      queryClient.setQueryData<ShotWithImage[]>(
+        shotKeys.list(sequenceId),
+        (old) =>
+          old?.map((f) =>
+            f.id === shotId
+              ? {
+                  ...f,
+                  variantImageUrl: variantImageUrl ?? f.variantImageUrl,
+                  variantImageStatus: isValidShotStatus(status)
+                    ? status
+                    : f.variantImageStatus,
+                }
+              : f
+          )
       );
       break;
     }
@@ -333,10 +426,15 @@ export function updateQueryCacheFromEvent(
             shotKeys.list(sequenceId),
             `shots:${sequenceId}`
           );
+          // Namespace-wide: also refreshes the scene-scoped entry that feeds
+          // the scene summary and left-rail dots (#1077). Debounced per
+          // sequence, not per shot — the payload is sequence-wide, so a
+          // per-shot key would fan a burst of shot events into N identical
+          // namespace invalidations, each refetching every shot's hashes.
           debouncedInvalidate(
             queryClient,
-            ['shot-staleness', entityId],
-            `shot-staleness:${entityId}`
+            [...shotStalenessNamespace],
+            `shot-staleness:${sequenceId}`
           );
           break;
 
@@ -443,42 +541,79 @@ export function updateQueryCacheFromEvent(
     case 'generation.error':
       // Update shot status if shotId present
       if (shotId) {
-        queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-          old?.map((f) =>
-            f.id === shotId
-              ? { ...f, thumbnailStatus: 'failed', videoStatus: 'failed' }
-              : f
-          )
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (old) =>
+            old?.map((f) =>
+              f.id === shotId
+                ? { ...f, thumbnailStatus: 'failed', videoStatus: 'failed' }
+                : f
+            )
         );
       }
       break;
 
     case 'generation.scene:updated': {
-      // Update shot metadata title in cache by matching sceneId
+      // Update shot metadata title in cache by matching analysis sceneId
       const sceneId = getString(data, 'sceneId');
       const title = getString(data, 'title');
       if (sceneId && title) {
-        queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-          old?.map((f) => {
-            if (f.metadata?.sceneId !== sceneId || !f.metadata.metadata)
-              return f;
-            return {
-              ...f,
-              metadata: {
-                ...f.metadata,
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (old) =>
+            old?.map((f) => {
+              if (f.metadata?.sceneId !== sceneId || !f.metadata.metadata)
+                return f;
+              return {
+                ...f,
                 metadata: {
-                  ...f.metadata.metadata,
-                  title,
+                  ...f.metadata,
+                  metadata: {
+                    ...f.metadata.metadata,
+                    title,
+                  },
                 },
-              },
-            };
-          })
+              };
+            })
         );
       }
+      // Stream also upserts the scenes row (title/location/…) — refetch the
+      // spine grouping source so scene headers stay in sync (#1072).
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        shotKeys.list(sequenceId),
+        `shots:${sequenceId}`
+      );
       break;
     }
 
+    case 'generation.scene:new':
+      // Analysis now persists a scenes row as each scene completes (#1072).
+      // Refetch so the spine grows scene groups live instead of only after
+      // the late bulk persist-scenes step — and so the Script tab collapses
+      // once the first scene lands.
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        shotKeys.list(sequenceId),
+        `shots:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.composedScript(sequenceId),
+        `composed-script:${sequenceId}`
+      );
+      break;
+
     // Phase events don't need cache updates (UI-only via reducer state)
-    // scene:new events don't need cache updates (analysis phase, no shots yet)
   }
 }

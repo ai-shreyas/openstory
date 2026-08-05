@@ -32,6 +32,11 @@ import {
   DEFAULT_ANALYSIS_MODEL,
   getAnalysisModelById,
 } from '@/lib/ai/models.config';
+import {
+  deductWorkflowCredits,
+  extractImageCost,
+  recordFalUsageStep,
+} from '@/lib/billing/workflow-deduction';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { StyleConfigSchema } from '@/lib/db/schema';
@@ -134,29 +139,61 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     // state. Non-critical — failures are logged and swallowed so a poster
     // outage cannot block the storyboard. Mirrors the QStash original's
     // try/catch swallow inside the step.
-    await step.do('generate-poster', async () => {
+    const posterResult = await step.do('generate-poster', async () => {
       try {
         const prompt = buildPosterPrompt(title, script, styleConfig);
-        const result = await generateImageWithProvider({
-          model: PREVIEW_IMAGE_MODEL,
-          prompt,
-          imageSize: aspectRatioToImageSize(aspectRatio),
+        return await generateImageWithProvider(
+          {
+            model: PREVIEW_IMAGE_MODEL,
+            prompt,
+            imageSize: aspectRatioToImageSize(aspectRatio),
+          },
+          { scopedDb }
+        );
+      } catch (error) {
+        logger.warn('[StoryboardWorkflow:cf] Poster generation failed:', {
+          err: error,
         });
+        return null;
+      }
+    });
 
-        const posterUrl = result.imageUrls[0];
-        if (posterUrl) {
+    if (posterResult) {
+      const posterUrl = posterResult.imageUrls[0];
+      if (posterUrl) {
+        await step.do('save-poster', async () => {
           await scopedDb.sequences.update({ id: sequenceId, posterUrl });
           await getGenerationChannel(sequenceId).emit(
             'generation.poster:ready',
             { posterUrl }
           );
-        }
-      } catch (error) {
-        logger.warn('[StoryboardWorkflow:cf] Poster generation failed:', {
-          err: error,
+        });
+
+        // Before the deduction guard — see recordFalUsageStep (#1069).
+        const posterUsage = await recordFalUsageStep(
+          step,
+          scopedDb,
+          posterResult.metadata,
+          'record-fal-usage-poster'
+        );
+
+        await step.do('deduct-poster-credits', async () => {
+          await deductWorkflowCredits({
+            scopedDb,
+            costMicros: extractImageCost(posterResult.metadata),
+            usedOwnKey: posterResult.metadata.usedOwnKey,
+            description: `Sequence poster (${PREVIEW_IMAGE_MODEL})`,
+            idempotencyKey: `${event.instanceId}:poster`,
+            metadata: {
+              ...posterUsage,
+              model: PREVIEW_IMAGE_MODEL,
+              sequenceId,
+            },
+            workflowName: 'StoryboardWorkflow',
+          });
         });
       }
-    });
+    }
 
     // Spawn the analyze-script child and block until it returns. Pattern 3.
     await spawnAndAwaitChild<AnalyzeScriptWorkflowInput, unknown>(step, {

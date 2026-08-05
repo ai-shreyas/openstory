@@ -284,7 +284,7 @@ describe('location-sheet-variants insertDivergent', () => {
 
 describe('talent-sheet-variants insertDivergent', () => {
   it('is idempotent on (talentSheetId, model, inputHash)', async () => {
-    const methods = createTalentSheetVariantsMethods(db);
+    const methods = createTalentSheetVariantsMethods(db, team.id);
     const divergedAt = new Date('2026-04-29T00:00:00Z');
 
     const first = await methods.insertDivergent({
@@ -427,7 +427,7 @@ describe('location-sheet-variants discard / promote', () => {
 
 describe('talent-sheet-variants discard / promote', () => {
   it('promoteAtomically writes onto talent_sheets and discards the variant', async () => {
-    const methods = createTalentSheetVariantsMethods(db);
+    const methods = createTalentSheetVariantsMethods(db, team.id);
     const divergedAt = new Date('2026-04-29T00:00:00Z');
     const variant = await methods.insertDivergent({
       talentSheetId,
@@ -678,12 +678,12 @@ describe('sheet-variants list filters and empty-input short-circuits', () => {
   });
 
   it('talent listDivergentActiveByTalents returns [] for empty input', async () => {
-    const methods = createTalentSheetVariantsMethods(db);
+    const methods = createTalentSheetVariantsMethods(db, team.id);
     expect(await methods.listDivergentActiveByTalents([])).toEqual([]);
   });
 
   it('talent listDivergentActiveByTalentSheets returns [] for empty input', async () => {
-    const methods = createTalentSheetVariantsMethods(db);
+    const methods = createTalentSheetVariantsMethods(db, team.id);
     expect(await methods.listDivergentActiveByTalentSheets([])).toEqual([]);
   });
 
@@ -767,7 +767,7 @@ describe('sheet-variants list filters and empty-input short-circuits', () => {
 
 describe('talent-sheet-variants promoteAtomically negative cases', () => {
   it('throws when the talent sheet does not exist; variant is not soft-deleted', async () => {
-    const methods = createTalentSheetVariantsMethods(db);
+    const methods = createTalentSheetVariantsMethods(db, team.id);
     const variant = await methods.insertDivergent({
       talentSheetId,
       model: 'flux-pro',
@@ -794,7 +794,7 @@ describe('talent-sheet-variants promoteAtomically negative cases', () => {
   });
 
   it('throws when the variant does not exist; talent_sheets is not updated', async () => {
-    const methods = createTalentSheetVariantsMethods(db);
+    const methods = createTalentSheetVariantsMethods(db, team.id);
     expect(
       methods.promoteAtomically(
         talentSheetId,

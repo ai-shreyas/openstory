@@ -14,7 +14,67 @@ import type {
   TalentWithSheets,
 } from '@/lib/db/schema';
 import { talent, talentMedia, talentSheets } from '@/lib/db/schema';
+import {
+  SERVER_MANAGED_TALENT_COLUMNS,
+  type ServerManagedTalentColumn,
+} from '@/lib/schemas/talent.schemas';
 import { and, asc, desc, eq, or, sql } from 'drizzle-orm';
+import { stripServerManagedColumns } from './server-managed';
+
+const TALENT_WRITE_DENIED =
+  'Talent not found or you do not have permission to modify it';
+
+/**
+ * Write-side ACL for scoped talent mutations. Public/system templates are
+ * readable by every team but writable only by non-public, team-owned rows.
+ */
+export function isTeamWritableTalent(
+  record: { teamId: string; isPublic: boolean | null },
+  teamId: string
+): boolean {
+  return record.teamId === teamId && !record.isPublic;
+}
+
+async function getWritableTalent(
+  db: Database,
+  talentId: string,
+  teamId: string
+): Promise<Talent | undefined> {
+  const record = await db.query.talent.findFirst({
+    where: { id: talentId },
+  });
+  if (!record || !isTeamWritableTalent(record, teamId)) {
+    return undefined;
+  }
+  return record;
+}
+
+async function requireWritableTalent(
+  db: Database,
+  talentId: string,
+  teamId: string
+): Promise<Talent> {
+  const record = await getWritableTalent(db, talentId, teamId);
+  if (!record) {
+    throw new Error(TALENT_WRITE_DENIED);
+  }
+  return record;
+}
+
+/** Resolve a sheet to its parent talent and enforce the write ACL. */
+export async function assertTalentSheetWritableForTeam(
+  db: Database,
+  talentSheetId: string,
+  teamId: string
+): Promise<void> {
+  const sheet = await db.query.talentSheets.findFirst({
+    where: { id: talentSheetId },
+  });
+  if (!sheet) {
+    throw new Error(`TalentSheet ${talentSheetId} not found`);
+  }
+  await requireWritableTalent(db, sheet.talentId, teamId);
+}
 
 /**
  * Shared implementation for team-scoped and public (anonymous) talent reads.
@@ -268,12 +328,21 @@ export function createTalentMethods(
   return {
     ...read,
 
+    // Server-managed columns (isPublic, isTemplate, …) are excluded from the
+    // parameter type AND scrubbed at runtime: the type alone doesn't stop a
+    // non-literal object from carrying extra keys, and drizzle writes any key
+    // that matches a table column. Admin paths (the system template seeder)
+    // insert via raw drizzle instead.
     create: async (
-      data: Omit<NewTalent, 'teamId' | 'createdBy'>
+      data: Omit<NewTalent, ServerManagedTalentColumn>
     ): Promise<Talent> => {
       const [created] = await db
         .insert(talent)
-        .values({ ...data, teamId, createdBy: userId })
+        .values({
+          ...stripServerManagedColumns(data, SERVER_MANAGED_TALENT_COLUMNS),
+          teamId,
+          createdBy: userId,
+        })
         .returning();
       if (!created) throw new Error('Failed to create talent');
       return created;
@@ -281,17 +350,28 @@ export function createTalentMethods(
 
     update: async (
       talentId: string,
-      data: Partial<Omit<Talent, 'id' | 'teamId' | 'createdAt' | 'createdBy'>>
+      data: Partial<Omit<Talent, ServerManagedTalentColumn>>
     ): Promise<Talent | undefined> => {
+      if (!(await getWritableTalent(db, talentId, teamId))) {
+        return undefined;
+      }
+
       const [updated] = await db
         .update(talent)
-        .set({ ...data, updatedAt: new Date() })
+        .set({
+          ...stripServerManagedColumns(data, SERVER_MANAGED_TALENT_COLUMNS),
+          updatedAt: new Date(),
+        })
         .where(and(eq(talent.id, talentId), eq(talent.teamId, teamId)))
         .returning();
       return updated;
     },
 
     delete: async (talentId: string): Promise<boolean> => {
+      if (!(await getWritableTalent(db, talentId, teamId))) {
+        return false;
+      }
+
       const result = await db
         .delete(talent)
         .where(and(eq(talent.id, talentId), eq(talent.teamId, teamId)));
@@ -300,10 +380,8 @@ export function createTalentMethods(
     },
 
     toggleFavorite: async (talentId: string): Promise<Talent | undefined> => {
-      const existing = await db.query.talent.findFirst({
-        where: { id: talentId },
-      });
-      if (!existing || existing.teamId !== teamId) return undefined;
+      const existing = await getWritableTalent(db, talentId, teamId);
+      if (!existing) return undefined;
 
       const [updated] = await db
         .update(talent)
@@ -317,6 +395,8 @@ export function createTalentMethods(
       ...read.sheets,
 
       create: async (data: NewTalentSheet): Promise<TalentSheet> => {
+        await requireWritableTalent(db, data.talentId, teamId);
+
         const existingSheets = await db
           .select({ count: sql<number>`count(*)`.mapWith(Number) })
           .from(talentSheets)
@@ -349,16 +429,21 @@ export function createTalentMethods(
         sheetId: string,
         data: Partial<Omit<TalentSheet, 'id' | 'talentId' | 'createdAt'>>
       ): Promise<TalentSheet | undefined> => {
+        const sheetForAcl = await db.query.talentSheets.findFirst({
+          where: { id: sheetId },
+        });
+        if (
+          !sheetForAcl ||
+          !(await getWritableTalent(db, sheetForAcl.talentId, teamId))
+        ) {
+          return undefined;
+        }
+
         if (data.isDefault) {
-          const sheet = await db.query.talentSheets.findFirst({
-            where: { id: sheetId },
-          });
-          if (sheet) {
-            await db
-              .update(talentSheets)
-              .set({ isDefault: false })
-              .where(eq(talentSheets.talentId, sheet.talentId));
-          }
+          await db
+            .update(talentSheets)
+            .set({ isDefault: false })
+            .where(eq(talentSheets.talentId, sheetForAcl.talentId));
         }
 
         const [updated] = await db
@@ -374,7 +459,9 @@ export function createTalentMethods(
         const sheet = await db.query.talentSheets.findFirst({
           where: { id: sheetId },
         });
-        if (!sheet) return false;
+        if (!sheet || !(await getWritableTalent(db, sheet.talentId, teamId))) {
+          return false;
+        }
 
         const result = await db
           .delete(talentSheets)
@@ -406,12 +493,21 @@ export function createTalentMethods(
       ...read.media,
 
       create: async (data: NewTalentMedia): Promise<TalentMediaRecord> => {
+        await requireWritableTalent(db, data.talentId, teamId);
+
         const [media] = await db.insert(talentMedia).values(data).returning();
         if (!media) throw new Error('Failed to create talent media');
         return media;
       },
 
       delete: async (mediaId: string): Promise<boolean> => {
+        const media = await db.query.talentMedia.findFirst({
+          where: { id: mediaId },
+        });
+        if (!media || !(await getWritableTalent(db, media.talentId, teamId))) {
+          return false;
+        }
+
         const result = await db
           .delete(talentMedia)
           .where(eq(talentMedia.id, mediaId));

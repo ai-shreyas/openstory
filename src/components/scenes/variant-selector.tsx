@@ -82,6 +82,17 @@ export function VariantSelector({
   // Background size: scale by cols horizontally and rows vertically
   const bgSize = `${cols * 100}% ${rows * 100}%`;
 
+  /** Crop position for one tile inside the variant sheet image. */
+  const tileBackgroundPosition = (index: number): string => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    // For 3x3: positions are 0%, 50%, 100% per axis
+    // For 3x1: col positions are 0%, 50%, 100%; row is always 0%
+    const bgPosX = cols > 1 ? `${(col / (cols - 1)) * 100}%` : '0%';
+    const bgPosY = rows > 1 ? `${(row / (rows - 1)) * 100}%` : '0%';
+    return `${bgPosX} ${bgPosY}`;
+  };
+
   if (!variantImageUrl) {
     return (
       <div className="w-full">
@@ -103,14 +114,6 @@ export function VariantSelector({
         aria-label="Variant selection"
       >
         {Array.from({ length: count }).map((_, index) => {
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-
-          // For 3x3: positions are 0%, 50%, 100% per axis
-          // For 3x1: col positions are 0%, 50%, 100%; row is always 0%
-          const bgPosX = cols > 1 ? `${(col / (cols - 1)) * 100}%` : '0%';
-          const bgPosY = rows > 1 ? `${(row / (rows - 1)) * 100}%` : '0%';
-
           return (
             <button
               key={index}
@@ -137,7 +140,7 @@ export function VariantSelector({
                 style={{
                   backgroundImage: `url(${variantImageUrl})`,
                   backgroundSize: bgSize,
-                  backgroundPosition: `${bgPosX} ${bgPosY}`,
+                  backgroundPosition: tileBackgroundPosition(index),
                 }}
               />
 
@@ -160,21 +163,39 @@ export function VariantSelector({
         open={pendingVariantIndex !== null}
         onOpenChange={(open) => !open && handleCancel()}
       >
-        <DialogContent showCloseButton={false} className="sm:max-w-md">
+        <DialogContent showCloseButton={false} className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Select this variant?</DialogTitle>
             <DialogDescription>
-              This will replace the current shot image. The video will need to
-              be regenerated.
+              This will replace the current start frame image. The video will
+              need to be regenerated.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="mt-4">
+
+          {pendingVariantIndex !== null && (
+            <div
+              aria-hidden="true"
+              className={cn(
+                'relative w-full overflow-hidden rounded-lg ring-1 ring-foreground/10',
+                aspectRatioClass
+              )}
+              style={{
+                backgroundImage: `url(${variantImageUrl})`,
+                backgroundSize: bgSize,
+                backgroundPosition: tileBackgroundPosition(pendingVariantIndex),
+              }}
+            />
+          )}
+
+          <DialogFooter className="mt-2">
             <DialogClose asChild>
               <Button type="button" variant="outline">
                 Cancel
               </Button>
             </DialogClose>
-            <Button onClick={handleConfirm}>Confirm</Button>
+            <Button ref={confirmButtonRef} onClick={handleConfirm}>
+              Confirm
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

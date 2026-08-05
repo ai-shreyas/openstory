@@ -36,7 +36,7 @@ The central player displays:
 - **Still image** — When no video exists yet
 - **Video playback** — When motion has been generated, with play/pause controls
 - **Progress overlay** — During generation, shows the current phase name
-- **Variant preview** — When browsing image variants, shows the alternate image with a "Click Set Image to use" badge
+- **Model hint** — When the inspector model differs from the current still, a badge points at Set Image / Generate without replacing the primary image
 
 The player automatically sizes to match your sequence's aspect ratio (16:9, 9:16, or 1:1).
 

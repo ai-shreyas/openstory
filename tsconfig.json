@@ -25,5 +25,8 @@
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules"]
+  // `containers/**` is a separate, self-contained build (its own tsconfig +
+  // deps, Node/NodeNext target) typechecked in its Docker image — keep it out
+  // of the Worker typecheck.
+  "exclude": ["node_modules", "containers"]
 }

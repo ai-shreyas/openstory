@@ -15,6 +15,14 @@ import {
   withHtmlAccept,
 } from '@/lib/agent/discovery';
 import { reconcileAllStuckJobs } from '@/lib/cron/reconcile-all';
+import {
+  FAL_PRICING_CRON,
+  refreshFalPricing,
+} from '@/lib/cron/refresh-fal-pricing';
+import {
+  FAL_BILLING_RECONCILE_CRON,
+  reconcileFalBilling,
+} from '@/lib/cron/reconcile-fal-billing';
 import { ensureSystemTemplatesSeeded } from '@/lib/db/seed-system-templates';
 
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
@@ -66,8 +74,8 @@ export { LibraryTalentSheetWorkflow } from '@/lib/workflows/library-talent-sheet
 export { LibraryLocationSheetWorkflow } from '@/lib/workflows/library-location-sheet-workflow';
 export { ShotVariantWorkflow } from '@/lib/workflows/shot-variant-workflow';
 export { UpscaleShotVariantWorkflow } from '@/lib/workflows/upscale-shot-variant-workflow';
-export { VisualPromptSceneWorkflow } from '@/lib/workflows/visual-prompt-scene-workflow';
-export { MotionPromptSceneWorkflow } from '@/lib/workflows/motion-prompt-scene-workflow';
+export { FramePromptWorkflow } from '@/lib/workflows/frame-prompt-workflow';
+export { MotionPromptWorkflow } from '@/lib/workflows/motion-prompt-workflow';
 export { MusicPromptWorkflow } from '@/lib/workflows/music-prompt-workflow';
 export { RecastCharacterWorkflow } from '@/lib/workflows/recast-character-workflow';
 export { LocationMatchingWorkflow } from '@/lib/workflows/location-matching-workflow';
@@ -75,19 +83,27 @@ export { ShotImagesWorkflow } from '@/lib/workflows/shot-images-workflow';
 export { TalentMatchingWorkflow } from '@/lib/workflows/talent-matching-workflow';
 export { CharacterBibleWorkflow } from '@/lib/workflows/character-bible-workflow';
 export { LocationBibleWorkflow } from '@/lib/workflows/location-bible-workflow';
-export { VisualPromptWorkflow } from '@/lib/workflows/visual-prompt-workflow';
-export { MotionPromptWorkflow } from '@/lib/workflows/motion-prompt-workflow';
+export { FramePromptBatchWorkflow } from '@/lib/workflows/frame-prompt-batch-workflow';
+export { MotionPromptBatchWorkflow } from '@/lib/workflows/motion-prompt-batch-workflow';
 export { MotionMusicPromptsWorkflow } from '@/lib/workflows/motion-music-prompts-workflow';
 export { RegenerateShotsWorkflow } from '@/lib/workflows/regenerate-shots-workflow';
+export { UpdateStaleShotsWorkflow } from '@/lib/workflows/update-stale-shots-workflow';
 export { RecastLocationWorkflow } from '@/lib/workflows/recast-location-workflow';
 export { ReplaceElementWorkflow } from '@/lib/workflows/replace-element-workflow';
 export { SceneSplitWorkflow } from '@/lib/workflows/scene-split-workflow';
 export { StoryboardWorkflow } from '@/lib/workflows/storyboard-workflow';
 export { AnalyzeScriptWorkflow } from '@/lib/workflows/analyze-script-workflow';
+export { SequenceExportWorkflow } from '@/lib/workflows/sequence-export-workflow';
+export { AssetGenerationWorkflow } from '@/lib/workflows/asset-generation-workflow';
 
 // Realtime broker Durable Object. Re-exported so the binding's `class_name`
 // in wrangler.jsonc resolves in the Worker bundle (#802).
 export { RealtimeChannel } from '@/lib/realtime/realtime-channel.do';
+
+// Server-side video-export container DO (#968). Production-only binding
+// (`VIDEO_EXPORT_CONTAINER`); re-exported so its `class_name` resolves in the
+// bundle when CLOUDFLARE_ENV=production bakes the [env.production] block.
+export { VideoExportContainer } from '@/lib/containers/video-export-container';
 
 // Bindings shape from wrangler.jsonc. Only declared so the scheduled() handler
 // has a real type for its env parameter (vs. the framework default of unknown).
@@ -123,7 +139,25 @@ const exportedHandler: ExportedHandler<WorkerEnv> = {
     // RFC 8288 Link headers on document responses for agent discovery.
     return withDiscoveryLinkHeader(response, pathname);
   },
-  scheduled(_controller, _env, ctx) {
+  scheduled(controller, _env, ctx) {
+    // Daily fal pricing refresh into the model_pricing table (#1069).
+    if (controller.cron === FAL_PRICING_CRON) {
+      ctx.waitUntil(
+        refreshFalPricing().catch((error) => {
+          logger.error('refreshFalPricing failed:', { err: error });
+        })
+      );
+      return;
+    }
+    // Hourly audit of charges against fal's per-request bill (#1069).
+    if (controller.cron === FAL_BILLING_RECONCILE_CRON) {
+      ctx.waitUntil(
+        reconcileFalBilling().catch((error) => {
+          logger.error('reconcileFalBilling failed:', { err: error });
+        })
+      );
+      return;
+    }
     // Best-effort sweep for stuck generating-status rows across every table.
     // See src/lib/cron/reconcile-all.ts; cron schedule is in wrangler.jsonc.
     ctx.waitUntil(

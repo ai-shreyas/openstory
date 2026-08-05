@@ -1,6 +1,6 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { type Editor, EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
   Markdown,
@@ -15,6 +15,29 @@ import type { MentionItem } from '@/components/scenes/prompt-mention/mention-ite
 import { PromptMention } from './mention/mention-extension';
 
 type MentionConfigure = Partial<MentionOptions>;
+
+// markdown-it parses two trailing spaces + `\n` as a hard break, so converting
+// single newlines (but not paragraph-separating blank lines) keeps a pasted
+// multi-line screenplay block in one paragraph instead of shredding each line
+// into its own paragraph. Exported for unit testing.
+export const toHardBreakMarkdown = (text: string): string =>
+  text.replace(/(?<!\n)\n(?!\n)/g, '  \n');
+
+// Decide what to insert for a paste. The script editor must only ever ingest
+// markdown — never the arbitrary inline styling (fonts, colours, sizes) that
+// rich `text/html` clipboard payloads from Word / Google Docs / web pages
+// carry. When HTML is present we ignore it and insert the clipboard's
+// plain-text representation parsed as markdown; a plain-text-only paste returns
+// null so tiptap-markdown's own `clipboardTextParser` handles it. Exported for
+// unit testing.
+export const plainTextPasteAsMarkdown = (
+  html: string,
+  text: string
+): string | null => {
+  if (!html) return null; // plain text paste — handled as markdown already
+  if (!text) return null; // image-only / non-text paste — leave to default
+  return toHardBreakMarkdown(text);
+};
 import { createMentionSuggestion } from './mention/mention-suggestion';
 import { tagifyMarkdown } from './mention/tagify';
 
@@ -48,6 +71,13 @@ const HardBreakAsNewline = HardBreak.extend({
 type MarkdownEditorProps = {
   value: string;
   onValueChange: (markdown: string) => void;
+  /**
+   * Fired when the user focuses the editor. Lets callers distinguish a genuine
+   * user edit from the editor's own on-mount normalization emit (TipTap can
+   * re-serialize the initial content — e.g. mention tagification — and fire
+   * `onValueChange` before the user has touched anything).
+   */
+  onFocus?: () => void;
   placeholder?: string;
   disabled?: boolean;
   className?: string;
@@ -63,8 +93,9 @@ type MarkdownEditorProps = {
    * When provided, enables @-mention autocomplete. Tags found in the incoming
    * markdown (by canonical slug match against the items list) are rendered as
    * coloured pills via the Mention extension. Pass `undefined` (default) on
-   * surfaces where mentions don't apply (e.g. the pre-analysis script editor,
-   * where no canonical tags exist yet).
+   * surfaces where mentions don't apply. Enablement is captured at editor
+   * init — pass an (empty) array from the first render, not `undefined` that
+   * later becomes a list, or the extension never registers.
    */
   mentionItems?: MentionItem[];
 };
@@ -84,6 +115,7 @@ const placeholderClasses =
 export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   value,
   onValueChange,
+  onFocus,
   placeholder,
   disabled = false,
   className,
@@ -101,6 +133,14 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   // handler reads the freshest callback without needing to recreate the editor.
   const onKeyDownRef = useRef(onKeyDown);
   onKeyDownRef.current = onKeyDown;
+
+  // Same ref pattern as onKeyDown — useEditor captures callbacks at init.
+  const onFocusRef = useRef(onFocus);
+  onFocusRef.current = onFocus;
+
+  // handlePaste is captured at editor init (before `editor` is assigned), so it
+  // reads the live instance through this ref to insert markdown at the caret.
+  const editorRef = useRef<Editor | null>(null);
 
   // The suggestion plugin fires on every `@` keystroke; the items it pulls
   // must reflect the parent's latest list (it grows as the user adds cast /
@@ -195,15 +235,33 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           return true;
         },
       },
-      // Same treatment for actual paste events — markdown-it parses two
+      // Strip styling from rich (text/html) paste: insert only the plain-text
+      // representation, parsed as markdown, so the script never accepts fonts,
+      // colours, or other inline styling. Plain-text paste falls through to
+      // tiptap-markdown's clipboardTextParser (transformPastedText below).
+      handlePaste: (_view, event) => {
+        const clipboard = event.clipboardData;
+        if (!clipboard) return false;
+        const markdown = plainTextPasteAsMarkdown(
+          clipboard.getData('text/html'),
+          clipboard.getData('text/plain')
+        );
+        if (markdown === null) return false;
+        event.preventDefault();
+        editorRef.current?.commands.insertContent(markdown);
+        return true;
+      },
+      // Same treatment for actual plain-text paste — markdown-it parses two
       // trailing spaces + \n as a hard break, so the pasted block stays in
       // one paragraph instead of splitting.
-      transformPastedText: (text) => text.replace(/(?<!\n)\n(?!\n)/g, '  \n'),
+      transformPastedText: (text) => toHardBreakMarkdown(text),
     },
     onUpdate: ({ editor: e }) => {
       onValueChange(e.storage.markdown.getMarkdown());
     },
+    onFocus: () => onFocusRef.current?.(),
   });
+  editorRef.current = editor;
 
   // Canonical Tiptap external-value sync (mirrors the Vue v-model example in
   // their docs): only setContent if the editor's current markdown differs

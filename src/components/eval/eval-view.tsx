@@ -18,7 +18,6 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { VideoIcon } from 'lucide-react';
 import { Link } from '@tanstack/react-router';
-import { Route as sequencesNewRoute } from '@/routes/_app/sequences/new';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { getCreatorIdentity } from './creator-identity';
 
@@ -245,9 +244,7 @@ export const EvalView: React.FC<EvalViewProps> = ({ initialUserFilter }) => {
           action={
             !filters.search && !supportMode ? (
               <Button asChild size="lg">
-                <Link to={sequencesNewRoute.fullPath}>
-                  Create Your First Sequence
-                </Link>
+                <Link to="/sequences/new">Create Your First Sequence</Link>
               </Button>
             ) : undefined
           }

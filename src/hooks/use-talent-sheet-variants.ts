@@ -6,6 +6,7 @@ import {
   undiscardTalentSheetVariantFn,
 } from '@/functions/talent-sheet-variants';
 import { talentKeys } from '@/hooks/use-talent';
+import { useUser } from '@/hooks/use-user';
 import type { TalentSheetVariant } from '@/lib/db/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -23,11 +24,14 @@ export const talentSheetVariantKeys = {
 export function useTeamTalentDivergentVariants(options?: {
   refetchInterval?: number | false;
 }) {
+  const { data: user } = useUser();
+
   return useQuery<TalentSheetVariant[]>({
     queryKey: talentSheetVariantKeys.divergentTeam(),
     queryFn: () => getTeamTalentDivergentVariantsFn(),
     staleTime: 30_000,
     refetchInterval: options?.refetchInterval ?? false,
+    enabled: !!user,
   });
 }
 

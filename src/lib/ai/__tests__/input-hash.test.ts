@@ -741,29 +741,15 @@ describe('prompt input hashes', () => {
     expect(a).not.toBe(c);
   });
 
-  it('hash excludes LLM output: same upstream context with different prompts/continuity hashes the same', async () => {
+  it('hash excludes LLM output: same upstream context with different continuity hashes the same', async () => {
+    // The generated prompts moved off the Scene shape entirely (#713), so the
+    // only LLM-derived field still on the scene is `continuity` — confirm it is
+    // excluded from both the visual and motion input hashes.
     const upstream = await computeVisualPromptInputHash(sceneCtx);
     const enriched = await computeVisualPromptInputHash({
       ...sceneCtx,
       scene: {
         ...minimalScene,
-        prompts: {
-          visual: {
-            fullPrompt: 'A wholly different prompt produced by the LLM',
-            negativePrompt: 'blurry',
-            components: {
-              sceneDescription: 'foo',
-              subject: 'bar',
-              environment: '',
-              lighting: '',
-              camera: '',
-              composition: '',
-              style: '',
-              technical: '',
-              atmosphere: '',
-            },
-          },
-        },
         continuity: {
           characterTags: ['alice'],
           environmentTag: 'beach',
@@ -780,26 +766,12 @@ describe('prompt input hashes', () => {
       ...sceneCtx,
       scene: {
         ...minimalScene,
-        prompts: {
-          motion: {
-            fullPrompt: 'Camera dolly in slowly',
-            components: {
-              cameraMovement: 'dolly',
-              startPosition: '',
-              endPosition: '',
-              durationSeconds: 5,
-              speed: 'slow',
-              smoothness: 'smooth',
-              subjectTracking: '',
-              equipment: '',
-            },
-            parameters: {
-              durationSeconds: 5,
-              fps: 30,
-              motionAmount: 'medium',
-              cameraControl: { pan: 0, tilt: 0, zoom: 0, movement: '' },
-            },
-          },
+        continuity: {
+          characterTags: ['alice'],
+          environmentTag: 'beach',
+          colorPalette: 'warm',
+          lightingSetup: 'golden hour',
+          styleTag: 'cinematic',
         },
       },
     });

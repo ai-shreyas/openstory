@@ -3,7 +3,17 @@
  * Centralized ID generation for all database entities using ULIDs
  */
 
-import { ulid } from 'ulid';
+import { monotonicFactory } from 'ulid';
+
+/**
+ * Monotonic ULID factory. Unlike the plain `ulid()`, calls within the same
+ * millisecond increment the random component so IDs are *strictly* increasing
+ * within a process. This makes `ORDER BY id` a reliable insertion order for
+ * rows created back-to-back (e.g. the `sequence_events` timeline read via
+ * `desc(id)`), instead of the non-deterministic same-ms ordering plain ULIDs
+ * give. Output is still a valid, sortable, globally-unique ULID.
+ */
+const monotonicUlid = monotonicFactory();
 
 /**
  * Generate a ULID (Universally Unique Lexicographically Sortable Identifier)
@@ -25,7 +35,7 @@ import { ulid } from 'ulid';
  * ```
  */
 export function generateId(): string {
-  return ulid();
+  return monotonicUlid();
 }
 
 /**

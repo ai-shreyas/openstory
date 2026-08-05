@@ -1,4 +1,5 @@
 import { getChannelHistoryFn } from '@/functions/realtime-history';
+import { useUser } from '@/hooks/use-user';
 import { useRealtime } from '@/lib/realtime/client';
 import type { StaleDetectedPayload } from '@/lib/realtime';
 import { useQueryClient } from '@tanstack/react-query';
@@ -53,12 +54,13 @@ function resolveStatusFromHistory(
  */
 export function useLocationSheetRealtime(locationId?: string) {
   const queryClient = useQueryClient();
+  const { data: user } = useUser();
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Replay channel history on mount
   useEffect(() => {
-    if (!locationId) return;
+    if (!locationId || !user) return;
 
     getChannelHistoryFn({ data: { channel: `location:${locationId}` } })
       .then((events) => {
@@ -72,7 +74,7 @@ export function useLocationSheetRealtime(locationId?: string) {
           err,
         });
       });
-  }, [locationId]);
+  }, [locationId, user]);
 
   const handleEvent = useCallback(
     (event: LocationRealtimeEvent) => {

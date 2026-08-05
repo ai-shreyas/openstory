@@ -12,9 +12,23 @@ import { teamInvitations, teamMembers, teams } from './teams';
 
 import { sequences } from './sequences';
 
+import { dbSceneId, scenes } from './scenes';
+import { sceneScriptVersions } from './scene-script-versions';
+
 import { shots } from './shots';
 
 import { shotVariants } from './shot-variants';
+
+// SSF redesign (#990) — render segments (scene render units) + flat video
+// versions (replaces shot_variants video slice).
+import { renderSegments } from './render-segments';
+import { videoVariants } from './video-variants';
+
+// SSF redesign (#987) — additive image/event surface. Empty until #988+ wire it.
+import { frames } from './frames';
+import { frameVariants } from './frame-variants';
+import { framePromptVersions } from './frame-prompt-versions';
+import { sequenceEvents } from './sequence-events';
 
 import { characterSheetVariants } from './character-sheet-variants';
 
@@ -22,9 +36,9 @@ import { locationSheetVariants } from './location-sheet-variants';
 
 import { talentSheetVariants } from './talent-sheet-variants';
 
-import { shotPromptVariants } from './shot-prompt-variants';
+import { shotPromptVersions } from './shot-prompt-versions';
 
-import { sequenceMusicPromptVariants } from './sequence-music-prompt-variants';
+import { sequenceMusicPromptVersions } from './sequence-music-prompt-versions';
 
 import { sequenceMusicVariants } from './sequence-music-variants';
 import { sequenceExports } from './sequence-exports';
@@ -65,6 +79,16 @@ import { giftTokenRedemptions, giftTokens } from './gift-tokens';
 
 import { appMetadata } from './app-metadata';
 
+// Generated Assets (#458 — direct model access)
+import { generatedAssets } from './generated-assets';
+
+// Model Pricing (#1069 — live per-provider pricing snapshot + history)
+import {
+  modelPricing,
+  modelPricingHistory,
+  modelUsageObservations,
+} from './model-pricing';
+
 // Better Auth tables
 export { account, apikey, passkey, session, user, verification };
 
@@ -78,6 +102,19 @@ export { sequences };
 
 export type { NewSequence, Sequence } from './sequences';
 
+// Scenes (narrative units; each owns an ordered list of shots)
+export { dbSceneId, scenes };
+
+export type { DbSceneId, NewScene, SceneRow } from './scenes';
+
+// Scene script versions (per-scene script history; #1030)
+export { sceneScriptVersions };
+
+export type {
+  SceneScriptVersion,
+  SceneScriptSource,
+} from './scene-script-versions';
+
 // Shots
 export { shots };
 
@@ -87,6 +124,71 @@ export type { NewShot, Shot } from './shots';
 export { shotVariants };
 
 export type { ShotVariant, NewShotVariant } from './shot-variants';
+
+// Render Segments (#990 — scene render units; a scene is tiled into ≤cap
+// contiguous-shot segments, membership via shots.renderSegmentId).
+export { renderSegments };
+
+/** @public consumed from #990+ */
+export type { RenderSegment, NewRenderSegment } from './render-segments';
+
+// Video Variants (#990 — flat video render versions; replaces the shot_variants
+// video slice). Keyed by (renderSegmentId, model); manifest snapshots the
+// referenced prompt/frame versions.
+export { videoVariants };
+
+/** @public consumed from #990+ */
+export type {
+  VideoVariant,
+  NewVideoVariant,
+  VideoManifest,
+  VideoManifestEntry,
+} from './video-variants';
+
+/**
+ * SSF redesign (#987) — the still-image + activity-log surface, added ahead of
+ * its consumers (#988 scoped-db layer onward). The tables ship empty; the app
+ * still reads/writes the `shots` image columns until later phases repoint it.
+ * Each table must stay individually exported (drizzle-kit only diffs top-level
+ * exports — see the creditBatches note below).
+ *
+ * @public consumed from #988+, not yet in the app import graph
+ */
+export { frames, frameVariants, framePromptVersions, sequenceEvents };
+
+/** @public used by #988+ (frames = the IMAGE unit; still keyframes per shot) */
+export { FRAME_ROLES, FRAME_SOURCES } from './frames';
+
+/** @public used by #988+ */
+export type { Frame, NewFrame, FrameRole, FrameSource } from './frames';
+
+/** @public used by #988+ (flat still-image versions; variant = model|framing) */
+export { FRAME_VARIANT_KINDS } from './frame-variants';
+
+/** @public used by #988+ */
+export type {
+  FrameVariant,
+  NewFrameVariant,
+  FrameVariantKind,
+} from './frame-variants';
+
+/** @public used by #988+ (visual/image prompt version history) */
+export type {
+  FramePromptVersion,
+  PromptVersionSource,
+  PromptVersionStatus,
+} from './frame-prompt-versions';
+
+/** @public used by #988+ (append-only cross-sequence activity log) */
+export { SEQUENCE_EVENT_TARGET_TYPES } from './sequence-events';
+
+/** @public used by #988+ */
+export type {
+  SequenceEvent,
+  NewSequenceEvent,
+  SequenceEventTargetType,
+  SequenceEventData,
+} from './sequence-events';
 
 // Sheet Variants (Stage 2: divergent character/location/talent sheet outputs)
 export { characterSheetVariants };
@@ -111,22 +213,24 @@ export type {
   TalentSheetVariant,
 } from './talent-sheet-variants';
 
-// Shot Prompt Variants (visual/motion prompt history)
-export { shotPromptVariants };
+// Shot Prompt Versions (visual/motion prompt history; renamed from
+// shot_prompt_variants in #988)
+export { shotPromptVersions };
 
-export { SHOT_PROMPT_TYPES } from './shot-prompt-variants';
+export { SHOT_PROMPT_TYPES } from './shot-prompt-versions';
 
 export type {
   ShotPromptType,
-  ShotPromptVariant,
-  ShotPromptVariantComponents,
+  ShotPromptVersion,
+  ShotPromptVersionComponents,
   PromptVariantSource,
-} from './shot-prompt-variants';
+} from './shot-prompt-versions';
 
-// Sequence Music Prompt Variants (music prompt history)
-export { sequenceMusicPromptVariants };
+// Sequence Music Prompt Versions (music prompt history; renamed from
+// sequence_music_prompt_variants in #988)
+export { sequenceMusicPromptVersions };
 
-export type { SequenceMusicPromptVariant } from './sequence-music-prompt-variants';
+export type { SequenceMusicPromptVersion } from './sequence-music-prompt-versions';
 
 // Sequence-level variants (music)
 export { sequenceMusicVariants };
@@ -224,6 +328,25 @@ export { giftTokens, giftTokenRedemptions };
 // App Metadata (key/value bookkeeping, e.g. system-template seed hash)
 export { appMetadata };
 
+// Generated Assets (#458 — direct model access; flat team-scoped runs of
+// arbitrary fal endpoints, decoupled from the sequence graph)
+export { generatedAssets };
+
+export { GENERATED_ASSET_ACTIVITIES } from './generated-assets';
+
+// Model Pricing (#1069 — live per-provider pricing snapshot + price-change
+// history, refreshed daily by the Worker cron; fal rows today)
+export { modelPricing, modelPricingHistory, modelUsageObservations };
+
+export type {
+  GeneratedAsset,
+  NewGeneratedAsset,
+  GeneratedAssetActivity,
+  GeneratedAssetInput,
+  GeneratedAssetOutput,
+  JsonValue,
+} from './generated-assets';
+
 /**
  * Complete schema object for Drizzle client initialization (tables only).
  * Relations are defined separately in ./relations.ts using defineRelations().
@@ -244,13 +367,23 @@ export const schema = {
 
   // Sequences
   sequences,
+  scenes,
+  sceneScriptVersions,
   shots,
   shotVariants,
+  // SSF redesign (#990) — render segments + flat video render versions
+  renderSegments,
+  videoVariants,
+  // SSF redesign (#987) — additive image/event surface
+  frames,
+  frameVariants,
+  framePromptVersions,
+  sequenceEvents,
   characterSheetVariants,
   locationSheetVariants,
   talentSheetVariants,
-  shotPromptVariants,
-  sequenceMusicPromptVariants,
+  shotPromptVersions,
+  sequenceMusicPromptVersions,
   sequenceMusicVariants,
   sequenceExports,
 
@@ -294,4 +427,12 @@ export const schema = {
 
   // App Metadata
   appMetadata,
+
+  // Generated Assets (#458 — direct model access)
+  generatedAssets,
+
+  // Model Pricing (#1069)
+  modelPricing,
+  modelPricingHistory,
+  modelUsageObservations,
 };

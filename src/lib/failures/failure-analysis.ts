@@ -5,6 +5,7 @@
 
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
 type FailureCategory =
   | 'image'
@@ -82,7 +83,10 @@ function buildHeadline(
 }
 
 export function analyzeFailures(
-  shots: Shot[],
+  // The image surface (thumbnailStatus/thumbnailUrl/thumbnailError) moved onto
+  // the anchor frame in #989; callers project it back via `projectShotWithImage`
+  // so the failure heuristics here read the same legacy field names.
+  shots: ShotWithImage[],
   sequence: Sequence
 ): FailureSummary {
   const groups: FailureGroup[] = [];
@@ -186,6 +190,30 @@ export function analyzeFailures(
   // Catch-all: sequence failed but no specific failures identified
   if (sequence.status === 'failed' && groups.length === 0) {
     requiresFullRetry = true;
+  }
+
+  // Mid-pipeline crash (e.g. scene-split after streaming some shots, #1072):
+  // later phases never ran, so the only "failures" are missing motion/music
+  // prompts. That is not a real music-prompt failure — smart-retry would
+  // mislead. Prefer the sequence statusError and force full regenerate.
+  const onlyMissingDownstreamArtifacts =
+    groups.length > 0 &&
+    groups.every(
+      (g) => g.category === 'music-prompt' || g.category === 'motion-prompts'
+    );
+  if (
+    sequence.status === 'failed' &&
+    sequence.statusError &&
+    onlyMissingDownstreamArtifacts
+  ) {
+    return {
+      requiresFullRetry: true,
+      headline: 'Generation failed \u2014 full retry required',
+      groups: [],
+      totalFailures: 1,
+      hasFailed: true,
+      error: sequence.statusError,
+    };
   }
 
   const totalFailures = groups.reduce(

@@ -11,6 +11,7 @@ import {
   zLtx23ImageToVideoInput,
   zMinimaxHailuo23ProImageToVideoInput,
   zSeedance20EnterpriseV2ImageToVideoInput,
+  zSeedance20EnterpriseV2ReferenceToVideoInput,
   zVeo31ImageToVideoInput,
 } from './generated/zod.gen';
 
@@ -20,6 +21,7 @@ import {
   Ltx23ImageToVideoInputSchema,
   MinimaxHailuo23ProImageToVideoInputSchema,
   Seedance20EnterpriseV2ImageToVideoInputSchema,
+  Seedance20EnterpriseV2ReferenceToVideoInputSchema,
   Veo31ImageToVideoInputSchema,
 } from './generated/schemas.gen';
 
@@ -29,11 +31,14 @@ export type MotionJSONSchema =
   | typeof Ltx23ImageToVideoInputSchema
   | typeof MinimaxHailuo23ProImageToVideoInputSchema
   | typeof Seedance20EnterpriseV2ImageToVideoInputSchema
+  | typeof Seedance20EnterpriseV2ReferenceToVideoInputSchema
   | typeof Veo31ImageToVideoInputSchema;
 
 export const MOTION_INPUT_SCHEMAS = {
   'bytedance/seedance-2.0/enterprise/v2/image-to-video':
     zSeedance20EnterpriseV2ImageToVideoInput,
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video':
+    zSeedance20EnterpriseV2ReferenceToVideoInput,
   'fal-ai/kling-video/v3/pro/image-to-video': zKlingVideoV3ProImageToVideoInput,
   'fal-ai/ltx-2.3/image-to-video': zLtx23ImageToVideoInput,
   'fal-ai/minimax/hailuo-2.3/pro/image-to-video':
@@ -57,6 +62,8 @@ export type MotionInputFor<T extends MotionEndpointId> = z.infer<
 export const MOTION_JSON_SCHEMAS = {
   'bytedance/seedance-2.0/enterprise/v2/image-to-video':
     Seedance20EnterpriseV2ImageToVideoInputSchema,
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video':
+    Seedance20EnterpriseV2ReferenceToVideoInputSchema,
   'fal-ai/kling-video/v3/pro/image-to-video':
     KlingVideoV3ProImageToVideoInputSchema,
   'fal-ai/ltx-2.3/image-to-video': Ltx23ImageToVideoInputSchema,
@@ -71,6 +78,10 @@ export const MOTION_TRANSFORMS = {
   'bytedance/seedance-2.0/enterprise/v2/image-to-video': motionTransform(
     zSeedance20EnterpriseV2ImageToVideoInput,
     Seedance20EnterpriseV2ImageToVideoInputSchema
+  ),
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video': motionTransform(
+    zSeedance20EnterpriseV2ReferenceToVideoInput,
+    Seedance20EnterpriseV2ReferenceToVideoInputSchema
   ),
   'fal-ai/kling-video/v3/pro/image-to-video': motionTransform(
     zKlingVideoV3ProImageToVideoInput,

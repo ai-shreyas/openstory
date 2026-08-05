@@ -2,64 +2,112 @@
  * Shared Motion Prompt Resolution
  *
  * Resolves the motion prompt string for a shot, applying model-specific
- * assembly when structured MotionPrompt data is available.
+ * assembly to the structured motion prompt.
  *
- * Priority: user override → model-specific assembly → legacy fallback
+ * Single source of truth (#713): the structured motion prompt comes from the
+ * shot's *selected* `shot_prompt_versions` row (reconstructed via
+ * `motionPromptFromVersion`), never from `metadata.prompts.motion` (that field
+ * was removed from the Scene type). `shot.motionPrompt` is the cached mirror of
+ * that selected version's `text`, so a user edit is just the latest version —
+ * there is no separate "user override" branch any more.
  */
 
-import type { MotionPrompt } from '@/lib/ai/scene-analysis.schema';
-import {
-  type ImageToVideoModel,
-  videoModelSupportsAudio,
-} from '@/lib/ai/models';
+import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
+import type { ImageToVideoModel } from '@/lib/ai/models';
 import { assembleMotionPrompt } from './assemble-motion-prompt';
 
-type ShotPromptData = {
-  motionPrompt: string | null;
-  metadata: {
-    prompts?: { motion?: MotionPrompt };
-    continuity?: { characterTags?: readonly string[] };
-  } | null;
+/** The `shot_prompt_versions` motion-row fields needed to rebuild a prompt. */
+type MotionVersionRow = {
+  text: string;
+  dialogue: AssemblableMotionPrompt['dialogue'];
+  audio: AssemblableMotionPrompt['audio'];
+};
+
+/**
+ * Reconstruct the assemblable motion prompt from a selected motion
+ * `shot_prompt_versions` row. Only `text` (→ `fullPrompt`) plus the
+ * dialogue/audio direction feed model-specific assembly; `components` /
+ * `parameters` are stored for history but unused at render time.
+ */
+export function motionPromptFromVersion(
+  version: MotionVersionRow
+): AssemblableMotionPrompt {
+  return {
+    fullPrompt: version.text,
+    dialogue: version.dialogue,
+    audio: version.audio,
+  };
+}
+
+type ResolveMotionPromptInput = {
+  /**
+   * The shot's selected motion prompt (reconstructed from its version row), or
+   * null when the shot has no motion prompt yet.
+   */
+  motionPrompt: AssemblableMotionPrompt | null;
+  /**
+   * Scene character tags (`continuity.characterTags`) for model-specific
+   * in-prompt guards (e.g. Seedance's "Avoid jitter and bent limbs.").
+   */
+  characterTags?: readonly string[];
+  /** Fallback prompt when the shot has no motion prompt version. */
   description: string | null;
 };
 
 /**
  * Resolve the motion prompt for a shot, formatted for the target video model.
  *
- * - If the user has manually edited the prompt (shot.motionPrompt), it wins
- *   but dialogue/audio are appended for audio-capable models.
- * - If structured MotionPrompt data exists, assemble a model-specific prompt.
- * - Otherwise fall back to shot.description.
+ * - If a structured motion prompt exists, assemble a model-specific prompt
+ *   (audio-capable models get dialogue/audio appended).
+ * - Otherwise fall back to the shot description.
  */
 export function resolveMotionPrompt(
-  shot: ShotPromptData,
+  input: ResolveMotionPromptInput,
   model: ImageToVideoModel
 ): string {
-  const motionPromptData = shot.metadata?.prompts?.motion;
-  const characterTags = shot.metadata?.continuity?.characterTags;
-
-  // User override: manually edited prompt string
-  if (shot.motionPrompt) {
-    // For audio models, enrich the user's prompt with dialogue/audio if available
-    if (videoModelSupportsAudio(model) && motionPromptData) {
-      return assembleMotionPrompt({
-        motionPrompt: { ...motionPromptData, fullPrompt: shot.motionPrompt },
-        model,
-        characterTags,
-      });
-    }
-    return shot.motionPrompt;
-  }
-
-  // Structured data available — assemble for target model
-  if (motionPromptData) {
+  if (input.motionPrompt) {
     return assembleMotionPrompt({
-      motionPrompt: motionPromptData,
+      motionPrompt: input.motionPrompt,
       model,
-      characterTags,
+      characterTags: input.characterTags,
     });
   }
+  return input.description || '';
+}
 
-  // Legacy fallback
-  return shot.description || '';
+/**
+ * Convenience wrapper for server call sites that hold a selected motion
+ * `shot_prompt_versions` row (or null): reconstruct + resolve in one step.
+ *
+ * `motionPromptMirror` (the `shot.motionPrompt` cached column) is the legacy
+ * fallback: shots created before #713 carry the mirror text but no
+ * `selectedMotionPromptVersionId` pointer, so there is no version row to read.
+ * Using the mirror keeps their motion prompt intact (without the per-model
+ * dialogue/audio enrichment, which only the version row can supply) until they
+ * are regenerated.
+ */
+export function resolveMotionPromptFromVersion(
+  version: MotionVersionRow | null | undefined,
+  opts: {
+    motionPromptMirror?: string | null;
+    characterTags?: readonly string[];
+    description: string | null;
+  },
+  model: ImageToVideoModel
+): string {
+  if (version) {
+    return resolveMotionPrompt(
+      {
+        motionPrompt: motionPromptFromVersion(version),
+        characterTags: opts.characterTags,
+        description: opts.description,
+      },
+      model
+    );
+  }
+  // Legacy fallback: no version row to assemble from. Use the bare mirror text
+  // (there is no structured dialogue/audio to enrich, and re-running
+  // model-specific assembly would change long-standing output), else the
+  // description.
+  return opts.motionPromptMirror || opts.description || '';
 }

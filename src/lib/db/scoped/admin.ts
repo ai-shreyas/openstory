@@ -10,13 +10,31 @@ import { generateId } from '@/lib/db/id';
 import { user } from '@/lib/db/schema/auth';
 import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
+import { frames } from '@/lib/db/schema/frames';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
-import type { Shot, Sequence } from '@/lib/db/schema';
+import type { Sequence } from '@/lib/db/schema';
+import {
+  projectShotMissingFrame,
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
 import { teamMembers, teams } from '@/lib/db/schema/teams';
 import { ValidationError } from '@/lib/errors';
-import { and, asc, count, desc, eq, like, not, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  like,
+  not,
+  or,
+  sql,
+} from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 
 // Ambiguity-free alphabet (no 0/O/1/I) -- 32 chars -> 32^6 ~ 1B combinations
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -147,11 +165,32 @@ export function createAdminMethods(db: Database) {
     const { limit = 50, offset = 0, search } = opts ?? {};
 
     const trimmed = search?.trim().toLowerCase();
+
+    // Resolve a person via TEAM MEMBERSHIP, not the sequence creator. Support
+    // ("show me this customer's account") means their whole team's work, and
+    // `sequences.createdBy` is not a reliable handle for it: it is nullable and
+    // `ON DELETE SET NULL`, so a `user`-table rebuild nulls it wholesale (the
+    // #612-class incident that stranded 174 prod sequences). Matching any team
+    // member keeps lookup working even when the creator column is lost again.
+    const memberUser = alias(user, 'member_user');
     const searchClause = trimmed
       ? or(
           like(sql`lower(${sequences.title})`, `%${trimmed}%`),
-          like(sql`lower(${user.name})`, `%${trimmed}%`),
-          like(sql`lower(${user.email})`, `%${trimmed}%`)
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(teamMembers)
+              .innerJoin(memberUser, eq(memberUser.id, teamMembers.userId))
+              .where(
+                and(
+                  eq(teamMembers.teamId, sequences.teamId),
+                  or(
+                    like(sql`lower(${memberUser.name})`, `%${trimmed}%`),
+                    like(sql`lower(${memberUser.email})`, `%${trimmed}%`)
+                  )
+                )
+              )
+          )
         )
       : undefined;
 
@@ -175,12 +214,25 @@ export function createAdminMethods(db: Database) {
     }));
   }
 
-  async function getShotsForSequence(sequenceId: string): Promise<Shot[]> {
-    return await db
+  async function getShotsForSequence(
+    sequenceId: string
+  ): Promise<ShotWithImage[]> {
+    // Project the anchor-frame image surface (#989) — the shot's first frame
+    // (orderIndex 0), joined by shotId (NOT id-reuse).
+    const rows = await db
       .select()
       .from(shots)
+      .leftJoin(
+        frames,
+        and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
+      )
       .where(eq(shots.sequenceId, sequenceId))
       .orderBy(asc(shots.orderIndex));
+    return rows.map((row) =>
+      row.frames
+        ? projectShotWithImage(row.shots, row.frames)
+        : projectShotMissingFrame(row.shots)
+    );
   }
 
   // ---- User activity reporting ----

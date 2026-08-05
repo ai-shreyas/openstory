@@ -2,6 +2,7 @@ import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { routeParams } from '@/components/layout/breadcrumbs';
 import { EditTalentDialog } from '@/components/talent-library/edit-talent-dialog';
 import { PageContainer } from '@/components/layout/page-container';
+import { getCurrentUserProfileFn } from '@/functions/user';
 import { PageDescription } from '@/components/typography/page-description';
 import { PageHeader } from '@/components/typography/page-header';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ import {
   useToggleTalentFavorite,
 } from '@/hooks/use-talent';
 import { cn } from '@/lib/utils';
+import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import {
   ArrowLeft,
@@ -51,17 +53,31 @@ function TalentDetailPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthGate();
   const { data: talent, isLoading, error } = useTalentById(id);
+  const { data: profile } = useQuery({
+    queryKey: ['currentUserProfile'],
+    queryFn: () => getCurrentUserProfileFn(),
+    staleTime: 5 * 60 * 1000,
+    enabled: isAuthenticated,
+  });
   const toggleFavorite = useToggleTalentFavorite();
   const deleteTalent = useDeleteTalent();
   const generateSheet = useGenerateTalentSheet();
   const setDefaultSheet = useSetDefaultSheet();
+
+  const canManageTalent = Boolean(
+    isAuthenticated &&
+    profile?.teamId &&
+    talent &&
+    talent.teamId === profile.teamId &&
+    !talent.isPublic
+  );
+
   const {
     isGenerating: isGeneratingSheet,
     phase: generatingPhase,
     error: sheetError,
     startGenerating,
-    // Anonymous visitors view talent read-only; don't open a realtime channel.
-  } = useTalentSheetRealtime(isAuthenticated ? id : undefined);
+  } = useTalentSheetRealtime(canManageTalent ? id : undefined);
 
   const handleGenerateSheet = () => {
     if (!talent) return;
@@ -69,12 +85,13 @@ function TalentDetailPage() {
     generateSheet.mutate({ talentId: talent.id });
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!talent) return;
     if (!confirm(`Delete "${talent.name}"? This cannot be undone.`)) return;
 
-    await deleteTalent.mutateAsync(talent.id);
-    void navigate({ to: '/talent' });
+    deleteTalent.mutate(talent.id, {
+      onSuccess: () => void navigate({ to: '/talent' }),
+    });
   };
 
   if (isLoading) {
@@ -128,7 +145,7 @@ function TalentDetailPage() {
 
         <PageHeader
           actions={
-            isAuthenticated ? (
+            canManageTalent ? (
               <div className="flex items-center gap-2">
                 <EditTalentDialog
                   talent={talent}
@@ -156,7 +173,7 @@ function TalentDetailPage() {
                 <Button
                   variant="outline"
                   size="icon"
-                  onClick={() => void handleDelete()}
+                  onClick={handleDelete}
                   disabled={deleteTalent.isPending}
                 >
                   <Trash2 className="h-4 w-4 text-destructive" />
@@ -225,7 +242,7 @@ function TalentDetailPage() {
             {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
             {talent.media &&
               talent.media.filter((m) => m.type === 'image').length > 0 &&
-              isAuthenticated && (
+              canManageTalent && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -249,7 +266,7 @@ function TalentDetailPage() {
               {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
               {talent.media &&
               talent.media.filter((m) => m.type === 'image').length > 0 &&
-              isAuthenticated ? (
+              canManageTalent ? (
                 <div>
                   <p className="text-muted-foreground mb-3">
                     {isGeneratingSheet
@@ -333,7 +350,7 @@ function TalentDetailPage() {
                     <p className="font-medium text-sm line-clamp-1">
                       {sheet.name}
                     </p>
-                    {isAuthenticated &&
+                    {canManageTalent &&
                       talent.sheets.length > 1 &&
                       !sheet.isDefault && (
                         <Button

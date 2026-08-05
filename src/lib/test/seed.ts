@@ -12,6 +12,8 @@ import { generateId } from '@/lib/db/id';
 import {
   characters,
   credits,
+  frameVariants,
+  frames,
   shots,
   locationLibrary,
   locationSheets,
@@ -27,7 +29,7 @@ import {
   verification,
 } from '@/lib/db/schema';
 import { getDb } from '#db-client';
-import { and, eq, like, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, like, sql } from 'drizzle-orm';
 
 export type CreatedTestUser = {
   id: string;
@@ -242,13 +244,42 @@ export async function createTestShot(
     id: shotId,
     sequenceId,
     orderIndex,
-    thumbnailUrl,
-    thumbnailStatus: 'completed',
-    variantImageUrl,
-    variantImageStatus,
     createdAt: now,
     updatedAt: now,
   });
+
+  // The still-image surface lives on each shot's anchor frame now (#989). The
+  // frame gets its OWN id (id-reuse was migration-only); it's resolved by
+  // (shotId, orderIndex 0).
+  const anchorFrameId = generateId();
+  await db.insert(frames).values({
+    id: anchorFrameId,
+    shotId,
+    sequenceId,
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: thumbnailUrl,
+    imageStatus: 'completed',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // The 3×3 grid sheet (was shots.variantImage*) is a kind:'framing'
+  // frame_variants version with no sourceVariantId.
+  if (variantImageUrl !== null) {
+    await db.insert(frameVariants).values({
+      id: generateId(),
+      frameId: anchorFrameId,
+      sequenceId,
+      kind: 'framing',
+      model: 'nano_banana_2',
+      url: variantImageUrl,
+      status: variantImageStatus,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
 
   return { id: shotId, sequenceId, orderIndex };
 }
@@ -653,15 +684,39 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
     columns: {
       id: true,
       orderIndex: true,
-      thumbnailUrl: true,
-      thumbnailStatus: true,
       videoUrl: true,
       videoStatus: true,
       audioUrl: true,
       audioStatus: true,
     },
   });
-  return rows.sort((a, b) => a.orderIndex - b.orderIndex);
+  // The still-image surface lives on each shot's anchor frame now (#989);
+  // project it back under the legacy thumbnail* names — keyed by shotId
+  // (orderIndex 0), never by id-reuse.
+  const frameRows = await db
+    .select({
+      shotId: frames.shotId,
+      imageUrl: frames.imageUrl,
+      imageStatus: frames.imageStatus,
+    })
+    .from(frames)
+    .where(and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0)));
+  const framesByShot = new Map(frameRows.map((f) => [f.shotId, f]));
+  return rows
+    .map((row) => {
+      const frame = framesByShot.get(row.id);
+      return {
+        id: row.id,
+        orderIndex: row.orderIndex,
+        thumbnailUrl: frame?.imageUrl ?? null,
+        thumbnailStatus: frame?.imageStatus ?? null,
+        videoUrl: row.videoUrl,
+        videoStatus: row.videoStatus,
+        audioUrl: row.audioUrl,
+        audioStatus: row.audioStatus,
+      };
+    })
+    .sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
 /**
@@ -673,21 +728,33 @@ export async function getTestShot(shotId: string): Promise<{
   variantImageStatus: string | null;
 } | null> {
   const db = getDb();
-  const result = await db.query.shots.findFirst({
-    where: { id: shotId },
-    columns: {
-      id: true,
-      thumbnailUrl: true,
-      variantImageStatus: true,
-    },
-  });
+  // The still image lives on the shot's anchor frame now (#989), resolved by
+  // (shotId, orderIndex 0) — never by id-reuse; the variant grid sheet is the
+  // latest kind:'framing' frame_variants version on that frame.
+  const [frame] = await db
+    .select({ id: frames.id, imageUrl: frames.imageUrl })
+    .from(frames)
+    .where(and(eq(frames.shotId, shotId), eq(frames.orderIndex, 0)));
 
-  if (!result) return null;
+  if (!frame) return null;
+
+  const [gridSheet] = await db
+    .select({ status: frameVariants.status })
+    .from(frameVariants)
+    .where(
+      and(
+        eq(frameVariants.frameId, frame.id),
+        eq(frameVariants.kind, 'framing'),
+        isNull(frameVariants.sourceVariantId)
+      )
+    )
+    .orderBy(desc(frameVariants.id))
+    .limit(1);
 
   return {
-    id: result.id,
-    thumbnailUrl: result.thumbnailUrl,
-    variantImageStatus: result.variantImageStatus,
+    id: shotId,
+    thumbnailUrl: frame.imageUrl,
+    variantImageStatus: gridSheet?.status ?? null,
   };
 }
 

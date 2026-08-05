@@ -11,6 +11,7 @@ import type { StalenessEntityType } from '@/components/staleness/staleness-indic
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { AppImage } from '@/components/ui/app-image';
 
 type SheetAspectRatio = 'square' | 'video' | 'portrait';
 
@@ -89,9 +90,11 @@ const SheetPreview: React.FC<{
     // Compare-dialog is a transient surface; the unpic optimisation pipeline
     // adds little here and the variant URL may already be a CDN-resized one.
     // Plain img keeps this simple and aligns with `DivergenceCompareDialog`.
-    <img
+    <AppImage
       src={url}
       alt={alt}
+      width={160}
+      height={160}
       className={cn('w-full rounded-md object-cover', aspectClass)}
     />
   );

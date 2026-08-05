@@ -1,4 +1,5 @@
 import { getChannelHistoryFn } from '@/functions/realtime-history';
+import { useUser } from '@/hooks/use-user';
 import { useRealtime } from '@/lib/realtime/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,6 +26,7 @@ type SheetProgressEvent = {
  */
 export function useLocationSheetsRealtime(locationIds: string[] = []) {
   const queryClient = useQueryClient();
+  const { data: user } = useUser();
   const [generatingStatus, setGeneratingStatus] = useState<
     Map<string, boolean>
   >(new Map());
@@ -38,6 +40,8 @@ export function useLocationSheetsRealtime(locationIds: string[] = []) {
 
   // Replay channel history for newly added location IDs
   useEffect(() => {
+    if (!user) return;
+
     const newIds = locationIds.filter((id) => !checkedIds.current.has(id));
     if (newIds.length === 0) return;
 
@@ -70,7 +74,7 @@ export function useLocationSheetsRealtime(locationIds: string[] = []) {
           logger.error(`Failed to fetch history for location:${id}:`, { err });
         });
     }
-  }, [locationIds]);
+  }, [locationIds, user]);
 
   const handleEvent = useCallback(
     (event: SheetProgressEvent) => {

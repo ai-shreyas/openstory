@@ -13,6 +13,9 @@ const APP_DOMAIN = (() => {
 
 export const CONTACT_EMAIL = `hello@${APP_DOMAIN}`;
 export const PRIVACY_EMAIL = `privacy@${APP_DOMAIN}`;
+/** Where "Ask Tom for Credits" requests land (#1096). Deliberately a person,
+ * not an alias — the pitch is that the founder replies. */
+export const FOUNDER_EMAIL = 'tom@openstory.so';
 
 export const SITE_CONFIG = {
   name: APP_NAME,
@@ -21,10 +24,17 @@ export const SITE_CONFIG = {
   url: APP_URL,
   contactEmail: CONTACT_EMAIL,
   privacyEmail: PRIVACY_EMAIL,
-  ogImage: `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/og.jpg`,
+  // The OG card is the app's own front page, captured to public/og.jpg by
+  // scripts/generate-og-image.ts. Served same-origin so it deploys atomically
+  // with the app (and each preview shows its own) instead of drifting from a
+  // hand-uploaded R2 file.
+  ogImage: `${APP_URL}/og.jpg`,
   ctaText: 'Get Started',
   ctaHref: '/sequences/new',
   githubHref: 'https://github.com/openstory-so/openstory',
+  xHref: 'https://x.com/openstory_so',
+  youtubeHref:
+    'https://www.youtube.com/playlist?list=PLCFHxgvzZ1EGTj_miPI2Rn8eUGrajumEA',
 };
 
 export const TOP_TIER_FEATURES = [
@@ -115,7 +125,7 @@ export const FAQ_ITEMS = [
   {
     question: 'How does pricing work?',
     answer:
-      'There are no subscriptions and no margin on model costs. You pay exactly what the AI providers charge\u2009\u2014\u2009nothing more. Bring your own API keys or self-host for full control.',
+      'No subscriptions. Generations are billed at the rates of the labs and platforms that run them (fal.ai, OpenRouter, and more soon). A platform fee applies only when you buy credits, not on each generation. See openstory.so/pricing for the full model price list. Bring your own API keys to skip credits entirely.',
   },
   {
     question: 'Can I use my own API keys?',
@@ -143,12 +153,12 @@ export const OPEN_FAIR_BENEFITS = [
   {
     title: 'Bring Your Own Keys',
     description:
-      'Use your own API keys or self-host entirely. Pay providers directly, no markup.',
+      'Use your own API keys or self-host entirely. Pay providers directly with no platform fees.',
   },
   {
     title: 'At Cost Pricing',
     description:
-      'No subscriptions. No margin on model costs. You pay what the AI providers charge.',
+      'No subscriptions. AI usage at provider cost. A small fee applies only when buying credits.',
   },
   {
     title: 'Export Everything',

@@ -13,17 +13,20 @@ import {
 } from '@/lib/ai/prompt-context';
 import {
   SHOT_PROMPT_TYPES,
-  type ShotPromptVariant,
-  type SequenceMusicPromptVariant,
+  type ShotPromptVersion,
+  type SequenceMusicPromptVersion,
 } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { simpleHash } from '@/lib/utils/hash';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
+import { terminateSingleArtifactRun } from '@/lib/workflow/run-outcome';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import type { ScopedDb } from '@/lib/db/scoped';
 import type {
-  MotionPromptSceneWorkflowInput,
+  MotionPromptWorkflowInput,
   MusicPromptWorkflowInput,
-  VisualPromptSceneWorkflowInput,
+  FramePromptWorkflowInput,
 } from '@/lib/workflow/types';
 import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
 import { createServerFn } from '@tanstack/react-start';
@@ -80,12 +83,18 @@ export function isPromptUpToDate(
   return storedHash !== null && storedHash === liveHash;
 }
 
-export type ShotPromptVariantWithAuthor = ShotPromptVariant & {
+// Visual prompt history now comes from `frame_prompt_versions` and motion from
+// `shot_prompt_versions` (#989). Both stores are normalized to this minimal,
+// store-agnostic row so `listShotPromptVariantsFn` returns one shape.
+export type ShotPromptVariantWithAuthor = Pick<
+  ShotPromptVersion,
+  'id' | 'source' | 'text' | 'inputHash' | 'createdAt' | 'status'
+> & {
   createdByName: string | null;
 };
 
 export type SequenceMusicPromptVariantWithAuthor =
-  SequenceMusicPromptVariant & { createdByName: string | null };
+  SequenceMusicPromptVersion & { createdByName: string | null };
 
 const shotListInput = z.object({
   sequenceId: ulidSchema,
@@ -98,10 +107,38 @@ export const listShotPromptVariantsFn = createServerFn({ method: 'GET' })
   .inputValidator(zodValidator(shotListInput))
   .handler(
     async ({ context, data }): Promise<ShotPromptVariantWithAuthor[]> => {
-      return await context.scopedDb.shotPromptVariants.listByShotWithAuthor(
-        data.shotId,
-        data.promptType
-      );
+      // Visual prompt history moved to frame_prompt_versions (#989); motion
+      // history stays on shot_prompt_versions. Use the resolved anchor frame id
+      // (never the shot id).
+      if (data.promptType === 'visual') {
+        const rows =
+          await context.scopedDb.framePromptVersions.listByFrameWithAuthor(
+            context.frame.id
+          );
+        return rows.map((r) => ({
+          id: r.id,
+          source: r.source,
+          text: r.text,
+          inputHash: r.inputHash,
+          createdAt: r.createdAt,
+          createdByName: r.createdByName,
+          status: r.status,
+        }));
+      }
+      const rows =
+        await context.scopedDb.shotPromptVersions.listByShotWithAuthor(
+          data.shotId,
+          data.promptType
+        );
+      return rows.map((r) => ({
+        id: r.id,
+        source: r.source,
+        text: r.text,
+        inputHash: r.inputHash,
+        createdAt: r.createdAt,
+        createdByName: r.createdByName,
+        status: r.status,
+      }));
     }
   );
 
@@ -117,7 +154,7 @@ export const listSequenceMusicPromptVariantsFn = createServerFn({
       context,
       data,
     }): Promise<SequenceMusicPromptVariantWithAuthor[]> => {
-      return await context.scopedDb.sequenceMusicPromptVariants.listBySequenceWithAuthor(
+      return await context.scopedDb.sequenceMusicPromptVersions.listBySequenceWithAuthor(
         data.sequenceId
       );
     }
@@ -136,20 +173,51 @@ export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(shotRestoreInput))
   .handler(async ({ context, data }) => {
-    const chosen = await context.scopedDb.shotPromptVariants.getByIdForShot(
+    // Visual prompt history lives in frame_prompt_versions (#989); motion stays
+    // on shot_prompt_versions. ULIDs are globally unique, so a frame-store hit
+    // unambiguously identifies a visual restore. Use the resolved anchor frame
+    // id (never the shot id).
+    const frameChosen =
+      await context.scopedDb.framePromptVersions.getByIdForFrame(
+        data.variantId,
+        context.frame.id
+      );
+    if (frameChosen) {
+      if (frameChosen.status !== 'completed') {
+        // In-flight/failed placeholders have no content to restore (#1085).
+        throw new Error('Cannot restore a prompt version that never completed');
+      }
+      const inserted = await context.scopedDb.framePromptVersions.write({
+        frameId: context.frame.id,
+        text: frameChosen.text,
+        components: frameChosen.components,
+        source: 'restored',
+        inputHash: frameChosen.inputHash,
+        analysisModel: frameChosen.analysisModel,
+        createdBy: context.user.id,
+      });
+      return { variantId: inserted.id };
+    }
+
+    const chosen = await context.scopedDb.shotPromptVersions.getByIdForShot(
       data.variantId,
       data.shotId
     );
     if (!chosen) {
       throw new Error('Prompt variant not found for this shot');
     }
+    if (chosen.status !== 'completed') {
+      throw new Error('Cannot restore a prompt version that never completed');
+    }
 
-    const inserted = await context.scopedDb.shotPromptVariants.write({
+    const inserted = await context.scopedDb.shotPromptVersions.write({
       shotId: data.shotId,
       promptType: chosen.promptType,
       text: chosen.text,
       components: chosen.components,
       parameters: chosen.parameters,
+      dialogue: chosen.dialogue,
+      audio: chosen.audio,
       source: 'restored',
       inputHash: chosen.inputHash,
       analysisModel: chosen.analysisModel,
@@ -170,7 +238,7 @@ export const restoreSequenceMusicPromptVariantFn = createServerFn({
   .inputValidator(zodValidator(sequenceRestoreInput))
   .handler(async ({ context, data }) => {
     const chosen =
-      await context.scopedDb.sequenceMusicPromptVariants.getByIdForSequence(
+      await context.scopedDb.sequenceMusicPromptVersions.getByIdForSequence(
         data.variantId,
         data.sequenceId
       );
@@ -178,7 +246,7 @@ export const restoreSequenceMusicPromptVariantFn = createServerFn({
       throw new Error('Music prompt variant not found for this sequence');
     }
 
-    const inserted = await context.scopedDb.sequenceMusicPromptVariants.write({
+    const inserted = await context.scopedDb.sequenceMusicPromptVersions.write({
       sequenceId: data.sequenceId,
       prompt: chosen.prompt,
       tags: chosen.tags,
@@ -188,6 +256,211 @@ export const restoreSequenceMusicPromptVariantFn = createServerFn({
       createdBy: context.user.id,
     });
     return { variantId: inserted.id };
+  });
+
+// Persist a hand-edited prompt as a `user-edit` version WITHOUT triggering a
+// render. Until now the only persistence path for an edited prompt was clicking
+// Generate/Regenerate (the render fns), so a manual edit or a "Shorten" stayed a
+// local textarea draft and was silently lost on the next shot refetch. This is
+// the standalone Save: it appends a `user-edit` version + mirrors it onto the
+// frame/shot, matching what the image/motion workflows record for an edited
+// prompt (`shouldRecordUserEdit` + upstream-hash capture) minus the render.
+const shotSaveInput = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  promptType: promptTypeSchema,
+  text: z.string().min(1),
+});
+
+export const saveShotPromptFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(shotSaveInput))
+  .handler(async ({ context, data }) => {
+    const { shot, frame, sequence, scopedDb, user, scene } = context;
+    const text = data.text.trim();
+    if (!text) {
+      throw new Error('Cannot save an empty prompt');
+    }
+
+    // No-op guard: don't append a `user-edit` identical to the live prompt —
+    // mirrors `shouldRecordUserEdit` in the render workflows so a Save with no
+    // actual change doesn't spawn a duplicate history row.
+    const currentPrompt =
+      data.promptType === 'visual' ? frame.imagePrompt : shot.motionPrompt;
+    if (currentPrompt !== null && currentPrompt === text) {
+      return { unchanged: true } as const;
+    }
+
+    // Capture the current upstream hash so staleness keeps tracking: a manual
+    // edit aligns the prompt with the live context, and it should later light
+    // up 'stale' if that context changes. Best-effort — a null hash just
+    // disables staleness for this prompt, it never blocks the save (matches the
+    // render-workflow user-edit path).
+    let inputHash: string | null = null;
+    let analysisModel: string | null = null;
+    if (scene) {
+      try {
+        const ctx = await loadShotPromptContext({
+          scopedDb,
+          sequence,
+          scene,
+          // No-op for visual; the motion hash folds in the rendered still.
+          startingFrameImageUrl: frame.imageUrl,
+        });
+        const narrowed = narrowShotPromptContext(ctx);
+        inputHash =
+          data.promptType === 'visual'
+            ? await computeVisualPromptInputHash(narrowed)
+            : await computeMotionPromptInputHash(narrowed);
+        analysisModel = ctx.analysisModel;
+      } catch (error) {
+        logger.warn(
+          `saveShotPrompt: uncomputable hash for shot ${shot.id}; recording with null hash`,
+          { err: error }
+        );
+      }
+    }
+
+    if (data.promptType === 'visual') {
+      const inserted = await scopedDb.framePromptVersions.write({
+        frameId: frame.id,
+        text,
+        source: 'user-edit',
+        inputHash,
+        analysisModel,
+        createdBy: user.id,
+      });
+      return { unchanged: false, versionId: inserted.id } as const;
+    }
+
+    // Carry the selected version's dialogue/audio direction forward onto the
+    // user-edit so audio-capable models keep their enrichment after a free-text
+    // edit (mirrors the motion-workflow user-edit path). `components` /
+    // `parameters` stay null on a hand edit.
+    const selected = await scopedDb.shotPromptVersions.getSelectedMotion(
+      shot.id
+    );
+    const inserted = await scopedDb.shotPromptVersions.write({
+      shotId: shot.id,
+      promptType: 'motion',
+      text,
+      dialogue: selected?.dialogue ?? null,
+      audio: selected?.audio ?? null,
+      source: 'user-edit',
+      inputHash,
+      analysisModel,
+      createdBy: user.id,
+    });
+    return { unchanged: false, versionId: inserted.id } as const;
+  });
+
+/**
+ * Cancel an in-flight pending artifact claim (#1085): flip the row to
+ * 'cancelled' (a completion that races in afterwards is discarded against the
+ * status guard), cascade to dependent image claims, and best-effort terminate
+ * the producing workflow when it's a single-artifact run. Idempotent — a row
+ * that already went terminal reports `cancelled: false`.
+ */
+const cancelPendingInput = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  versionId: ulidSchema,
+  artifact: z.enum(['visual-prompt', 'motion-prompt', 'image']),
+});
+
+/**
+ * Settle the frame's primary in-flight state after an image claim cancel
+ * (#1095 review): the producing run may be terminated (or abandon the claim
+ * before its own settle path runs), which would leave `image_status` stuck
+ * 'generating' with nothing in flight. Only touches the frame when THIS
+ * cancelled row is what holds it — a newer kickoff's state is left alone.
+ */
+async function settleFrameAfterImageCancel(
+  scopedDb: ScopedDb,
+  frameId: string,
+  row: { id: string; workflowRunId: string | null }
+): Promise<void> {
+  const frameNow = await scopedDb.frames.getById(frameId);
+  if (!frameNow) return;
+  const heldByThisRow =
+    frameNow.pendingPromoteVersionId === row.id ||
+    (row.workflowRunId !== null &&
+      frameNow.imageWorkflowRunId === row.workflowRunId);
+  if (!heldByThisRow) return;
+  await scopedDb.frames.clearPendingPromoteVersionIdIf(frameId, row.id);
+  if (frameNow.imageStatus === 'generating') {
+    await scopedDb.frames.setImageGenerationStatus(
+      frameId,
+      {
+        imageStatus: frameNow.selectedImageVersionId ? 'completed' : 'pending',
+        imageWorkflowRunId: null,
+        imageError: null,
+      },
+      { throwOnMissing: false }
+    );
+  }
+}
+
+export const cancelPendingArtifactFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(cancelPendingInput))
+  .handler(async ({ context, data }) => {
+    const { scopedDb, frame, shot } = context;
+
+    if (data.artifact === 'visual-prompt') {
+      const row = await scopedDb.framePromptVersions.getByIdForFrame(
+        data.versionId,
+        frame.id
+      );
+      if (!row) throw new Error('Prompt version not found for this shot');
+      const cancelled = await scopedDb.framePromptVersions.markTerminal(
+        row.id,
+        'cancelled'
+      );
+      if (!cancelled) return { cancelled: false } as const;
+      const cascaded = await scopedDb.frameVariants.cancelByDependency(
+        row.id,
+        'Upstream visual prompt was cancelled'
+      );
+      for (const dep of cascaded) {
+        // Terminate the image child (if it has a real single-artifact run id)
+        // before settling frame state — cancel should stop spend when possible.
+        // Status guards still discard any completion that races past this.
+        await terminateSingleArtifactRun(dep.workflowRunId);
+        await settleFrameAfterImageCancel(scopedDb, dep.frameId, dep);
+      }
+      await terminateSingleArtifactRun(row.workflowRunId);
+      return { cancelled: true } as const;
+    }
+
+    if (data.artifact === 'motion-prompt') {
+      const row = await scopedDb.shotPromptVersions.getByIdForShot(
+        data.versionId,
+        shot.id
+      );
+      if (!row) throw new Error('Prompt version not found for this shot');
+      const cancelled = await scopedDb.shotPromptVersions.markTerminal(
+        row.id,
+        'cancelled'
+      );
+      if (!cancelled) return { cancelled: false } as const;
+      await terminateSingleArtifactRun(row.workflowRunId);
+      return { cancelled: true } as const;
+    }
+
+    const row = await scopedDb.frameVariants.getById(data.versionId);
+    if (!row || row.frameId !== frame.id) {
+      throw new Error('Image version not found for this shot');
+    }
+    const cancelled = await scopedDb.frameVariants.markTerminal(
+      row.id,
+      'cancelled',
+      'Cancelled by user'
+    );
+    if (!cancelled) return { cancelled: false } as const;
+    await terminateSingleArtifactRun(row.workflowRunId);
+    await settleFrameAfterImageCancel(scopedDb, row.frameId, row);
+    return { cancelled: true } as const;
   });
 
 const shotRegenerateInput = z.object({
@@ -204,20 +477,21 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(shotRegenerateInput))
   .handler(async ({ context, data }) => {
-    const { shot, sequence, scopedDb, user, teamId } = context;
+    const { shot, frame, sequence, scopedDb, user, teamId, scene } = context;
 
-    if (!shot.metadata) {
+    if (!scene) {
       throw new Error('Shot has no scene metadata to regenerate from');
     }
 
     const ctx = await loadShotPromptContext({
       scopedDb,
       sequence,
-      scene: shot.metadata,
+      scene,
       // Motion prompts are conditioned on the rendered still (#929); feeding
       // its URL here keeps this regen-bail check in lockstep with the
-      // generation-time stamp and the staleness verify. No-op for visual.
-      startingFrameImageUrl: shot.thumbnailUrl,
+      // generation-time stamp and the staleness verify. No-op for visual. The
+      // still lives on the anchor frame now (#989).
+      startingFrameImageUrl: frame.imageUrl,
     });
 
     // Bail if the cached input hash already matches the live recompute —
@@ -236,25 +510,84 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
         : await computeMotionPromptInputHash(narrowed);
     const storedHash =
       data.promptType === 'visual'
-        ? shot.visualPromptInputHash
+        ? frame.visualPromptInputHash
         : shot.motionPromptInputHash;
     if (!data.force && isPromptUpToDate(storedHash, liveHash)) {
-      return { workflowRunId: null, alreadyUpToDate: true } as const;
+      return {
+        workflowRunId: null,
+        alreadyUpToDate: true,
+        alreadyInFlight: false,
+      } as const;
     }
 
-    // Stream incremental deltas only on the explicit force-regen path — the
-    // user is actively watching the shot in that case. The auto-staleness
-    // path can land later when the user isn't viewing this shot, so we skip
-    // the realtime publishes to avoid burning Redis ops for a stream nobody
-    // is consuming.
-    const baseInput:
-      | VisualPromptSceneWorkflowInput
-      | MotionPromptSceneWorkflowInput = {
+    // Server-side dedup (#1085): a live pending claim for exactly these
+    // inputs means a run is already producing this prompt — a second click,
+    // a second tab, or a teammate must no-op instead of double-spending.
+    // Applies to `force` too: force bypasses the up-to-date bail, not an
+    // in-flight run.
+    const existingClaim =
+      data.promptType === 'visual'
+        ? await scopedDb.framePromptVersions.getLivePending(frame.id, liveHash)
+        : await scopedDb.shotPromptVersions.getLivePending(shot.id, liveHash);
+    if (existingClaim) {
+      return {
+        workflowRunId: existingClaim.workflowRunId,
+        alreadyUpToDate: false,
+        alreadyInFlight: true,
+      } as const;
+    }
+
+    // Pre-create the pending version row (#1085) so in-flight work is
+    // representable: staleness reads 'updating', duplicate enqueues no-op,
+    // and the run completes this row in place. The partial unique index on
+    // live claims closes the check-then-insert race above — the loser lands
+    // here and reports in-flight instead of double-spending.
+    let claim;
+    try {
+      claim =
+        data.promptType === 'visual'
+          ? await scopedDb.framePromptVersions.createPending({
+              frameId: frame.id,
+              pendingInputHash: liveHash,
+              createdBy: user.id,
+            })
+          : await scopedDb.shotPromptVersions.createPending({
+              shotId: shot.id,
+              pendingInputHash: liveHash,
+              createdBy: user.id,
+            });
+    } catch (error) {
+      const racedClaim =
+        data.promptType === 'visual'
+          ? await scopedDb.framePromptVersions.getLivePending(
+              frame.id,
+              liveHash
+            )
+          : await scopedDb.shotPromptVersions.getLivePending(shot.id, liveHash);
+      if (!racedClaim) throw error;
+      return {
+        workflowRunId: racedClaim.workflowRunId,
+        alreadyUpToDate: false,
+        alreadyInFlight: true,
+      } as const;
+    }
+
+    // Always stream deltas for this endpoint — it's only invoked from the
+    // shot inspector (stale banner or force regenerate), so a viewer is
+    // watching. Binding emitStreaming to `force` alone left the stale-banner
+    // path silent (no shotPrompt.streaming events → textarea never updates).
+    // Fields common to both prompt workflows. The two trigger calls below build
+    // their input in a NARROWED, per-type block (not a `A | B` union) so the
+    // compiler enforces each workflow's required fields — a union literal only
+    // has to satisfy ONE member, which is exactly how the missing-`frameId` bug
+    // slipped through (FramePromptWorkflowInput needs it, MotionPromptWorkflowInput
+    // doesn't, so the union accepted the omission).
+    const commonInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
-      scene: shot.metadata,
+      scene,
       aspectRatio: sequence.aspectRatio,
       characterBible: ctx.characterBible,
       locationBible: ctx.locationBible,
@@ -262,24 +595,12 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
       styleConfig: ctx.styleConfig,
       analysisModelId:
         getAnalysisModelById(ctx.analysisModel)?.id ?? DEFAULT_ANALYSIS_MODEL,
-      emitStreaming: data.force === true,
-      // Snapshot the rendered still at trigger time (#929) — the motion
-      // workflow must NOT look it up mid-run, or a concurrent re-render could
-      // swap it. No-op for the visual path. `shot` was loaded at the top of
-      // this handler, so this is the image as it exists right now.
-      ...(data.promptType === 'motion' && {
-        startingFrameImageUrl: shot.thumbnailUrl,
-      }),
+      emitStreaming: true,
     };
 
-    const urlPath =
-      data.promptType === 'visual'
-        ? '/visual-prompt-scene'
-        : '/motion-prompt-scene';
-
-    // Force-regen needs a unique dedup ID per click so QStash doesn't collapse
-    // repeat clicks into a single run — the user is explicitly asking for
-    // another LLM completion. The auto-staleness path keeps the stable
+    // Force-regen needs a unique dedup ID per click so the workflow trigger
+    // doesn't collapse repeat clicks into a single run — the user is explicitly
+    // asking for another LLM completion. The auto-staleness path keeps the stable
     // hash-based ID so genuine retries collapse to one run.
     const deduplicationId = data.force
       ? shotPromptForceDedupId(
@@ -288,13 +609,85 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
           `${Date.now()}-${crypto.randomUUID()}`
         )
       : shotPromptDedupId(data.promptType, shot.id, liveHash);
-
-    const workflowRunId = await triggerWorkflow(urlPath, baseInput, {
+    const triggerOpts = {
       deduplicationId,
       label: buildWorkflowLabel(sequence.id),
-    });
+    };
 
-    return { workflowRunId, alreadyUpToDate: false } as const;
+    // Neighbour scenes give the motion LLM the same continuity context the
+    // analysis batch pipeline passes via MotionPromptBatchWorkflow (#929).
+    let sceneBefore: Scene | undefined;
+    let sceneAfter: Scene | undefined;
+    if (data.promptType === 'motion') {
+      const shotsInSeq = await scopedDb.shots.listBySequence(sequence.id);
+      const idx = shotsInSeq.findIndex((s) => s.id === shot.id);
+      const prevShot = idx > 0 ? shotsInSeq[idx - 1] : undefined;
+      const nextShot =
+        idx >= 0 && idx < shotsInSeq.length - 1
+          ? shotsInSeq[idx + 1]
+          : undefined;
+      sceneBefore = prevShot?.metadata ?? undefined;
+      sceneAfter = nextShot?.metadata ?? undefined;
+    }
+
+    let workflowRunId: string;
+    try {
+      workflowRunId =
+        data.promptType === 'visual'
+          ? // `frameId` is REQUIRED on FramePromptWorkflowInput — the workflow
+            // never reads the DB (#991) and persists the visual prompt only
+            // when it's present, so resolving the anchor frame here (from the
+            // access middleware's `frame`) is mandatory, not optional.
+            await triggerWorkflow<FramePromptWorkflowInput>(
+              '/frame-prompt',
+              {
+                ...commonInput,
+                frameId: frame.id,
+                targetVersionId: claim.id,
+              },
+              triggerOpts
+            )
+          : // Snapshot the rendered still at trigger time (#929) so the motion
+            // workflow never looks it up mid-run (a concurrent re-render could
+            // swap it). The still lives on the anchor frame now (#989).
+            await triggerWorkflow<MotionPromptWorkflowInput>(
+              '/motion-prompt',
+              {
+                ...commonInput,
+                startingFrameImageUrl: frame.imageUrl,
+                sceneBefore,
+                sceneAfter,
+                targetVersionId: claim.id,
+              },
+              triggerOpts
+            );
+    } catch (error) {
+      // The claim must not outlive a trigger that never happened.
+      if (data.promptType === 'visual') {
+        await scopedDb.framePromptVersions.markTerminal(claim.id, 'failed');
+      } else {
+        await scopedDb.shotPromptVersions.markTerminal(claim.id, 'failed');
+      }
+      throw error;
+    }
+
+    // Stamp the producing instance so cancel + zombie reconciliation can
+    // verify the run. 'generating' from here on — the instance starts
+    // immediately.
+    if (data.promptType === 'visual') {
+      await scopedDb.framePromptVersions.markGenerating(
+        claim.id,
+        workflowRunId
+      );
+    } else {
+      await scopedDb.shotPromptVersions.markGenerating(claim.id, workflowRunId);
+    }
+
+    return {
+      workflowRunId,
+      alreadyUpToDate: false,
+      alreadyInFlight: false,
+    } as const;
   });
 
 const sequenceRegenerateInput = z.object({ sequenceId: ulidSchema });
@@ -340,8 +733,8 @@ export const regenerateMusicPromptFn = createServerFn({ method: 'POST' })
         analysisModelId,
       },
       {
-        // Dedup by the live input hash so a QStash retry of the same upstream
-        // context collapses to one workflow run instead of N.
+        // Dedup by the live input hash so a retry of the same upstream context
+        // collapses to one workflow run instead of N.
         deduplicationId: musicPromptDedupId(sequence.id, liveHash),
         label: buildWorkflowLabel(sequence.id),
       }
@@ -373,7 +766,7 @@ export const getMusicPromptStalenessFn = createServerFn({ method: 'GET' })
       }
       const sceneSummaries = buildMusicSceneSummaries(scenes);
 
-      const latest = await scopedDb.sequenceMusicPromptVariants.getLatest(
+      const latest = await scopedDb.sequenceMusicPromptVersions.getLatest(
         sequence.id
       );
       const analysisModel =
@@ -431,12 +824,15 @@ export const getDivergentVariantPromptDiffFn = createServerFn({
     // variants which have no field-level prompt diff.
     if (!variant.promptHash) return null;
     if (variant.variantType === 'audio') return null;
+    // Image variants moved to frame_variants (#989); `shot_variants` only holds
+    // video/audio now, so the only field-level prompt diff here is motion. (An
+    // image variant id never resolves via `shotVariants.getById`.)
+    if (variant.variantType === 'image') return null;
 
-    const promptType = variant.variantType === 'image' ? 'visual' : 'motion';
     const candidates =
-      await context.scopedDb.shotPromptVariants.listCandidatesAtOrBefore(
+      await context.scopedDb.shotPromptVersions.listCandidatesAtOrBefore(
         variant.shotId,
-        promptType,
+        'motion',
         variant.createdAt
       );
 
@@ -459,13 +855,12 @@ export const getDivergentVariantPromptDiffFn = createServerFn({
         `Shot ${variant.shotId} missing for variant ${variant.id}`
       );
     }
-    const live =
-      promptType === 'visual' ? shotRow.imagePrompt : shotRow.motionPrompt;
+    const live = shotRow.motionPrompt;
     if (!live) return null;
     if (live === matched.text) return null;
 
     return {
-      label: promptType === 'visual' ? 'Visual prompt' : 'Motion prompt',
+      label: 'Motion prompt',
       before: matched.text,
       after: live,
     };

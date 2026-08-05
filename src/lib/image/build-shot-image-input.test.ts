@@ -17,26 +17,19 @@ import { buildShotImageWorkflowInput } from '@/lib/image/build-shot-image-input'
 
 const NOW = new Date('2026-06-03T00:00:00.000Z');
 
+// The still-image surface moved off `shots` onto the anchor `frame` in #989, so
+// the shot is a plain `Shot` (no image columns); the stored image prompt is
+// passed to `buildShotImageWorkflowInput` explicitly (callers pass
+// `frame.imagePrompt`).
 function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {
     id: 'shot-1',
     sequenceId: 'seq-1',
+    sceneId: null,
+    shotNumber: null,
     orderIndex: 0,
     description: '',
     durationMs: 3000,
-    thumbnailUrl: null,
-    thumbnailPath: null,
-    thumbnailStatus: 'pending',
-    thumbnailWorkflowRunId: null,
-    thumbnailGeneratedAt: null,
-    thumbnailError: null,
-    imageModel: 'nano_banana_2',
-    imagePrompt: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    variantWorkflowRunId: null,
-    variantImageGeneratedAt: null,
-    variantImageError: null,
     videoUrl: null,
     videoPath: null,
     videoStatus: 'pending',
@@ -52,13 +45,11 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     audioGeneratedAt: null,
     audioError: null,
     audioModel: null,
-    thumbnailInputHash: null,
-    variantImageInputHash: null,
     videoInputHash: null,
     audioInputHash: null,
-    visualPromptInputHash: null,
     motionPromptInputHash: null,
-    previewThumbnailUrl: null,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     metadata: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -66,27 +57,13 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   };
 }
 
-const VISUAL_COMPONENTS = {
-  sceneDescription: '',
-  subject: '',
-  environment: '',
-  lighting: '',
-  camera: '',
-  composition: '',
-  style: '',
-  technical: '',
-  atmosphere: '',
-};
-
 /**
  * A complete, fully-typed `Scene`. Built as a plain literal (the `: Scene`
  * return type makes tsgo enforce completeness at compile time) rather than via
  * `schema.parse()` — so the fixture never leans on `.catch()` defaults filling
  * missing keys, a behavior that isn't portable across zod versions.
  */
-function makeScene(
-  opts: { sceneId?: string; visualFullPrompt?: string } = {}
-): Scene {
+function makeScene(opts: { sceneId?: string } = {}): Scene {
   return {
     sceneId: opts.sceneId ?? 'scene-1',
     sceneNumber: 1,
@@ -97,13 +74,6 @@ function makeScene(
       location: '',
       timeOfDay: '',
       storyBeat: '',
-    },
-    prompts: {
-      visual: {
-        fullPrompt: opts.visualFullPrompt ?? '',
-        negativePrompt: '',
-        components: VISUAL_COMPONENTS,
-      },
     },
   };
 }
@@ -121,49 +91,47 @@ const baseOpts = {
 
 describe('buildShotImageWorkflowInput — prompt fallback chain (#547)', () => {
   it('prefers opts.prompt over every stored source', async () => {
-    const shot = makeShot({
-      imagePrompt: 'STORED',
-      description: 'DESC',
-      metadata: makeScene({ visualFullPrompt: 'AI' }),
-    });
+    const shot = makeShot({ description: 'DESC', metadata: makeScene() });
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
       shot,
+      imagePrompt: 'STORED',
       prompt: 'OVERRIDE',
     });
     expect(input?.prompt).toBe('OVERRIDE');
     expect(input?.sceneSnapshot?.visualPrompt).toBe('OVERRIDE');
   });
 
-  it('falls back to shot.imagePrompt when no override', async () => {
-    const shot = makeShot({ imagePrompt: 'STORED', description: 'DESC' });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+  it('falls back to the stored frame imagePrompt when no override', async () => {
+    const shot = makeShot({ description: 'DESC' });
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: 'STORED',
+    });
     expect(input?.prompt).toBe('STORED');
   });
 
-  it('falls back to metadata.prompts.visual.fullPrompt before description', async () => {
-    const shot = makeShot({
-      imagePrompt: null,
-      description: 'DESC',
-      metadata: makeScene({ visualFullPrompt: 'AI' }),
-    });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
-    expect(input?.prompt).toBe('AI');
-  });
-
   it('falls back to shot.description last', async () => {
-    const shot = makeShot({ imagePrompt: null, description: 'DESC' });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+    const shot = makeShot({ description: 'DESC' });
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: null,
+    });
     expect(input?.prompt).toBe('DESC');
   });
 
   it('returns null when no prompt is available anywhere (caller skips the shot)', async () => {
     const shot = makeShot({
-      imagePrompt: null,
       description: '',
       metadata: null,
     });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: null,
+    });
     expect(input).toBeNull();
   });
 });

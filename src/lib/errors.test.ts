@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
+// Static, not a dynamic import inside the test: pulling in the whole start
+// instance takes seconds under full-suite load and would blow the timeout.
+import { startInstance } from '@/start';
 import {
   ConfigurationError,
   ConnectionError,
   DatabaseError,
+  errorCode,
+  errorMessage,
   handleApiError,
+  InsufficientCreditsError,
+  isInsufficientCreditsError,
+  openStoryErrorSerializationAdapter,
   StorageError,
   ValidationError,
   OpenStoryError,
@@ -159,5 +167,112 @@ describe('handleApiError', () => {
     expect(result.message).toBe('An unknown error occurred');
     expect(result.code).toBe('UNKNOWN_ERROR');
     expect(result.details).toEqual({ originalError: 'string' });
+  });
+});
+
+describe('errorCode / isInsufficientCreditsError', () => {
+  it('reads code from a live OpenStoryError', () => {
+    const ours = new InsufficientCreditsError('Insufficient credits for image');
+    expect(errorCode(ours)).toBe('INSUFFICIENT_CREDITS');
+    expect(isInsufficientCreditsError(ours)).toBe(true);
+    expect(ours.message).toBe('Insufficient credits for image');
+  });
+
+  it('matches our error across the server-fn boundary but not a provider’s', () => {
+    // Seroval reconstitutes a thrown OpenStoryError as a plain Error with the
+    // same own props (code/statusCode/details) — not the original class.
+    // See #1087 / seroval Error own-property serialization.
+    const acrossBoundary = Object.assign(
+      new Error('Insufficient credits for image'),
+      {
+        name: 'InsufficientCreditsError',
+        code: 'INSUFFICIENT_CREDITS',
+        statusCode: 402,
+      }
+    );
+    expect(isInsufficientCreditsError(acrossBoundary)).toBe(true);
+    expect(errorCode(acrossBoundary)).toBe('INSUFFICIENT_CREDITS');
+
+    // OpenRouter's own balance — pinned in llm-client.test.ts. Routing this to
+    // our billing dialog sends the user to top up an account that is fine.
+    // Message prose alone must never open the dialog.
+    expect(
+      isInsufficientCreditsError(
+        new Error(
+          'Insufficient credits. Add more using https://openrouter.ai/settings/credits'
+        )
+      )
+    ).toBe(false);
+    expect(
+      errorCode(
+        new Error(
+          'Insufficient credits. Add more using https://openrouter.ai/settings/credits'
+        )
+      )
+    ).toBeUndefined();
+  });
+
+  it('preserves code/statusCode/details through the serialization adapter', () => {
+    // The adapter is the ONLY reason `code` reaches the client: TanStack
+    // Router's ShallowErrorPlugin matches every Error and keeps `message`
+    // alone. Without this round-trip the billing gate silently stops opening.
+    const original = new InsufficientCreditsError(
+      'Insufficient credits for image',
+      { needed: 10 }
+    );
+    const restored: unknown =
+      openStoryErrorSerializationAdapter.fromSerializable(
+        openStoryErrorSerializationAdapter.toSerializable(original)
+      );
+
+    expect(restored).toBeInstanceOf(Error);
+    // Subclass identity is intentionally lost — discriminate on the code.
+    expect(restored).not.toBeInstanceOf(InsufficientCreditsError);
+    expect(restored).toMatchObject({
+      name: 'InsufficientCreditsError',
+      message: 'Insufficient credits for image',
+      code: 'INSUFFICIENT_CREDITS',
+      statusCode: 402,
+      details: { needed: 10 },
+    });
+    expect(isInsufficientCreditsError(restored)).toBe(true);
+  });
+
+  it('survives details it cannot serialize rather than failing the error', () => {
+    // A throw inside error serialization would replace the real error with an
+    // opaque one, so the gate would never open.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const restored: unknown =
+      openStoryErrorSerializationAdapter.fromSerializable(
+        openStoryErrorSerializationAdapter.toSerializable(
+          new InsufficientCreditsError('Insufficient credits', circular)
+        )
+      );
+
+    expect(isInsufficientCreditsError(restored)).toBe(true);
+    if (!(restored instanceof OpenStoryError)) {
+      throw new Error('expected an OpenStoryError');
+    }
+    expect(restored.details).toBeUndefined();
+  });
+
+  it('stays registered in createStart', async () => {
+    // Drop the adapter from src/start.ts and everything still typechecks and
+    // every other test still passes — the only symptom would be the billing
+    // gate quietly never opening again. This is the guard for that.
+    const options = await startInstance.getOptions();
+
+    expect(options.serializationAdapters).toContain(
+      openStoryErrorSerializationAdapter
+    );
+  });
+
+  it('surfaces the plain message for display', () => {
+    const ours = new InsufficientCreditsError('Insufficient credits for image');
+    expect(errorMessage(ours)).toBe('Insufficient credits for image');
+    expect(errorMessage(new Error(ours.message))).toBe(
+      'Insufficient credits for image'
+    );
   });
 });

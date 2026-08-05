@@ -67,51 +67,8 @@ export const sceneAnalysisExample: SceneAnalysis = {
         storyBeat: 'What happens narratively',
       },
 
-      prompts: {
-        visual: {
-          fullPrompt:
-            'Complete 200-400 word self-contained visual description combining all components with director style applied. Include: shot type, all subjects with complete descriptions, complete environment, lighting details, camera specs, composition approach, style elements, technical specifications, and atmospheric details.',
-          negativePrompt:
-            'blurry, low quality, distorted, amateur, soft focus, watermark, text, signature',
-          components: {
-            sceneDescription: 'What is visible in this frame',
-            subject: 'Complete character/object descriptions',
-            environment: 'Complete setting details',
-            lighting: 'Light sources, quality, color, direction',
-            camera: 'Shot type, angle, lens, technical specs',
-            composition: 'Framing approach and spatial arrangement',
-            style: 'Director aesthetic and color grading',
-            technical: 'Camera equipment and settings',
-            atmosphere: 'Mood, textures, emotional tone',
-          },
-        },
-
-        motion: {
-          fullPrompt:
-            'Complete 100-150 word camera movement description. Include: camera equipment, movement type, start position, end position, speed, smoothness, what stays in frame, duration, and emotional purpose of movement.',
-          components: {
-            cameraMovement: 'Type of movement (static, dolly, pan, etc.)',
-            startPosition: 'Starting frame description',
-            endPosition: 'Ending frame description',
-            durationSeconds: 6,
-            speed: 'Slow/medium/fast with specifics',
-            smoothness: 'Quality of movement (glass-smooth, organic, etc.)',
-            subjectTracking: 'What remains in frame throughout',
-            equipment: 'Camera rig and mounting',
-          },
-          parameters: {
-            durationSeconds: 6,
-            fps: 24,
-            motionAmount: 'low',
-            cameraControl: {
-              pan: 0,
-              tilt: 0,
-              zoom: 0,
-              movement: 'static',
-            },
-          },
-        },
-      },
+      // `prompts` removed from the Scene shape (#713): visual prompts live in
+      // `frame_prompt_versions`, motion prompts in `shot_prompt_versions`.
 
       musicDesign: {
         presence: 'none',

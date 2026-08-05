@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { StorybookConfig } from '@storybook/react-vite';
 import type { PluginOption } from 'vite';
-import { serverStubPlugin } from './server-stub-plugin';
+import { serverStubPlugin } from './server-stub-plugin.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +30,13 @@ const config: StorybookConfig = {
       __dirname,
       '../src/lib/mocks/tanstack-start.ts'
     );
+    // The cloudflare() plugin (which provides the `cloudflare:workers` virtual
+    // module) is stripped below; alias the import to a stub so server-only
+    // modules pulled into story graphs still resolve.
+    const cloudflareWorkersMock = path.resolve(
+      __dirname,
+      '../src/lib/mocks/cloudflare-workers.ts'
+    );
     const existingAliases = Array.isArray(config.resolve.alias)
       ? config.resolve.alias
       : Object.entries(config.resolve.alias ?? {}).map(
@@ -39,6 +46,7 @@ const config: StorybookConfig = {
       ...existingAliases,
       { find: /^@tanstack\/react-start$/, replacement: mockPath },
       { find: /^@tanstack\/react-start\/server$/, replacement: mockPath },
+      { find: /^cloudflare:workers$/, replacement: cloudflareWorkersMock },
     ];
 
     // serverStubPlugin replaces server-only modules (server fns, observability,
@@ -50,19 +58,24 @@ const config: StorybookConfig = {
     config.plugins = [serverStubPlugin(), ...(config.plugins ?? [])];
 
     // Storybook merges the project's vite.config.ts, which registers
-    // tanstackStart(). Its sub-plugins (start, router code-splitter,
-    // route-tree generator) assume a TanStack Start app shape — single
-    // client entry, real route tree — and crash inside Storybook's build
-    // (MSW adds a second entry; there's no router). Storybook needs none
-    // of them, so strip the whole family.
-    const tanstackPluginPrefixes = [
+    // tanstackStart() and cloudflare(). The TanStack Start sub-plugins
+    // (start, router code-splitter, route-tree generator) assume a TanStack
+    // Start app shape — single client entry, real route tree — and crash
+    // inside Storybook's build (MSW adds a second entry; there's no router).
+    // The cloudflare() plugin spins up a Workerd runner and analyzes the
+    // worker entry's exports (getWorkerEntryExportTypes), which evaluates
+    // server.ts and throws "createStartHandler is not a function" because the
+    // TanStack Start server export is stubbed for the iframe. Storybook needs
+    // none of these, so strip the whole family.
+    const strippedPluginPrefixes = [
       'tanstack-start:',
       'tanstack-start-core:',
       'tanstack-router:',
       'tanstack:router-generator',
       'start-client-tree-plugin',
+      'vite-plugin-cloudflare',
     ];
-    const isTanstackStartPlugin = (p: PluginOption): boolean => {
+    const isStrippedPlugin = (p: PluginOption): boolean => {
       if (
         typeof p !== 'object' ||
         p === null ||
@@ -74,13 +87,13 @@ const config: StorybookConfig = {
       const name = p.name;
       return (
         typeof name === 'string' &&
-        tanstackPluginPrefixes.some((prefix) => name.startsWith(prefix))
+        strippedPluginPrefixes.some((prefix) => name.startsWith(prefix))
       );
     };
     const flattenPlugins = (plugins: PluginOption[]): PluginOption[] =>
       plugins.flatMap((p) => (Array.isArray(p) ? flattenPlugins(p) : [p]));
     config.plugins = flattenPlugins(config.plugins ?? []).filter(
-      (p) => !isTanstackStartPlugin(p)
+      (p) => !isStrippedPlugin(p)
     );
 
     return config;

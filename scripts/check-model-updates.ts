@@ -13,16 +13,30 @@
  * applying the bump is the skill's job. HTTP-only by design so it runs anywhere
  * (local, CI, or a headless cron agent) without genmedia/fal-MCP/FAL_KEY.
  *
+ * Proxy handling: the agent/CI sandboxes route outbound HTTPS through a
+ * TLS-intercepting proxy (HTTPS_PROXY). Bun's fetch cannot complete the
+ * handshake through such a proxy, which silently turned every lookup into an
+ * error on the cloud routine. So when a proxy is configured we make requests
+ * via `curl` (a system tool, not an npm dep) — it honors HTTPS_PROXY, NO_PROXY,
+ * and the system CA bundle on every runtime. Without a proxy, the built-in
+ * fetch is used directly. `curl` must be on PATH behind a proxy (it is in CI,
+ * cloud sandboxes, and standard dev machines).
+ *
  * Usage:
  *   bun scripts/check-model-updates.ts            # human-readable report
  *   bun scripts/check-model-updates.ts --json     # machine-readable JSON
  *
- * Exit code is 0 even when updates are found (it is a report, not a gate);
- * use the JSON `hasUpdates` field to branch in automation.
+ * Exit code is 0 when every lookup succeeded — whether or not updates were
+ * found (it is a report, not a gate). It is NON-ZERO when one or more lookups
+ * FAILED, so automation never mistakes a network outage for "all models
+ * current". Branch on the JSON `ok` / `hasUpdates` fields (`ok: false` means
+ * the report is incomplete — investigate connectivity, do not stop).
  */
 
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   AUDIO_MODELS,
@@ -182,13 +196,25 @@ function brandStem(id: string): string {
 // Network helpers
 // ---------------------------------------------------------------------------
 
-async function fetchJson<T>(url: string, timeoutMs = 20_000): Promise<T> {
+const USER_AGENT = 'openstory-model-update-checker';
+
+const execFileAsync = promisify(execFile);
+
+/** True when outbound HTTPS is routed through a proxy (agent/CI sandboxes). */
+const PROXIED = Boolean(
+  process.env.HTTPS_PROXY ??
+  process.env.https_proxy ??
+  process.env.HTTP_PROXY ??
+  process.env.http_proxy
+);
+
+async function fetchJsonNative<T>(url: string, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { 'user-agent': 'openstory-model-update-checker' },
+      headers: { 'user-agent': USER_AGENT },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
     const data: T = await res.json();
@@ -196,6 +222,45 @@ async function fetchJson<T>(url: string, timeoutMs = 20_000): Promise<T> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchJsonViaCurl<T>(url: string, timeoutMs: number): Promise<T> {
+  // -f → non-2xx exits non-zero (mirrors res.ok); -sS → quiet but show errors;
+  // -L → follow redirects. curl reads HTTPS_PROXY/NO_PROXY and the system CA
+  // bundle itself, which is why it traverses the proxy where Bun's fetch can't.
+  try {
+    const { stdout } = await execFileAsync(
+      'curl',
+      [
+        '-fsSL',
+        '--max-time',
+        String(Math.ceil(timeoutMs / 1000)),
+        '-H',
+        `user-agent: ${USER_AGENT}`,
+        url,
+      ],
+      { timeout: timeoutMs + 2_000, maxBuffer: 64 * 1024 * 1024 }
+    );
+    const data: T = JSON.parse(stdout);
+    return data;
+  } catch (error) {
+    const stderr =
+      error && typeof error === 'object' && 'stderr' in error
+        ? String((error as { stderr?: unknown }).stderr).trim()
+        : '';
+    throw new Error(`curl failed for ${url}${stderr ? `: ${stderr}` : ''}`);
+  }
+}
+
+/**
+ * Fetch + parse JSON. Routes through curl when an HTTPS proxy is configured
+ * (Bun's fetch cannot traverse the agent/CI proxy's TLS interception); uses the
+ * built-in fetch for direct, proxy-free environments.
+ */
+async function fetchJson<T>(url: string, timeoutMs = 20_000): Promise<T> {
+  return PROXIED
+    ? fetchJsonViaCurl<T>(url, timeoutMs)
+    : fetchJsonNative<T>(url, timeoutMs);
 }
 
 type FalCatalogResponse = {
@@ -414,10 +479,26 @@ async function main() {
   const hasUpdates =
     modelsWithUpdates.length > 0 || packagesWithUpdates.length > 0;
 
+  // A failed lookup is NOT "no update". Count failures so neither a human nor
+  // automation can read a network/proxy outage as "all models current" — the
+  // exact silent false-negative that hid behind `hasUpdates: false` when every
+  // fetch errored. `ok: false` ⇒ the report is incomplete; exit non-zero too.
+  const errorCount =
+    modelReports.filter((r) => r.error).length +
+    packageReports.filter((r) => r.error).length;
+  const ok = errorCount === 0;
+  if (!ok) process.exitCode = 1;
+
   if (jsonOutput) {
     console.log(
       JSON.stringify(
-        { hasUpdates, models: modelReports, packages: packageReports },
+        {
+          ok,
+          errorCount,
+          hasUpdates,
+          models: modelReports,
+          packages: packageReports,
+        },
         null,
         2
       )
@@ -425,13 +506,14 @@ async function main() {
     return;
   }
 
-  printReport(modelReports, packageReports, hasUpdates);
+  printReport(modelReports, packageReports, hasUpdates, errorCount);
 }
 
 function printReport(
   modelReports: ModelReport[],
   packageReports: PackageReport[],
-  hasUpdates: boolean
+  hasUpdates: boolean,
+  errorCount: number
 ) {
   const SOURCE_LABEL: Record<ModelReport['source'], string> = {
     'fal-image': 'Image (fal.ai)',
@@ -482,9 +564,18 @@ function printReport(
     }
   }
 
-  console.log(
-    `\n=== ${hasUpdates ? 'UPDATES AVAILABLE — review candidates above' : 'Everything is up to date'} ===\n`
-  );
+  if (errorCount > 0) {
+    console.log(
+      `\n=== ⚠️  ${errorCount} lookup(s) FAILED — report is INCOMPLETE ===\n` +
+        'Do NOT treat this as "all models current". A failed lookup means we could\n' +
+        'not check that model, not that it is up to date. Fix connectivity (behind\n' +
+        'a proxy this needs `curl` on PATH — see the header) and re-run.\n'
+    );
+  } else {
+    console.log(
+      `\n=== ${hasUpdates ? 'UPDATES AVAILABLE — review candidates above' : 'Everything is up to date'} ===\n`
+    );
+  }
   console.log(
     'Candidates are heuristic (same brand, higher version number). Verify each\n' +
       'is a genuine successor before bumping — see the update-model-versions skill.\n'

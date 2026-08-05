@@ -1,4 +1,5 @@
 import { PromptDiffView } from '@/components/prompts/prompt-diff-view';
+import { AppImage } from '@/components/ui/app-image';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -10,7 +11,8 @@ import {
 } from '@/components/ui/dialog';
 import { Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { Shot, ShotVariant } from '@/lib/db/schema';
+import type { ShotVariant } from '@/lib/db/schema';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { VariantType } from '@/lib/db/schema/shot-variants';
 
 type DivergencePromptDiff = {
@@ -22,7 +24,7 @@ type DivergencePromptDiff = {
 type DivergenceCompareDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  shot: Shot;
+  shot: ShotWithImage;
   variant: ShotVariant;
   onPromote: () => void;
   onDiscard: () => void;
@@ -41,7 +43,7 @@ const ARTIFACT_LABEL: Record<VariantType, string> = {
 };
 
 function liveAssetForVariant(
-  shot: Shot,
+  shot: ShotWithImage,
   variantType: VariantType
 ): { url: string | null; kind: 'image' | 'video' | 'audio' } {
   switch (variantType) {
@@ -68,13 +70,11 @@ const AssetPreview: React.FC<{
   }
   if (kind === 'image') {
     return (
-      // Compare-dialog is a transient surface; the unpic optimisation pipeline
-      // adds little here and the variant URL may already be a CDN-resized one.
-      // Plain img keeps this simple and aligns with the existing variant
-      // selector dialog.
-      <img
+      <AppImage
         src={url}
         alt={alt}
+        width={640}
+        height={360}
         className="aspect-video w-full rounded-md object-cover"
       />
     );

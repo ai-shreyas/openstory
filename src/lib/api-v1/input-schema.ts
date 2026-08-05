@@ -11,6 +11,7 @@
  */
 
 import { aspectRatioSchema } from '@/lib/constants/aspect-ratios';
+import { MUSIC_REQUIRES_MOTION_ERROR } from '@/lib/schemas/sequence.schemas';
 import { z } from 'zod';
 
 const entityName = z
@@ -183,6 +184,10 @@ export const apiCreateSequenceSchema = z
       description:
         'Reserved for phase 2: URL to receive a signed completion webhook. Stored intent only — delivery is not implemented yet.',
     }),
+  })
+  .refine((data) => !data.music || data.motion, {
+    path: ['music'],
+    message: MUSIC_REQUIRES_MOTION_ERROR,
   })
   .meta({
     id: 'CreateSequenceRequest',

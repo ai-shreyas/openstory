@@ -1,7 +1,13 @@
-/* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Storybook mock data uses intentional type assertions */
 import { ScenesView } from '@/components/scenes/scenes-view';
-import type { Shot, Sequence } from '@/types/database';
+import type { SceneRow } from '@/lib/db/schema';
+import type { Sequence, Shot, Style } from '@/types/database';
 import type { Meta, StoryObj } from '@storybook/react';
+import {
+  fixtureScenes,
+  fixtureSequence,
+  fixtureShots,
+  fixtureStyle,
+} from './scenes-view.fixture';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createMemoryHistory,
@@ -60,11 +66,22 @@ const meta = {
   },
   decorators: [
     (Story, context) => {
-      // Get shots from story parameters (not args since ScenesView doesn't accept them)
-      const shots = context.parameters.shots as Shot[];
+      // Pull mock data from story parameters (not args, since ScenesView doesn't
+      // accept them). `context.parameters` is loosely typed (any), so annotate the
+      // locals rather than assert — avoids an unsafe-from-any type assertion.
+      const shots: Shot[] = context.parameters.shots ?? [];
+      const scenes: SceneRow[] = context.parameters.scenes ?? [];
+      const style: Style | undefined = context.parameters.style;
       const sequenceId = context.args.sequenceId || 'mock-sequence';
-      const sequenceOverrides = context.parameters
-        .sequenceOverrides as Partial<Sequence>;
+      const sequenceOverrides: Partial<Sequence> =
+        context.parameters.sequenceOverrides ?? {};
+      // A story can supply a whole sequence (real fixture) or just overrides on
+      // the synthetic mock.
+      const sequence: Sequence = context.parameters.sequence ?? {
+        ...mockSequence,
+        id: sequenceId,
+        ...sequenceOverrides,
+      };
 
       // Create a query client with mock data
       const queryClient = new QueryClient({
@@ -75,13 +92,27 @@ const meta = {
         },
       });
 
-      // Pre-populate the cache with mock data using the correct query keys
+      // Pre-populate the cache with mock data using the correct query keys.
+      // Scenes group the shots (they carry no model of their own, #1066); the
+      // model the image/motion tabs show is resolved per shot from its selected
+      // image/video version.
       queryClient.setQueryData(['shots', 'list', sequenceId], shots);
-      queryClient.setQueryData(['sequences', 'detail', sequenceId], {
-        ...mockSequence,
-        id: sequenceId,
-        ...sequenceOverrides,
+      queryClient.setQueryData(['scenes', 'list', sequenceId], scenes);
+      queryClient.setQueryData(['sequences', 'detail', sequenceId], sequence);
+      // The per-shot resolved models the tab selectors read (#1066). Seeded
+      // empty: this fixture has no version rows, so every shot falls back to
+      // the sequence default — the same answer the live editor gives for a
+      // shot that has never generated. Without the key the query would never
+      // settle and the story couldn't exercise resolution at all.
+      queryClient.setQueryData(['sequence-selected-models', sequenceId], {
+        imageModelByShot: {},
+        videoModelByShot: {},
+        failedImageModelByShot: {},
+        failedVideoModelByShot: {},
       });
+      if (style) {
+        queryClient.setQueryData(['styles', 'detail', style.id], style);
+      }
 
       // Provide a minimal TanStack Router context for useNavigate()
       const rootRoute = createRootRoute({
@@ -104,9 +135,37 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+/**
+ * Real sequence (MAKEUP AD, 9:16) captured from local D1, so the editor renders
+ * exactly as it does live: a flat shot list with the image/motion tab selectors
+ * resolving each shot's per-asset look/motion models. Media URLs are swapped for public
+ * placeholders (stored R2 paths are origin-relative and don't resolve from the
+ * Storybook origin). Regenerate via scratchpad/gen-fixture.mjs.
+ */
+export const RealSequence: Story = {
+  args: {
+    sequenceId: fixtureSequence.id,
+    search: {},
+  },
+  parameters: {
+    sequence: fixtureSequence,
+    scenes: fixtureScenes,
+    shots: fixtureShots,
+    style: fixtureStyle,
+    docs: {
+      description: {
+        story:
+          'A real, fully-generated sequence pulled from the local database — the closest match to the live editor (flat shot list + per-asset model selectors in the image/motion tabs).',
+      },
+    },
+  },
+};
+
 // Mock shot base — all Shot fields included
 const mockShotBase = {
   sequenceId: 'seq-1',
+  sceneId: null,
+  shotNumber: null,
   orderIndex: 0,
   description: 'A scene from the storyboard',
   durationMs: 5000,
@@ -147,60 +206,14 @@ const mockShotBase = {
       timeOfDay: 'Dawn',
       storyBeat: 'Introduction',
     },
-    selectedVariant: {
-      cameraAngle: 'A1' as const,
-      movementStyle: 'B1' as const,
-      moodTreatment: 'C1' as const,
-      rationale: 'Sample rationale',
-    },
-    prompts: {
-      visual: {
-        fullPrompt: 'Sample visual prompt',
-        negativePrompt: '',
-        components: {
-          sceneDescription: 'Forest scene',
-          subject: 'Character',
-          environment: 'Forest',
-          lighting: 'Dawn light',
-          camera: 'Wide shot',
-          composition: 'Centered',
-          style: 'Cinematic',
-          technical: 'High detail',
-          atmosphere: 'Mysterious',
-        },
-        parameters: {
-          dimensions: { width: 1280, height: 720, aspectRatio: '16:9' },
-          quality: { steps: 30, guidance: 7.5 },
-          control: 0.8,
-        },
-      },
-      motion: {
-        fullPrompt: 'Sample motion prompt',
-        components: {
-          cameraMovement: 'Slow pan',
-          startPosition: 'Left',
-          endPosition: 'Right',
-          durationSeconds: 5,
-          speed: 'slow',
-          smoothness: 'smooth',
-          subjectTracking: 'follow',
-          equipment: 'slider',
-        },
-        parameters: {
-          durationSeconds: 5,
-          fps: 24,
-          motionAmount: 0.5,
-          cameraControl: 0.7,
-        },
-      },
-    },
     continuity: {
       characterTags: ['hero'],
       environmentTag: 'forest',
       colorPalette: 'cool',
       lightingSetup: 'natural',
+      styleTag: '',
     },
-  },
+  } satisfies Shot['metadata'],
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -229,7 +242,7 @@ export const MixedStates: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Opening Scene',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -249,7 +262,7 @@ export const MixedStates: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'The Journey',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -265,7 +278,7 @@ export const MixedStates: Story = {
           ...mockShotBase.metadata,
           sceneNumber: 3,
           metadata: { ...mockShotBase.metadata.metadata, title: 'Climax' },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -284,7 +297,7 @@ export const MixedStates: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Resolution',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -303,7 +316,7 @@ export const MixedStates: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Epilogue',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -336,7 +349,7 @@ export const AllCompleted: Story = {
           ...mockShotBase.metadata,
           sceneNumber: 1,
           metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 1' },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -353,7 +366,7 @@ export const AllCompleted: Story = {
           ...mockShotBase.metadata,
           sceneNumber: 2,
           metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 2' },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -370,7 +383,7 @@ export const AllCompleted: Story = {
           ...mockShotBase.metadata,
           sceneNumber: 3,
           metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 3' },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -405,7 +418,7 @@ export const AllPending: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Waiting for Video 1',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -424,7 +437,7 @@ export const AllPending: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Waiting for Video 2',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -443,7 +456,7 @@ export const AllPending: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Waiting for Video 3',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -479,7 +492,7 @@ export const ShotsGenerating: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Scene 1 - Ready',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -498,7 +511,7 @@ export const ShotsGenerating: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Scene 2 - Shot Ready',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -517,7 +530,7 @@ export const ShotsGenerating: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Scene 3 - Generating Shot',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -536,7 +549,7 @@ export const ShotsGenerating: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Scene 4 - Shot Pending',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -571,7 +584,7 @@ export const GenerationInProgress: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Video Generating',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -590,7 +603,7 @@ export const GenerationInProgress: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Shot Generating',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -609,7 +622,7 @@ export const GenerationInProgress: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Shot Pending',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -645,7 +658,7 @@ export const PreviewMode: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Preview - Generating Full Image',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -665,7 +678,7 @@ export const PreviewMode: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Preview - Still Processing',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -685,7 +698,7 @@ export const PreviewMode: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Final Image Ready',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -722,7 +735,7 @@ export const PreviewModePortrait: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Preview - Generating Full Image',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -742,7 +755,7 @@ export const PreviewModePortrait: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Preview - Still Processing',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -762,7 +775,7 @@ export const PreviewModePortrait: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Final Image Ready',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {
@@ -798,7 +811,7 @@ export const WithFailures: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Successful Scene',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -817,7 +830,7 @@ export const WithFailures: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Failed Generation',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
       {
         ...mockShotBase,
@@ -836,7 +849,7 @@ export const WithFailures: Story = {
             ...mockShotBase.metadata.metadata,
             title: 'Pending Scene',
           },
-        } as unknown as Shot['metadata'],
+        },
       },
     ],
     docs: {

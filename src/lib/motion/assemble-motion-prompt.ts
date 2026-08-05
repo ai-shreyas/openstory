@@ -10,19 +10,19 @@
  */
 
 import type {
+  AssemblableMotionPrompt,
   DialogueLine,
-  MotionPrompt,
+  MotionAudio,
+  MotionDialogue,
 } from '@/lib/ai/scene-analysis.schema';
 import {
   IMAGE_TO_VIDEO_MODELS,
   type ImageToVideoModel,
   videoModelSupportsAudio,
 } from '@/lib/ai/models';
-type MotionDialogue = NonNullable<MotionPrompt['dialogue']>;
-type MotionAudio = NonNullable<MotionPrompt['audio']>;
 
 type AssembleOptions = {
-  motionPrompt: MotionPrompt;
+  motionPrompt: AssemblableMotionPrompt;
   model: ImageToVideoModel;
   /**
    * Scene character tags (`continuity.characterTags`). Drives character-only

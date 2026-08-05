@@ -10,11 +10,24 @@ import type {
   NewSequenceElement,
   SequenceElement,
 } from '@/lib/db/schema';
-import { shots, sequenceElements, sequences } from '@/lib/db/schema';
+import {
+  frames,
+  scenes,
+  sceneScriptVersions,
+  shots,
+  shotPromptVersions,
+  sequenceElements,
+  sequences,
+} from '@/lib/db/schema';
 import {
   buildShotRenameDeltas,
   replaceTokenInText,
 } from '@/lib/sequence-elements/cascade-rename';
+import {
+  enrichShotWithSceneScript,
+  loadSelectedScriptsBySequenceFromDb,
+  scriptExtract,
+} from '@/lib/scenes/scene-script';
 import { matchElementsToScene } from '@/lib/workflows/scene-matching';
 import { and, eq, inArray, like, ne, or, sql } from 'drizzle-orm';
 
@@ -266,24 +279,105 @@ export function createSequenceElementsMethods(db: Database) {
                 .where(eq(sequences.id, sequenceId)),
             ];
 
-      const allShots = (await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId))) as Shot[];
-      const deltas = buildShotRenameDeltas(allShots, oldToken, newToken);
-      const shotStatements = deltas.map((delta) => {
+      const [allShotsRaw, scriptBySceneId] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+      ]);
+      const allShots = allShotsRaw.map((shot) =>
+        enrichShotWithSceneScript(shot, scriptBySceneId)
+      );
+      // The image prompt lives on each shot's anchor frame now (#989) — keyed
+      // by shotId (orderIndex 0), never by id-reuse.
+      const frameRows = await db
+        .select({ shotId: frames.shotId, imagePrompt: frames.imagePrompt })
+        .from(frames)
+        .where(
+          and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0))
+        );
+      const imagePromptByShot = new Map(
+        frameRows.map((f) => [f.shotId, f.imagePrompt])
+      );
+      const shotsWithImagePrompt = allShots.map((s) => ({
+        ...s,
+        imagePrompt: imagePromptByShot.get(s.id) ?? null,
+      }));
+      const deltas = buildShotRenameDeltas(
+        shotsWithImagePrompt,
+        oldToken,
+        newToken
+      );
+      // metadata/motionPrompt → shots; imagePrompt mirror → the anchor frame.
+      // The motion prompt is resolved from the *selected* `shot_prompt_versions`
+      // row now (#713), so a rename must rewrite that row's text too — updating
+      // only the `shot.motionPrompt` mirror would leave the render reading the
+      // un-renamed version. (Image resolution reads the `frame.imagePrompt`
+      // mirror directly, so the frame update below suffices there.)
+      const selectedMotionVersionByShot = new Map(
+        allShots.map((s) => [s.id, s.selectedMotionPromptVersionId])
+      );
+      const selectedScriptRows = await db
+        .select({ version: sceneScriptVersions })
+        .from(scenes)
+        .innerJoin(
+          sceneScriptVersions,
+          eq(scenes.selectedScriptVersionId, sceneScriptVersions.id)
+        )
+        .where(eq(scenes.sequenceId, sequenceId));
+      const sceneScriptStatements = selectedScriptRows.flatMap(
+        ({ version }) => {
+          const extract = version.content.extract;
+          if (!extract) return [];
+          const rewritten = replaceTokenInText(extract, oldToken, newToken);
+          if (rewritten === extract) return [];
+          return [
+            db
+              .update(sceneScriptVersions)
+              .set({
+                content: { ...version.content, extract: rewritten },
+              })
+              .where(eq(sceneScriptVersions.id, version.id)),
+          ];
+        }
+      );
+
+      const shotStatements = deltas.flatMap((delta) => {
         const set: Record<string, unknown> = { updatedAt: now };
         if (delta.metadata !== undefined) set.metadata = delta.metadata;
-        if (delta.imagePrompt !== undefined)
-          set.imagePrompt = delta.imagePrompt;
         if (delta.motionPrompt !== undefined)
           set.motionPrompt = delta.motionPrompt;
-        return db.update(shots).set(set).where(eq(shots.id, delta.shotId));
+        const selectedMotionVersionId = selectedMotionVersionByShot.get(
+          delta.shotId
+        );
+        return [
+          ...(Object.keys(set).length > 1
+            ? [db.update(shots).set(set).where(eq(shots.id, delta.shotId))]
+            : []),
+          ...(delta.motionPrompt !== undefined && selectedMotionVersionId
+            ? [
+                db
+                  .update(shotPromptVersions)
+                  .set({ text: delta.motionPrompt })
+                  .where(eq(shotPromptVersions.id, selectedMotionVersionId)),
+              ]
+            : []),
+          ...(delta.imagePrompt !== undefined
+            ? [
+                db
+                  .update(frames)
+                  .set({ imagePrompt: delta.imagePrompt, updatedAt: now })
+                  .where(eq(frames.id, delta.shotId)),
+              ]
+            : []),
+        ];
       });
 
       const [elementRows] = await db.batch([
         elementUpdate,
         ...scriptStatements,
+        ...sceneScriptStatements,
         ...shotStatements,
       ]);
       const element = elementRows[0];
@@ -316,15 +410,19 @@ export function createSequenceElementsMethods(db: Database) {
         return [];
       }
 
-      const allShots = await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId));
+      const [allShotsRaw, scriptBySceneId] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+      ]);
 
-      return (allShots as Shot[])
+      return allShotsRaw
+        .map((shot) => enrichShotWithSceneScript(shot, scriptBySceneId))
         .filter((shot) => {
           const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-          const sceneScript = shot.metadata?.originalScript?.extract ?? '';
+          const sceneScript = scriptExtract(shot.metadata?.originalScript);
           return (
             matchElementsToScene([element], elementTags, sceneScript).length > 0
           );
@@ -354,14 +452,18 @@ export function createSequenceElementsMethods(db: Database) {
       }
       if (allElements.length === 0) return counts;
 
-      const allShots = await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId));
+      const [allShotsRaw, scriptBySceneId] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+      ]);
 
-      for (const shot of allShots as Shot[]) {
+      for (const rawShot of allShotsRaw) {
+        const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
         const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-        const sceneScript = shot.metadata?.originalScript.extract ?? '';
+        const sceneScript = scriptExtract(shot.metadata?.originalScript);
         const matched = matchElementsToScene(
           allElements,
           elementTags,

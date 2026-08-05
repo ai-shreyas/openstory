@@ -15,6 +15,8 @@ export default {
     // path), so knip can't trace them from an import.
     'src/lib/mocks/server-stub.ts',
     'src/lib/mocks/tanstack-start.ts',
+    // Aliased for `cloudflare:workers` in .storybook/main.ts (string path).
+    'src/lib/mocks/cloudflare-workers.ts',
   ],
   project: ['src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
   ignore: [

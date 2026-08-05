@@ -2,27 +2,22 @@
 name: block-migration-bash
 enabled: true
 event: bash
-action: block
-pattern: (rm|mv|cp|sed\s+-i|echo\s*>|tee|truncate).*drizzle/migrations|drizzle/migrations.*(>|>>)
+action: warn
+pattern: (rm|mv|cp|sed\s+-i|echo\s*>|tee|truncate).*drizzle/migrations/(meta/|[^/]+/snapshot\.json)|(rm|mv)\s+(-[^\s]*\s+)*drizzle/migrations/[0-9]|drizzle/migrations/(meta/|[^/]+/snapshot\.json).*(>|>>)
 ---
 
-🚫 **Direct migration directory modification blocked!**
+🚫 **Drizzle migration metadata modification blocked!**
 
-You attempted to modify files in the drizzle/migrations directory via bash command.
+You attempted to modify **journal / snapshot** files or remove a migration directory via bash.
 
-The drizzle/migrations directory should **never be modified directly**.
+**Note:** Reading migration files (`cat`, `head`, `less`) is allowed.
 
-**Note:** Reading migration files (cat, head, tail, less) is allowed for investigation.
+**Allowed via editor tools:** `drizzle/migrations/<dir>/migration.sql` — add D1-safe backfill DML after `db:generate`; run `bun scripts/check-migrations.ts` before commit.
 
-**Per project rules:**
+**Blocked via bash:** `drizzle/migrations/meta/`, any `snapshot.json`, deleting whole migration directories.
 
-- Migrations are auto-generated from schema changes
-- Use `bun db:generate:local` after modifying `src/lib/db/schema/`
-- Never manually write, delete, or modify migration files or journal
+**To fix a bad migration generation, ask the user first, then:**
 
-**If you need to fix a migration, ask the user for permission first, then:**
-
-1. Delete the problematic migration file
+1. Delete the problematic migration directory
 2. Remove its entry from `drizzle/migrations/meta/_journal.json`
-3. Delete the corresponding snapshot in `drizzle/migrations/meta/`
-4. Regenerate with `bun db:generate:local`
+3. Regenerate with `bun db:generate:local`

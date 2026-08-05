@@ -1,4 +1,5 @@
 import { getChannelHistoryFn } from '@/functions/realtime-history';
+import { useUser } from '@/hooks/use-user';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useReducer } from 'react';
 import { useRealtime } from './client';
@@ -263,6 +264,7 @@ export function useGenerationStream(
     createInitialState
   );
   const replayHistory = options?.replayHistory ?? true;
+  const { data: user } = useUser();
 
   // Handle incoming events
   const handleEvent = useCallback(
@@ -287,7 +289,7 @@ export function useGenerationStream(
   // Skipped when replayHistory is false (e.g., sequence already complete) to
   // avoid briefly flashing progress UI from old events on tab re-mount.
   useEffect(() => {
-    if (!replayHistory) return;
+    if (!replayHistory || !user) return;
     getChannelHistoryFn({ data: { channel: sequenceId } })
       .then((events: { event: string; data: string }[]) => {
         for (const evt of events) {
@@ -307,7 +309,7 @@ export function useGenerationStream(
           err: error,
         });
       });
-  }, [sequenceId, replayHistory]);
+  }, [sequenceId, replayHistory, user]);
 
   // Subscribe to realtime events for live updates.
   const { status } = useRealtime({

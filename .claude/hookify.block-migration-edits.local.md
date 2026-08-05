@@ -2,35 +2,31 @@
 name: block-migration-edits
 enabled: true
 event: file
-action: block
+action: warn
 conditions:
   - field: file_path
     operator: regex_match
-    pattern: drizzle/migrations/
+    pattern: drizzle/migrations/(meta/|.*/snapshot\.json$)
   - field: new_text
     operator: regex_match
     pattern: .+
 ---
 
-🚫 **Direct migration directory edit blocked!**
+🚫 **Drizzle migration metadata edit blocked!**
 
-Files in drizzle/migrations should **never be edited directly**.
+Journal entries and `snapshot.json` files are **drizzle-kit outputs** — do not hand-edit them.
 
-**Per project rules:**
+**Allowed:** editing `drizzle/migrations/<dir>/migration.sql` after `db:generate` (e.g. D1-safe backfill DML). Unsafe SQL is blocked separately by `hookify.block-d1-unsafe-migration-sql`.
 
-- Migrations are auto-generated from schema changes
-- Use `bun db:generate:local` after modifying `src/lib/db/schema/`
-- Never manually write migration SQL files
+**Workflow:**
 
-**If you need to fix a migration:**
+1. Change `src/lib/db/schema/`
+2. `bun db:generate:local`
+3. Hand-edit **`migration.sql` only** if backfill DML is needed — use set-based `UPDATE … FROM` / windowed `JOIN` (#1019), no table rebuild (#612)
+4. `bun scripts/check-migrations.ts drizzle/migrations/<dir>/migration.sql` (must exit 0; lefthook runs this at pre-commit)
 
-1. Delete the problematic migration file
+**To fix a bad migration generation (journal/snapshot), ask the user first, then:**
+
+1. Delete the problematic migration directory
 2. Remove its entry from `drizzle/migrations/meta/_journal.json`
-3. Delete the corresponding snapshot in `drizzle/migrations/meta/`
-4. Regenerate with `bun db:generate:local`
-
-**If you need to undo a migration from the database:**
-
-```sql
-DELETE FROM __drizzle_migrations WHERE created_at >= <timestamp>;
-```
+3. Regenerate with `bun db:generate:local`

@@ -57,31 +57,14 @@ const baseVariant = (overrides: Partial<ShotVariant> = {}): ShotVariant => ({
 });
 
 describe('buildPromoteUpdate', () => {
-  it('image variant: copies thumbnail fields, clears downstream video, sets imageModel', () => {
+  it('image variant: throws — image promotion is retired (#989), selection is a frameVariants.select repoint', () => {
     const variant = baseVariant({ variantType: 'image' });
-    const { update, progressEvent, progressUrlField } =
-      buildPromoteUpdate(variant);
-
-    expect(update.thumbnailUrl).toBe(variant.url);
-    expect(update.thumbnailPath).toBe(variant.storagePath);
-    expect(update.thumbnailStatus).toBe('completed');
-    expect(update.thumbnailError).toBeNull();
-    expect(update.thumbnailInputHash).toBe(variant.inputHash);
-    expect(update.imageModel).toBe(variant.model);
-    // Critical: image promote must clear the downstream video so it doesn't
-    // sit there mismatched against the new image.
-    expect(update.videoUrl).toBeNull();
-    expect(update.videoPath).toBeNull();
-    expect(update.videoStatus).toBe('pending');
-    expect(update.videoWorkflowRunId).toBeNull();
-    expect(update.videoGeneratedAt).toBeNull();
-    expect(update.videoError).toBeNull();
-
-    expect(progressEvent).toBe('image:progress');
-    expect(progressUrlField).toBe('thumbnailUrl');
+    // Image variants moved to `frame_variants`; the still is chosen by a
+    // pointer repoint (`frameVariants.select`), never copied onto `shots`.
+    expect(() => buildPromoteUpdate(variant)).toThrow(/not promoted/);
   });
 
-  it('video variant: copies video fields only, leaves image intact', () => {
+  it('video variant: copies video fields only', () => {
     const variant = baseVariant({ variantType: 'video' });
     const { update, progressEvent, progressUrlField } =
       buildPromoteUpdate(variant);
@@ -92,8 +75,6 @@ describe('buildPromoteUpdate', () => {
     expect(update.videoError).toBeNull();
     expect(update.videoInputHash).toBe(variant.inputHash);
 
-    expect(update.thumbnailUrl).toBeUndefined();
-    expect(update.imageModel).toBeUndefined();
     expect(update.audioUrl).toBeUndefined();
 
     expect(progressEvent).toBe('video:progress');
@@ -111,7 +92,6 @@ describe('buildPromoteUpdate', () => {
     expect(update.audioError).toBeNull();
     expect(update.audioInputHash).toBe(variant.inputHash);
 
-    expect(update.thumbnailUrl).toBeUndefined();
     expect(update.videoUrl).toBeUndefined();
 
     expect(progressEvent).toBe('audio:progress');
@@ -164,7 +144,12 @@ async function seed() {
     ]);
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0, thumbnailUrl: 'https://live/old.png' })
+    .values({
+      sequenceId,
+      orderIndex: 0,
+      videoUrl: 'https://live/old.mp4',
+      videoStatus: 'completed',
+    })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
@@ -185,17 +170,20 @@ beforeEach(async () => {
 });
 
 describe('shotVariants.promoteAtomically', () => {
+  // Image variants no longer live on `shot_variants` (#989), so the
+  // promote-atomically path now only serves video/audio. Exercise it with a
+  // divergent VIDEO alternate.
   async function insertDivergent(opts: {
     inputHash: string;
     url: string;
-    variantType?: 'image' | 'video' | 'audio';
+    variantType?: 'video' | 'audio';
   }) {
     const [variant] = await db
       .insert(shotVariants)
       .values({
         shotId,
         sequenceId,
-        variantType: opts.variantType ?? 'image',
+        variantType: opts.variantType ?? 'video',
         model: 'm1',
         url: opts.url,
         status: 'completed',
@@ -208,36 +196,36 @@ describe('shotVariants.promoteAtomically', () => {
     return variant;
   }
 
-  it('promotes image: updates shot thumbnail and discards variant in one batch', async () => {
+  it('promotes video: updates shot video and discards variant in one batch', async () => {
     const variant = await insertDivergent({
       inputHash: 'h1',
-      url: 'https://alt/v1.png',
+      url: 'https://alt/v1.mp4',
     });
     const methods = createShotVariantsMethods(db);
 
     const { update } = buildPromoteUpdate(variant);
     const result = await methods.promoteAtomically(shotId, update, variant.id);
 
-    expect(result.shot.thumbnailUrl).toBe('https://alt/v1.png');
-    expect(result.shot.videoStatus).toBe('pending');
+    expect(result.shot.videoUrl).toBe('https://alt/v1.mp4');
+    expect(result.shot.videoStatus).toBe('completed');
     expect(result.discardedAt).toBeInstanceOf(Date);
 
     const after = await methods.getById(variant.id);
     expect(after?.discardedAt).toBeInstanceOf(Date);
     // Variant falls out of the divergent listing once discardedAt is set.
-    const stillDivergent = await methods.listDivergentByShot(shotId, 'image');
+    const stillDivergent = await methods.listDivergentByShot(shotId, 'video');
     expect(stillDivergent.map((r) => r.id)).not.toContain(variant.id);
   });
 
   it('throws when shot does not exist; variant is not soft-deleted', async () => {
     const variant = await insertDivergent({
       inputHash: 'h2',
-      url: 'https://alt/v2.png',
+      url: 'https://alt/v2.mp4',
     });
     const methods = createShotVariantsMethods(db);
 
     expect(
-      methods.promoteAtomically(generateId(), { thumbnailUrl: 'x' }, variant.id)
+      methods.promoteAtomically(generateId(), { videoUrl: 'x' }, variant.id)
     ).rejects.toThrow('not found');
 
     // Both writes go through db.batch, so a missing shot must roll back the
@@ -252,7 +240,7 @@ describe('shotVariants.promoteAtomically', () => {
     expect(
       methods.promoteAtomically(
         shotId,
-        { thumbnailUrl: 'should-not-stick' },
+        { videoUrl: 'should-not-stick' },
         generateId()
       )
     ).rejects.toThrow('not found');
@@ -262,6 +250,6 @@ describe('shotVariants.promoteAtomically', () => {
       .from(shots)
       .where(eq(shots.id, shotId));
     if (!shotAfter) throw new Error('test setup: shot lookup returned nothing');
-    expect(shotAfter.thumbnailUrl).toBe('https://live/old.png');
+    expect(shotAfter.videoUrl).toBe('https://live/old.mp4');
   });
 });

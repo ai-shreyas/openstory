@@ -1,10 +1,52 @@
 import type { Shot } from '@/types/database';
+import type { Frame } from '@/lib/db/schema';
+import {
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
 import type { Meta, StoryObj } from '@storybook/react';
 import { SceneListItem } from './scene-list-item';
 
-const mockShot: Shot = {
+// The still IMAGE surface moved off `shots` onto the anchor frame in #989. The
+// mock carries the legacy `thumbnail*`/`image*` names the card still reads (the
+// `ShotWithImage` projection); mirror them back onto a concrete anchor `Frame`
+// (id == shot.id) so the row matches what `getShotsFn` returns.
+const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
+  const frame: Frame = {
+    id: shot.id,
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: shot.thumbnailUrl,
+    previewImageUrl: shot.previewThumbnailUrl,
+    imagePath: shot.thumbnailPath,
+    imageStatus: shot.thumbnailStatus,
+    imageWorkflowRunId: shot.thumbnailWorkflowRunId,
+    imageGeneratedAt: shot.thumbnailGeneratedAt,
+    imageError: shot.thumbnailError,
+    imageModel: shot.imageModel,
+    imagePrompt: shot.imagePrompt,
+    selectedImageVersionId: null,
+    selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
+    imageInputHash: shot.thumbnailInputHash,
+    visualPromptInputHash: shot.visualPromptInputHash,
+    createdAt: shot.createdAt,
+    updatedAt: shot.updatedAt,
+  };
+  return projectShotWithImage(shot, frame, {
+    url: shot.variantImageUrl,
+    status: shot.variantImageStatus,
+  });
+};
+
+const mockShot: ShotWithImage = toShotWithImage({
   id: 'shot-1',
   sequenceId: 'seq-1',
+  sceneId: null,
+  shotNumber: null,
   orderIndex: 0,
   description: 'A bustling coffee shop interior during morning rush hour',
   durationMs: 3000,
@@ -12,9 +54,6 @@ const mockShot: Shot = {
   thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
   variantImageUrl: null,
   variantImageStatus: 'pending',
-  variantWorkflowRunId: null,
-  variantImageGeneratedAt: null,
-  variantImageError: null,
   videoUrl: null,
   videoPath: null,
   thumbnailStatus: 'completed',
@@ -29,6 +68,9 @@ const mockShot: Shot = {
   videoError: null,
   motionPrompt: '',
   motionModel: 'veo3',
+  motionPromptData: null,
+  selectedMotionPromptVersionId: null,
+  renderSegmentId: null,
   audioUrl: null,
   audioPath: null,
   audioStatus: 'pending',
@@ -37,7 +79,6 @@ const mockShot: Shot = {
   audioError: null,
   audioModel: null,
   thumbnailInputHash: null,
-  variantImageInputHash: null,
   videoInputHash: null,
   audioInputHash: null,
   visualPromptInputHash: null,
@@ -64,48 +105,6 @@ const mockShot: Shot = {
       timeOfDay: 'Morning',
       storyBeat: 'Establish protagonist stress and setting',
     },
-    prompts: {
-      visual: {
-        fullPrompt:
-          'Busy coffee shop interior, morning light streaming through windows',
-        negativePrompt: 'blurry, low quality',
-        components: {
-          sceneDescription: 'Coffee shop',
-          subject: 'Woman at laptop',
-          environment: 'Interior cafe',
-          lighting: 'Natural morning light',
-          camera: 'Medium shot',
-          composition: 'Rule of thirds',
-          style: 'Cinematic',
-          technical: '4K, sharp focus',
-          atmosphere: 'Bustling yet intimate',
-        },
-      },
-      motion: {
-        fullPrompt: 'Slow push in, subtle camera movement',
-        components: {
-          cameraMovement: 'Push in',
-          startPosition: 'Wide',
-          endPosition: 'Medium',
-          durationSeconds: 3,
-          speed: 'Slow',
-          smoothness: 'Very smooth',
-          subjectTracking: 'Locked',
-          equipment: 'Dolly',
-        },
-        parameters: {
-          durationSeconds: 3,
-          fps: 24,
-          motionAmount: 'medium' as const,
-          cameraControl: {
-            pan: 0,
-            tilt: 0,
-            zoom: 0.2,
-            movement: 'forward',
-          },
-        },
-      },
-    },
     musicDesign: {
       presence: 'none',
       style: '',
@@ -123,7 +122,7 @@ const mockShot: Shot = {
   },
   createdAt: new Date(),
   updatedAt: new Date(),
-};
+});
 
 const meta: Meta<typeof SceneListItem> = {
   title: 'Scenes/SceneListItem',
@@ -150,7 +149,6 @@ export const Inactive: Story = {
   args: {
     shot: mockShot,
     isActive: false,
-    isCompleted: false,
   },
 };
 
@@ -158,7 +156,6 @@ export const Active: Story = {
   args: {
     shot: mockShot,
     isActive: true,
-    isCompleted: false,
   },
 };
 
@@ -166,7 +163,6 @@ export const Completed: Story = {
   args: {
     shot: mockShot,
     isActive: false,
-    isCompleted: true,
   },
 };
 
@@ -174,7 +170,6 @@ export const ActiveAndCompleted: Story = {
   args: {
     shot: mockShot,
     isActive: true,
-    isCompleted: true,
   },
 };
 
@@ -186,7 +181,6 @@ export const Generating: Story = {
       thumbnailStatus: 'generating',
     },
     isActive: false,
-    isCompleted: false,
   },
 };
 
@@ -198,7 +192,6 @@ export const GeneratingActive: Story = {
       thumbnailStatus: 'generating',
     },
     isActive: true,
-    isCompleted: false,
   },
 };
 
@@ -211,7 +204,6 @@ export const Failed: Story = {
       thumbnailError: 'Generation timeout',
     },
     isActive: false,
-    isCompleted: false,
   },
 };
 
@@ -234,47 +226,6 @@ export const LongTitle: Story = {
           timeOfDay: mockShot.metadata?.metadata?.timeOfDay ?? '',
           storyBeat: mockShot.metadata?.metadata?.storyBeat ?? '',
         },
-        prompts: mockShot.metadata?.prompts ?? {
-          visual: {
-            fullPrompt: '',
-            negativePrompt: '',
-            components: {
-              sceneDescription: '',
-              subject: '',
-              environment: '',
-              lighting: '',
-              camera: '',
-              composition: '',
-              style: '',
-              technical: '',
-              atmosphere: '',
-            },
-          },
-          motion: {
-            fullPrompt: '',
-            components: {
-              cameraMovement: '',
-              startPosition: '',
-              endPosition: '',
-              durationSeconds: 3,
-              speed: '',
-              smoothness: '',
-              subjectTracking: '',
-              equipment: '',
-            },
-            parameters: {
-              durationSeconds: 3,
-              fps: 24,
-              motionAmount: 'medium' as const,
-              cameraControl: {
-                pan: 0,
-                tilt: 0,
-                zoom: 0,
-                movement: '',
-              },
-            },
-          },
-        },
         audioDesign: mockShot.metadata?.audioDesign ?? {
           music: { presence: 'none', style: '', mood: '', rationale: '' },
           soundEffects: [],
@@ -292,7 +243,6 @@ export const LongTitle: Story = {
       } satisfies Shot['metadata'],
     },
     isActive: false,
-    isCompleted: false,
   },
 };
 
@@ -318,47 +268,6 @@ export const LongScript: Story = {
           timeOfDay: '',
           storyBeat: '',
         },
-        prompts: mockShot.metadata?.prompts ?? {
-          visual: {
-            fullPrompt: '',
-            negativePrompt: '',
-            components: {
-              sceneDescription: '',
-              subject: '',
-              environment: '',
-              lighting: '',
-              camera: '',
-              composition: '',
-              style: '',
-              technical: '',
-              atmosphere: '',
-            },
-          },
-          motion: {
-            fullPrompt: '',
-            components: {
-              cameraMovement: '',
-              startPosition: '',
-              endPosition: '',
-              durationSeconds: 3,
-              speed: '',
-              smoothness: '',
-              subjectTracking: '',
-              equipment: '',
-            },
-            parameters: {
-              durationSeconds: 3,
-              fps: 24,
-              motionAmount: 'medium' as const,
-              cameraControl: {
-                pan: 0,
-                tilt: 0,
-                zoom: 0,
-                movement: '',
-              },
-            },
-          },
-        },
         audioDesign: mockShot.metadata?.audioDesign ?? {
           music: { presence: 'none', style: '', mood: '', rationale: '' },
           soundEffects: [],
@@ -376,6 +285,5 @@ export const LongScript: Story = {
       } satisfies Shot['metadata'],
     },
     isActive: false,
-    isCompleted: false,
   },
 };

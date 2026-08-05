@@ -8,7 +8,15 @@ import type { MusicSceneSummary } from '@/lib/workflow/types';
  * input_hash matching after upstream metadata went missing.
  */
 export function buildMusicSceneSummaries(
-  scenes: readonly Scene[]
+  scenes: readonly Scene[],
+  /**
+   * Visual prompt text per scene (the shot's `frame.imagePrompt` mirror),
+   * keyed by `sceneId`. The structured visual prompt moved off `scene.prompts`
+   * to `frame_prompt_versions` (#713), so the caller (which has DB access)
+   * supplies it here for the music prompt's visual grounding. Empty when a
+   * scene has no generated visual prompt yet.
+   */
+  visualSummaryBySceneId: Record<string, string> = {}
 ): MusicSceneSummary[] {
   return scenes.map((scene) => {
     if (!scene.metadata) {
@@ -23,7 +31,7 @@ export function buildMusicSceneSummaries(
       durationSeconds: scene.metadata.durationSeconds,
       location: scene.metadata.location,
       timeOfDay: scene.metadata.timeOfDay,
-      visualSummary: scene.prompts?.visual?.components.atmosphere ?? '',
+      visualSummary: visualSummaryBySceneId[scene.sceneId] ?? '',
     };
   });
 }

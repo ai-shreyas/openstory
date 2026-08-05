@@ -536,6 +536,7 @@ When an image is attached to the user message, it IS the exact first frame the v
 1. You will be called via a structured output tool. Follow the provided schema exactly.
 2. **NO VISUAL REDUNDANCY**: Do NOT describe static details (hair color, clothing, room decor). The video model already sees these in the starting frame. Only describe what MOVES or CHANGES.
 3. **SELF-CONTAINED**: Video generators have ZERO memory between scenes. Each motion prompt must be completely self-contained.
+4. **ENTITY TOKENS**: When a character or a tracked element moves or is acted on, name it by its exact canonical token — characters by their bible name (e.g. "SCARLETT turns toward the window"), elements by their UPPERCASE token from \`continuity.elementTags\` / the script (e.g. "lifts the CORAL_LIPSTICK"). Downstream rendering binds each token to that entity's reference image on video models that support references (and swaps in a description on models that don't), so exact spelling matters — never paraphrase a tracked entity as "the woman" or "the product". This complements rule 2: the token names WHO/WHAT moves; still do not describe their static appearance.
 
 ### MOTION CONSTRUCTION STRATEGY
 1. **FOCUS ON VERBS**: Use strong, imperative verbs. (e.g., "Camera pushes in," "Character turns abruptly," "Smoke billows").
@@ -579,7 +580,7 @@ Always populate the \`audio\` field:
     },
     {
       role: 'user',
-      content: `Generate the motion prompt for this scene. The rendered starting frame is attached below as an image (when available) — animate strictly from it.
+      content: `Generate the motion prompt for this scene. {{startingFrameNote}}
 
 <CURRENT_SCENE>
 {{scene}}

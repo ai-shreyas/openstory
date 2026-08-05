@@ -378,6 +378,77 @@ export function buildOpenApiDocument(): JsonObject {
           },
         },
       },
+      [`${API_V1_BASE}/sequences/{id}/exports`]: {
+        get: {
+          tags: ['sequences'],
+          summary: 'List server-side exports',
+          description:
+            "Lists this sequence's server-side MP4 exports in any status (processing/ready/failed), newest first. Poll until an entry is `ready`, then download its `url`.",
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              description: 'The sequence id (ULID).',
+              schema: { type: 'string' },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'The list of exports.',
+              content: {
+                'application/json': {
+                  schema: {
+                    $ref: '#/components/schemas/SequenceExportsResult',
+                  },
+                },
+              },
+            },
+            '401': errorResponse('Missing or invalid API key.'),
+            '404': errorResponse('No such sequence for this key.'),
+          },
+        },
+        post: {
+          tags: ['sequences'],
+          summary: 'Start a server-side MP4 export',
+          description:
+            "Stitches the sequence's scene videos and mixes music + dialogue into one MP4, rendered in a Cloudflare Container (mediabunny) and stored in R2. Async: responds 202 with a `processing` export — poll the GET endpoint until it is `ready`. An already in-flight export is reused rather than duplicated. Takes no body.",
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              description: 'The sequence id (ULID).',
+              schema: { type: 'string' },
+            },
+          ],
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  description: 'No parameters; send `{}` or an empty body.',
+                },
+              },
+            },
+          },
+          responses: {
+            '202': {
+              description: 'Export accepted (newly started or coalesced).',
+              content: {
+                'application/json': {
+                  schema: {
+                    $ref: '#/components/schemas/SequenceExportAccepted',
+                  },
+                },
+              },
+            },
+            '401': errorResponse('Missing or invalid API key.'),
+            '404': errorResponse('No such sequence for this key.'),
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -591,6 +662,57 @@ export function buildOpenApiDocument(): JsonObject {
               items: { $ref: '#/components/schemas/WaitedSequence' },
             },
             enhancedScript: { type: 'string' },
+            _links: { $ref: '#/components/schemas/HalLinks' },
+          },
+        },
+        SequenceExport: {
+          type: 'object',
+          description: 'One server-side MP4 export of a sequence.',
+          required: [
+            'id',
+            'status',
+            'url',
+            'durationSeconds',
+            'error',
+            'createdAt',
+          ],
+          properties: {
+            id: { type: 'string' },
+            status: statusEnum(['processing', 'ready', 'failed']),
+            url: {
+              oneOf: [{ type: 'string' }, { type: 'null' }],
+              description:
+                'Absolute download URL, present only when `status` is `ready`.',
+            },
+            durationSeconds: {
+              oneOf: [{ type: 'number' }, { type: 'null' }],
+            },
+            error: {
+              oneOf: [{ type: 'string' }, { type: 'null' }],
+              description:
+                'Failure reason, present only when `status` is `failed`.',
+            },
+            createdAt: { type: 'string', format: 'date-time' },
+            workflowRunId: { type: 'string' },
+          },
+        },
+        SequenceExportsResult: {
+          type: 'object',
+          required: ['sequenceId', 'exports', '_links'],
+          properties: {
+            sequenceId: { type: 'string' },
+            exports: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/SequenceExport' },
+            },
+            _links: { $ref: '#/components/schemas/HalLinks' },
+          },
+        },
+        SequenceExportAccepted: {
+          type: 'object',
+          required: ['export', '_links'],
+          properties: {
+            export: { $ref: '#/components/schemas/SequenceExport' },
             _links: { $ref: '#/components/schemas/HalLinks' },
           },
         },

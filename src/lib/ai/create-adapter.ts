@@ -8,11 +8,8 @@
 import { getEnv } from '#env';
 import type { TextModel } from '@/lib/ai/models';
 import { HTTPClient } from '@openrouter/sdk/lib/http';
-import {
-  getOpenRouterApiKeyFromEnv,
-  OpenRouterTextAdapter,
-  openRouterText,
-} from '@tanstack/ai-openrouter';
+import { createModel, extendAdapter } from '@tanstack/ai';
+import { createOpenRouterText, openRouterText } from '@tanstack/ai-openrouter';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -66,47 +63,31 @@ export function getPlatformLlmKey():
 
 let loggedRetryMode = false;
 
-type AdapterModel = Parameters<typeof openRouterText>[0];
-type BaseAdapter = OpenRouterTextAdapter<AdapterModel>;
-
 /**
- * @tanstack/ai-openrouter@0.13 (TanStack/ai PR #660) started copying chat()'s
- * root observability `metadata` onto the wire as OpenRouter's
- * `chatRequest.metadata`, which @openrouter/sdk validates as
- * Record<string, string>. Our metadata is structured (prompt ref object,
- * tags array, nested metadata object), so every call fails SDK input
- * validation before it leaves the process. Strip `metadata` from what the
- * adapter sees — the AI event bridge is fed by the chat() orchestrator's
- * event stream, not the adapter, so observability is unaffected. This
- * restores the 0.12 wire shape; if we ever want OpenRouter-side request
- * metadata, it belongs in `modelOptions.metadata` as plain strings.
- *
- * Reported upstream as https://github.com/TanStack/ai/issues/735 — remove
- * this wrapper once a fixed @tanstack/ai-openrouter ships.
+ * Registry model ids the adapter's generated catalog doesn't know yet — the
+ * catalog is a codegen snapshot of OpenRouter's live list and lags new
+ * releases. `extendAdapter` widens the factories' typed model union so a
+ * registry id that is in NEITHER list is a compile error instead of an
+ * unsafe cast. `catalog-lag.test.ts` fails once a package bump ships an id
+ * below, telling the bumper (usually the model-freshness routine, #792) to
+ * prune it here. Add entries with `createModel` from '@tanstack/ai':
+ * `createModel('vendor/model-id', { input: [...], features: [...] })`.
  */
-class WireSafeOpenRouterTextAdapter extends OpenRouterTextAdapter<AdapterModel> {
-  override chatStream(options: Parameters<BaseAdapter['chatStream']>[0]) {
-    return super.chatStream({ ...options, metadata: undefined });
-  }
+export const CATALOG_LAG_MODELS = [
+  createModel('x-ai/grok-4.5', {
+    input: ['text', 'image'],
+    features: ['reasoning', 'structured_outputs'],
+  }),
+] as const;
 
-  override structuredOutput(
-    options: Parameters<BaseAdapter['structuredOutput']>[0]
-  ) {
-    return super.structuredOutput({
-      ...options,
-      chatOptions: { ...options.chatOptions, metadata: undefined },
-    });
-  }
-
-  override structuredOutputStream(
-    options: Parameters<BaseAdapter['structuredOutputStream']>[0]
-  ) {
-    return super.structuredOutputStream({
-      ...options,
-      chatOptions: { ...options.chatOptions, metadata: undefined },
-    });
-  }
-}
+const openRouterTextExtended = extendAdapter(
+  openRouterText,
+  CATALOG_LAG_MODELS
+);
+const createOpenRouterTextExtended = extendAdapter(
+  createOpenRouterText,
+  CATALOG_LAG_MODELS
+);
 
 // Callers must say which API a key belongs to (`via`) — a bare string can't:
 // a fal key mistaken for an OpenRouter key gets Bearer auth against
@@ -116,9 +97,6 @@ export function createAdapter(model: TextModel, keyInfo?: LlmKeyInfo) {
   const resolved = keyInfo ?? getPlatformLlmKey();
   const key = resolved?.key;
   const via = resolved?.via ?? 'openrouter';
-  // Adapter type list lags behind OpenRouter's catalog — cast at the boundary
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Model is dynamic from config but always a valid OpenRouter model ID
-  const adapterModel = model as AdapterModel;
 
   // During E2E recording, aimock proxies our OpenRouter calls upstream and
   // *buffers* the entire SSE response before relaying — see
@@ -155,10 +133,7 @@ export function createAdapter(model: TextModel, keyInfo?: LlmKeyInfo) {
     }),
   };
 
-  // `??` keeps the env fallback lazy — getOpenRouterApiKeyFromEnv() throws
-  // when OPENROUTER_API_KEY is unset, so it must only run keyless.
-  return new WireSafeOpenRouterTextAdapter(
-    { apiKey: key ?? getOpenRouterApiKeyFromEnv(), ...config },
-    adapterModel
-  );
+  return key
+    ? createOpenRouterTextExtended(model, key, config)
+    : openRouterTextExtended(model, config);
 }

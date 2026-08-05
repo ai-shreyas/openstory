@@ -5,9 +5,6 @@
  * the SDK's hardcoded `Bearer` with 401), aimock's OPENROUTER_BASE_URL
  * precedence for e2e hermeticity, and the platform-key fallback order.
  *
- * The metadata-stripping behavior of the WireSafe wrapper is covered
- * separately in create-adapter.wire-metadata.test.ts (it needs the real
- * @tanstack/ai-openrouter module, which is mocked out here).
  */
 
 import type { HTTPClient } from '@openrouter/sdk/lib/http';
@@ -35,39 +32,43 @@ vi.doMock('#env', () => ({
 }));
 
 type AdapterConfig = {
-  apiKey: string;
   httpReferer: string;
   xTitle: string;
   serverURL?: string;
   httpClient?: HTTPClient;
 };
 
-// Capture constructor args instead of building real adapters (createAdapter
-// instantiates a subclass of OpenRouterTextAdapter, so the constructor is the
-// single point every code path funnels through). The real HTTPClient stays
-// unmocked so the beforeRequest hook is exercised for real.
-const constructed: Array<{ config: AdapterConfig; model: string }> = [];
-class CaptureAdapter {
-  constructor(config: AdapterConfig, model: string) {
-    constructed.push({ config, model });
+type AdapterCall =
+  | { kind: 'keyed'; model: string; key: string; config: AdapterConfig }
+  | { kind: 'env'; model: string; config: AdapterConfig };
+
+// Capture factory args instead of building real adapters. The real HTTPClient
+// stays unmocked so the beforeRequest hook is exercised for real.
+const adapterCalls: AdapterCall[] = [];
+const createOpenRouterTextMock = vi.fn(
+  (model: string, key: string, config: AdapterConfig) => {
+    adapterCalls.push({ kind: 'keyed', model, key, config });
+    return { kind: 'keyed-adapter' };
   }
-}
-const getOpenRouterApiKeyFromEnvMock = vi.fn(() => 'env-fallback-key');
+);
+const openRouterTextMock = vi.fn((model: string, config: AdapterConfig) => {
+  adapterCalls.push({ kind: 'env', model, config });
+  return { kind: 'env-adapter' };
+});
 vi.doMock('@tanstack/ai-openrouter', () => ({
-  OpenRouterTextAdapter: CaptureAdapter,
-  openRouterText: vi.fn(),
-  getOpenRouterApiKeyFromEnv: getOpenRouterApiKeyFromEnvMock,
+  createOpenRouterText: createOpenRouterTextMock,
+  openRouterText: openRouterTextMock,
 }));
 
 // Dynamic import so the mocks above apply — see CLAUDE.md module-mocking
 // pattern.
 const { createAdapter, getPlatformLlmKey } = await import('./create-adapter');
 
-const MODEL = 'x-ai/grok-4.3';
+const MODEL = 'x-ai/grok-4.5';
 const FAL_URL = 'https://fal.run/openrouter/router/openai/v1';
 
-function lastCall(): { model: string; config: AdapterConfig } {
-  const call = constructed.at(-1);
+function lastCall(): AdapterCall {
+  const call = adapterCalls.at(-1);
   if (!call) throw new Error('the adapter was never constructed');
   return call;
 }
@@ -98,8 +99,9 @@ beforeEach(() => {
   testEnv.FAL_KEY = undefined;
   testEnv.OPENROUTER_BASE_URL = undefined;
   testEnv.E2E_RECORD = undefined;
-  constructed.length = 0;
-  getOpenRouterApiKeyFromEnvMock.mockClear();
+  adapterCalls.length = 0;
+  createOpenRouterTextMock.mockClear();
+  openRouterTextMock.mockClear();
 });
 
 afterEach(() => {
@@ -110,14 +112,16 @@ describe('createAdapter routing (issue #895)', () => {
   it('routes via:"fal" to fal’s OpenRouter endpoint and rewrites auth to "Key"', async () => {
     createAdapter(MODEL, { key: 'sk-fal-team', via: 'fal' });
 
-    const { config } = lastCall();
-    expect(config.apiKey).toBe('sk-fal-team');
-    expect(config.serverURL).toBe(FAL_URL);
-    if (!config.httpClient) throw new Error('expected an httpClient');
+    const call = lastCall();
+    expect(call.kind).toBe('keyed');
+    if (call.kind !== 'keyed') throw new Error('expected keyed adapter');
+    expect(call.key).toBe('sk-fal-team');
+    expect(call.config.serverURL).toBe(FAL_URL);
+    if (!call.config.httpClient) throw new Error('expected an httpClient');
 
     // The SDK hardcodes `Bearer`; fal’s endpoint 401s on it. The hook must
     // overwrite whatever Authorization the SDK set, as the last writer.
-    const sent = await sendThroughClient(config.httpClient, {
+    const sent = await sendThroughClient(call.config.httpClient, {
       Authorization: 'Bearer sdk-set-this',
     });
     expect(sent.headers.get('Authorization')).toBe('Key sk-fal-team');
@@ -126,10 +130,12 @@ describe('createAdapter routing (issue #895)', () => {
   it('routes via:"openrouter" directly: no serverURL override, no auth hook', () => {
     createAdapter(MODEL, { key: 'sk-or-team', via: 'openrouter' });
 
-    const { config } = lastCall();
-    expect(config.apiKey).toBe('sk-or-team');
-    expect(config.serverURL).toBeUndefined();
-    expect(config.httpClient).toBeUndefined();
+    const call = lastCall();
+    expect(call.kind).toBe('keyed');
+    if (call.kind !== 'keyed') throw new Error('expected keyed adapter');
+    expect(call.key).toBe('sk-or-team');
+    expect(call.config.serverURL).toBeUndefined();
+    expect(call.config.httpClient).toBeUndefined();
   });
 
   it('lets OPENROUTER_BASE_URL (aimock) win over the fal proxy URL', () => {
@@ -145,34 +151,39 @@ describe('createAdapter routing (issue #895)', () => {
     testEnv.FAL_KEY = 'platform-fal';
     createAdapter(MODEL);
 
-    const { config } = lastCall();
-    expect(config.apiKey).toBe('platform-or');
-    expect(config.serverURL).toBeUndefined();
-    expect(getOpenRouterApiKeyFromEnvMock).not.toHaveBeenCalled();
+    const call = lastCall();
+    expect(call.kind).toBe('keyed');
+    if (call.kind !== 'keyed') throw new Error('expected keyed adapter');
+    expect(call.key).toBe('platform-or');
+    expect(call.config.serverURL).toBeUndefined();
+    expect(openRouterTextMock).not.toHaveBeenCalled();
   });
 
   it('falls back to the platform fal key (fal-routed) when only FAL_KEY is set', async () => {
     testEnv.FAL_KEY = 'platform-fal';
     createAdapter(MODEL);
 
-    const { config } = lastCall();
-    expect(config.apiKey).toBe('platform-fal');
-    expect(config.serverURL).toBe(FAL_URL);
-    if (!config.httpClient) throw new Error('expected an httpClient');
-    const sent = await sendThroughClient(config.httpClient, {
+    const call = lastCall();
+    expect(call.kind).toBe('keyed');
+    if (call.kind !== 'keyed') throw new Error('expected keyed adapter');
+    expect(call.key).toBe('platform-fal');
+    expect(call.config.serverURL).toBe(FAL_URL);
+    if (!call.config.httpClient) throw new Error('expected an httpClient');
+    const sent = await sendThroughClient(call.config.httpClient, {
       Authorization: 'Bearer sdk-set-this',
     });
     expect(sent.headers.get('Authorization')).toBe('Key platform-fal');
   });
 
-  it('falls back to OPENROUTER_API_KEY via the SDK when nothing is configured', () => {
+  it('falls back to openRouterText when no key is configured', () => {
     createAdapter(MODEL);
 
-    const { config } = lastCall();
-    expect(getOpenRouterApiKeyFromEnvMock).toHaveBeenCalledTimes(1);
-    expect(config.apiKey).toBe('env-fallback-key');
-    expect(config.serverURL).toBeUndefined();
-    expect(config.httpClient).toBeUndefined();
+    const call = lastCall();
+    expect(call.kind).toBe('env');
+    expect(openRouterTextMock).toHaveBeenCalledTimes(1);
+    expect(createOpenRouterTextMock).not.toHaveBeenCalled();
+    expect(call.config.serverURL).toBeUndefined();
+    expect(call.config.httpClient).toBeUndefined();
   });
 });
 

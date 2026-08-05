@@ -19,12 +19,9 @@ import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type {
   Character,
   Shot,
-  NewShot,
-  NewShotVariant,
   SequenceElement,
   SequenceLocation,
 } from '@/lib/db/schema';
-import { buildDivergentRevertWrites } from './divergence-writes';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { buildLocationReferenceImages } from '@/lib/prompts/location-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -39,23 +36,34 @@ import { resolveSceneShotImageReferences } from './sheet-snapshots';
  * time and (with current-state inputs) at write time for divergence checks.
  */
 export async function buildRegenerateShotSnapshot(params: {
-  shot: Pick<Shot, 'id' | 'imagePrompt' | 'metadata'>;
+  shot: Pick<Shot, 'id' | 'metadata'>;
+  /**
+   * The frame's current image prompt (mirror of the selected prompt version).
+   * Moved off `shots` onto the anchor frame in #989; callers pass
+   * `frame.imagePrompt`.
+   */
+  imagePrompt: string | null;
   characters: Character[];
   locations: SequenceLocation[];
   elements: SequenceElement[];
   imageModel: TextToImageModel;
   aspectRatio: AspectRatio;
 }): Promise<RegenerateShotSnapshot> {
-  const { shot, characters, locations, elements, imageModel, aspectRatio } =
-    params;
+  const {
+    shot,
+    imagePrompt,
+    characters,
+    locations,
+    elements,
+    imageModel,
+    aspectRatio,
+  } = params;
 
-  // Effective prompt: user-override column wins over the AI-generated prompt
-  // stored in scene metadata. Both sites must read this same fallback chain
-  // so a `visualPromptSceneWorkflow` regen (which only updates metadata)
-  // produces a different hash than the prior thumbnail's stored hash. See #713
-  // for the longer-term single-source-of-truth refactor.
-  const effectivePrompt =
-    shot.imagePrompt || shot.metadata?.prompts?.visual?.fullPrompt;
+  // The visual prompt lives solely on `frame.imagePrompt` (#989/#713) — passed
+  // in as `imagePrompt`. The visual-prompt workflow now mirrors AI/regenerated
+  // prompts onto it (no more `metadata.prompts.visual` fallback), so this hash
+  // tracks the live prompt by construction.
+  const effectivePrompt = imagePrompt;
 
   // Reject empty prompts at the snapshot boundary so trigger-time data
   // errors fail loudly at the call site instead of being absorbed as
@@ -191,47 +199,4 @@ export async function emitRecastEvent(
     locationId: args.triggerId,
     error: args.error,
   });
-}
-
-/**
- * Writes to apply when the per-shot hash matches between trigger and write
- * time. `image-workflow` already wrote the primary; record the input-hash on
- * both rows so downstream staleness reads compare against this snapshot.
- */
-export function buildConvergentWrites(snapshotInputHash: string): {
-  shot: Partial<NewShot>;
-  variant: Partial<NewShotVariant>;
-} {
-  return {
-    shot: { thumbnailInputHash: snapshotInputHash },
-    variant: { inputHash: snapshotInputHash, divergedAt: null },
-  };
-}
-
-/**
- * `divergentRow` is a partial payload for an INSERT that preserves the
- * diverged result as an alternate. The workflow supplies shotId, sequenceId,
- * variantType, model, and the speculative url; this helper supplies the
- * divergence-specific fields so the alternate is identifiable in the
- * divergent partial unique index.
- */
-export function buildDivergentWrites(
-  snapshotInputHash: string,
-  divergedAt: Date
-): {
-  shot: Partial<NewShot>;
-  primaryRevert: Partial<NewShotVariant>;
-  divergentRow: Partial<NewShotVariant> & {
-    inputHash: string;
-    divergedAt: Date;
-  };
-} {
-  return {
-    ...buildDivergentRevertWrites(),
-    divergentRow: {
-      inputHash: snapshotInputHash,
-      divergedAt,
-      status: 'completed',
-    },
-  };
 }

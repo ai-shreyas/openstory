@@ -1,12 +1,13 @@
+import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
-import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
-import { buildMentionItems } from '@/components/scenes/prompt-mention/mention-items';
+import { PremiumCard } from '@/components/cards/premium-card';
 import {
   ElementSelector,
   type ElementSelectorHandle,
 } from '@/components/element/element-selector';
 import { GenerateSequenceIcon } from '@/components/icons/generate-sequence-icon';
 import { LocationSuggestionSelector } from '@/components/location-library/location-suggestion-selector';
+import { buildMentionItems } from '@/components/scenes/prompt-mention/mention-items';
 import { GenerationSettings } from '@/components/settings/generation-settings';
 import { StyleSelector } from '@/components/style/style-selector';
 import { TalentSuggestionSelector } from '@/components/talent/talent-suggestion-selector';
@@ -22,8 +23,6 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { CardContent, CardFooter, CardHeader } from '@/components/ui/card';
-import { ThinkingBar } from '@/components/ai/thinking-bar';
-import { PremiumCard } from '@/components/cards/premium-card';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import {
   Popover,
@@ -32,19 +31,23 @@ import {
 } from '@/components/ui/popover';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { enhanceScriptStreamFn } from '@/functions/ai';
-import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
 import { useAutoScroll } from '@/hooks/use-auto-scroll';
+import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
+import { BILLING_TRANSACTIONS_KEY } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGate } from '@/hooks/use-billing-gate';
 import { useGenerationSettings } from '@/hooks/use-generation-settings';
-import { useSequenceDraft } from '@/hooks/use-sequence-draft';
+import { useComposedScript } from '@/hooks/use-scenes';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
+import { useSequenceDraft } from '@/hooks/use-sequence-draft';
 import {
   useSequenceElements,
   type DraftElementUpload,
 } from '@/hooks/use-sequence-elements';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
 import { useCreateSequence } from '@/hooks/use-sequences';
-import { useStyles } from '@/hooks/use-styles';
+import { useRecommendedStyles, useStyles } from '@/hooks/use-styles';
+import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_MUSIC_MODEL,
@@ -64,10 +67,12 @@ import {
   isValidAnalysisModelId,
   type AnalysisModelId,
 } from '@/lib/ai/models.config';
+import { SCRIPT_SHORT_THRESHOLD } from '@/lib/ai/should-enhance';
 import {
   aspectRatioSchema,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
 import { cn } from '@/lib/utils';
 import {
   dataTransferHasImages,
@@ -78,9 +83,15 @@ import {
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { ImagePlus, Loader2, Sparkles, Square, Undo2 } from 'lucide-react';
-import React, { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from 'react';
 import { ScriptEditor } from './script-editor';
-import { SCRIPT_SHORT_THRESHOLD } from '@/lib/ai/should-enhance';
 
 const DURATION_PRESETS = [
   { value: '15', label: '15s', seconds: 15 },
@@ -94,6 +105,10 @@ export const ScriptView: FC<{
   teamId?: string;
   sequence?: Sequence;
   flat?: boolean;
+  /** Extra classes merged onto the outer card — e.g. a height bound on the
+   *  logged-out new-sequence page so a large paste scrolls instead of growing
+   *  the page (#1000). */
+  className?: string;
   loading?: boolean;
   onSuccess?: (sequenceIds: string[]) => void;
   onCancel?: () => void;
@@ -102,23 +117,52 @@ export const ScriptView: FC<{
    *  saved draft for the initial value; remount (via `key`) to re-seed. */
   initialScript?: string;
   initialStyleId?: string;
+  /** Notified when the user picks a style, so the new-sequence page can mirror
+   *  it into `?style=`. Not called for the auto-selected default. */
+  onStyleChange?: (styleId: string) => void;
+  /**
+   * Allow editing an analysed sequence's derived script (#1037).
+   *
+   * Normally that text is read-only here: it's the composed scene-script
+   * document, whose canonical home is `scene_script_versions` and whose editor
+   * is the Scenes script view — typing into it would edit nothing. On the
+   * copy-a-sequence path (`/sequences/new?from=`) it's just the seed for a new
+   * analysis, so it must be editable.
+   */
+  allowScriptEdit?: boolean;
 }> = ({
   teamId,
   sequence,
   loading = false,
   onSuccess,
   flat,
+  className,
   onCancel,
   initialScript,
   initialStyleId,
+  onStyleChange,
+  allowScriptEdit = false,
 }) => {
-  // Local content state - undefined until user makes an edit. A `initial*` seed
-  // (sample-style prefill) wins over the stored sequence for the first value.
+  const queryClient = useQueryClient();
+  const isEditing = !!sequence?.id;
+  const { data: composedScriptData } = useComposedScript(sequence?.id);
+  const composedScript = composedScriptData?.script;
+  // Analyzed sequences derive the document from scene versions (#1030), so the
+  // text is read-only — unless we're seeding a copy, where it feeds a fresh
+  // analysis rather than standing in for the canonical version.
+  const isDerivedScript = isEditing && !!composedScript && !allowScriptEdit;
+  const baseScript = composedScript ?? sequence?.script;
+
+  // Local script override — undefined means "show the canonical baseScript".
+  // For existing sequences that is the composed scene-script document once the
+  // query resolves (#1030); until then baseScript falls back to sequence.script.
+  // New-sequence creation leaves this undefined and the draft-sync effect fills
+  // it from localStorage. initialScript (sample-style prefill) wins outright.
   const [contentState, setContentState] = useState<{
     script: string | null | undefined;
     styleId: string | null;
   }>({
-    script: initialScript ?? sequence?.script,
+    script: initialScript ?? (isEditing ? undefined : sequence?.script),
     styleId: initialStyleId ?? sequence?.styleId ?? null,
   });
   const { script, styleId } = contentState;
@@ -127,6 +171,13 @@ export const ScriptView: FC<{
     setContentState((s) => ({ ...s, script: v }));
   const setStyleId = (v: string | null) =>
     setContentState((s) => ({ ...s, styleId: v }));
+  // A user-initiated style pick: update local state and mirror it to the URL.
+  // The auto-selected default calls `setStyleId` directly, so a bare
+  // /sequences/new stays a bare URL until the user actually chooses.
+  const selectStyle = (styleId: string) => {
+    setStyleId(styleId);
+    onStyleChange?.(styleId);
+  };
 
   // Load saved settings from localStorage
   const {
@@ -142,9 +193,6 @@ export const ScriptView: FC<{
     saveDraft,
     clearDraft,
   } = useSequenceDraft();
-
-  // Determine if we're editing an existing sequence
-  const isEditing = !!sequence?.id;
 
   // Initialize with sequence values (if editing) or localStorage defaults (if creating)
   const sequenceAnalysisModels: AnalysisModelId[] = useMemo(() => {
@@ -254,7 +302,12 @@ export const ScriptView: FC<{
 
   const posthog = usePostHog();
 
-  const { data: styles = [], isLoading: isLoadingStyles } = useStyles();
+  // `isPending` (not `isLoading`) so the skeleton state is shown whenever there
+  // is no styles data yet — including during SSR, where the query is disabled
+  // behind the still-pending session and `isLoading` is misleadingly false.
+  // This keeps the server and first client render identical (both skeletons)
+  // and avoids a hydration mismatch (#style-selector "View all 0 styles").
+  const { data: styles = [], isPending: isLoadingStyles } = useStyles();
 
   // Auto-select first style if none selected
   useEffect(() => {
@@ -273,9 +326,11 @@ export const ScriptView: FC<{
   const styleName = selectedStyle?.name ?? undefined;
 
   // Sequence cast/elements/locations drive @-mention pills in the script
-  // editor — same canonical tags the scene prompt editors use. Only an existing
-  // (analysed) sequence has these; on the create screen there are no canonical
-  // tags yet, so we pass `undefined` to keep mentions off there.
+  // editor — same canonical tags the scene prompt editors use. An existing
+  // (analysed) sequence has all three; on the create screen only the uploaded
+  // draft elements exist, so their tokens pill (and `@`-complete) from local
+  // state instead (#1079). Always defined — the editor's mention extension is
+  // registered at init and can't be enabled later.
   const mentionSequenceId = sequence?.id;
   const { data: mentionElements } = useSequenceElements(mentionSequenceId);
   const { data: mentionCharacters } = useSequenceCharacters(
@@ -292,8 +347,38 @@ export const ScriptView: FC<{
             elements: mentionElements ?? [],
             locations: mentionLocations ?? [],
           })
-        : undefined,
-    [mentionSequenceId, mentionCharacters, mentionElements, mentionLocations]
+        : buildMentionItems({
+            characters: [],
+            elements: draftElements.map((el) => ({
+              id: el.tempPath,
+              token: el.token,
+              description: el.description,
+              imageUrl: el.tempPublicUrl,
+              consistencyTag: el.consistencyTag,
+            })),
+            locations: [],
+          }),
+    [
+      mentionSequenceId,
+      mentionCharacters,
+      mentionElements,
+      mentionLocations,
+      draftElements,
+    ]
+  );
+
+  // Renaming a draft element rewrites its token references in the script so
+  // the tile name and what the analyser will see stay in sync (the persisted
+  // path does the same server-side via cascadeRename).
+  const handleDraftTokenRename = useCallback(
+    (oldToken: string, newToken: string) => {
+      setContentState((s) => {
+        if (!s.script) return s;
+        const rewritten = replaceTokenInText(s.script, oldToken, newToken);
+        return rewritten === s.script ? s : { ...s, script: rewritten };
+      });
+    },
+    []
   );
   const recommendedImageModel = selectedStyle?.recommendedImageModel ?? null;
   const recommendedVideoModel = selectedStyle?.recommendedVideoModel ?? null;
@@ -532,34 +617,72 @@ export const ScriptView: FC<{
 
   const createSequenceMutation = useCreateSequence();
   const { requireAuth } = useAuthGate();
+  const { needsBillingSetup, showGate } = useBillingGate();
+
+  // Style recommendations. We rank a *snapshot* of the script (not the live
+  // value) so the LLM call only fires on an explicit trigger — the "Recommend
+  // styles" button or a completed enhance — and editing the script afterwards
+  // doesn't re-spend a call on every keystroke. Repeats are free (cached by
+  // script hash in useRecommendedStyles).
+  const [recommendScript, setRecommendScript] = useState<string | null>(null);
   const {
-    needsBillingSetup,
-    showGate,
-    gateProps,
-    hasFalKey,
-    hasOpenRouterKey,
-    stripeEnabled,
-  } = useBillingGate();
+    data: recommendData,
+    isFetching: isRecommending,
+    isError: recommendFailed,
+    refetch: refetchRecommendations,
+  } = useRecommendedStyles(recommendScript, {
+    enabled: recommendScript !== null,
+  });
+  const recommendations = recommendData?.recommendations;
+  const currentScriptText = (script ?? sequence?.script ?? '').trim();
+  const recommendationsStale =
+    recommendScript !== null && currentScriptText !== recommendScript;
+  const activeRecommendations =
+    !recommendationsStale && recommendations?.length
+      ? recommendations
+      : undefined;
+  const isRecommended = !!activeRecommendations && !isRecommending;
+  const recommendButtonLabel = isRecommending
+    ? 'Recommend styles'
+    : isRecommended
+      ? 'Recommended'
+      : 'Recommend styles';
+  // The shortlist ran but turned up nothing usable (or errored). Distinguish
+  // this from "never asked" so we can tell the user instead of silently
+  // reverting to the trigger button (which invites a re-click + re-charge).
+  const recommendRanForCurrentScript =
+    recommendScript !== null && !recommendationsStale && !isRecommending;
+  const recommendEmpty =
+    recommendRanForCurrentScript &&
+    !recommendFailed &&
+    recommendations?.length === 0;
+
+  const triggerRecommend = () => {
+    if (!requireAuth()) return;
+    if (needsBillingSetup) {
+      showGate();
+      return;
+    }
+    const text = (script ?? sequence?.script ?? '').trim();
+    if (text.length < 3) return;
+    // Same script after an error/empty run: refetch instead of no-op setState.
+    if (recommendScript === text) {
+      void refetchRecommendations();
+      return;
+    }
+    setRecommendScript(text);
+  };
 
   const handleCancel = onCancel;
 
   const executeRegeneration = () => {
-    posthog.capture('sequence_generated', {
-      is_editing: isEditing,
-      aspect_ratio: aspectRatio,
-      image_models: imageModels,
-      video_models: videoModels,
-      audio_models: audioModels,
-      auto_generate_motion: autoGenerateMotion,
-      auto_generate_music: autoGenerateMusic,
-      analysis_model_count: analysisModels.length,
-      script_length: (script ?? sequence?.script ?? '').length,
-    });
+    // sequence_generated is captured server-side in createSequences (#1088)
+    // so dashboard + public API both feed #product-alerts once.
     createSequenceMutation.mutate(
       {
         title: undefined,
         teamId,
-        script: script ?? sequence?.script ?? '',
+        script: script ?? baseScript ?? '',
         styleId: styleId || sequence?.styleId || undefined,
         aspectRatio,
         analysisModels,
@@ -619,7 +742,7 @@ export const ScriptView: FC<{
       return;
     }
 
-    const scriptText = script ?? sequence?.script ?? '';
+    const scriptText = script ?? baseScript ?? '';
     if (!canUndoEnhance && scriptText.length < SCRIPT_SHORT_THRESHOLD) {
       setEnhance('showEnhanceNudge', true);
       return;
@@ -681,6 +804,21 @@ export const ScriptView: FC<{
         setScript(accumulated);
       }
       setEnhance('canUndoEnhance', true);
+      // Charge lands when the stream finishes — keep the credit chip in sync
+      // even if the billing SSE is delayed or dropped on this request path.
+      void queryClient.invalidateQueries({
+        queryKey: [...BILLING_BALANCE_KEY],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...BILLING_TRANSACTIONS_KEY],
+      });
+      // Pre-warm the style shortlist off the freshly enhanced script so the
+      // picker is ready the moment the user looks for it.
+      // Billing is already gated above (handleEnhance returns early when
+      // needsBillingSetup), so reaching here means the recommend call can bill.
+      if (!abortController.signal.aborted && accumulated.trim().length >= 3) {
+        setRecommendScript(accumulated.trim());
+      }
     } catch (error) {
       if (!abortController.signal.aborted) {
         setEnhance(
@@ -717,7 +855,7 @@ export const ScriptView: FC<{
   }, [isEnhancing]);
 
   const isFormValid =
-    (script || sequence?.script) &&
+    (script || baseScript) &&
     (styleId || sequence?.styleId) &&
     analysisModels.length > 0;
 
@@ -725,7 +863,7 @@ export const ScriptView: FC<{
   const isDisabled =
     !isFormValid || isSubmitting || isEnhancing || isElementBusy;
 
-  const scriptValue = script ?? sequence?.script ?? '';
+  const scriptValue = script ?? baseScript ?? '';
   const { ref: textareaRef } = useAutoScroll<HTMLDivElement>({
     enabled: isEnhancing,
     content: scriptValue,
@@ -735,7 +873,8 @@ export const ScriptView: FC<{
     <PremiumCard
       className={cn(
         'relative flex flex-col min-h-0 max-h-full',
-        flat && 'border-none'
+        flat && 'border-none',
+        className
       )}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -758,7 +897,7 @@ export const ScriptView: FC<{
         className="flex flex-col min-h-0 max-h-full"
       >
         {/* Control bar */}
-        <CardHeader className="shrink-0 flex flex-col md:flex-row items-start justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40">
+        <CardHeader className="shrink-0 flex flex-col lg:flex-row items-start justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40">
           <GenerationSettings
             aspectRatio={aspectRatio}
             analysisModels={analysisModels}
@@ -814,6 +953,7 @@ export const ScriptView: FC<{
                 ref={elementSelectorRef}
                 draftElements={draftElements}
                 onDraftElementsChange={setDraftElements}
+                onDraftTokenRename={handleDraftTokenRename}
                 disabled={loading}
                 onElementBusyChange={setIsElementBusy}
               />
@@ -838,108 +978,138 @@ export const ScriptView: FC<{
               }}
               maxLength={50000}
               placeholder="A one-liner or website URL is all you need — click Enhance Script to do the rest. Or paste a full screenplay and generate directly."
-              disabled={loading}
+              disabled={loading || isDerivedScript}
               showCharacterCount={false}
               mentionItems={mentionItems}
             />
-            <div className="absolute bottom-2 right-2 flex items-center gap-1">
-              {canUndoEnhance && !isEnhancing && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1.5 text-muted-foreground"
-                  onClick={handleUndoEnhance}
-                >
-                  <Undo2 className="size-3.5" />
-                  Undo
-                </Button>
-              )}
-              {isEnhancing ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1.5 text-muted-foreground"
-                  onClick={handleStopEnhance}
-                >
-                  <span className="relative size-5">
-                    <Loader2 className="absolute inset-0 size-5 animate-spin" />
-                    <Square className="absolute inset-[5px] size-[10px] fill-current" />
-                  </span>
-                  Stop
-                </Button>
-              ) : (
-                <Popover
-                  open={enhancePopoverOpen}
-                  onOpenChange={setEnhancePopoverOpen}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1.5 text-muted-foreground"
-                      disabled={
-                        !scriptValue || scriptValue.length < 10 || isSubmitting
-                      }
-                    >
-                      <Sparkles className="size-3.5" />
-                      Enhance Script
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="end" side="top" className="w-auto">
-                    <div className="flex flex-col gap-3">
-                      <p className="text-sm font-medium">
-                        Target video duration
-                      </p>
-                      <ToggleGroup
-                        type="single"
-                        value={String(targetDuration)}
-                        onValueChange={(v) => {
-                          if (v) setTargetDuration(Number(v));
-                        }}
-                        variant="outline"
-                        size="sm"
-                      >
-                        {DURATION_PRESETS.map((preset) => (
-                          <ToggleGroupItem
-                            key={preset.value}
-                            value={preset.value}
-                          >
-                            {preset.label}
-                          </ToggleGroupItem>
-                        ))}
-                      </ToggleGroup>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={() => {
-                          setEnhancePopoverOpen(false);
-                          void handleEnhance();
-                        }}
-                      >
-                        <Sparkles className="size-3.5" />
-                        Enhance
-                      </Button>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              )}
-            </div>
           </div>
           {enhanceError && (
             <p className="text-sm text-destructive">{enhanceError}</p>
           )}
 
-          <div className="shrink-0">
+          <div className="shrink-0 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={
+                  loading || currentScriptText.length < 3 || isRecommending
+                }
+                onClick={triggerRecommend}
+              >
+                {isRecommending ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <Sparkles className="size-3.5 text-primary" />
+                )}
+                {recommendButtonLabel}
+              </Button>
+              <div className="flex items-center gap-1 shrink-0">
+                {canUndoEnhance && !isEnhancing && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-muted-foreground"
+                    onClick={handleUndoEnhance}
+                  >
+                    <Undo2 className="size-3.5" />
+                    Undo
+                  </Button>
+                )}
+                {isEnhancing ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-muted-foreground"
+                    onClick={handleStopEnhance}
+                  >
+                    <span className="relative size-5">
+                      <Loader2 className="absolute inset-0 size-5 animate-spin" />
+                      <Square className="absolute inset-[5px] size-[10px] fill-current" />
+                    </span>
+                    Stop
+                  </Button>
+                ) : (
+                  <Popover
+                    open={enhancePopoverOpen}
+                    onOpenChange={setEnhancePopoverOpen}
+                  >
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        disabled={
+                          !scriptValue ||
+                          scriptValue.length < 10 ||
+                          isSubmitting
+                        }
+                      >
+                        <Sparkles className="size-3.5 text-primary" />
+                        Enhance Script
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" side="top" className="w-auto">
+                      <div className="flex flex-col gap-3">
+                        <p className="text-sm font-medium">
+                          Target video duration
+                        </p>
+                        <ToggleGroup
+                          type="single"
+                          value={String(targetDuration)}
+                          onValueChange={(v) => {
+                            if (v) setTargetDuration(Number(v));
+                          }}
+                          variant="outline"
+                          size="sm"
+                        >
+                          {DURATION_PRESETS.map((preset) => (
+                            <ToggleGroupItem
+                              key={preset.value}
+                              value={preset.value}
+                            >
+                              {preset.label}
+                            </ToggleGroupItem>
+                          ))}
+                        </ToggleGroup>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => {
+                            setEnhancePopoverOpen(false);
+                            void handleEnhance();
+                          }}
+                        >
+                          <Sparkles className="size-3.5" />
+                          Enhance
+                        </Button>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                )}
+              </div>
+            </div>
             <StyleSelector
               styles={styles}
               selectedStyleId={styleId || sequence?.styleId || null}
-              onStyleSelect={setStyleId}
+              onStyleSelect={selectStyle}
               loading={isLoadingStyles}
+              recommendations={activeRecommendations}
+              recommendationsLoading={isRecommending && !recommendationsStale}
             />
+            {(recommendEmpty || recommendFailed) && (
+              <p className="text-xs text-muted-foreground">
+                {recommendFailed
+                  ? "Couldn't suggest styles — try again or pick one below."
+                  : 'No standout matches — try again or pick a style below.'}
+              </p>
+            )}
           </div>
         </CardContent>
 
@@ -1006,12 +1176,6 @@ export const ScriptView: FC<{
           </div>
         </CardFooter>
       </form>
-      <BillingGateDialog
-        {...gateProps}
-        hasFalKey={hasFalKey}
-        hasOpenRouterKey={hasOpenRouterKey}
-        stripeEnabled={stripeEnabled}
-      />
       <AlertDialog
         open={showRegenerateConfirm}
         onOpenChange={(v) => setEnhance('showRegenerateConfirm', v)}

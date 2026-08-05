@@ -20,7 +20,7 @@ import { HighlightedPrompt } from '@/components/text-editor/mention/highlighted-
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
-import type { Shot } from '@/types/database';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
 import { Clapperboard, FileTextIcon, ImageIcon, TextIcon } from 'lucide-react';
@@ -48,7 +48,7 @@ function isDialogTab(value: string): value is DialogTab {
 type EvalCellDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  shot: Shot;
+  shot: ShotWithImage;
   sceneNumber: number;
   sequenceTitle: string;
   aspectRatio: AspectRatio;

@@ -7,6 +7,11 @@ import type { Database } from '@/lib/db/client';
 import type { NewStyle, Style } from '@/lib/db/schema';
 import { styles } from '@/lib/db/schema';
 import { ValidationError } from '@/lib/errors';
+import {
+  SERVER_MANAGED_STYLE_COLUMNS,
+  type ServerManagedStyleColumn,
+} from '@/lib/schemas/style.schemas';
+import { stripServerManagedColumns } from './server-managed';
 import { styleSlug } from '@/lib/style/style-slug';
 import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 
@@ -134,13 +139,22 @@ export function createStylesMethods(
   return {
     ...createStylesReadMethods(db, teamId),
 
+    // Server-managed columns (isPublic, isTemplate, usageCount, …) are
+    // excluded from the parameter type AND scrubbed at runtime: the type
+    // alone doesn't stop a non-literal object from carrying extra keys, and
+    // drizzle writes any key that matches a table column. Admin paths (the
+    // system template seeder) insert via raw drizzle instead.
     create: async (
-      data: Omit<NewStyle, 'teamId' | 'createdBy'>
+      data: Omit<NewStyle, ServerManagedStyleColumn>
     ): Promise<Style> => {
       await assertSlugAvailable(db, teamId, data.name);
       const result = await db
         .insert(styles)
-        .values({ ...data, teamId, createdBy: userId })
+        .values({
+          ...stripServerManagedColumns(data, SERVER_MANAGED_STYLE_COLUMNS),
+          teamId,
+          createdBy: userId,
+        })
         .returning();
       const style = result[0];
       if (!style) {
@@ -151,14 +165,14 @@ export function createStylesMethods(
 
     update: async (
       styleId: string,
-      data: Partial<Omit<Style, 'id' | 'teamId' | 'createdAt' | 'createdBy'>>
+      data: Partial<Omit<Style, ServerManagedStyleColumn>>
     ): Promise<Style | undefined> => {
       if (data.name !== undefined) {
         await assertSlugAvailable(db, teamId, data.name, styleId);
       }
       const result = await db
         .update(styles)
-        .set(data)
+        .set(stripServerManagedColumns(data, SERVER_MANAGED_STYLE_COLUMNS))
         .where(and(eq(styles.id, styleId), eq(styles.teamId, teamId)))
         .returning();
       return Array.isArray(result) ? result[0] : undefined;

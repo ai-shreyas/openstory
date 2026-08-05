@@ -32,6 +32,9 @@ const validAudioModelKeys = Object.keys(
   AUDIO_MODELS
 ) satisfies readonly string[];
 
+export const MUSIC_REQUIRES_MOTION_ERROR =
+  'Music generation currently requires motion. Turn on motion or disable music.';
+
 export const createSequenceSchema = createInsertSchema(sequences, {
   title: (schema) => schema.min(1).optional(), // Optional - defaults to 'Untitled Sequence' in hook
   script: z.string().min(10), // Override to make it required with business rules
@@ -147,6 +150,10 @@ export const createSequenceSchema = createInsertSchema(sequences, {
     // When regenerating from an existing sequence, copy its elements onto the
     // newly created sequence so the user doesn't have to re-upload references.
     sourceSequenceId: ulidSchemaOptional,
+  })
+  .refine((data) => !data.autoGenerateMusic || data.autoGenerateMotion, {
+    path: ['autoGenerateMusic'],
+    message: MUSIC_REQUIRES_MOTION_ERROR,
   });
 
 export const updateSequenceSchema = createUpdateSchema(sequences, {

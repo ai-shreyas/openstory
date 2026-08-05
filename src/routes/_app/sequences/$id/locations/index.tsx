@@ -1,13 +1,13 @@
-import { LocationView } from '@/components/locations/location-view';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
+/** Locations index is now the nothing-selected Locations facet (#986). */
 export const Route = createFileRoute('/_app/sequences/$id/locations/')({
-  component: LocationsPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/sequences/$id/scenes',
+      params: { id: params.id },
+      search: { facet: 'location' },
+    });
+  },
   staticData: { breadcrumb: 'Locations' },
 });
-
-function LocationsPage() {
-  const { id: sequenceId } = Route.useParams();
-
-  return <LocationView sequenceId={sequenceId} />;
-}

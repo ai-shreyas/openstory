@@ -16,6 +16,7 @@
  */
 
 import {
+  isAudioResponse,
   LLMock,
   loadFixtureFile,
   type ChatCompletionRequest,
@@ -59,13 +60,14 @@ const RECORD_STAGING_DIR = resolve(
 // family — otherwise its recordings get stuck in `_unsorted/` with a warning.
 const STAGE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['Enhance the script inside <USER_SCRIPT>', 'script-enhance'],
+  ['STYLE CATALOG (choose by index):', 'style-recommend'],
   ['Analyze the script within the USER_SCRIPT', 'script-analyze'],
   ['Match the following library locations', 'location-match'],
   ['Cast the following talent', 'talent-cast'],
   ['Generate the visual prompt for the starting frame', 'visual-prompts'],
   ['Generate the motion prompt for this scene', 'motion-prompts'],
   ['Classify music design for each scene', 'music-design'],
-  ['Uploaded filename (hint only', 'element-vision'],
+  ['Uploaded filename:', 'element-vision'],
 ];
 
 // Diagnostic dump for unmatched requests — written on shutdown so we can diff
@@ -82,10 +84,15 @@ const AIMOCK_SYSTEM_FINGERPRINT = 'fp_aimock';
 
 function stampOne(fixture: Fixture): void {
   const response = fixture.response;
+  // Response factories (aimock 1.35+) build their response per-request; our
+  // recorded fixtures are always static objects, so skip the function form.
+  if (typeof response === 'function') return;
   // Only completion responses (TextResponse / ToolCallResponse /
   // ContentWithToolCallsResponse) extend ResponseOverrides where
   // systemFingerprint lives. Narrow via `in` so other variants
-  // (ImageResponse, ErrorResponse, …) are skipped.
+  // (ImageResponse, ErrorResponse, …) are skipped. AudioResponse (added in
+  // aimock 1.35) also carries `content` but no systemFingerprint — exclude it.
+  if (isAudioResponse(response)) return;
   if (!('content' in response) && !('toolCalls' in response)) return;
   if (response.systemFingerprint === undefined) {
     response.systemFingerprint = AIMOCK_SYSTEM_FINGERPRINT;
@@ -244,6 +251,15 @@ export async function startAimockServer(): Promise<string> {
     // CI replay, lenient while recording so the proxy/record path runs.
     strict: !E2E_RECORDING,
     logLevel: 'info',
+    // Recorded fixtures carry real streaming timings (ttft + inter-chunk
+    // delays) which replay at 1x by default — a full-pipeline replay would
+    // wait out every original LLM stream in real time. 100x fast-forwards
+    // (a 30s reasoning gap becomes 300ms) while still yielding between
+    // chunks, so concurrent streams keep interleaving like production.
+    // Recording is unaffected — record mode streams live from upstream.
+    // AIMOCK_REPLAY_SPEED overrides for demo/video runs where streaming
+    // should be watchable (e.g. 10 keeps the script split visibly streaming).
+    replaySpeed: Number(process.env.AIMOCK_REPLAY_SPEED ?? 100),
     requestTransform: falRequestTransform,
     // Record only when E2E_RECORD=1 (real key from .env.local). Default is
     // strict replay against the recorded fixtures — CI runs without the flag
@@ -254,13 +270,12 @@ export async function startAimockServer(): Promise<string> {
       record: {
         providers: { openai: 'https://openrouter.ai/api/v1' },
         fixturePath: RECORD_STAGING_DIR,
-        // Reasoning models (e.g. Grok 4.3 + structured output under concurrent
+        // Reasoning models (e.g. Grok 4.5 + structured output under concurrent
         // load) routinely leave 30s+ gaps between SSE chunks while thinking,
         // which trips aimock's default 30s body-idle timer and truncates the
-        // recorded stream. Option ships on the linked aimock fork
-        // (CopilotKit/aimock#197); requires @copilotkit/aimock linked locally
-        // until the option is in a published release.
-        // bodyTimeoutMs: 120_000,
+        // recorded stream — recordings for the slowest calls are silently
+        // dropped (CopilotKit/aimock#197, shipped in >=1.35.0).
+        bodyTimeoutMs: 120_000,
       },
     }),
   });

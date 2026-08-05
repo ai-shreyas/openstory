@@ -93,6 +93,17 @@ export async function authenticateUser(
 ): Promise<void> {
   const testOtp = '123456';
 
+  // Welcome-credits dialog (#1096) re-shows every 3h until the team has a
+  // credit_usage row. Fresh e2e users have none — pre-seed a recent dismiss
+  // so the modal never overlays the UI under test. storageState carries it
+  // into specs that reuse the shared session.
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'openstory:welcome-credits-dismissed-at',
+      String(Date.now())
+    );
+  });
+
   // Create OTP via test API (the route normalizes to the identifier
   // Better Auth's signIn.emailOtp will actually look up).
   await fetch('http://localhost:3001/api/test/verify', {

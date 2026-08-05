@@ -19,13 +19,20 @@
 
 import { getDb } from '#db-client';
 import {
+  framePromptVersions,
+  frameVariants,
+  frames,
+  generatedAssets,
+  renderSegments,
+  shotPromptVersions,
   shots,
   shotVariants,
   sequenceElements,
   sequences,
+  videoVariants,
 } from '@/lib/db/schema';
 import { resolveRunState, STALE_THRESHOLD_MS } from '@/lib/workflow/reconcile';
-import { and, eq, isNotNull, lt } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -56,9 +63,25 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
   const counts: ReconcileCounts = {};
 
   const passes: Array<[string, () => Promise<number>]> = [
-    ['shots.thumbnail', () => reconcileShotsPass(db, 'thumbnail')],
+    // Image lives on frames / frame_variants now (#989).
+    ['frames.image', () => reconcileFramesImagePass(db)],
     ['shots.video', () => reconcileShotsPass(db, 'video')],
-    ['shots.variant_image', () => reconcileShotsPass(db, 'variantImage')],
+    ['frame_variants.status', () => reconcileFrameVariantsPass(db)],
+    // Pending artifact claims (#1085): a dead run must not leave rows that
+    // read as "a job is fixing this" forever.
+    [
+      'frame_prompt_versions.claims',
+      () => reconcilePromptClaimsPass(db, 'frame'),
+    ],
+    [
+      'shot_prompt_versions.claims',
+      () => reconcilePromptClaimsPass(db, 'shot'),
+    ],
+    ['frame_variants.claims', () => reconcileImageClaimsPass(db)],
+    // Video versions live on video_variants now (#990) — without this pass a
+    // dead motion run leaves a permanent "generating" chip on the Video tab
+    // (#1076).
+    ['video_variants.status', () => reconcileVideoVariantsPass(db)],
     ['shots.audio', () => reconcileShotsPass(db, 'audio')],
     ['shot_variants.status', () => reconcileShotVariantsPass(db, 'primary')],
     [
@@ -68,6 +91,10 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
     ['sequences.status', () => reconcileSequencesPass(db)],
     ['sequences.music', () => blindFailPass(db, 'sequencesMusic')],
     ['sequence_elements.vision', () => blindFailPass(db, 'sequenceElements')],
+    // Direct model runs (#458) — verified pass plus an orphan pass for rows
+    // whose trigger died before a workflowRunId was ever persisted.
+    ['generated_assets.status', () => reconcileGeneratedAssetsPass(db)],
+    ['generated_assets.orphaned', () => failOrphanedGeneratedAssetsPass(db)],
   ];
 
   for (const [name, run] of passes) {
@@ -101,7 +128,7 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
   return counts;
 }
 
-type ShotPipeline = 'thumbnail' | 'video' | 'variantImage' | 'audio';
+type ShotPipeline = 'video' | 'audio';
 
 // Why we don't bump `updatedAt` on reconciler writes (applies to every pass
 // in this file): the staleness predicate is `updated_at < cutoff`. If pass A
@@ -113,20 +140,10 @@ type ShotPipeline = 'thumbnail' | 'video' | 'variantImage' | 'audio';
 // status column. The on-load reconciler doesn't have this issue because it
 // collects all stale entries from in-memory data before writing.
 const SHOTS_PIPELINE_COLUMNS = {
-  thumbnail: {
-    status: shots.thumbnailStatus,
-    runId: shots.thumbnailWorkflowRunId,
-    setStatus: (next: 'failed' | 'completed') => ({ thumbnailStatus: next }),
-  },
   video: {
     status: shots.videoStatus,
     runId: shots.videoWorkflowRunId,
     setStatus: (next: 'failed' | 'completed') => ({ videoStatus: next }),
-  },
-  variantImage: {
-    status: shots.variantImageStatus,
-    runId: shots.variantWorkflowRunId,
-    setStatus: (next: 'failed' | 'completed') => ({ variantImageStatus: next }),
   },
   audio: {
     status: shots.audioStatus,
@@ -134,6 +151,254 @@ const SHOTS_PIPELINE_COLUMNS = {
     setStatus: (next: 'failed' | 'completed') => ({ audioStatus: next }),
   },
 } as const;
+
+/**
+ * Reconcile stuck anchor-frame image generation (#989 — the old
+ * `shots.thumbnail*` pass). Frame image status with a known workflow run id.
+ */
+async function reconcileFramesImagePass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const stuck = await db
+    .select({ id: frames.id, runId: frames.imageWorkflowRunId })
+    .from(frames)
+    .where(
+      and(
+        eq(frames.imageStatus, 'generating'),
+        lt(frames.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  let updated = 0;
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    await db
+      .update(frames)
+      .set({ imageStatus: next })
+      .where(eq(frames.id, row.id));
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * Reconcile stuck `frame_variants` versions (model re-rolls + the 3×3 grid /
+ * upscaled framing tiles) — the image-variant analog of the retired
+ * `shots.variant_image` pass.
+ */
+async function reconcileFrameVariantsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const stuck = await db
+    .select({ id: frameVariants.id, runId: frameVariants.workflowRunId })
+    .from(frameVariants)
+    .where(
+      and(
+        eq(frameVariants.status, 'generating'),
+        lt(frameVariants.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  let updated = 0;
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    await db
+      .update(frameVariants)
+      .set({ status: next })
+      .where(eq(frameVariants.id, row.id));
+    // Drop auto-promote claim if this stuck version held it (#1070).
+    if (next === 'failed') {
+      await db
+        .update(frames)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(eq(frames.pendingPromoteVersionId, row.id));
+    }
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * Reconcile stuck `video_variants` versions (#990 / #1076) — the motion analog
+ * of {@link reconcileFrameVariantsPass}. Dead motion runs that never hit
+ * `onFailure` left permanent "generating" chips on the Video tab; heal them
+ * from the workflow instance status and drop a failed version's auto-promote
+ * claim on its render segment.
+ */
+async function reconcileVideoVariantsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const stuck = await db
+    .select({ id: videoVariants.id, runId: videoVariants.workflowRunId })
+    .from(videoVariants)
+    .where(
+      and(
+        eq(videoVariants.status, 'generating'),
+        lt(videoVariants.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  let updated = 0;
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    await db
+      .update(videoVariants)
+      .set({ status: next })
+      .where(eq(videoVariants.id, row.id));
+    // Drop auto-promote claim if this stuck version held it (#1070).
+    if (next === 'failed') {
+      await db
+        .update(renderSegments)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(eq(renderSegments.pendingPromoteVersionId, row.id));
+    }
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * Sweep zombie pending prompt claims (#1085) — `frame_prompt_versions` /
+ * `shot_prompt_versions` rows still 'pending'/'generating' whose producing
+ * instance is dead. The honest terminal state is always 'failed' (never
+ * 'completed': a live claim on a terminal instance means the completion write
+ * never landed, so there is no content). Failed frame-side claims cascade to
+ * their dependent image claims. Rows with no run id (trigger died between
+ * insert and the run-id stamp) blind-fail after the longer threshold.
+ *
+ * Cutoffs use `createdAt` — these tables have no `updatedAt`, and a claim's
+ * whole lifecycle is minutes, so enqueue age is the right staleness signal.
+ */
+async function reconcilePromptClaimsPass(
+  db: Database,
+  side: 'frame' | 'shot'
+): Promise<number> {
+  const table = side === 'frame' ? framePromptVersions : shotPromptVersions;
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const blindCutoff = new Date(Date.now() - BLIND_FAIL_THRESHOLD_MS);
+  let updated = 0;
+
+  const cascade = async (versionId: string) => {
+    if (side !== 'frame') return;
+    // No updatedAt bump — see the file-wide rule above `SHOTS_PIPELINE_COLUMNS`.
+    await db
+      .update(frameVariants)
+      .set({
+        status: 'cancelled',
+        error: 'Upstream visual prompt generation died',
+      })
+      .where(
+        and(
+          eq(frameVariants.dependsOnVersionId, versionId),
+          inArray(frameVariants.status, ['pending', 'generating'])
+        )
+      );
+  };
+
+  const stuck = await db
+    .select({ id: table.id, runId: table.workflowRunId })
+    .from(table)
+    .where(
+      and(
+        inArray(table.status, ['pending', 'generating']),
+        isNotNull(table.workflowRunId),
+        lt(table.createdAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    // Re-guard live status at write time: a long generation can complete the
+    // claim between the SELECT above and this UPDATE (resolveRunState is a
+    // network RPC). Without the predicate we'd overwrite completed content
+    // with 'failed' and cascade-cancel dependent image claims.
+    const transitioned = await db
+      .update(table)
+      .set({ status: 'failed' })
+      .where(
+        and(
+          eq(table.id, row.id),
+          inArray(table.status, ['pending', 'generating'])
+        )
+      )
+      .returning({ id: table.id });
+    if (transitioned.length === 0) continue;
+    await cascade(row.id);
+    updated++;
+  }
+
+  const orphaned = await db
+    .update(table)
+    .set({ status: 'failed' })
+    .where(
+      and(
+        inArray(table.status, ['pending', 'generating']),
+        isNull(table.workflowRunId),
+        lt(table.createdAt, blindCutoff)
+      )
+    )
+    .returning({ id: table.id });
+  for (const row of orphaned) await cascade(row.id);
+
+  return updated + orphaned.length;
+}
+
+/**
+ * Sweep zombie 'pending' image claims (#1085). The existing
+ * `frame_variants.status` pass covers 'generating' rows; claim rows that
+ * never reached `set-generating-status` stay 'pending' with the enqueue-time
+ * run id (or none, if the trigger died first). Terminal instance → 'failed';
+ * no run id → blind-fail after the longer threshold.
+ */
+async function reconcileImageClaimsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+  const blindCutoff = new Date(Date.now() - BLIND_FAIL_THRESHOLD_MS);
+  let updated = 0;
+
+  const stuck = await db
+    .select({ id: frameVariants.id, runId: frameVariants.workflowRunId })
+    .from(frameVariants)
+    .where(
+      and(
+        eq(frameVariants.status, 'pending'),
+        isNotNull(frameVariants.workflowRunId),
+        lt(frameVariants.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    // 'failed' regardless of the instance verdict: a still-pending claim on a
+    // terminal instance means no render ever landed on this row. Re-guard
+    // status so a completion that raced the network lookup is never
+    // overwritten (same TOCTOU as the prompt-claim pass).
+    const transitioned = await db
+      .update(frameVariants)
+      .set({ status: 'failed', error: 'Generation died before starting' })
+      .where(
+        and(eq(frameVariants.id, row.id), eq(frameVariants.status, 'pending'))
+      )
+      .returning({ id: frameVariants.id });
+    if (transitioned.length === 0) continue;
+    updated++;
+  }
+
+  const orphaned = await db
+    .update(frameVariants)
+    .set({ status: 'failed', error: 'Generation could not be started' })
+    .where(
+      and(
+        eq(frameVariants.status, 'pending'),
+        isNull(frameVariants.workflowRunId),
+        lt(frameVariants.updatedAt, blindCutoff)
+      )
+    )
+    .returning({ id: frameVariants.id });
+
+  return updated + orphaned.length;
+}
 
 async function reconcileShotsPass(
   db: Database,
@@ -268,6 +533,84 @@ async function reconcileSequencesPass(db: Database): Promise<number> {
     updated++;
   }
   return updated;
+}
+
+// Narrowly typed like `setSequenceStatus` so dropping the null/'unknown'
+// guard in the loop fails typecheck. A verified-'completed' instance whose
+// row is still queued/running means `markCompleted` never landed — the
+// outputs can't be recovered here, so the honest terminal state is 'failed'
+// with a retry hint, never a fabricated 'completed' without outputs.
+const setGeneratedAssetStatus = (next: 'failed' | 'completed') =>
+  next === 'failed'
+    ? {
+        status: 'failed' as const,
+        error: 'Generation was interrupted — run it again.',
+      }
+    : {
+        status: 'failed' as const,
+        error:
+          'The generation finished but its result was not saved — run it again.',
+      };
+
+/**
+ * Heal `generated_assets` rows stuck in 'queued'/'running' whose workflow
+ * died without persisting an outcome, verified against the CF instance via
+ * the persisted `workflowRunId` (same shape as the sequences pass).
+ */
+async function reconcileGeneratedAssetsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+
+  const stuck = await db
+    .select({ id: generatedAssets.id, runId: generatedAssets.workflowRunId })
+    .from(generatedAssets)
+    .where(
+      and(
+        inArray(generatedAssets.status, ['queued', 'running']),
+        isNotNull(generatedAssets.workflowRunId),
+        lt(generatedAssets.updatedAt, staleCutoff)
+      )
+    )
+    .limit(MAX_ROWS_PER_PASS);
+
+  let updated = 0;
+  for (const row of stuck) {
+    const next = await resolveRunState(row.runId ?? '');
+    if (next === null || next === 'unknown') continue;
+    await db
+      .update(generatedAssets)
+      .set(setGeneratedAssetStatus(next))
+      .where(eq(generatedAssets.id, row.id));
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * Blind-fail `generated_assets` rows stuck 'queued' with NO `workflowRunId`.
+ * The create fn marks the row failed when the trigger throws, so this only
+ * catches the residue (crash between insert and that catch, or a failed
+ * `setWorkflowRunId` write whose workflow then also died before its own
+ * first write). A live workflow flips the row to 'running' within seconds,
+ * so 'queued' after 30 minutes with no run id is safely dead.
+ */
+async function failOrphanedGeneratedAssetsPass(db: Database): Promise<number> {
+  const staleCutoff = new Date(Date.now() - BLIND_FAIL_THRESHOLD_MS);
+
+  const result = await db
+    .update(generatedAssets)
+    .set({
+      status: 'failed',
+      error: 'The generation could not be started — please try again.',
+    })
+    .where(
+      and(
+        eq(generatedAssets.status, 'queued'),
+        isNull(generatedAssets.workflowRunId),
+        lt(generatedAssets.updatedAt, staleCutoff)
+      )
+    )
+    .returning({ id: generatedAssets.id });
+  return result.length;
 }
 
 type BlindFailPipeline = 'sequencesMusic' | 'sequenceElements';

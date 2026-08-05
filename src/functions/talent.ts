@@ -6,7 +6,7 @@ import {
   getPublicTalentWithRelations,
   listPublicTalent,
 } from '@/lib/db/scoped';
-import type { Talent, TalentWithSheets } from '@/lib/db/schema';
+import type { TalentWithSheets } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createTalentSchema,
@@ -23,6 +23,7 @@ import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
+import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { createLibraryTalent } from '@/lib/talent/create-library-talent';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
@@ -33,23 +34,6 @@ const talentIdSchema = z.object({ talentId: ulidSchema });
 const sheetIdSchema = z.object({ sheetId: ulidSchema });
 const mediaIdSchema = z.object({ mediaId: ulidSchema });
 const characterIdSchema = z.object({ characterId: ulidSchema });
-
-/**
- * Verify a talent record belongs to the given team, throwing if not found.
- * Uses scopedDb which is already team-scoped.
- */
-async function requireTalentOwnership(
-  scopedDb: {
-    talent: { getById: (id: string) => Promise<Talent | undefined> };
-  },
-  talentId: string
-): Promise<Talent> {
-  const record = await scopedDb.talent.getById(talentId);
-  if (!record) {
-    throw new Error('Talent not found');
-  }
-  return record;
-}
 
 // List Talent
 
@@ -145,7 +129,9 @@ export const deleteTalentFn = createServerFn({ method: 'POST' })
 
     const deleted = await context.scopedDb.talent.delete(data.talentId);
     if (!deleted) {
-      throw new Error('Talent not found or failed to delete');
+      throw new Error(
+        'Talent not found, is read-only, or you do not have permission to delete it'
+      );
     }
 
     return { success: true };
@@ -172,8 +158,6 @@ export const createTalentSheetFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .inputValidator(zodValidator(createTalentSheetSchema))
   .handler(async ({ context, data }) => {
-    await requireTalentOwnership(context.scopedDb, data.talentId);
-
     return context.scopedDb.talent.sheets.create({
       talentId: data.talentId,
       name: data.name,
@@ -201,8 +185,6 @@ export const deleteTalentSheetFn = createServerFn({ method: 'POST' })
       throw new Error('Sheet not found');
     }
 
-    await requireTalentOwnership(context.scopedDb, sheet.talentId);
-
     const deleted = await context.scopedDb.talent.sheets.delete(data.sheetId);
     if (!deleted) {
       throw new Error('Failed to delete sheet');
@@ -221,8 +203,6 @@ export const setDefaultSheetFn = createServerFn({ method: 'POST' })
     if (!sheet) {
       throw new Error('Sheet not found');
     }
-
-    await requireTalentOwnership(context.scopedDb, sheet.talentId);
 
     const updated = await context.scopedDb.talent.sheets.update(data.sheetId, {
       isDefault: true,
@@ -245,7 +225,10 @@ export const deleteTalentMediaFn = createServerFn({ method: 'POST' })
       throw new Error('Media not found');
     }
 
-    await requireTalentOwnership(context.scopedDb, media.talentId);
+    const deleted = await context.scopedDb.talent.media.delete(data.mediaId);
+    if (!deleted) {
+      throw new Error('Failed to delete media');
+    }
 
     if (media.path) {
       try {
@@ -256,11 +239,6 @@ export const deleteTalentMediaFn = createServerFn({ method: 'POST' })
       } catch {
         // Storage deletion is best-effort
       }
-    }
-
-    const deleted = await context.scopedDb.talent.media.delete(data.mediaId);
-    if (!deleted) {
-      throw new Error('Failed to delete media');
     }
 
     return { success: true };
@@ -283,7 +261,15 @@ export const presignTalentUploadFn = createServerFn({ method: 'POST' })
   )
   .handler(async ({ context, data }) => {
     if (data.talentId) {
-      await requireTalentOwnership(context.scopedDb, data.talentId);
+      const talentRecord = await context.scopedDb.talent.getById(data.talentId);
+      if (
+        !talentRecord ||
+        !isTeamWritableTalent(talentRecord, context.teamId)
+      ) {
+        throw new Error(
+          'Talent not found or you do not have permission to modify it'
+        );
+      }
     }
 
     const ext = getExtensionFromUrl(data.filename);
@@ -321,8 +307,6 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       throw new Error('Invalid storage path');
     }
 
-    await requireTalentOwnership(context.scopedDb, data.talentId);
-
     await context.scopedDb.talent.media.create({
       id: data.mediaId,
       talentId: data.talentId,
@@ -351,6 +335,12 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
 
     if (!talentRecord) {
       throw new Error('Talent not found');
+    }
+
+    if (!isTeamWritableTalent(talentRecord, context.teamId)) {
+      throw new Error(
+        'Talent not found or you do not have permission to modify it'
+      );
     }
 
     const imageMedia =

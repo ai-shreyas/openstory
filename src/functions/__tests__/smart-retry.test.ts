@@ -16,8 +16,12 @@
  */
 
 import { describe, expect, test, vi } from 'vitest';
-import type { Shot, Sequence } from '@/lib/db/schema';
+import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
+import type { Frame, Sequence } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
+import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 
 const assertNoActiveStoryboardMock = vi.fn();
 const triggerStoryboardMock = vi.fn();
@@ -38,6 +42,11 @@ vi.doMock('@/lib/workflow/client', () => ({
 const requireCreditsMock = vi.fn();
 vi.doMock('@/lib/billing/preflight', () => ({
   requireCredits: requireCreditsMock,
+}));
+
+// The live pricing loader reads D1 (unavailable under node tests).
+vi.doMock('@/lib/ai/fal-pricing-live', () => ({
+  getEffectiveFalPricing: async () => FAL_PRICING,
 }));
 
 // Dynamic imports so the mocks above apply (vi.doMock is not hoisted).
@@ -87,10 +96,17 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   };
 }
 
-function makeShot(overrides: Partial<Shot> = {}): Shot {
-  return {
+// The still-image surface moved off `shots` onto the anchor `frame` in #989;
+// `executeSmartRetry` projects `ShotWithImage` from each shot + its frame, so the
+// fixture keeps the legacy projected names (`thumbnail*`/`image*`) AND mirrors
+// them onto a concrete anchor `frame` (id == shot.id) so the projection the
+// source builds reflects the per-test overrides.
+function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
+  const base: Omit<ShotWithImage, 'frame'> = {
     id: 'shot-1',
     sequenceId: 'seq_1',
+    sceneId: null,
+    shotNumber: null,
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
@@ -104,9 +120,6 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     imagePrompt: null,
     variantImageUrl: null,
     variantImageStatus: 'pending',
-    variantWorkflowRunId: null,
-    variantImageGeneratedAt: null,
-    variantImageError: null,
     videoUrl: null,
     videoPath: null,
     videoStatus: 'pending',
@@ -115,6 +128,9 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     videoError: null,
     motionPrompt: 'slow pan',
     motionModel: null,
+    motionPromptData: null,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     audioUrl: null,
     audioPath: null,
     audioStatus: 'pending',
@@ -123,7 +139,6 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     audioError: null,
     audioModel: null,
     thumbnailInputHash: null,
-    variantImageInputHash: null,
     videoInputHash: null,
     audioInputHash: null,
     visualPromptInputHash: null,
@@ -134,16 +149,94 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     updatedAt: NOW,
     ...overrides,
   };
+  const frame: Frame = {
+    // Own id — distinct from the shot id (#989); only shotId links them.
+    id: `frame-${base.id}`,
+    shotId: base.id,
+    sequenceId: base.sequenceId,
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: base.thumbnailUrl,
+    previewImageUrl: base.previewThumbnailUrl,
+    imagePath: base.thumbnailPath,
+    imageStatus: base.thumbnailStatus,
+    imageWorkflowRunId: base.thumbnailWorkflowRunId,
+    imageGeneratedAt: base.thumbnailGeneratedAt,
+    imageError: base.thumbnailError,
+    imageModel: base.imageModel,
+    imagePrompt: base.imagePrompt,
+    selectedImageVersionId: null,
+    selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
+    imageInputHash: base.thumbnailInputHash,
+    visualPromptInputHash: base.visualPromptInputHash,
+    createdAt: base.createdAt,
+    updatedAt: base.updatedAt,
+  };
+  return { ...base, frame };
 }
 
-function makeContext(sequence: Sequence, shots: Shot[]) {
+/**
+ * The model each shot's selected image / video version was rendered with
+ * (#1066) — `shotId → model`, exactly what the scoped bulk reads return.
+ */
+type SelectedModels = {
+  image?: Map<string, string>;
+  video?: Map<string, string>;
+  /** `shotId → model` of each shot's newest FAILED version (#1066). */
+  failedImage?: Map<string, string>;
+  failedVideo?: Map<string, string>;
+};
+
+function makeContext(
+  sequence: Sequence,
+  shots: ShotWithImage[],
+  selectedModels: SelectedModels = {}
+) {
   const updateStatus = vi.fn();
   const updateMusicFields = vi.fn();
   const listBySequence = vi.fn(async () => shots);
+  const ensureAnchorFrames = vi.fn(async () => {});
+  // The image surface lives on each shot's anchor frame now (#989); the source
+  // projects `ShotWithImage` from `shots` + anchor `frames`, so expose the
+  // anchors here (keyed by shotId, never id-reuse).
+  const listAnchorsBySequence = vi.fn(async () => shots.map((s) => s.frame));
   const listWithSheets = vi.fn(async () => []);
+  // Model identity lives on the version that produced each asset (#1066); an
+  // empty map means nothing has been rendered yet → shots inherit the sequence
+  // default, preserving the legacy single-model path.
+  const listSelectedImageModels = vi.fn(
+    async () => selectedModels.image ?? new Map<string, string>()
+  );
+  const listSelectedVideoModels = vi.fn(
+    async () => selectedModels.video ?? new Map<string, string>()
+  );
+  // The failed-attempt tier (#1066): every shot smart retry touches is in a
+  // failed state, so the model that failed outranks the older selected one.
+  const listFailedImageModels = vi.fn(
+    async () => selectedModels.failedImage ?? new Map<string, string>()
+  );
+  const listFailedVideoModels = vi.fn(
+    async () => selectedModels.failedVideo ?? new Map<string, string>()
+  );
+  // Motion prompt is resolved from the selected version now (#713); the retry
+  // path reads it per shot. No selected version in these fixtures → resolution
+  // falls back to the shot description.
+  const getSelectedMotion = vi.fn(async () => null);
   const stub = {
-    shots: { listBySequence },
+    shots: { listBySequence, ensureAnchorFrames },
+    frames: { listAnchorsBySequence },
+    frameVariants: {
+      listSelectedModelsBySequence: listSelectedImageModels,
+      listLastFailedModelsBySequence: listFailedImageModels,
+    },
+    videoVariants: {
+      listSelectedModelsBySequence: listSelectedVideoModels,
+      listLastFailedModelsBySequence: listFailedVideoModels,
+    },
     characters: { listWithSheets },
+    shotPromptVersions: { getSelectedMotion },
     sequence: vi.fn(() => ({ updateStatus, updateMusicFields })),
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only what executeSmartRetry touches
@@ -353,6 +446,193 @@ describe('executeSmartRetry — partial retry status reset', () => {
 
     await expect(executeSmartRetry(context)).rejects.toThrow(
       'No failures found to retry'
+    );
+  });
+});
+
+describe('executeSmartRetry — per-asset model selection (#1066)', () => {
+  test("retries each failed image with its selected version's model, summing cost per model", async () => {
+    resetMocks();
+    // Two failed image shots whose selected image versions were rendered by
+    // different models — both differing from the sequence default
+    // ('nano_banana_2').
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      thumbnailStatus: 'failed',
+      imagePrompt: 'Look A',
+    });
+    const shotB = makeShot({
+      id: 'shot-b',
+      orderIndex: 1,
+      sceneId: 'scene-b',
+      thumbnailStatus: 'failed',
+      imagePrompt: 'Look B',
+    });
+    const { context } = makeContext(makeSequence(), [shotA, shotB], {
+      image: new Map([
+        ['shot-a', 'gpt_image_2'],
+        ['shot-b', 'flux_2_max'],
+      ]),
+    });
+
+    await executeSmartRetry(context);
+
+    // Each shot retries with the model that produced its current still, not
+    // the sequence default.
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/image',
+      expect.objectContaining({ shotId: 'shot-a', model: 'gpt_image_2' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/image',
+      expect.objectContaining({ shotId: 'shot-b', model: 'flux_2_max' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+
+    // Pre-flight credit check sums per-shot costs across the two models —
+    // a regression to single-model `multiply(cost, count)` pricing would diverge
+    // whenever the shots were rendered by differently-priced models.
+    const expectedCost = addMicros(
+      addMicros(
+        ZERO_MICROS,
+        gateEstimate(
+          estimateImageCost('gpt_image_2', '16:9', 1, { pricing: FAL_PRICING }),
+          {
+            model: 'gpt_image_2',
+            operation: 'smart-retry:image',
+          }
+        )
+      ),
+      gateEstimate(
+        estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+        {
+          model: 'flux_2_max',
+          operation: 'smart-retry:image',
+        }
+      )
+    );
+    expect(requireCreditsMock).toHaveBeenCalledTimes(1);
+    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
+  });
+
+  test("retries each failed motion video with its selected version's model", async () => {
+    resetMocks();
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      videoStatus: 'failed',
+      thumbnailStatus: 'completed',
+      thumbnailUrl: 'https://cdn/a.jpg',
+    });
+    const shotB = makeShot({
+      id: 'shot-b',
+      orderIndex: 1,
+      sceneId: 'scene-b',
+      videoStatus: 'failed',
+      thumbnailStatus: 'completed',
+      thumbnailUrl: 'https://cdn/b.jpg',
+    });
+    const { context } = makeContext(makeSequence(), [shotA, shotB], {
+      video: new Map([
+        ['shot-a', 'seedance_v2'],
+        ['shot-b', 'kling_v3_pro'],
+      ]),
+    });
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/motion',
+      expect.objectContaining({ shotId: 'shot-a', model: 'seedance_v2' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/motion',
+      expect.objectContaining({ shotId: 'shot-b', model: 'kling_v3_pro' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+  });
+
+  test('retries the model that FAILED, not the older successful one', async () => {
+    resetMocks();
+    // shot-a's still came from gpt_image_2. The user then tried flux_2_max and
+    // it failed — that failed version is not selectable, so without the
+    // failed-attempt tier the retry would silently re-run gpt_image_2: the
+    // model the user had already moved on from.
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      thumbnailStatus: 'failed',
+      imagePrompt: 'Look A',
+    });
+    const { context } = makeContext(makeSequence(), [shotA], {
+      image: new Map([['shot-a', 'gpt_image_2']]),
+      failedImage: new Map([['shot-a', 'flux_2_max']]),
+    });
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/image',
+      expect.objectContaining({ shotId: 'shot-a', model: 'flux_2_max' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+    // …and it is priced as flux_2_max, so the estimate matches the charge.
+    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
+      addMicros(
+        ZERO_MICROS,
+        gateEstimate(
+          estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+          {
+            model: 'flux_2_max',
+            operation: 'smart-retry:image',
+          }
+        )
+      )
+    );
+  });
+
+  test('retries the failed video model over the older selected one', async () => {
+    resetMocks();
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      videoStatus: 'failed',
+      thumbnailStatus: 'completed',
+      thumbnailUrl: 'https://cdn/a.jpg',
+    });
+    const { context } = makeContext(makeSequence(), [shotA], {
+      video: new Map([['shot-a', 'seedance_v2']]),
+      failedVideo: new Map([['shot-a', 'veo3_1']]),
+    });
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/motion',
+      expect.objectContaining({ shotId: 'shot-a', model: 'veo3_1' }),
+      expect.objectContaining({ label: expect.any(String) })
+    );
+  });
+
+  test('falls back to the sequence default when nothing was ever rendered', async () => {
+    resetMocks();
+    const shotA = makeShot({
+      id: 'shot-a',
+      sceneId: 'scene-a',
+      thumbnailStatus: 'failed',
+      imagePrompt: 'Look A',
+    });
+    const { context } = makeContext(makeSequence(), [shotA]);
+
+    await executeSmartRetry(context);
+
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/image',
+      expect.objectContaining({ shotId: 'shot-a', model: 'nano_banana_2' }),
+      expect.objectContaining({ label: expect.any(String) })
     );
   });
 });

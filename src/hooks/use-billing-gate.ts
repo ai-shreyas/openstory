@@ -6,7 +6,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSession } from '@/lib/auth/client';
 import { getBillingGateStatusFn } from '@/functions/billing-gate';
-import { useState, useCallback } from 'react';
+import { openBillingGate } from './use-billing-gate-dialog';
 
 export const BILLING_GATE_KEY = ['billing-gate-byok'] as const;
 
@@ -48,7 +48,6 @@ function hasByokCoverage(data: BillingGateStatus): boolean {
  */
 export function useBillingGate() {
   const query = useBillingGateQuery();
-  const [open, setOpen] = useState(false);
 
   const data: BillingGateStatus | undefined = query.data;
 
@@ -60,8 +59,6 @@ export function useBillingGate() {
     ? !data.hasCredits && !hasByokCoverage(data) && !data.hasAutoTopUp
     : false;
 
-  const showGate = useCallback(() => setOpen(true), []);
-
   return {
     canGenerate,
     needsBillingSetup,
@@ -72,8 +69,8 @@ export function useBillingGate() {
     hasCredits: data?.hasCredits ?? true,
     hasAutoTopUp: data?.hasAutoTopUp ?? false,
     stripeEnabled: data?.stripeEnabled ?? true,
-    showGate,
-    gateProps: { open, onOpenChange: setOpen },
+    // Opens the globally-mounted gate dialog (#1099)
+    showGate: openBillingGate,
     isLoading: query.isLoading,
   };
 }

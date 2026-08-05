@@ -7,23 +7,25 @@ import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 
+import { AUDIO_MODELS } from '@/lib/ai/models';
+import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import {
-  AUDIO_MODELS,
-  DEFAULT_VIDEO_MODEL,
-  safeImageToVideoModel,
-} from '@/lib/ai/models';
-import { estimateVideoCost } from '@/lib/billing/cost-estimation';
-import { multiplyMicros } from '@/lib/billing/money';
+  estimateBatchMotionCost,
+  resolveBatchShotVideoModel,
+} from '@/lib/motion/batch-motion-cost';
 import { requireCredits } from '@/lib/billing/preflight';
+import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
-import { snapDuration } from '@/lib/motion/motion-generation';
 import { generateMotionSchema } from '@/lib/schemas/shot.schemas';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { BatchMotionMusicWorkflowInput } from '@/lib/workflow/types';
 
-import { resolveMotionPrompt } from '@/lib/motion/resolve-motion-prompt';
+import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import { projectShotWithImage } from '@/lib/shots/shot-with-image';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 
 import { shotAccessMiddleware, sequenceAccessMiddleware } from './middleware';
@@ -39,25 +41,49 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(generateMotionInputSchema))
   .handler(async ({ data, context }) => {
-    const { shot, sequence, teamId } = context;
+    const { shot, frame, sequence, teamId } = context;
 
-    if (!shot.thumbnailUrl) {
+    // The still image lives on the anchor frame now (#989). Capture into a const
+    // so the non-null narrowing survives the awaits before the workflow input.
+    const imageUrl = frame.imageUrl;
+    if (!imageUrl) {
       throw new Error('Shot has no thumbnail to generate motion from');
     }
 
-    const model = safeImageToVideoModel(
-      data.model || shot.motionModel || sequence.videoModel,
-      DEFAULT_VIDEO_MODEL
-    );
+    // Model identity lives on the version that rendered the clip (#1066):
+    // explicit request model wins, else the version the shot's render segment
+    // currently points at, then the sequence default.
+    const [selectedVersion, lastFailed] = await Promise.all([
+      context.scopedDb.videoVariants.getSelectedByShot(shot.id),
+      context.scopedDb.videoVariants.getLastFailedByShot(shot.id),
+    ]);
+    const model = resolveVideoModel({
+      explicit: data.model,
+      lastFailedAttemptModel: lastFailed?.model,
+      selectedVersionModel: selectedVersion?.model,
+      sequenceModel: sequence.videoModel,
+    });
 
     const userEditedPrompt = Boolean(data.prompt);
-    const prompt = data.prompt || resolveMotionPrompt(shot, model);
+    const selectedMotion =
+      await context.scopedDb.shotPromptVersions.getSelectedMotion(shot.id);
+    const prompt =
+      data.prompt ||
+      resolveMotionPromptFromVersion(
+        selectedMotion,
+        {
+          motionPromptMirror: shot.motionPrompt,
+          characterTags: shot.metadata?.continuity?.characterTags,
+          description: shot.description,
+        },
+        model
+      );
 
     // Auto-link any element/cast/location tags the user mentioned in their
     // edited motion prompt into shot.metadata.continuity, so downstream
-    // consumers (next image regenerate, shot-image reference attachment)
-    // see the new references. Motion itself uses image-to-video and doesn't
-    // re-attach references here, but persisting keeps the data consistent.
+    // consumers (next image regenerate, shot-image reference attachment, and
+    // the motion reference attachment below) see the new references.
+    let effectiveContinuity = shot.metadata?.continuity;
     if (userEditedPrompt && shot.metadata?.continuity) {
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
@@ -66,11 +92,28 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
         promptText: prompt,
       });
       if (rescan.changed) {
+        effectiveContinuity = rescan.continuity;
         await context.scopedDb.shots.update(shot.id, {
           metadata: { ...shot.metadata, continuity: rescan.continuity },
         });
       }
     }
+
+    // Resolve cast/element reference images so motion preserves identity across
+    // the clip, not just in the start frame (#873). Only Kling v3 Pro emits
+    // them downstream; threaded for every model so they're ready if support
+    // widens. Matches the continuity AFTER any rescan above.
+    const [characters, elements] = await Promise.all([
+      context.scopedDb.characters.listWithSheets(sequence.id),
+      context.scopedDb.sequenceElements.list(sequence.id),
+    ]);
+    const referenceImages = buildMotionReferenceImages({
+      scene: shot.metadata
+        ? { ...shot.metadata, continuity: effectiveContinuity }
+        : null,
+      characters,
+      elements,
+    });
 
     // Snap the resolved duration onto the selected model's valid set before
     // both the credit pre-flight and the workflow input — otherwise an
@@ -84,9 +127,16 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       model,
     });
 
-    await requireCredits(context.scopedDb, estimateVideoCost(model, duration), {
-      errorMessage: 'Insufficient credits for motion generation',
-    });
+    await requireCredits(
+      context.scopedDb,
+      gateEstimate(
+        estimateVideoCost(model, duration, {
+          pricing: await getEffectiveFalPricing(),
+        }),
+        { model, operation: 'motion' }
+      ),
+      { errorMessage: 'Insufficient credits for motion generation' }
+    );
 
     const workflowInput: BatchMotionMusicWorkflowInput = {
       userId: context.user.id,
@@ -96,7 +146,7 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       shots: [
         {
           shotId: shot.id,
-          imageUrl: shot.thumbnailUrl,
+          imageUrl,
           prompt,
           model,
           duration,
@@ -105,6 +155,16 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
           aspectRatio: sequence.aspectRatio,
           generateAudio: data.generateAudio,
           userEditedPrompt,
+          // Capture the edited version's dialogue/audio now so the workflow can
+          // carry it onto the recorded user-edit version without a racy /
+          // replay-unsafe in-workflow DB re-read (#713/#991).
+          priorMotion: userEditedPrompt
+            ? {
+                dialogue: selectedMotion?.dialogue ?? null,
+                audio: selectedMotion?.audio ?? null,
+              }
+            : undefined,
+          referenceImages,
         },
       ],
     };
@@ -145,8 +205,19 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user } = context;
 
-    const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    // Server determines eligible shots: thumbnail done, video pending/failed
+    // Project the anchor-frame image surface (#989) so the eligibility filter
+    // and downstream `shot.thumbnailUrl` reads keep working unchanged.
+    const rawShots = await context.scopedDb.shots.listBySequence(sequence.id);
+    const anchorsByShot = new Map(
+      (await context.scopedDb.frames.listAnchorsBySequence(sequence.id)).map(
+        (f) => [f.shotId, f]
+      )
+    );
+    const allShots = rawShots.flatMap((s) => {
+      const frame = anchorsByShot.get(s.id);
+      return frame ? [projectShotWithImage(s, frame)] : [];
+    });
+    // Server determines eligible shots: still done, video pending/failed
     const eligibleShots = allShots.filter(
       (f) =>
         f.thumbnailStatus === 'completed' &&
@@ -158,19 +229,34 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       throw new Error('No eligible shots for motion generation');
     }
 
-    const batchModel = data.model ?? DEFAULT_VIDEO_MODEL;
-    const batchDuration = snapDuration(data.duration, batchModel);
-
-    await requireCredits(
-      context.scopedDb,
-      multiplyMicros(
-        estimateVideoCost(batchModel, batchDuration),
-        eligibleShots.length
+    // Model identity lives on the version that rendered each clip (#1066).
+    // Resolve each shot's model from its selected video version (an explicit
+    // batch `data.model` still overrides everything). One join, no N+1.
+    const [selected, lastFailed] = await Promise.all([
+      context.scopedDb.videoVariants.listSelectedModelsBySequence(sequence.id),
+      context.scopedDb.videoVariants.listLastFailedModelsBySequence(
+        sequence.id
       ),
+    ]);
+    const shotModels = { selected, lastFailed };
+    const resolveShotVideoModel = (shot: (typeof allShots)[number]) =>
+      resolveBatchShotVideoModel(shot, shotModels, sequence, data.model);
+
+    // Sum per-shot costs — shots may render with different (priced) models.
+    const estimatedCost = estimateBatchMotionCost(
+      eligibleShots,
+      shotModels,
+      sequence,
       {
-        errorMessage: `Insufficient credits for batch motion generation (${eligibleShots.length} shots)`,
+        explicitModel: data.model,
+        duration: data.duration,
+        pricing: await getEffectiveFalPricing(),
       }
     );
+
+    await requireCredits(context.scopedDb, estimatedCost, {
+      errorMessage: `Insufficient credits for batch motion generation (${eligibleShots.length} shots)`,
+    });
 
     const includeMusic =
       (data.includeMusic ?? false) && sequence.musicStatus !== 'generating';
@@ -189,6 +275,13 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         ...(musicModelChanged ? { musicModel: data.musicModel } : {}),
       });
     }
+
+    // Resolve cast/element reference images once for the whole batch (#873) —
+    // matched per frame below against each frame's continuity tags.
+    const [characters, elements] = await Promise.all([
+      context.scopedDb.characters.listWithSheets(sequence.id),
+      context.scopedDb.sequenceElements.list(sequence.id),
+    ]);
 
     // Build music config if requested
     let musicConfig: BatchMotionMusicWorkflowInput['music'];
@@ -212,20 +305,32 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       };
     }
 
+    // Batch-load the selected motion prompt version for every eligible shot —
+    // the resolution source of truth (#713), replacing `metadata.prompts.motion`.
+    const selectedMotionByShot =
+      await context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
+        eligibleShots.map((s) => s.id)
+      );
+
     const workflowInput: BatchMotionMusicWorkflowInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
       includeMusic,
       shots: eligibleShots.map((shot) => {
-        const shotModel = safeImageToVideoModel(
-          data.model || shot.motionModel || sequence.videoModel,
-          DEFAULT_VIDEO_MODEL
-        );
+        const shotModel = resolveShotVideoModel(shot);
         return {
           shotId: shot.id,
           imageUrl: shot.thumbnailUrl ?? '',
-          prompt: resolveMotionPrompt(shot, shotModel),
+          prompt: resolveMotionPromptFromVersion(
+            selectedMotionByShot.get(shot.id),
+            {
+              motionPromptMirror: shot.motionPrompt,
+              characterTags: shot.metadata?.continuity?.characterTags,
+              description: shot.description,
+            },
+            shotModel
+          ),
           model: shotModel,
           duration:
             data.duration ??
@@ -237,6 +342,11 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
           motionBucket: data.motionBucket,
           aspectRatio: sequence.aspectRatio,
           generateAudio: data.generateAudio,
+          referenceImages: buildMotionReferenceImages({
+            scene: shot.metadata,
+            characters,
+            elements,
+          }),
         };
       }),
       music: musicConfig,

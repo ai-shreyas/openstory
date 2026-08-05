@@ -1,0 +1,1 @@
+ALTER TABLE `model_pricing` ADD `rate_verified_at` integer;

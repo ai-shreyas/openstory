@@ -49,6 +49,7 @@ export const buildCharacterReferenceImages = (
       referenceImageUrl: c.sheetImageUrl ?? '',
       description: buildCharacterDescription(c),
       role: 'character' as const,
+      token: c.name,
     }));
 };
 
@@ -191,9 +192,13 @@ export const buildCastingAttributes = (
     age: meta?.age || scriptEntry.age,
     gender: meta?.gender || scriptEntry.gender,
     ethnicity: meta?.ethnicity || scriptEntry.ethnicity,
+    // Likeness is anchored to the reference image, never to the talent's
+    // name: naming a person and demanding exact likeness trips OpenAI's
+    // real-person moderation deterministically (the reseed retry can't
+    // rescue it), and the name adds nothing the reference image doesn't carry.
     physicalDescription:
       meta?.physicalDescription ||
-      `Match the real-world appearance of ${talent.talentName} exactly.${talent.talentDescription ? ` ${talent.talentDescription}` : ''}`,
+      `Match the appearance of the person shown in this character's reference image exactly.${talent.talentDescription ? ` ${talent.talentDescription}` : ''}`,
     // Costume/styling: always from the character role
     standardClothing: scriptEntry.standardClothing,
     distinguishingFeatures: scriptEntry.distinguishingFeatures,
@@ -302,7 +307,7 @@ export const buildCharacterSheetPrompt = (
   const physicalDescription =
     talentMeta?.physicalDescription ||
     (hasTalent && talentOverrides.description
-      ? `${talentOverrides.description}. Match this person's real-world appearance exactly.`
+      ? `${talentOverrides.description}. Match the appearance in the reference image exactly.`
       : entry.physicalDescription);
 
   // Costume/wardrobe: always from the character (the role they're playing)
@@ -335,7 +340,7 @@ ${characterFeatures}`;
       : '';
     referenceInstruction = `
 CRITICAL - Actor Reference:
-The reference image shows the ACTUAL PERSON who plays this character. Their physical appearance (face, body type, skin tone, hair, age) MUST match the reference image exactly. If any text description conflicts with the reference image, the IMAGE takes priority. Dress this person in the costume described above and apply any character makeup/styling notes, but DO NOT alter their fundamental physical appearance.${talentNotes}
+The reference image defines this character's appearance. Their physical appearance (face, body type, skin tone, hair, age) MUST match the reference image exactly. If any text description conflicts with the reference image, the IMAGE takes priority. Dress this person in the costume described above and apply any character makeup/styling notes, but DO NOT alter their fundamental physical appearance.${talentNotes}
 `;
   }
 

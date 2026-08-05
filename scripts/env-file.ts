@@ -113,6 +113,20 @@ export function ensureLocalEnv(): string[] {
   return added;
 }
 
+/** Admin key for fal's pricing & usage APIs (distinct from FAL_KEY for generation). */
+export function getFalPricingKey(): string | undefined {
+  return process.env.FAL_PRICING_KEY;
+}
+
+export function requireFalPricingKey(): string {
+  const key = getFalPricingKey();
+  if (!key) {
+    console.error('FAL_PRICING_KEY not set (add to .env.local)');
+    process.exit(1);
+  }
+  return key;
+}
+
 export function generateSecret(): string {
   try {
     return execFileSync('openssl', ['rand', '-hex', '32'], {

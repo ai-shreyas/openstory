@@ -10,7 +10,6 @@ import type { SequenceWithShots } from '@/hooks/use-sequences-with-shots';
 import type { ViewMode } from './eval-view';
 import { getAspectRatioData } from '@/lib/constants/aspect-ratios';
 import { getAnalysisModelById } from '@/lib/ai/models.config';
-import { Route as sequencesScenesRoute } from '@/routes/_app/sequences/$id/scenes';
 import { Link } from '@tanstack/react-router';
 import { ChevronRight, Mail, User } from 'lucide-react';
 import { getCreatorIdentity } from './creator-identity';
@@ -168,7 +167,7 @@ const MobileReelRow: React.FC<MobileReelRowProps> = ({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <Link
-            to={sequencesScenesRoute.fullPath}
+            to="/sequences/$id/scenes"
             params={{ id: sequence.id }}
             className="font-medium text-sm text-foreground line-clamp-1 hover:underline"
             title={sequence.title || 'Untitled Sequence'}
@@ -192,10 +191,7 @@ const MobileReelRow: React.FC<MobileReelRowProps> = ({
             className="h-8 w-8"
             aria-label="Open sequence"
           >
-            <Link
-              to={sequencesScenesRoute.fullPath}
-              params={{ id: sequence.id }}
-            >
+            <Link to="/sequences/$id/scenes" params={{ id: sequence.id }}>
               <ChevronRight className="h-4 w-4" />
             </Link>
           </Button>
@@ -330,7 +326,7 @@ const SequencePosterCell: React.FC<SequencePosterCellProps> = ({
   );
 
   const linkProps = {
-    to: sequencesScenesRoute.fullPath,
+    to: '/sequences/$id/scenes',
     params: { id: sequence.id },
     'aria-label': `Open ${sequence.title || 'sequence'}`,
   } as const;

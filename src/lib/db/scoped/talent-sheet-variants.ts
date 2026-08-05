@@ -11,6 +11,7 @@ import type {
 import { talentSheetVariants, talentSheets } from '@/lib/db/schema';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { insertDivergentRaceTolerant } from './divergent-insert';
+import { assertTalentSheetWritableForTeam } from './talent';
 
 type PromoteTalentSheetUpdate = {
   imageUrl: string | null;
@@ -18,7 +19,7 @@ type PromoteTalentSheetUpdate = {
   inputHash: string | null;
 };
 
-export function createTalentSheetVariantsMethods(db: Database) {
+export function createTalentSheetVariantsMethods(db: Database, teamId: string) {
   return {
     listByTalentSheet: async (
       talentSheetId: string
@@ -122,6 +123,8 @@ export function createTalentSheetVariantsMethods(db: Database) {
     insert: async (
       values: NewTalentSheetVariant
     ): Promise<TalentSheetVariant> => {
+      await assertTalentSheetWritableForTeam(db, values.talentSheetId, teamId);
+
       const [row] = await db
         .insert(talentSheetVariants)
         .values(values)
@@ -144,6 +147,8 @@ export function createTalentSheetVariantsMethods(db: Database) {
         divergedAt: Date;
       }
     ): Promise<TalentSheetVariant> => {
+      await assertTalentSheetWritableForTeam(db, values.talentSheetId, teamId);
+
       const findExisting = () =>
         db
           .select()
@@ -165,6 +170,14 @@ export function createTalentSheetVariantsMethods(db: Database) {
 
     /** Soft-delete a divergent alternate; preserves the row for the toast Undo. */
     discard: async (variantId: string): Promise<Date> => {
+      const variant = await db.query.talentSheetVariants.findFirst({
+        where: { id: variantId },
+      });
+      if (!variant) {
+        throw new Error(`TalentSheetVariant ${variantId} not found`);
+      }
+      await assertTalentSheetWritableForTeam(db, variant.talentSheetId, teamId);
+
       const discardedAt = new Date();
       const result = await db
         .update(talentSheetVariants)
@@ -178,6 +191,14 @@ export function createTalentSheetVariantsMethods(db: Database) {
     },
 
     undiscard: async (variantId: string): Promise<void> => {
+      const variant = await db.query.talentSheetVariants.findFirst({
+        where: { id: variantId },
+      });
+      if (!variant) {
+        throw new Error(`TalentSheetVariant ${variantId} not found`);
+      }
+      await assertTalentSheetWritableForTeam(db, variant.talentSheetId, teamId);
+
       const result = await db
         .update(talentSheetVariants)
         .set({ discardedAt: null, updatedAt: new Date() })
@@ -214,6 +235,8 @@ export function createTalentSheetVariantsMethods(db: Database) {
       if (!existingVariant) {
         throw new Error(`TalentSheetVariant ${variantId} not found`);
       }
+
+      await assertTalentSheetWritableForTeam(db, talentSheetId, teamId);
 
       const now = new Date();
       const updateSheet = db

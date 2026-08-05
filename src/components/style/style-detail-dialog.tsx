@@ -21,7 +21,6 @@ import {
   stylePreviewImageUrls,
 } from '@/lib/style/style-assets';
 import { styleSlug } from '@/lib/style/style-slug';
-import { Route as NewSequenceRoute } from '@/routes/_app/sequences/new';
 import type { Style } from '@/types/database';
 import { Link } from '@tanstack/react-router';
 import { Wand2 } from 'lucide-react';
@@ -33,6 +32,13 @@ type StyleDetailDialogProps = {
   style: Style | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * When provided, the footer "Use this style" selects the style in place
+   * (and closes the dialog) instead of navigating to a fresh composer — used
+   * when the dialog is opened from within the composer, where navigating away
+   * would discard the current draft.
+   */
+  onUseStyle?: (styleId: string) => void;
 };
 
 /** A still that removes itself if the source 404s (some older styles render
@@ -90,7 +96,7 @@ const SampleClip: FC<{
           className="absolute right-2 top-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity hover:opacity-100"
         >
           <Link
-            to={NewSequenceRoute.to}
+            to="/sequences/new"
             search={{ style: slug }}
             hash="compose"
             aria-label={`Try the ${styleName} style`}
@@ -124,17 +130,33 @@ export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
   style,
   open,
   onOpenChange,
+  onUseStyle,
 }) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] max-w-[95vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl lg:max-w-4xl">
-        {style && <StyleDetailContent style={style} />}
+        {style && (
+          <StyleDetailContent
+            style={style}
+            onUseStyle={
+              onUseStyle
+                ? () => {
+                    onUseStyle(style.id);
+                    onOpenChange(false);
+                  }
+                : undefined
+            }
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
 };
 
-const StyleDetailContent: FC<{ style: Style }> = ({ style }) => {
+const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
+  style,
+  onUseStyle,
+}) => {
   const canonicalUrl = styleCanonicalVideoUrl(style);
   const videoSrc = canonicalUrl ? optimizedVideoUrl(canonicalUrl) : null;
   const poster = canonicalUrl ? videoPosterUrl(canonicalUrl) : undefined;
@@ -276,19 +298,32 @@ const StyleDetailContent: FC<{ style: Style }> = ({ style }) => {
         </div>
       </div>
 
-      <DialogFooter className="border-t px-6 py-4">
+      {/* Reset the footer's default `-mx-4 -mb-4` bleed: this dialog uses a
+          `p-0` content, so the footer bar aligns to the content edges here. */}
+      <DialogFooter className="mx-0 mb-0 border-t px-6 py-4">
         {/* "Use this style" = select the style only (blank prompt) — distinct
-            from the video's "Try", which also seeds the sample brief. */}
-        <Button asChild>
-          <Link
-            to={NewSequenceRoute.to}
-            search={{ style: styleSlug(style.name), prefill: 'style' }}
-            hash="compose"
+            from the video's "Try", which also seeds the sample brief. From the
+            composer it selects in place (onUseStyle); from the styles page it
+            navigates to a fresh composer seeded with this style. */}
+        {onUseStyle ? (
+          <Button
+            onClick={onUseStyle}
             aria-label={`Use the ${style.name} style`}
           >
             Use this style
-          </Link>
-        </Button>
+          </Button>
+        ) : (
+          <Button asChild>
+            <Link
+              to="/sequences/new"
+              search={{ style: styleSlug(style.name), prefill: 'style' }}
+              hash="compose"
+              aria-label={`Use the ${style.name} style`}
+            >
+              Use this style
+            </Link>
+          </Button>
+        )}
       </DialogFooter>
     </div>
   );

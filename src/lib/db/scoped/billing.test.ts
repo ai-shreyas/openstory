@@ -9,7 +9,6 @@
  * original transaction id instead of double-debiting the team.
  */
 
-import { applyMarkup } from '@/lib/billing/constants';
 import { micros, negateMicros } from '@/lib/billing/money';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
@@ -59,18 +58,16 @@ beforeEach(async () => {
 });
 
 describe('deductCredits with an idempotencyKey', () => {
-  const rawCost = micros(1_000_000); // $1 raw
+  const rawCost = micros(1_000_000); // $1
 
   it('debits once and writes a single ledger row', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    const charged = applyMarkup(rawCost);
-
     const result = await billing.deductCredits(rawCost, {
       idempotencyKey: 'wf-instance-1:image',
     });
 
-    expect(result.chargedAmount).toBe(charged);
-    expect(result.newBalance).toBe(STARTING_BALANCE - charged);
+    expect(result.chargedAmount).toBe(rawCost);
+    expect(result.newBalance).toBe(STARTING_BALANCE - rawCost);
     expect(result.transactionId).not.toBe('');
 
     const rows = await db
@@ -78,16 +75,15 @@ describe('deductCredits with an idempotencyKey', () => {
       .from(transactions)
       .where(eq(transactions.teamId, teamId));
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.amount).toBe(negateMicros(charged));
+    expect(rows[0]?.amount).toBe(negateMicros(rawCost));
     // The balanceAfter subquery must see the post-UPDATE balance (the batch
     // statements run sequentially inside one transaction).
-    expect(rows[0]?.balanceAfter).toBe(STARTING_BALANCE - charged);
+    expect(rows[0]?.balanceAfter).toBe(STARTING_BALANCE - rawCost);
     expect(rows[0]?.idempotencyKey).toBe('wf-instance-1:image');
   });
 
   it('replay with the same key is a no-op that returns the original transaction id', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    const charged = applyMarkup(rawCost);
 
     const first = await billing.deductCredits(rawCost, {
       idempotencyKey: 'wf-instance-1:image',
@@ -98,7 +94,7 @@ describe('deductCredits with an idempotencyKey', () => {
 
     // Must not throw, must not double-debit, must recover the original id.
     expect(replay.transactionId).toBe(first.transactionId);
-    expect(replay.newBalance).toBe(STARTING_BALANCE - charged);
+    expect(replay.newBalance).toBe(STARTING_BALANCE - rawCost);
 
     const rows = await db
       .select()
@@ -110,12 +106,11 @@ describe('deductCredits with an idempotencyKey', () => {
       .select({ balance: credits.balance })
       .from(credits)
       .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE - charged);
+    expect(credit?.balance).toBe(STARTING_BALANCE - rawCost);
   });
 
   it('distinct keys are distinct charges', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    const charged = applyMarkup(rawCost);
 
     await billing.deductCredits(rawCost, {
       idempotencyKey: 'wf-instance-1:image',
@@ -138,14 +133,14 @@ describe('deductCredits with an idempotencyKey', () => {
     const motionRow = rows.find(
       (r) => r.idempotencyKey === 'wf-instance-1:motion'
     );
-    expect(imageRow?.balanceAfter).toBe(STARTING_BALANCE - charged);
-    expect(motionRow?.balanceAfter).toBe(STARTING_BALANCE - 2 * charged);
+    expect(imageRow?.balanceAfter).toBe(STARTING_BALANCE - rawCost);
+    expect(motionRow?.balanceAfter).toBe(STARTING_BALANCE - 2 * rawCost);
 
     const [credit] = await db
       .select({ balance: credits.balance })
       .from(credits)
       .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE - 2 * charged);
+    expect(credit?.balance).toBe(STARTING_BALANCE - 2 * rawCost);
   });
 
   it('the same key under a different team charges both teams (key is team-scoped)', async () => {
@@ -166,9 +161,8 @@ describe('deductCredits with an idempotencyKey', () => {
     });
 
     expect(a.transactionId).not.toBe(b.transactionId);
-    const charged = applyMarkup(rawCost);
-    expect(a.newBalance).toBe(STARTING_BALANCE - charged);
-    expect(b.newBalance).toBe(STARTING_BALANCE - charged);
+    expect(a.newBalance).toBe(STARTING_BALANCE - rawCost);
+    expect(b.newBalance).toBe(STARTING_BALANCE - rawCost);
   });
 });
 
@@ -177,7 +171,6 @@ describe('deductCredits without an idempotencyKey (keyless path)', () => {
 
   it('charges on every call (HTTP single-shot semantics preserved)', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    const charged = applyMarkup(rawCost);
 
     const r1 = await billing.deductCredits(rawCost, {
       description: 'one',
@@ -187,7 +180,7 @@ describe('deductCredits without an idempotencyKey (keyless path)', () => {
     });
 
     expect(r1.transactionId).not.toBe(r2.transactionId);
-    expect(r2.newBalance).toBe(STARTING_BALANCE - 2 * charged);
+    expect(r2.newBalance).toBe(STARTING_BALANCE - 2 * rawCost);
 
     const rows = await db
       .select()

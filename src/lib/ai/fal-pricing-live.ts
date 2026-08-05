@@ -1,0 +1,144 @@
+/**
+ * Live fal pricing from the `model_pricing` D1 table — the only pricing
+ * record (#1069). The daily Worker cron fills it with every priced endpoint
+ * in fal's catalog; locally, run `bun scripts/refresh-fal-pricing.ts`.
+ * Both estimation and billing read it, so a fal price move reaches real
+ * charges on the next refresh. Cached per isolate for a few minutes.
+ */
+
+import { getDb } from '#db-client';
+import { micros, type Microdollars } from '@/lib/billing/money';
+import { modelPricing } from '@/lib/db/schema';
+import type { ObservedUnits } from '@/lib/db/schema/model-pricing';
+import { getLogger } from '@/lib/observability/logger';
+import { eq } from 'drizzle-orm';
+
+const logger = getLogger(['openstory', 'ai', 'fal-pricing-live']);
+
+/** One endpoint's pricing row, as estimation and billing consume it. */
+export type EffectiveFalPricing = {
+  /** Per-unit price in microdollars, verbatim from fal. */
+  unitPrice: Microdollars;
+  /** Raw fal unit string (e.g. "images", "compute seconds", "units"). */
+  unit: string;
+  /** Fal's historical estimate of units per call. */
+  typicalUnitsPerCall?: number;
+  /**
+   * Median unitsBilled per image across our own recent generations, with its
+   * sample count. The preferred estimation signal — readers apply
+   * `MIN_OBSERVED_SAMPLES` before trusting the median.
+   */
+  observed?: ObservedUnits;
+};
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Past two missed daily runs the cron is failing silently — and a stale table
+ * produces the same-looking estimates as a fresh one, so this log is the only
+ * thing that can tell them apart.
+ */
+const STALE_AFTER_MS = 48 * 60 * 60 * 1000;
+
+type PricingRow = typeof modelPricing.$inferSelect;
+
+let cache: {
+  at: number;
+  map: Record<string, EffectiveFalPricing>;
+  updatedAt: Date | null;
+} | null = null;
+
+/** Build the endpoint→pricing map from `model_pricing` rows. */
+export function buildFalPricingMap(
+  rows: PricingRow[]
+): Record<string, EffectiveFalPricing> {
+  const map: Record<string, EffectiveFalPricing> = {};
+  const duplicates = new Set<string>();
+  for (const row of rows) {
+    // The table key is (provider, endpointId, unit), so an endpoint fal
+    // re-denominated can briefly have two rows. Billing multiplies unitsBilled
+    // by this price, so an arbitrary winner is a wrong charge — drop the
+    // endpoint and let it be a visible unknown until the cron's sweep runs.
+    if (map[row.endpointId]) {
+      duplicates.add(row.endpointId);
+      continue;
+    }
+    map[row.endpointId] = {
+      unitPrice: micros(row.unitPriceMicros),
+      unit: row.unit,
+      typicalUnitsPerCall: row.typicalUnitsPerCall ?? undefined,
+      // The DB CHECK keeps median and count consistent.
+      ...(row.observedMedianUnits != null && {
+        observed: {
+          medianUnits: row.observedMedianUnits,
+          sampleCount: row.observedSampleCount,
+        } satisfies ObservedUnits,
+      }),
+    };
+  }
+  for (const endpointId of duplicates) {
+    logger.error(
+      'model_pricing has multiple rows for one endpoint — dropping it rather than billing an arbitrary rate',
+      { endpointId }
+    );
+    delete map[endpointId];
+  }
+  return map;
+}
+
+async function load(): Promise<NonNullable<typeof cache>> {
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache;
+
+  const rows = await getDb()
+    .select()
+    .from(modelPricing)
+    .where(eq(modelPricing.provider, 'fal'));
+
+  warnIfStale(rows);
+  const updatedAt = rows.length
+    ? new Date(Math.max(...rows.map((r) => r.fetchedAt.getTime())))
+    : null;
+  cache = { at: Date.now(), map: buildFalPricingMap(rows), updatedAt };
+  return cache;
+}
+
+export async function getEffectiveFalPricing(): Promise<
+  Record<string, EffectiveFalPricing>
+> {
+  return (await load()).map;
+}
+
+/** When the pricing snapshot was last refreshed (null = never). */
+export async function getFalPricingUpdatedAt(): Promise<Date | null> {
+  return (await load()).updatedAt;
+}
+
+function warnIfStale(rows: { fetchedAt: Date; endpointId: string }[]): void {
+  if (rows.length === 0) {
+    // Local dev / e2e / a fresh deploy before the first refresh. Estimates
+    // gate on the unknown floor and billing records $0 charges until a
+    // refresh lands.
+    logger.warn(
+      'model_pricing is empty — no fal pricing available until a refresh runs'
+    );
+    return;
+  }
+  // The OLDEST row: a successful refresh stamps every row with one `now`, and
+  // the writes are chunked — keying off the newest would hide a nightly
+  // partial failure forever.
+  const cutoff = Date.now() - STALE_AFTER_MS;
+  const staleRows = rows.filter((row) => row.fetchedAt.getTime() < cutoff);
+  if (staleRows.length === 0) return;
+  const oldest = Math.min(...staleRows.map((row) => row.fetchedAt.getTime()));
+  logger.error(
+    'model_pricing is stale — the daily refresh cron has not run successfully',
+    {
+      staleRows: staleRows.length,
+      totalRows: rows.length,
+      partial: staleRows.length < rows.length,
+      ageHours: Math.round((Date.now() - oldest) / 3_600_000),
+      oldestFetchedAt: new Date(oldest).toISOString(),
+      endpoints: staleRows.slice(0, 10).map((row) => row.endpointId),
+    }
+  );
+}

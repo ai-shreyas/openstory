@@ -28,6 +28,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { LocationPickerDialog } from './location-picker-dialog';
 import { LocationRecastConfirmDialog } from './location-recast-confirm-dialog';
+import { AppImage } from '@/components/ui/app-image';
 
 type LocationDetailViewProps = {
   sequenceId: string;
@@ -317,9 +318,11 @@ export const LocationDetailView: React.FC<LocationDetailViewProps> = ({
           {/* Location reference image - 16:9 aspect ratio */}
           <div className="relative aspect-video overflow-hidden rounded-lg bg-muted">
             {location.referenceImageUrl && !isSheetGenerating ? (
-              <img
+              <AppImage
                 src={location.referenceImageUrl}
                 alt={location.name}
+                width={160}
+                height={160}
                 className="h-full w-full object-cover"
               />
             ) : isSheetGenerating ? (

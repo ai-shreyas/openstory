@@ -12,6 +12,7 @@ import { useTalent } from '@/hooks/use-talent';
 import type { TalentWithSheets } from '@/lib/db/schema';
 import { Search, User } from 'lucide-react';
 import { useState } from 'react';
+import { AppImage } from '@/components/ui/app-image';
 
 type TalentPickerDialogProps = {
   open: boolean;
@@ -46,11 +47,12 @@ const TalentPickerCard: React.FC<TalentPickerCardProps> = ({
     >
       <div className="aspect-square w-full overflow-hidden rounded-lg bg-muted">
         {imageUrl ? (
-          <img
+          <AppImage
             src={imageUrl}
             alt={talent.name}
+            width={160}
+            height={160}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-            style={{ objectPosition: '95% 75%' }}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center">

@@ -87,10 +87,11 @@ Here's your caffeine fix. How's it going?
     `.trim();
 
       // Click a style to force React interaction and confirm hydration
-      // The style grid may be SSR-rendered before React hydrates
+      // The style grid may be SSR-rendered before React hydrates. Target style
+      // tiles by aria-label so the trailing "View all" tile is never picked.
       const firstStyle = page
         .getByRole('grid', { name: 'Style selection' })
-        .getByRole('button')
+        .getByRole('button', { name: /^Select .+ style$/ })
         .first();
       await firstStyle.click();
 
@@ -191,15 +192,19 @@ testWithUser.describe('Variant Selection', () => {
 
     // Also wait for the shot thumbnail to be visible
     // Shots load via a separate API call from the sequence data, so needs its own timeout
-    await expect(page.getByRole('img', { name: 'Scene 1' })).toBeVisible({
+    const shotThumbnail = page.getByRole('img', { name: 'Scene 1' });
+    await expect(shotThumbnail).toBeVisible({
       timeout: 15000,
     });
 
-    const variantsTab = page.getByRole('tab', { name: /Variants/i });
-    await expect(variantsTab).toBeVisible({ timeout: 10000 });
-
-    // Click the Variants tab
-    await variantsTab.click();
+    // Variants moved from a tab to a dialog opened from the canvas image (#986):
+    // select the shot, then open the variants dialog from the starting frame.
+    await shotThumbnail.click();
+    const variantsButton = page.getByRole('button', {
+      name: 'Frame variants',
+    });
+    await expect(variantsButton).toBeVisible({ timeout: 10000 });
+    await variantsButton.click();
 
     const variantGrid = page.getByRole('grid', { name: 'Variant selection' });
 
@@ -214,23 +219,31 @@ testWithUser.describe('Variant Selection', () => {
     // Confirmation dialog should appear
     await expect(page.getByText('Select this variant?')).toBeVisible();
 
+    // Selecting a tile no longer writes the thumbnail synchronously (#989).
+    // `selectShotVariantFn` runs the full synchronous path — reads the latest
+    // framing grid sheet from frame_variants, crops the chosen tile, checks
+    // credits, and triggers the upscale workflow — then returns. The actual
+    // still REPOINT happens asynchronously inside that workflow (covered by
+    // upscale-shot-variant-workflow.test.ts's persistUpscaleSelection), and
+    // normal e2e no-ops workflow triggers (workflow/client.ts), so there is no
+    // synchronous DB thumbnail change to observe here. Assert the interaction
+    // round-trips cleanly instead: the select POST returns 200 and the flow
+    // completes without an error toast.
+    const selectResponse = page.waitForResponse(
+      (resp) =>
+        resp.request().method() === 'POST' &&
+        (resp.request().postData() ?? '').includes('variantIndex') &&
+        resp.status() === 200,
+      { timeout: 15_000 }
+    );
+
     // Confirm selection
     await page.getByRole('button', { name: 'Confirm' }).click();
+    await selectResponse;
 
-    // Dialog should close
+    // Dialog should close and no failure toast should surface.
     await expect(page.getByText('Select this variant?')).not.toBeVisible();
-
-    // Wait for the API call to complete and verify database was updated
-    // The thumbnailUrl should have changed from the original
-    await expect
-      .poll(
-        async () => {
-          const shotAfter = await getTestShot(testShot.id);
-          return shotAfter?.thumbnailUrl;
-        },
-        { timeout: 20_000 }
-      )
-      .not.toBe(originalThumbnailUrl);
+    await expect(page.getByText('Failed to select variant')).not.toBeVisible();
   });
 });
 

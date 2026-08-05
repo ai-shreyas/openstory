@@ -32,7 +32,7 @@ import {
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
 import type { Database } from '@/lib/db/client';
-import { createShotsMethods, type ShotArtifact } from './shots';
+import { createShotsMethods, type ShotHashArtifact } from './shots';
 import { createShotVariantsMethods } from './shot-variants';
 
 let client: Client;
@@ -101,22 +101,20 @@ beforeEach(async () => {
 });
 
 describe('shots input-hash columns', () => {
+  // The still-image hash columns (thumbnail / variantImage) moved to `frames`
+  // in #989; only the shot-owned video/audio artifact hashes remain here.
   it('default to null and persist when set', async () => {
     const [shot] = await db
       .insert(shots)
       .values({ sequenceId, orderIndex: 0 })
       .returning();
     if (!shot) throw new Error('test setup: shot insert returned nothing');
-    expect(shot.thumbnailInputHash).toBeNull();
-    expect(shot.variantImageInputHash).toBeNull();
     expect(shot.videoInputHash).toBeNull();
     expect(shot.audioInputHash).toBeNull();
 
     await db
       .update(shots)
       .set({
-        thumbnailInputHash: 't',
-        variantImageInputHash: 'v',
         videoInputHash: 'm',
         audioInputHash: 'a',
       })
@@ -126,8 +124,6 @@ describe('shots input-hash columns', () => {
       .from(shots)
       .where(eq(shots.id, shot.id));
     if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.thumbnailInputHash).toBe('t');
-    expect(refreshed.variantImageInputHash).toBe('v');
     expect(refreshed.videoInputHash).toBe('m');
     expect(refreshed.audioInputHash).toBe('a');
   });
@@ -269,24 +265,16 @@ describe('talent_sheets.input_hash', () => {
 
 describe('shots.isStale', () => {
   const ARTIFACTS: Array<{
-    artifact: ShotArtifact;
-    column:
-      | 'thumbnailInputHash'
-      | 'variantImageInputHash'
-      | 'videoInputHash'
-      | 'audioInputHash';
+    artifact: ShotHashArtifact;
+    column: 'videoInputHash' | 'audioInputHash';
   }> = [
-    { artifact: 'thumbnail', column: 'thumbnailInputHash' },
-    { artifact: 'variantImage', column: 'variantImageInputHash' },
     { artifact: 'video', column: 'videoInputHash' },
     { artifact: 'audio', column: 'audioInputHash' },
   ];
 
   it('throws when the shot does not exist', () => {
     const m = createShotsMethods(db);
-    expect(m.isStale(generateId(), 'thumbnail', 'h')).rejects.toThrow(
-      /not found/
-    );
+    expect(m.isStale(generateId(), 'video', 'h')).rejects.toThrow(/not found/);
   });
 
   it.each(ARTIFACTS)(
@@ -334,8 +322,6 @@ describe('shots.isStale', () => {
       .values({
         sequenceId,
         orderIndex: 0,
-        thumbnailInputHash: 't-hash',
-        variantImageInputHash: 'v-hash',
         videoInputHash: 'm-hash',
         audioInputHash: 'a-hash',
       })
@@ -343,10 +329,10 @@ describe('shots.isStale', () => {
     if (!shot) throw new Error('test setup: shot insert returned nothing');
     const m = createShotsMethods(db);
     // Each artifact key compares against ONLY its own column.
-    expect(await m.isStale(shot.id, 'thumbnail', 't-hash')).toBe(false);
-    expect(await m.isStale(shot.id, 'thumbnail', 'v-hash')).toBe(true);
     expect(await m.isStale(shot.id, 'video', 'm-hash')).toBe(false);
     expect(await m.isStale(shot.id, 'video', 'a-hash')).toBe(true);
+    expect(await m.isStale(shot.id, 'audio', 'a-hash')).toBe(false);
+    expect(await m.isStale(shot.id, 'audio', 'm-hash')).toBe(true);
   });
 });
 

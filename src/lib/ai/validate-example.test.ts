@@ -29,40 +29,8 @@ describe('Scene Analysis Schema Validation', () => {
       expect(scene.sceneNumber).toBeGreaterThan(0);
       expect(scene.originalScript).toBeDefined();
       expect(scene.metadata).toBeDefined();
-      expect(scene.prompts).toBeDefined();
-      expect(scene.prompts?.visual).toBeDefined();
-      expect(scene.prompts?.motion).toBeDefined();
-    }
-  });
-
-  test('visual prompts have all required components', () => {
-    for (const scene of sceneAnalysisExample.scenes) {
-      if (!scene.prompts?.visual) continue;
-      const { components } = scene.prompts.visual;
-      expect(components.sceneDescription).toBeDefined();
-      expect(components.subject).toBeDefined();
-      expect(components.environment).toBeDefined();
-      expect(components.lighting).toBeDefined();
-      expect(components.camera).toBeDefined();
-      expect(components.composition).toBeDefined();
-      expect(components.style).toBeDefined();
-      expect(components.technical).toBeDefined();
-      expect(components.atmosphere).toBeDefined();
-    }
-  });
-
-  test('motion prompts have all required components', () => {
-    for (const scene of sceneAnalysisExample.scenes) {
-      if (!scene.prompts?.motion) continue;
-      const { components } = scene.prompts.motion;
-      expect(components.cameraMovement).toBeDefined();
-      expect(components.startPosition).toBeDefined();
-      expect(components.endPosition).toBeDefined();
-      expect(components.durationSeconds).toBeGreaterThan(0);
-      expect(components.speed).toBeDefined();
-      expect(components.smoothness).toBeDefined();
-      expect(components.subjectTracking).toBeDefined();
-      expect(components.equipment).toBeDefined();
+      // `prompts` was removed from the Scene shape (#713): visual prompts live
+      // in frame_prompt_versions, motion prompts in shot_prompt_versions.
     }
   });
 

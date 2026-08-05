@@ -1,10 +1,17 @@
-import type { Shot, Style } from '@/types/database';
+import type { Frame } from '@/lib/db/schema';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { Style } from '@/types/database';
 import { faker } from '@faker-js/faker';
 
 // Set consistent seed for reproducible mock data
 faker.seed(123);
 
-const generateMockShot = (overrides?: Partial<Shot>): Shot => {
+// The still-image surface moved off `shots` onto the anchor `frame` in #989;
+// the mock keeps the legacy projected names (`thumbnail*`/`image*`) the UI
+// reads and derives the raw anchor `frame` from them.
+const generateMockShot = (
+  overrides?: Partial<ShotWithImage>
+): ShotWithImage => {
   const settings = [
     'City Street',
     'Forest',
@@ -13,11 +20,12 @@ const generateMockShot = (overrides?: Partial<Shot>): Shot => {
     'Mountains',
     'Space Station',
   ];
-  const moods = ['Tense', 'Happy', 'Sad', 'Excited', 'Calm', 'Angry'];
 
-  return {
+  const shotBase: Omit<ShotWithImage, 'frame'> = {
     id: faker.string.ulid(),
     sequenceId: faker.string.ulid(),
+    sceneId: null,
+    shotNumber: null,
     orderIndex: faker.number.int({ min: 1, max: 10 }),
     description: faker.lorem.paragraph(),
     thumbnailUrl: `https://picsum.photos/seed/${faker.helpers.arrayElement([
@@ -33,9 +41,6 @@ const generateMockShot = (overrides?: Partial<Shot>): Shot => {
     thumbnailPath: `teams/${faker.string.ulid()}/sequences/${faker.string.ulid()}/frames/${faker.string.ulid()}/thumbnail.jpg`,
     variantImageUrl: null,
     variantImageStatus: 'pending',
-    variantWorkflowRunId: null,
-    variantImageGeneratedAt: null,
-    variantImageError: null,
     videoUrl: faker.datatype.boolean()
       ? `${faker.internet.url()}/video.mp4`
       : null,
@@ -58,6 +63,7 @@ const generateMockShot = (overrides?: Partial<Shot>): Shot => {
       'flux_2_dev',
     ]),
     imagePrompt: null,
+    motionPromptData: null,
     videoStatus: faker.helpers.arrayElement([
       'pending',
       'generating',
@@ -81,11 +87,12 @@ const generateMockShot = (overrides?: Partial<Shot>): Shot => {
     audioError: null,
     audioModel: null,
     thumbnailInputHash: null,
-    variantImageInputHash: null,
     videoInputHash: null,
     audioInputHash: null,
     visualPromptInputHash: null,
     motionPromptInputHash: null,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     previewThumbnailUrl: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
@@ -122,50 +129,34 @@ const generateMockShot = (overrides?: Partial<Shot>): Shot => {
         styleTag: '',
       },
       sourceImageUrl: '',
-      prompts: {
-        visual: {
-          fullPrompt: faker.lorem.paragraph(),
-          negativePrompt: '',
-          components: {
-            sceneDescription: faker.lorem.sentence(),
-            subject: faker.lorem.words(5),
-            environment: faker.helpers.arrayElement(settings),
-            lighting: faker.lorem.words(3),
-            camera: faker.lorem.words(2),
-            composition: faker.lorem.words(3),
-            style: faker.lorem.word(),
-            technical: faker.lorem.words(2),
-            atmosphere: faker.helpers.arrayElement(moods),
-          },
-        },
-        motion: {
-          fullPrompt: faker.lorem.paragraph(),
-          components: {
-            cameraMovement: faker.lorem.words(3),
-            startPosition: faker.lorem.words(2),
-            endPosition: faker.lorem.words(2),
-            durationSeconds: faker.number.int({ min: 2, max: 5 }),
-            speed: 'medium',
-            smoothness: 'smooth',
-            subjectTracking: faker.lorem.word(),
-            equipment: faker.lorem.word(),
-          },
-          parameters: {
-            durationSeconds: faker.number.int({ min: 2, max: 5 }),
-            fps: 24,
-            motionAmount: 'medium' as const,
-            cameraControl: {
-              pan: 0,
-              tilt: 0,
-              zoom: 0,
-              movement: 'steady',
-            },
-          },
-        },
-      },
     },
-    ...overrides,
   };
+  const frame: Frame = {
+    // Own id — the anchor frame is NOT the shot (#989); only shotId links them.
+    id: faker.string.ulid(),
+    shotId: shotBase.id,
+    sequenceId: shotBase.sequenceId,
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: shotBase.thumbnailUrl,
+    previewImageUrl: shotBase.previewThumbnailUrl,
+    imagePath: shotBase.thumbnailPath,
+    imageStatus: shotBase.thumbnailStatus,
+    imageWorkflowRunId: shotBase.thumbnailWorkflowRunId,
+    imageGeneratedAt: shotBase.thumbnailGeneratedAt,
+    imageError: shotBase.thumbnailError,
+    imageModel: shotBase.imageModel,
+    imagePrompt: shotBase.imagePrompt,
+    selectedImageVersionId: null,
+    selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
+    imageInputHash: shotBase.thumbnailInputHash,
+    visualPromptInputHash: shotBase.visualPromptInputHash,
+    createdAt: shotBase.createdAt,
+    updatedAt: shotBase.updatedAt,
+  };
+  return { ...shotBase, frame, ...overrides };
 };
 
 const generateMockStyle = (overrides?: Partial<Style>): Style => {
@@ -316,7 +307,7 @@ const generateMockStyle = (overrides?: Partial<Style>): Style => {
 export const generateMockShots = (
   count: number = 6,
   sequenceId?: string
-): Shot[] => {
+): ShotWithImage[] => {
   return Array.from({ length: count }, (_, index) =>
     generateMockShot({
       orderIndex: index + 1,

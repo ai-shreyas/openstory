@@ -10,9 +10,12 @@
  */
 
 import type { ScopedDb } from '@/lib/db/scoped';
-import type { Shot } from '@/lib/db/schema/shots';
 import type { Style } from '@/lib/db/schema/libraries';
 import { ValidationError } from '@/lib/errors';
+import {
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
 import type { Sequence } from '@/types/database';
 import { createSequenceLink } from './discovery';
 import { API_V1_BASE, getLink, type HalResource, withLinks } from './hal';
@@ -77,7 +80,7 @@ export function decodeCursor(raw: string): SequenceCursor {
 
 function buildListItem(
   sequence: Sequence,
-  shots: Shot[],
+  shots: ShotWithImage[],
   style: Style | null,
   origin: string
 ): HalResource<SequenceListItem> {
@@ -101,6 +104,7 @@ function buildListItem(
 export async function buildSequenceListPage(params: {
   scopedDb: {
     sequences: Pick<ScopedDb['sequences'], 'listShotsByIds'>;
+    frames: Pick<ScopedDb['frames'], 'getAnchorsByShots'>;
     styles: Pick<ScopedDb['styles'], 'listByIds'>;
   };
   sequences: Sequence[];
@@ -117,11 +121,21 @@ export async function buildSequenceListPage(params: {
     scopedDb.styles.listByIds(sequences.map((s) => s.styleId)),
   ]);
 
-  const shotsById = new Map<string, Shot[]>();
+  // The still IMAGE surface lives on each shot's anchor frame now (#989).
+  // Batch-load the anchor frames keyed by shotId (NOT id-reuse) and project them
+  // back under the legacy thumbnail* names so `summarizeShotCounts` reads image
+  // readiness.
+  const anchorsByShot = await scopedDb.frames.getAnchorsByShots(
+    allShots.map((shot) => shot.id)
+  );
+  const shotsById = new Map<string, ShotWithImage[]>();
   for (const shot of allShots) {
+    const frame = anchorsByShot.get(shot.id);
+    if (!frame) continue;
+    const withImage = projectShotWithImage(shot, frame);
     const bucket = shotsById.get(shot.sequenceId);
-    if (bucket) bucket.push(shot);
-    else shotsById.set(shot.sequenceId, [shot]);
+    if (bucket) bucket.push(withImage);
+    else shotsById.set(shot.sequenceId, [withImage]);
   }
   const styleById = new Map(allStyles.map((style) => [style.id, style]));
 

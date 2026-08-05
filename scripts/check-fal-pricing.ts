@@ -1,17 +1,13 @@
 /**
  * Check fal.ai pricing for all supported models
  * Usage: bun scripts/check-fal-pricing.ts
+ * (Bun autoloads .env.local; use --env-file= to override)
  */
-import { getEnv } from '#env';
-import { getFalEndpointIds } from './fal-endpoints';
+import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';
+import { requireFalPricingKey } from './env-file';
 
 const endpoints = getFalEndpointIds();
-
-const apiKey = getEnv().FAL_KEY;
-if (!apiKey) {
-  console.error('FAL_KEY not set');
-  process.exit(1);
-}
+const apiKey = requireFalPricingKey();
 
 const url = new URL('https://api.fal.ai/v1/models/pricing');
 url.searchParams.set('endpoint_id', endpoints.join(','));

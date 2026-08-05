@@ -51,11 +51,60 @@ export const relations = defineRelations(schema, (r) => ({
       alias: 'sequences_updatedBy_users_id',
     }),
     style: r.one.styles({ from: r.sequences.styleId, to: r.styles.id }),
+    scenes: r.many.scenes(),
     shots: r.many.shots(),
+    frames: r.many.frames(),
+    renderSegments: r.many.renderSegments(),
+    videoVariants: r.many.videoVariants(),
+    events: r.many.sequenceEvents(),
     characters: r.many.characters(),
     locations: r.many.sequenceLocations(),
     elements: r.many.sequenceElements(),
-    musicPromptVariants: r.many.sequenceMusicPromptVariants(),
+    musicPromptVariants: r.many.sequenceMusicPromptVersions(),
+  },
+
+  // ---- Scenes ----
+  scenes: {
+    sequence: r.one.sequences({
+      from: r.scenes.sequenceId,
+      to: r.sequences.id,
+    }),
+    shots: r.many.shots(),
+    renderSegments: r.many.renderSegments(),
+    scriptVersions: r.many.sceneScriptVersions(),
+  },
+
+  sceneScriptVersions: {
+    scene: r.one.scenes({
+      from: r.sceneScriptVersions.sceneId,
+      to: r.scenes.id,
+    }),
+  },
+
+  // ---- Render Segments (SSF #990 — scene render units) ----
+  renderSegments: {
+    scene: r.one.scenes({
+      from: r.renderSegments.sceneId,
+      to: r.scenes.id,
+    }),
+    sequence: r.one.sequences({
+      from: r.renderSegments.sequenceId,
+      to: r.sequences.id,
+    }),
+    shots: r.many.shots(),
+    videoVariants: r.many.videoVariants(),
+  },
+
+  // ---- Video Variants (SSF #990 — flat video render versions per segment) ----
+  videoVariants: {
+    renderSegment: r.one.renderSegments({
+      from: r.videoVariants.renderSegmentId,
+      to: r.renderSegments.id,
+    }),
+    sequence: r.one.sequences({
+      from: r.videoVariants.sequenceId,
+      to: r.sequences.id,
+    }),
   },
 
   // ---- Shots ----
@@ -64,8 +113,17 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.shots.sequenceId,
       to: r.sequences.id,
     }),
+    scene: r.one.scenes({
+      from: r.shots.sceneId,
+      to: r.scenes.id,
+    }),
+    renderSegment: r.one.renderSegments({
+      from: r.shots.renderSegmentId,
+      to: r.renderSegments.id,
+    }),
+    frames: r.many.frames(),
     variants: r.many.shotVariants(),
-    promptVariants: r.many.shotPromptVariants(),
+    promptVariants: r.many.shotPromptVersions(),
   },
 
   // ---- Shot Variants ----
@@ -80,26 +138,76 @@ export const relations = defineRelations(schema, (r) => ({
     }),
   },
 
-  // ---- Shot Prompt Variants ----
-  shotPromptVariants: {
+  // ---- Frames (SSF #987 — IMAGE unit; still keyframes within a shot) ----
+  frames: {
     shot: r.one.shots({
-      from: r.shotPromptVariants.shotId,
+      from: r.frames.shotId,
       to: r.shots.id,
     }),
+    sequence: r.one.sequences({
+      from: r.frames.sequenceId,
+      to: r.sequences.id,
+    }),
+    variants: r.many.frameVariants(),
+    promptVersions: r.many.framePromptVersions(),
+  },
+
+  // ---- Frame Variants (SSF #987 — flat still-image versions) ----
+  frameVariants: {
+    frame: r.one.frames({
+      from: r.frameVariants.frameId,
+      to: r.frames.id,
+    }),
+    sequence: r.one.sequences({
+      from: r.frameVariants.sequenceId,
+      to: r.sequences.id,
+    }),
+  },
+
+  // ---- Frame Prompt Versions (SSF #987 — visual prompt history) ----
+  framePromptVersions: {
+    frame: r.one.frames({
+      from: r.framePromptVersions.frameId,
+      to: r.frames.id,
+    }),
     createdByUser: r.one.user({
-      from: r.shotPromptVariants.createdBy,
+      from: r.framePromptVersions.createdBy,
       to: r.user.id,
     }),
   },
 
-  // ---- Sequence Music Prompt Variants ----
-  sequenceMusicPromptVariants: {
+  // ---- Sequence Events (SSF #987 — append-only activity log) ----
+  sequenceEvents: {
     sequence: r.one.sequences({
-      from: r.sequenceMusicPromptVariants.sequenceId,
+      from: r.sequenceEvents.sequenceId,
+      to: r.sequences.id,
+    }),
+    actor: r.one.user({
+      from: r.sequenceEvents.actorId,
+      to: r.user.id,
+    }),
+  },
+
+  // ---- Shot Prompt Versions ----
+  shotPromptVersions: {
+    shot: r.one.shots({
+      from: r.shotPromptVersions.shotId,
+      to: r.shots.id,
+    }),
+    createdByUser: r.one.user({
+      from: r.shotPromptVersions.createdBy,
+      to: r.user.id,
+    }),
+  },
+
+  // ---- Sequence Music Prompt Versions ----
+  sequenceMusicPromptVersions: {
+    sequence: r.one.sequences({
+      from: r.sequenceMusicPromptVersions.sequenceId,
       to: r.sequences.id,
     }),
     createdByUser: r.one.user({
-      from: r.sequenceMusicPromptVariants.createdBy,
+      from: r.sequenceMusicPromptVersions.createdBy,
       to: r.user.id,
     }),
   },

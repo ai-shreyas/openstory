@@ -194,7 +194,13 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
     // for parity with the QStash version's `result.isFailed` check.
     const sceneResults = await Promise.allSettled(
       scenesWithVisualPrompts.map(async (scene) => {
-        const visualPrompt = scene.prompts?.visual?.fullPrompt;
+        // The visual prompt is no longer carried on `scene.prompts` (#713); it
+        // rides on the per-scene snapshot, which analyze-script populates from
+        // the shot's `frame.imagePrompt` mirror. Sourcing it here keeps the
+        // hashed snapshot and the rendered prompt identical by construction.
+        const visualPrompt = sceneSnapshotsById.get(
+          scene.sceneId
+        )?.visualPrompt;
         if (!visualPrompt) {
           throw new WorkflowValidationError(
             `Scene ${scene.sceneId} has no visual prompt`
@@ -202,7 +208,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
         }
 
         const matchedShot = shotMapping.find(
-          (f) => f.sceneId === scene.sceneId
+          (f) => f.analysisSceneId === scene.sceneId
         );
 
         const characterRefs = buildCharacterReferenceImages(
@@ -297,7 +303,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
                     sequenceId,
                     shotId: matchedShot?.shotId,
                     thumbnailUrl: childOutput.imageUrl,
-                    scenePrompt: scene.prompts?.visual?.fullPrompt,
+                    scenePrompt: visualPrompt,
                     characterReferences:
                       characterRefs.length > 0 ? characterRefs : undefined,
                     locationReferences:

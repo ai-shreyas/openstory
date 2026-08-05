@@ -4,16 +4,17 @@
  */
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { facetIdsForShots, useSceneFacetMaps } from '@/hooks/use-scene-facets';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import type { Character } from '@/lib/db/schema';
-import { matchCharactersToScene } from '@/lib/workflows/scene-matching';
-import type { Shot } from '@/types/database';
 import { Link } from '@tanstack/react-router';
 import { Film, User } from 'lucide-react';
+import { AppImage } from '@/components/ui/app-image';
 
 type SceneCastTabProps = {
-  shot?: Shot;
   sequenceId: string;
+  /** Shots in the current selection. `null` = whole sequence (show all). */
+  shotIds: string[] | null;
 };
 
 type CastCardProps = {
@@ -31,15 +32,12 @@ const CastCard: React.FC<CastCardProps> = ({ character, sequenceId }) => {
       {/* Character avatar - cropped from right side of sheet where large headshot lives */}
       <div className="aspect-square relative overflow-hidden bg-muted">
         {character.sheetImageUrl ? (
-          <img
+          <AppImage
             src={character.sheetImageUrl}
             alt={character.name}
+            width={160}
+            height={160}
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-            style={{
-              // The character sheet is 16:9 with a large headshot on the right side
-              // Crop to the right ~25% and lower ~60% where the headshot panel is
-              objectPosition: '95% 75%',
-            }}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center">
@@ -88,18 +86,18 @@ const CastCardSkeleton: React.FC = () => (
 );
 
 export const SceneCastTab: React.FC<SceneCastTabProps> = ({
-  shot,
   sequenceId,
+  shotIds,
 }) => {
   const { data: characters, isLoading } = useSequenceCharacters(sequenceId);
+  const { data: facetMaps } = useSceneFacetMaps(sequenceId);
 
-  // Get character tags from shot metadata
-  const characterTags = shot?.metadata?.continuity?.characterTags ?? [];
-
-  // Match characters to this shot
-  const shotCast = characters
-    ? matchCharactersToScene(characters, characterTags)
-    : [];
+  const scopedIds = facetIdsForShots(facetMaps?.characterIdsByShot, shotIds);
+  const scopedCast = !characters
+    ? []
+    : scopedIds === null
+      ? characters
+      : characters.filter((c) => scopedIds.has(c.id));
 
   // Loading state
   if (isLoading) {
@@ -112,38 +110,31 @@ export const SceneCastTab: React.FC<SceneCastTabProps> = ({
     );
   }
 
-  // Empty state - no characters in this scene
-  if (shotCast.length === 0) {
+  if (scopedCast.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <div className="rounded-full bg-muted p-4 mb-4">
           <Film className="h-8 w-8 text-muted-foreground/50" />
         </div>
-        <p className="text-sm text-muted-foreground">No cast in this scene</p>
-        {characterTags.length > 0 && (
-          <p className="mt-2 text-xs text-muted-foreground/70">
-            {characterTags.length} character tag
-            {characterTags.length > 1 ? 's' : ''} found but no matches
-          </p>
-        )}
+        <p className="text-sm text-muted-foreground">
+          {shotIds === null ? 'No cast yet' : 'No cast in this selection'}
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {/* Scene cast header */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
-        <span>Scene Cast</span>
+      <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+        <span>{shotIds === null ? 'All Cast' : 'Cast'}</span>
         <span className="text-muted-foreground/50">·</span>
         <span>
-          {shotCast.length} character{shotCast.length > 1 ? 's' : ''}
+          {scopedCast.length} character{scopedCast.length > 1 ? 's' : ''}
         </span>
       </div>
 
-      {/* Cast grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {shotCast.map((character) => (
+        {scopedCast.map((character) => (
           <CastCard
             key={character.id}
             character={character}

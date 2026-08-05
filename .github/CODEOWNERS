@@ -1,6 +1,10 @@
 # Sensitive paths require code-owner review.
 # Docs: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
 
+# Catch-all — auto-request review on every PR (#1017). Later, more specific
+# rules take precedence, so the sensitive-path entries below stay authoritative.
+*                     @tombeckenham
+
 # CI workflows — anything merged here can leak secrets on next main push
 /.github/workflows/   @tombeckenham
 

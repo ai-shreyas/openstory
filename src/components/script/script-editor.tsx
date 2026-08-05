@@ -17,8 +17,8 @@ type ScriptEditorProps = {
   /**
    * Sequence cast/elements/locations. When provided, their canonical tags in
    * the script render as @-mention pills (and `@` autocompletes them) — same
-   * behaviour as the scene prompt editors. Omit on the pre-analysis create
-   * screen where no canonical tags exist yet.
+   * behaviour as the scene prompt editors. The create screen passes the draft
+   * elements' tokens (#1079); pass the full sequence sets once analysed.
    */
   mentionItems?: MentionItem[];
 };

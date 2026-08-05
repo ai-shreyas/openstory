@@ -4,7 +4,6 @@ import { Card } from '@/components/ui/card';
 import { useLibraryLocationDivergentVariants } from '@/hooks/use-library-location-sheet-variants';
 import { useLocationSheetsRealtime } from '@/hooks/use-location-sheets-realtime';
 import type { LibraryLocation } from '@/lib/db/schema';
-import { useNavigate } from '@tanstack/react-router';
 import { useMemo } from 'react';
 
 type LocationLibraryListProps = {
@@ -18,8 +17,6 @@ export const LocationLibraryList: React.FC<LocationLibraryListProps> = ({
   isLoading,
   error,
 }) => {
-  const navigate = useNavigate();
-
   // Subscribe to realtime events for all locations
   const locationIds = locations?.map((l) => l.id) ?? [];
   const { isGenerating } = useLocationSheetsRealtime(locationIds);
@@ -71,12 +68,6 @@ export const LocationLibraryList: React.FC<LocationLibraryListProps> = ({
           key={location.id}
           location={location}
           isGenerating={isGenerating(location.id)}
-          onClick={() =>
-            void navigate({
-              to: '/locations/$locationId',
-              params: { locationId: location.id },
-            })
-          }
           divergentVariantId={divergentByLocationId.get(location.id)}
         />
       ))}

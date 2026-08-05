@@ -1,3 +1,4 @@
+import { AppImage } from '@/components/ui/app-image';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   getAspectRatioClassName,
@@ -141,10 +142,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           getAspectRatioClassName(aspectRatio)
         )}
       >
-        <img
+        {/* key forces a fresh image when the still changes so the browser
+            never keeps the previous shot's decoded bitmap after a switch. */}
+        <AppImage
+          key={posterSrc}
           src={posterSrc}
           alt="Scene thumbnail"
-          className="absolute inset-0 w-full h-full object-cover"
+          width={1280}
+          height={720}
+          className="absolute inset-0 h-full w-full object-cover"
         />
       </div>
     );

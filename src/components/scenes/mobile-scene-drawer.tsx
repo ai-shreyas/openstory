@@ -1,4 +1,3 @@
-import { MotionModelSelector } from '@/components/model/motion-model-selector';
 import { MusicModelSelector } from '@/components/model/music-model-selector';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -10,16 +9,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import {
-  DEFAULT_MUSIC_MODEL,
-  DEFAULT_VIDEO_MODEL,
-  videoModelSupportsAudio,
-  type AudioModel,
-  type ImageToVideoModel,
-} from '@/lib/ai/models';
+import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
-import type { Shot } from '@/types/database';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { ChevronUp, Loader2, Video } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import type { BatchGenerateMotionArgs } from './scene-list';
@@ -27,7 +20,7 @@ import { SceneListItem } from './scene-list-item';
 import { SceneThumbnail } from './scene-thumbnail';
 
 type MobileSceneDrawerProps = {
-  shots?: Shot[];
+  shots?: ShotWithImage[];
   selectedShotId?: string;
   aspectRatio: AspectRatio;
   onSelectShot: (shotId: string) => void;
@@ -37,18 +30,8 @@ type MobileSceneDrawerProps = {
   musicPromptsReady: boolean;
   /** Hide the batch motion button (e.g. while auto-generate motion is in flight). */
   hideBatchButton?: boolean;
-  /** Initial motion model for the batch selector (from `sequence.videoModel`). */
-  initialMotionModel?: ImageToVideoModel;
   /** Initial music model for the batch selector (from `sequence.musicModel`). */
   initialMusicModel?: AudioModel;
-  /** Current style category — used to filter style-restricted motion models. */
-  styleCategory?: string;
-};
-
-const isCompleted = (shot: Shot) => {
-  return (
-    shot.thumbnailStatus === 'completed' && shot.videoStatus === 'completed'
-  );
 };
 
 export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
@@ -61,31 +44,16 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   onBatchGenerateMotion,
   musicPromptsReady,
   hideBatchButton = false,
-  initialMotionModel,
   initialMusicModel,
-  styleCategory,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [includeMusic, setIncludeMusic] = useState(false);
   const [generateAudio, setGenerateAudio] = useState(true);
-  const [motionModel, setMotionModel] = useState<ImageToVideoModel>(
-    initialMotionModel ?? DEFAULT_VIDEO_MODEL
-  );
   const [musicModel, setMusicModel] = useState<AudioModel>(
     initialMusicModel ?? DEFAULT_MUSIC_MODEL
   );
 
-  const motionSupportsAudio = videoModelSupportsAudio(motionModel);
-
-  const prevInitialMotionRef = useRef(initialMotionModel);
-  if (
-    initialMotionModel &&
-    initialMotionModel !== prevInitialMotionRef.current
-  ) {
-    prevInitialMotionRef.current = initialMotionModel;
-    setMotionModel(initialMotionModel);
-  }
   const prevInitialMusicRef = useRef(initialMusicModel);
   if (initialMusicModel && initialMusicModel !== prevInitialMusicRef.current) {
     prevInitialMusicRef.current = initialMusicModel;
@@ -122,7 +90,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   const motionPromptsReady = useMemo(() => {
     if (!eligibleShots.length) return true;
     return eligibleShots.every(
-      (f) => f.motionPrompt || f.metadata?.prompts?.motion?.fullPrompt
+      (f) => f.motionPrompt || f.motionPromptData?.fullPrompt
     );
   }, [eligibleShots]);
 
@@ -133,9 +101,8 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
     try {
       await onBatchGenerateMotion({
         includeMusic,
-        motionModel,
         musicModel,
-        generateAudio: motionSupportsAudio ? generateAudio : false,
+        generateAudio,
       });
     } finally {
       setIsGenerating(false);
@@ -206,7 +173,6 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
                     shot={undefined}
                     aspectRatio={aspectRatio}
                     isActive={false}
-                    isCompleted={false}
                     onSelect={() => {}}
                   />
                 ))}
@@ -217,7 +183,6 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
                   shot={shot}
                   aspectRatio={aspectRatio}
                   isActive={shot.id === selectedShotId}
-                  isCompleted={isCompleted(shot)}
                   onSelect={() => handleSelectShot(shot.id)}
                   isRegeneratingImage={regeneratingImages.has(shot.id)}
                   isRegeneratingMotion={regeneratingMotion.has(shot.id)}
@@ -228,18 +193,6 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
 
           {showFooter && (
             <SheetFooter className="border-t pt-4 px-4 flex-col items-stretch gap-3">
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-muted-foreground">
-                  Motion model
-                </span>
-                <MotionModelSelector
-                  selectedModel={motionModel}
-                  onModelChange={setMotionModel}
-                  disabled={isGenerating || isMotionInProgress}
-                  aspectRatio={aspectRatio}
-                  styleCategory={styleCategory}
-                />
-              </div>
               {includeMusic && (
                 <div className="flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">
@@ -295,21 +248,19 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
                   )}
                 </span>
               </label>
-              {motionSupportsAudio && (
-                <label
-                  htmlFor="mobile-batch-generate-audio"
-                  className="flex items-center gap-2 text-sm text-muted-foreground justify-center"
-                >
-                  <Checkbox
-                    id="mobile-batch-generate-audio"
-                    checked={generateAudio}
-                    onCheckedChange={(checked) =>
-                      setGenerateAudio(checked === true)
-                    }
-                  />
-                  <span>Include SFX &amp; dialogue</span>
-                </label>
-              )}
+              <label
+                htmlFor="mobile-batch-generate-audio"
+                className="flex items-center gap-2 text-sm text-muted-foreground justify-center"
+              >
+                <Checkbox
+                  id="mobile-batch-generate-audio"
+                  checked={generateAudio}
+                  onCheckedChange={(checked) =>
+                    setGenerateAudio(checked === true)
+                  }
+                />
+                <span>Include SFX &amp; dialogue (when supported)</span>
+              </label>
             </SheetFooter>
           )}
         </SheetContent>

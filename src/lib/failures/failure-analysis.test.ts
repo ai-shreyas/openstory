@@ -1,12 +1,43 @@
 import { describe, expect, test } from 'vitest';
 import { analyzeFailures } from './failure-analysis';
-import type { Shot } from '@/lib/db/schema/shots';
+import type { Frame } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
-function makeShot(overrides: Partial<Shot> = {}): Shot {
+// The still-image surface moved off `shots` onto the anchor `frame` in #989;
+// the API/client shape `ShotWithImage` preserves the legacy `thumbnail*` /
+// `image*` field names that `analyzeFailures` reads, so the fixture keeps them
+// (plus the raw anchor `frame`).
+function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
+  const frame: Frame = {
+    id: 'shot-1',
+    shotId: 'shot-1',
+    sequenceId: 'seq-1',
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: 'https://example.com/thumb.jpg',
+    previewImageUrl: null,
+    imagePath: null,
+    imageStatus: 'completed',
+    imageWorkflowRunId: null,
+    imageGeneratedAt: null,
+    imageError: null,
+    imageModel: 'nano_banana_2',
+    imagePrompt: null,
+    selectedImageVersionId: null,
+    selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
+    imageInputHash: null,
+    visualPromptInputHash: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
   return {
     id: 'shot-1',
     sequenceId: 'seq-1',
+    sceneId: null,
+    shotNumber: null,
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
@@ -20,9 +51,6 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     imagePrompt: null,
     variantImageUrl: null,
     variantImageStatus: 'pending',
-    variantWorkflowRunId: null,
-    variantImageGeneratedAt: null,
-    variantImageError: null,
     videoUrl: 'https://example.com/video.mp4',
     videoPath: null,
     videoStatus: 'completed',
@@ -31,6 +59,7 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     videoError: null,
     motionPrompt: 'Camera pan left',
     motionModel: null,
+    motionPromptData: null,
     audioUrl: null,
     audioPath: null,
     audioStatus: 'pending',
@@ -38,16 +67,18 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     audioGeneratedAt: null,
     audioError: null,
     audioModel: null,
-    thumbnailInputHash: null,
-    variantImageInputHash: null,
     videoInputHash: null,
     audioInputHash: null,
+    thumbnailInputHash: null,
     visualPromptInputHash: null,
     motionPromptInputHash: null,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     previewThumbnailUrl: null,
     metadata: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    frame,
     ...overrides,
   };
 }
@@ -259,6 +290,27 @@ describe('analyzeFailures', () => {
     );
     expect(promptGroup).toBeDefined();
     expect(result.headline).toContain('music prompt generation failed');
+  });
+
+  test('pipeline statusError with only missing prompts forces full retry (#1072)', () => {
+    // Scene-split crashed after streaming shots; motion/music phases never
+    // ran. Do not claim "music prompt generation failed" or offer smart-retry.
+    const shots = [makeShot({ motionPrompt: null, videoStatus: 'pending' })];
+    const sequence = makeSequence({
+      status: 'failed',
+      musicPrompt: null,
+      musicTags: null,
+      musicStatus: 'pending',
+      statusError:
+        'Child workflow scene-split failed: Failed query: delete from "scenes"',
+    });
+
+    const result = analyzeFailures(shots, sequence);
+
+    expect(result.requiresFullRetry).toBe(true);
+    expect(result.groups).toHaveLength(0);
+    expect(result.headline).toContain('full retry required');
+    expect(result.error).toContain('delete from "scenes"');
   });
 
   test('completed sequence with no failures', () => {

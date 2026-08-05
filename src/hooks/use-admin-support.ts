@@ -5,7 +5,8 @@ import {
   getAllAdminSequencesFn,
 } from '@/functions/admin-support';
 import type { SequenceWithShots } from './use-sequences-with-shots';
-import type { Shot, Sequence } from '@/types/database';
+import type { Sequence } from '@/types/database';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
 const PAGE_SIZE = 50;
 
@@ -60,7 +61,7 @@ export function useAdminAllSequencesWithShots(
   const shotsQueries = useQueries({
     queries: allSequences.map((seq: Sequence) => ({
       queryKey: adminSupportKeys.shots(seq.id),
-      queryFn: async (): Promise<Shot[]> => {
+      queryFn: async (): Promise<ShotWithImage[]> => {
         return getAdminShotsFn({ data: { sequenceId: seq.id } });
       },
       staleTime: 60_000,

@@ -29,7 +29,7 @@ From your own clone, `bun setup --prod` walks through everything interactively: 
 
 ## wrangler.jsonc
 
-Bindings live in [`wrangler.jsonc`](https://github.com/anthropics/openstory/blob/main/wrangler.jsonc) at the repo root:
+Bindings live in [`wrangler.jsonc`](https://github.com/openstory-so/openstory/blob/main/wrangler.jsonc) at the repo root:
 
 - `DB` — D1 database (`openstory-prd`)
 - `R2_PUBLIC_ASSETS_BUCKET` — public assets (served via custom domain)
@@ -116,7 +116,7 @@ setup.
 
 ## Secrets
 
-Secrets are pushed to the Worker via `wrangler secret bulk`. The full list is defined in [`.github/workflows/deploy-cloudflare.yml`](https://github.com/anthropics/openstory/blob/main/.github/workflows/deploy-cloudflare.yml). Core secrets include:
+Secrets are pushed to the Worker via `wrangler secret bulk`. The full list is defined in [`.github/workflows/deploy-cloudflare.yml`](https://github.com/openstory-so/openstory/blob/main/.github/workflows/deploy-cloudflare.yml). Core secrets include:
 
 | Variable                                    | Description                                                                           |
 | ------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -185,10 +185,10 @@ reopen the PR to get a fresh, wrangler-tracked preview database.
 
 ## CI/CD
 
-Production pushes to `main` deploy via Workers Builds (see [Build & Deploy](#build--deploy) above). [`deploy-cloudflare.yml`](https://github.com/anthropics/openstory/blob/main/.github/workflows/deploy-cloudflare.yml) handles the PR previews, which stay on GitHub Actions because Workers Builds branch previews share production bindings — no per-PR D1 provisioning, no workflow-name namespacing, no teardown on close:
+Production pushes to `main` deploy via Workers Builds (see [Build & Deploy](#build--deploy) above). [`deploy-cloudflare.yml`](https://github.com/openstory-so/openstory/blob/main/.github/workflows/deploy-cloudflare.yml) handles the PR previews, which stay on GitHub Actions because Workers Builds branch previews share production bindings — no per-PR D1 provisioning, no workflow-name namespacing, no teardown on close:
 
-- **PR previews**: each PR gets its own Worker (`pr-<number>`) and D1 database (`openstory-pr-<number>`), with secrets pushed and the preview URL posted as a PR comment.
-- **Cleanup**: closing a PR deletes both the Worker and the D1 database.
+- **PR previews**: each PR gets its own Worker (`pr-<number>`) and D1 database (`openstory-pr-<number>`), with secrets pushed and the preview URL posted as a PR comment. Previews also get namespaced workflows (`*-pr-<number>`) and a video-export container application (`pr-<number>-videoexportcontainer`).
+- **Cleanup**: closing a PR deletes the Worker, namespaced workflows, container application, and D1 database. Container apps are account-level and outlive the worker — skipping them blocks reopened-PR redeploys and accrues provisioned instances (see #1052).
 
 ## Platform Detection
 

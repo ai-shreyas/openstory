@@ -1,21 +1,18 @@
 /**
- * Cloudflare Workflows port of `generateShotVariantWorkflow`.
+ * Shot variant (3×3 grid) workflow — generates the composition-picker SHEET.
  *
- * Mirrors the QStash version (`src/lib/workflows/shot-variant-workflow.ts`)
- * step for step — same step names, same control flow, same side effects.
- * The only differences are:
- *
- *   - Extends `OpenStoryWorkflowEntrypoint` instead of being built by
- *     `createScopedWorkflow`. Failure parity comes from the base class
- *     (see `base-workflow.ts`).
- *   - Uses `step.do` instead of `context.run`.
- *   - Reads the workflow run id from `event.instanceId` instead of
- *     `context.workflowRunId`. */
+ * #989: the sheet is no longer a `shots.variantImageUrl` column. It is a
+ * `frame_variants` version with `kind:'framing'` and `sourceVariantId = NULL`
+ * (the raw grid; a chosen tile later points its `sourceVariantId` at this
+ * sheet). The picker reads the latest such version. The sheet is never
+ * "selected" — it's only the source the tiles are cropped from.
+ */
 
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import {
   DEFAULT_IMAGE_SIZE,
@@ -44,38 +41,28 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'shot-variant']);
 
+type PrepResult = { params: ImageGenerationParams; versionId: string };
+
 export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariantWorkflowInput> {
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ShotVariantWorkflowInput>>,
     step: WorkflowStep,
     scopedDb: ScopedDb
   ): Promise<ShotVariantWorkflowResult> {
-    const rawInput = event.payload;
-    // Back-compat: accept shotId or shotId from in-flight instances serialized before #906
-    // TODO(#906): remove shotId shim one release after deploy
-    const input = {
-      ...rawInput,
-      shotId:
-        rawInput.shotId ??
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- back-compat shim for in-flight CF Workflow instances serialized before #906
-        (rawInput as { shotId?: string }).shotId ??
-        undefined,
-    };
+    const input = event.payload;
     const workflowRunId = event.instanceId;
 
-    // Step 1: Set status to generating if shotId is provided
-    const generationParams = await step.do(
+    const prep = await step.do(
       'set-generating-status',
-      async (): Promise<ImageGenerationParams | null> => {
-        // Validate required fields
+      async (): Promise<PrepResult | null> => {
         if (!input.thumbnailUrl || input.thumbnailUrl.trim().length === 0) {
           throw new WorkflowValidationError(
-            'Thumbnail URL is required for variant image generation'
+            'Source still URL is required for variant grid generation'
           );
         }
 
         logger.info(
-          `[ShotVariantWorkflow:cf] Starting variant image generation workflow for user ${input.userId}`
+          `[ShotVariantWorkflow] Starting variant grid generation for user ${input.userId}`
         );
 
         const model = input.model || DEFAULT_IMAGE_MODEL;
@@ -85,48 +72,6 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
         const imageSize =
           gridConfig?.imageSize ?? input.imageSize ?? DEFAULT_IMAGE_SIZE;
 
-        if (input.shotId) {
-          // update shot status to generating and store user prompt
-          const shot = await scopedDb.shots.update(
-            input.shotId,
-            {
-              variantImageStatus: 'generating',
-              variantWorkflowRunId: workflowRunId,
-            },
-            { throwOnMissing: false }
-          );
-
-          if (!shot) {
-            logger.info(
-              `[ShotVariantWorkflow:cf] Shot ${input.shotId} was deleted, skipping workflow`
-            );
-            return null; // Signal to skip
-          }
-
-          // Dual-write: update shot variant status on shot_variants row (returns null if row doesn't exist)
-          if (input.sequenceId) {
-            await scopedDb.shotVariants.updateByShotAndModel(
-              input.shotId,
-              'image',
-              model,
-              {
-                shotVariantStatus: 'generating',
-                shotVariantWorkflowRunId: workflowRunId,
-              }
-            );
-          }
-
-          // Emit realtime progress
-          await getGenerationChannel(input.sequenceId).emit(
-            'generation.variant-image:progress',
-            {
-              shotId: input.shotId,
-              status: 'generating',
-            }
-          );
-        }
-
-        // Build prompt with scene context and grid layout
         const basePrompt = getVariantImagePrompt(
           imageSize,
           input.scenePrompt,
@@ -135,7 +80,6 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
             : undefined
         );
 
-        // ALL references go through buildReferenceImagePrompt so each URL is labeled in the prompt
         const allReferences: ReferenceImageDescription[] = [
           {
             referenceImageUrl: input.thumbnailUrl,
@@ -154,46 +98,78 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
             IMAGE_MODELS[model].maxPromptLength
           );
 
-        // Return the generation params so it shows in the workflow context for debugging
-        return {
+        const params: ImageGenerationParams = {
           model,
           prompt: enhancedPrompt,
           imageSize,
           numImages: input.numImages ?? 1,
           seed: input.seed,
           referenceImageUrls: referenceUrls,
-        } satisfies ImageGenerationParams;
+        };
+
+        // No frame to attach the sheet to (deleted mid-flight) → skip.
+        if (!input.shotId || !input.sequenceId) {
+          return { params, versionId: '' };
+        }
+        const frame = await scopedDb.frames.getAnchorByShot(input.shotId);
+        if (!frame) {
+          logger.info(
+            `[ShotVariantWorkflow] Shot ${input.shotId} has no anchor frame, skipping`
+          );
+          return null;
+        }
+
+        const version = await scopedDb.frameVariants.appendVersion({
+          frameId: frame.id,
+          sequenceId: input.sequenceId,
+          kind: 'framing',
+          model,
+          sourceVariantId: null,
+          status: 'generating',
+          workflowRunId,
+        });
+
+        await getGenerationChannel(input.sequenceId).emit(
+          'generation.variant-image:progress',
+          { shotId: input.shotId, status: 'generating' }
+        );
+
+        return { params, versionId: version.id };
       }
     );
 
-    // Early exit if shot was deleted
-    if (!generationParams) {
+    if (!prep) {
       return { variantImageUrl: '' };
     }
 
-    // Step 2: Generate image
     const imageResult = await step.do('generate-image', async () => {
       logger.info(
-        `[ShotVariantWorkflow:cf] Generating variant image ${input.shotId} with model ${generationParams.model}`
+        `[ShotVariantWorkflow] Generating variant grid ${input.shotId} with model ${prep.params.model}`
       );
-
-      return await generateImageWithProvider(generationParams, { scopedDb });
+      return generateImageWithProvider(prep.params, { scopedDb });
     });
 
-    // Deduct credits for image generation (skip if team used own fal key)
+    // Before the deduction guard — see recordFalUsageStep (#1069).
+    const falUsage = await recordFalUsageStep(
+      step,
+      scopedDb,
+      imageResult.metadata
+    );
+
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
         scopedDb,
         costMicros: extractImageCost(imageResult.metadata),
         usedOwnKey: imageResult.metadata.usedOwnKey,
-        description: `Variant image generation (${generationParams.model})`,
+        description: `Variant grid generation (${prep.params.model})`,
         idempotencyKey: `${event.instanceId}:variant-image`,
         metadata: {
-          model: generationParams.model,
+          ...falUsage,
+          model: prep.params.model,
           shotId: input.shotId,
           sequenceId: input.sequenceId,
         },
-        workflowName: 'ShotVariantWorkflow:cf',
+        workflowName: 'ShotVariantWorkflow',
       });
     });
 
@@ -203,60 +179,31 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
     }
     let imageUrl: string = generatedImageUrl;
 
-    if (input.shotId && input.sequenceId && input.teamId) {
+    if (input.shotId && input.sequenceId && input.teamId && prep.versionId) {
       const uploadResult = await step.do('upload-to-storage', async () => {
-        if (
-          !input.shotId ||
-          !input.sequenceId ||
-          !input.teamId ||
-          !imageResult.imageUrls[0]
-        ) {
-          throw new Error('Missing required IDs for storage upload', {
-            cause: JSON.stringify(imageResult),
-          });
+        if (!input.shotId || !input.sequenceId || !input.teamId) {
+          throw new Error('Missing required IDs for storage upload');
         }
-
         const result = await uploadImageToStorage({
-          imageUrl: imageResult.imageUrls[0],
+          imageUrl: generatedImageUrl,
           teamId: input.teamId,
           sequenceId: input.sequenceId,
           shotId: input.shotId,
         });
-
         if (!result.url) {
           throw new Error('Failed to upload image to storage');
         }
 
-        const updatedShot = await scopedDb.shots.update(
-          input.shotId,
-          {
-            variantImageUrl: result.url, // Store public URL (permanent, not signed)
-            variantImageStatus: 'completed',
-          },
-          { throwOnMissing: false }
-        );
+        // Complete the framing-sheet version. No selection — the sheet is the
+        // picker source, not the frame's primary still.
+        await scopedDb.frameVariants.update(prep.versionId, {
+          status: 'completed',
+          url: result.url,
+          storagePath: result.path || null,
+          generatedAt: new Date(),
+          error: null,
+        });
 
-        if (!updatedShot) {
-          logger.info(
-            `[ShotVariantWorkflow:cf] Shot ${input.shotId} was deleted, skipping final update`
-          );
-          return { url: result.url, path: result.path };
-        }
-
-        // Dual-write: update shot variant on shot_variants row (returns null if row doesn't exist)
-        const variantModel = input.model || DEFAULT_IMAGE_MODEL;
-        await scopedDb.shotVariants.updateByShotAndModel(
-          input.shotId,
-          'image',
-          variantModel,
-          {
-            shotVariantUrl: result.url,
-            shotVariantPath: result.path || null,
-            shotVariantStatus: 'completed',
-          }
-        );
-
-        // Emit completion progress
         await getGenerationChannel(input.sequenceId).emit(
           'generation.variant-image:progress',
           {
@@ -267,20 +214,15 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
         );
 
         logger.info(
-          `[ShotVariantWorkflow:cf] Image uploaded to storage: ${result.path}`
+          `[ShotVariantWorkflow] Grid sheet uploaded: ${result.path}`
         );
-        return { url: result.url, path: result.path };
+        return { url: result.url };
       });
 
-      if (uploadResult.url) {
-        imageUrl = uploadResult.url;
-      }
+      if (uploadResult.url) imageUrl = uploadResult.url;
     }
 
-    // Return workflow result
-    return {
-      variantImageUrl: imageUrl,
-    };
+    return { variantImageUrl: imageUrl };
   }
 
   protected override async onFailure({
@@ -293,47 +235,26 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
     scopedDb: ScopedDb;
   }): Promise<void> {
     const input = event.payload;
+    if (!input.shotId || !input.teamId) return;
 
-    // Set shot variant status to 'failed' after all retries exhausted
-    if (input.shotId && input.teamId) {
-      await scopedDb.shots.update(
-        input.shotId,
-        {
-          variantImageStatus: 'failed',
-          variantImageError: error,
-        },
-        { throwOnMissing: false }
-      );
+    await scopedDb.frameVariants.markFailedByWorkflowRun(
+      event.instanceId,
+      error
+    );
 
-      // Dual-write: update shot variant status on shot_variants row (returns null if row doesn't exist)
-      const model = input.model || DEFAULT_IMAGE_MODEL;
-      if (input.sequenceId) {
-        await scopedDb.shotVariants.updateByShotAndModel(
-          input.shotId,
-          'image',
-          model,
-          { shotVariantStatus: 'failed' }
+    if (input.sequenceId) {
+      try {
+        await getGenerationChannel(input.sequenceId).emit(
+          'generation.variant-image:progress',
+          { shotId: input.shotId, status: 'failed' }
         );
+      } catch {
+        // Ignore emit errors
       }
-
-      // Emit failure progress
-      if (input.sequenceId) {
-        try {
-          await getGenerationChannel(input.sequenceId).emit(
-            'generation.variant-image:progress',
-            {
-              shotId: input.shotId,
-              status: 'failed',
-            }
-          );
-        } catch {
-          // Ignore emit errors
-        }
-      }
-
-      logger.error(
-        `[ShotVariantWorkflow:cf] Image generation failed for shot ${input.shotId}: ${error}`
-      );
     }
+
+    logger.error(
+      `[ShotVariantWorkflow] Variant grid generation failed for shot ${input.shotId}: ${error}`
+    );
   }
 }

@@ -12,6 +12,15 @@
  * See GitHub issue #612 for the verified mechanism and the production
  * incident on 2026-04-29.
  *
+ * It ALSO flags expensive data-backfill UPDATEs — a correlated/per-row
+ * subquery (a scalar subquery in SET, or a WHERE EXISTS/IN subquery) runs once
+ * per row of the target table, and over a large table (especially filtering on
+ * an unindexed column) trips D1's remote CPU-time limit (error 7429). That
+ * rolls the whole migration back and, because `wrangler d1 migrations apply`
+ * runs before `wrangler deploy`, freezes the deploy pipeline. Local/CI never
+ * catch it: Miniflare D1 has no CPU governor and seed data is tiny. Rewrite as
+ * a set-based `UPDATE … FROM (<join>)` (issue #1019); those are NOT flagged.
+ *
  * Modes:
  *   bun scripts/check-migrations.ts file1.sql file2.sql ...
  *     Scan the given files (used by lefthook with {staged_files}).
@@ -23,10 +32,13 @@
  *     Scan every migration on disk.
  *
  *   bun scripts/check-migrations.ts --allow-destructive
- *     Bypass the failure exit code (escape hatch for local dev).
+ *     Bypass the destructive-operation findings (escape hatch for local dev).
+ *
+ *   bun scripts/check-migrations.ts --allow-expensive
+ *     Bypass the expensive-backfill findings.
  *
  * Exit codes:
- *   0 — no findings
+ *   0 — no findings (or all findings bypassed)
  *   1 — findings found and not bypassed
  */
 
@@ -70,6 +82,36 @@ const DESTRUCTIVE_PATTERNS = [
   },
 ] as const;
 
+// Per-row subquery patterns inside an UPDATE — the #1019 failure class. Each
+// runs the subquery once per outer row, so on a large table it does O(rows^2)
+// work and trips D1's remote CPU-time limit. A set-based `UPDATE … FROM
+// (<join>)` has its SELECT in the FROM clause (evaluated once) with a plain
+// column reference in SET and no EXISTS/IN in WHERE, so none of these match it.
+const EXPENSIVE_UPDATE_PATTERNS = [
+  {
+    // Scalar subquery in SET (or a `col = (SELECT …)` predicate).
+    pattern: /=\s*\(\s*SELECT\b/gi,
+    name: 'per-row scalar subquery',
+  },
+  {
+    // Correlated existence test in WHERE.
+    pattern: /\b(?:NOT\s+)?EXISTS\s*\(\s*SELECT\b/gi,
+    name: 'correlated EXISTS subquery',
+  },
+  {
+    // Membership test against a subquery in WHERE.
+    pattern: /\bIN\s*\(\s*SELECT\b/gi,
+    name: 'subquery in IN (…)',
+  },
+] as const;
+
+type ExpensiveFinding = {
+  file: string;
+  line: number;
+  kind: string;
+  statement: string;
+};
+
 function getAppliedMigrations(): Set<string> {
   if (!existsSync(JOURNAL_PATH)) return new Set();
   const journal: Journal = JSON.parse(readFileSync(JOURNAL_PATH, 'utf-8'));
@@ -92,8 +134,10 @@ function buildCascadeMap(): Map<string, number> {
 
   for (const f of files) {
     const content = readFileSync(join(SCHEMA_DIR, f), 'utf-8');
+    // Tables are declared via `snakeCase.table('name', …)` (the project's
+    // snake_case column-casing wrapper); older ones via `sqliteTable('name', …)`.
     const re =
-      /export\s+const\s+(\w+)\s*=\s*sqliteTable\s*\(\s*['"]([^'"]+)['"]/g;
+      /export\s+const\s+(\w+)\s*=\s*(?:sqliteTable|\w+\.table)\s*\(\s*['"]([^'"]+)['"]/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(content)) !== null) {
       const varName = m[1];
@@ -159,6 +203,41 @@ function findDestructiveOperations(
   return operations;
 }
 
+/**
+ * Flag UPDATE statements that run a subquery per outer row (#1019). Blanks out
+ * SQL comments first — a migration's own header often explains the anti-pattern
+ * it deliberately avoids ("NOT a `= (SELECT …)`") and must not self-trigger —
+ * while preserving newlines so reported line numbers still point at real SQL.
+ */
+export function findExpensiveBackfills(filePath: string): ExpensiveFinding[] {
+  const raw = readFileSync(filePath, 'utf-8');
+  const fileName = basename(filePath);
+  const cleaned = raw
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/--[^\n]*/g, '');
+
+  const findings: ExpensiveFinding[] = [];
+  // Each UPDATE … up to its terminating `;` (subqueries don't contain `;`).
+  const updateStatement = /\bUPDATE\b[\s\S]*?;/gi;
+  let stmt: RegExpExecArray | null;
+  while ((stmt = updateStatement.exec(cleaned)) !== null) {
+    const text = stmt[0];
+    const line = cleaned.slice(0, stmt.index).split('\n').length;
+    for (const { pattern, name } of EXPENSIVE_UPDATE_PATTERNS) {
+      pattern.lastIndex = 0;
+      if (pattern.test(text)) {
+        findings.push({
+          file: fileName,
+          line,
+          kind: name,
+          statement: text.replace(/\s+/g, ' ').trim().slice(0, 140),
+        });
+      }
+    }
+  }
+  return findings;
+}
+
 function listSqlFiles(all: boolean): string[] {
   if (!existsSync(MIGRATIONS_DIR)) return [];
   const top = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'));
@@ -180,6 +259,7 @@ function listSqlFiles(all: boolean): string[] {
 function main(): void {
   const args = process.argv.slice(2);
   const allowDestructive = args.includes('--allow-destructive');
+  const allowExpensive = args.includes('--allow-expensive');
   const checkAll = args.includes('--all');
   const positional = args.filter((a) => !a.startsWith('--'));
 
@@ -190,46 +270,91 @@ function main(): void {
       ? positional.map((p) => (isAbsolute(p) ? p : join(process.cwd(), p)))
       : listSqlFiles(checkAll);
 
-  const allOps: Array<DestructiveOperation & { migrationDir: string }> = [];
-  for (const filePath of targets) {
-    if (!existsSync(filePath)) continue;
+  const migrationDirOf = (filePath: string): string => {
     const afterMigrations = filePath.split('/drizzle/migrations/')[1];
     const firstSegment = afterMigrations?.split('/')[0];
-    const dir = firstSegment ? firstSegment.replace(/\.sql$/, '') : 'unknown';
+    return firstSegment ? firstSegment.replace(/\.sql$/, '') : 'unknown';
+  };
+
+  const allOps: Array<DestructiveOperation & { migrationDir: string }> = [];
+  const expensiveOps: Array<ExpensiveFinding & { migrationDir: string }> = [];
+  for (const filePath of targets) {
+    if (!existsSync(filePath)) continue;
+    const dir = migrationDirOf(filePath);
     for (const op of findDestructiveOperations(filePath, cascadesByParent)) {
       allOps.push({ ...op, migrationDir: dir });
     }
+    for (const finding of findExpensiveBackfills(filePath)) {
+      expensiveOps.push({ ...finding, migrationDir: dir });
+    }
   }
 
-  if (allOps.length === 0) {
-    console.log('No destructive operations detected.');
+  if (allOps.length === 0 && expensiveOps.length === 0) {
+    console.log('No migration issues detected.');
     process.exit(0);
   }
 
-  console.log('Destructive operations detected:\n');
-  for (const op of allOps) {
-    const cascade =
-      op.operation === 'DROP TABLE' && op.cascadeChildCount > 0
-        ? ` ⚠ ${op.cascadeChildCount} cascade child FK(s)`
-        : '';
+  if (allOps.length > 0) {
+    console.log('Destructive operations detected:\n');
+    for (const op of allOps) {
+      const cascade =
+        op.operation === 'DROP TABLE' && op.cascadeChildCount > 0
+          ? ` ⚠ ${op.cascadeChildCount} cascade child FK(s)`
+          : '';
+      console.log(
+        `  ${op.migrationDir}/${op.file}:${op.line} — ${op.operation} \`${op.table}\`${cascade}`
+      );
+      console.log(`    ${op.statement}`);
+    }
+    console.log('');
     console.log(
-      `  ${op.migrationDir}/${op.file}:${op.line} — ${op.operation} \`${op.table}\`${cascade}`
+      'These are unsafe on D1/Turso HTTP migrators (issue #612). Either:'
     );
-    console.log(`    ${op.statement}`);
+    console.log(
+      '  1. Refactor the schema change to use ALTER TABLE column ops,'
+    );
+    console.log('  2. Apply manually via `wrangler d1` after a snapshot,');
+    console.log(
+      '  3. Or pass --allow-destructive if data loss is intentional.'
+    );
+    console.log('');
   }
-  console.log('');
-  console.log(
-    'These are unsafe on D1/Turso HTTP migrators (issue #612). Either:'
-  );
-  console.log('  1. Refactor the schema change to use ALTER TABLE column ops,');
-  console.log('  2. Apply manually via `wrangler d1` after a snapshot,');
-  console.log('  3. Or pass --allow-destructive if data loss is intentional.');
 
-  if (allowDestructive) {
-    console.log('\n--allow-destructive set; proceeding.');
-    process.exit(0);
+  if (expensiveOps.length > 0) {
+    console.log('Expensive backfill UPDATEs detected:\n');
+    for (const op of expensiveOps) {
+      console.log(`  ${op.migrationDir}/${op.file}:${op.line} — ${op.kind}`);
+      console.log(`    ${op.statement}`);
+    }
+    console.log('');
+    console.log(
+      'A per-row subquery over a large table trips D1’s remote CPU-time'
+    );
+    console.log(
+      'limit (7429) and freezes the deploy — migrations apply before deploy'
+    );
+    console.log('(issue #1019). Either:');
+    console.log(
+      '  1. Rewrite as a set-based `UPDATE … FROM (<join>)` (verify the plan'
+    );
+    console.log(
+      '     with EXPLAIN QUERY PLAN: scan the driver, search the target by key),'
+    );
+    console.log(
+      '  2. Or pass --allow-expensive if the touched tables are provably small.'
+    );
+    console.log('');
   }
-  process.exit(1);
+
+  const destructiveBlocks = allOps.length > 0 && !allowDestructive;
+  const expensiveBlocks = expensiveOps.length > 0 && !allowExpensive;
+  if (allowDestructive && allOps.length > 0) {
+    console.log('--allow-destructive set; destructive findings bypassed.');
+  }
+  if (allowExpensive && expensiveOps.length > 0) {
+    console.log('--allow-expensive set; expensive findings bypassed.');
+  }
+  process.exit(destructiveBlocks || expensiveBlocks ? 1 : 0);
 }
 
-main();
+if (import.meta.main) main();

@@ -50,10 +50,12 @@ function composeMiddleware(
  *
  * The `@tanstack/ai-fal` adapters call `fal.config({ credentials })` on the
  * singleton and would otherwise wipe any `requestMiddleware` we set, so we
- * monkey-patch `fal.config` to compose ours back in. Note: callers that build
- * a per-request client via `@fal-ai/client`'s `createFalClient(...)` get an
- * independent client whose config closure this monkey-patch can't touch —
- * those bypass the proxy.
+ * monkey-patch `fal.config` to compose ours back in. Callers that build a
+ * per-request client via `@fal-ai/client`'s `createFalClient(...)` get an
+ * independent client whose config closure this monkey-patch can't touch. The
+ * two call sites that do (`src/lib/storage/external-url.ts` and
+ * `scripts/verify-fal-costs.ts`) bypass the proxy intentionally — see the
+ * rationale comments there (#890).
  */
 export function configureFalProxyFromEnv(): void {
   if (configured) return;

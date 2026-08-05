@@ -1,11 +1,21 @@
-import type { Shot } from '@/types/database';
+import type { Frame } from '@/lib/db/schema';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
-import { SceneScriptPrompts, type TabValue } from './scene-script-prompts';
+import {
+  SceneScriptPrompts,
+  tabsForScope,
+  type TabValue,
+} from './scene-script-prompts';
 
+// The still-image surface moved off `shots` onto the anchor `frame` in #989;
+// the component reads the legacy projected names (`thumbnail*`/`image*`), so the
+// fixture keeps them and adds the raw anchor `frame`.
 const mockShot = {
   id: 'shot-1',
   sequenceId: 'seq-1',
+  sceneId: null,
+  shotNumber: null,
   orderIndex: 0,
   description: 'A bustling coffee shop interior during morning rush hour',
   durationMs: 3000,
@@ -13,9 +23,6 @@ const mockShot = {
   thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
   variantImageUrl: null,
   variantImageStatus: 'pending',
-  variantWorkflowRunId: null,
-  variantImageGeneratedAt: null,
-  variantImageError: null,
   videoUrl: null,
   videoPath: null,
   thumbnailStatus: 'completed',
@@ -30,6 +37,9 @@ const mockShot = {
   videoError: null,
   motionPrompt: null,
   motionModel: 'veo3',
+  motionPromptData: null,
+  selectedMotionPromptVersionId: null,
+  renderSegmentId: null,
   audioUrl: null,
   audioPath: null,
   audioStatus: 'pending',
@@ -38,7 +48,6 @@ const mockShot = {
   audioError: null,
   audioModel: null,
   thumbnailInputHash: null,
-  variantImageInputHash: null,
   videoInputHash: null,
   audioInputHash: null,
   visualPromptInputHash: null,
@@ -78,54 +87,35 @@ const mockShot = {
       mood: '',
       atmosphere: '',
     },
-    prompts: {
-      visual: {
-        fullPrompt:
-          'Busy coffee shop interior, morning light streaming through windows, woman sitting at corner table with laptop, steam rising from latte cup, warm atmosphere, cinematic lighting, 4K sharp focus',
-        negativePrompt: 'blurry, low quality, distorted',
-        components: {
-          sceneDescription: 'Coffee shop',
-          subject: 'Woman at laptop',
-          environment: 'Interior cafe',
-          lighting: 'Natural morning light',
-          camera: 'Medium shot',
-          composition: 'Rule of thirds',
-          style: 'Cinematic',
-          technical: '4K, sharp focus',
-          atmosphere: 'Bustling yet intimate',
-        },
-      },
-      motion: {
-        fullPrompt:
-          'Slow push in, subtle camera movement forward, dolly shot from wide to medium, very smooth transition, locked subject tracking',
-        components: {
-          cameraMovement: 'Push in',
-          startPosition: 'Wide',
-          endPosition: 'Medium',
-          durationSeconds: 3,
-          speed: 'Slow',
-          smoothness: 'Very smooth',
-          subjectTracking: 'Locked',
-          equipment: 'Dolly',
-        },
-        parameters: {
-          durationSeconds: 3,
-          fps: 24,
-          motionAmount: 'medium' as const,
-          cameraControl: {
-            pan: 0,
-            tilt: 0,
-            zoom: 0.2,
-            movement: 'forward',
-          },
-        },
-      },
-    },
     sourceImageUrl: '',
   },
   createdAt: new Date(),
   updatedAt: new Date(),
-} satisfies Shot;
+  frame: {
+    id: 'shot-1',
+    shotId: 'shot-1',
+    sequenceId: 'seq-1',
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: 'https://picsum.photos/seed/coffee/320/180',
+    previewImageUrl: null,
+    imagePath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
+    imageStatus: 'completed',
+    imageWorkflowRunId: null,
+    imageGeneratedAt: null,
+    imageError: null,
+    imageModel: 'nano_banana',
+    imagePrompt: null,
+    selectedImageVersionId: null,
+    selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
+    imageInputHash: null,
+    visualPromptInputHash: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  } satisfies Frame,
+} satisfies ShotWithImage;
 
 const meta: Meta<typeof SceneScriptPrompts> = {
   title: 'Scenes/SceneScriptPrompts',
@@ -134,12 +124,18 @@ const meta: Meta<typeof SceneScriptPrompts> = {
     layout: 'centered',
   },
   args: {
+    sequenceId: 'seq-1',
     selectedTab: 'script' as TabValue,
+    visibleTabs: tabsForScope('shot'),
     onTabChange: fn(),
     regeneratingImages: new Set<string>(),
     regeneratingMotion: new Set<string>(),
-    regeneratingSceneVariants: new Set<string>(),
     onRegenerateStart: fn(),
+    // Resolved per-asset models (#1066) — these are required props; without
+    // them IMAGE_TO_VIDEO_MODELS[undefined] is undefined and the component
+    // crashes on `'requiredStyleCategory' in undefined`.
+    resolvedImageModel: 'gpt_image_2',
+    resolvedVideoModel: 'seedance_v2',
   },
   decorators: [
     (Story) => (
@@ -211,49 +207,6 @@ export const LongPrompts: Story = {
       ...mockShot,
       metadata: {
         ...mockShot.metadata,
-        prompts: {
-          visual: {
-            fullPrompt:
-              'Busy coffee shop interior, morning light streaming through large windows casting long dramatic shadows across wooden floor, woman in casual business attire sitting at corner table with laptop, steam rising from latte cup on table, warm cozy atmosphere with bustling patrons in soft focus background, cinematic lighting with natural window light as key, shallow depth of field, 4K ultra sharp focus, professionally color graded, film grain texture',
-            negativePrompt: 'blurry, low quality, distorted',
-            components: {
-              sceneDescription: 'Coffee shop',
-              subject: 'Woman at laptop',
-              environment: 'Interior cafe',
-              lighting: 'Natural morning light',
-              camera: 'Medium shot',
-              composition: 'Rule of thirds',
-              style: 'Cinematic',
-              technical: '4K, sharp focus',
-              atmosphere: 'Bustling yet intimate',
-            },
-          },
-          motion: {
-            fullPrompt:
-              'Slow deliberate push in, subtle smooth camera movement forward using dolly equipment, starting from wide establishing shot transitioning to medium intimate shot, very smooth fluid transition at constant slow speed, locked subject tracking maintaining focus on protagonist, professional cinematography technique, 3 second duration, 24fps cinematic frame rate',
-            components: {
-              cameraMovement: 'Push in',
-              startPosition: 'Wide',
-              endPosition: 'Medium',
-              durationSeconds: 3,
-              speed: 'Slow',
-              smoothness: 'Very smooth',
-              subjectTracking: 'Locked',
-              equipment: 'Dolly',
-            },
-            parameters: {
-              durationSeconds: 3,
-              fps: 24,
-              motionAmount: 'medium' as const,
-              cameraControl: {
-                pan: 0,
-                tilt: 0,
-                zoom: 0.2,
-                movement: 'forward',
-              },
-            },
-          },
-        },
       },
     },
   },

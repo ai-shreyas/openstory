@@ -1,0 +1,24 @@
+{
+  "name": "openstory-video-export-container",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Server-side sequence MP4 export for the OpenStory API. Runs in a Cloudflare Container; concatenates scene videos and mixes music/dialogue with mediabunny + @mediabunny/server (NodeAV/FFmpeg).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "bun --watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mediabunny/server": "^1.49.0",
+    "mediabunny": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "trustedDependencies": [
+    "node-av"
+  ]
+}

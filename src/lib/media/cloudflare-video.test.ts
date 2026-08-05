@@ -25,9 +25,9 @@ describe('isTransformableVideoUrl', () => {
 });
 
 describe('videoPosterUrl', () => {
-  it('builds a shot-extraction URL for transformable sources', () => {
+  it('builds a frame-extraction URL for transformable sources', () => {
     expect(videoPosterUrl(SRC, 480)).toBe(
-      `https://assets.openstory.so/cdn-cgi/media/mode=shot,time=0s,format=jpg,width=480/${SRC}`
+      `https://assets.openstory.so/cdn-cgi/media/mode=frame,time=0s,format=jpg,width=480/${SRC}`
     );
   });
 

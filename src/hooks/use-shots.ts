@@ -1,6 +1,8 @@
 import type { Shot } from '@/types/database';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShotVariant } from '@/lib/db/schema';
+import type { ImageVariantWithShot } from '@/lib/db/scoped/frame-variants';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import {
   getShotsFn,
   getDivergentVariantsFn,
@@ -9,15 +11,25 @@ import {
   undiscardVariantFn,
   getSequenceImageModelsFn,
   getSequenceImageVariantsFn,
+  getSequenceSelectedModelsFn,
   getSequenceVideoModelsFn,
   getSequenceVideoVariantsFn,
 } from '@/functions/shots';
 import {
   generateShotVariantsFn,
+  listShotImageVersionsFn,
+  listShotVideoVersionsFn,
+  selectFrameImageVersionFn,
   selectShotVariantFn,
+  selectSegmentVideoVersionFn,
   setImageFromVariantFn,
   setVideoFromVariantFn,
+  type ShotImageVersionRow,
+  type ShotVideoVersionRow,
 } from '@/functions/shot-image';
+import { promptVariantKeys } from '@/hooks/use-prompt-variants';
+import { segmentKeys } from '@/hooks/use-segments';
+import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
 import type { GenerateVariantInput as SchemaGenerateVariantInput } from '@/lib/schemas/shot.schemas';
 
 type GenerateVariantInput = SchemaGenerateVariantInput & {
@@ -40,6 +52,12 @@ export const shotKeys = {
   detail: (id: string) => [...shotKeys.details(), id] as const,
   divergentVariants: (sequenceId: string) =>
     [...shotKeys.all, 'divergent-variants', sequenceId] as const,
+  /** Per-shot image version history (#1070). */
+  imageVersions: (shotId: string) =>
+    [...shotKeys.all, 'image-versions', shotId] as const,
+  /** Per-shot video version history (#1070). */
+  videoVersions: (shotId: string) =>
+    [...shotKeys.all, 'video-versions', shotId] as const,
 };
 
 // Distinct image models that have generated a variant for this sequence.
@@ -86,16 +104,35 @@ export function useSequenceVideoVariants(sequenceId?: string) {
   });
 }
 
-// All image ShotVariant rows for a sequence (#547). Used by the header image
+// All image FrameVariant (kind:'model') rows for a sequence (#547/#989), each
+// carrying its owning `shotId` (frame ids ≠ shot ids). Used by the header image
 // dropdown for sequence-wide per-model coverage, and by the scenes view to
-// resolve each shot's displayed image through the active model's variant. Key
-// matches the scenes-view query + the image:progress cache invalidation.
+// resolve each shot's displayed image through the active model's variant.
 export function useSequenceImageVariants(sequenceId?: string) {
-  return useQuery<ShotVariant[]>({
+  return useQuery<ImageVariantWithShot[]>({
     queryKey: ['sequence-image-variants', sequenceId ?? ''],
     queryFn: async () => {
       if (!sequenceId) throw new Error('sequenceId is required');
       return getSequenceImageVariantsFn({ data: { sequenceId } });
+    },
+    enabled: !!sequenceId,
+    staleTime: 30_000,
+  });
+}
+
+// The model recorded on each shot's selected image / video version (#1066).
+// Model identity lives on the version that produced the asset, so this is what
+// the editor resolves its displayed / generated-with model from. Invalidated by
+// the realtime image:progress + video:progress handlers, since a completed
+// convergent render repoints the selection.
+export function useSequenceSelectedModels(sequenceId?: string) {
+  return useQuery({
+    // Flat key, matching the sibling per-model queries — the realtime
+    // image/video progress handlers invalidate this exact shape.
+    queryKey: ['sequence-selected-models', sequenceId ?? ''],
+    queryFn: async () => {
+      if (!sequenceId) throw new Error('sequenceId is required');
+      return getSequenceSelectedModelsFn({ data: { sequenceId } });
     },
     enabled: !!sequenceId,
     staleTime: 30_000,
@@ -191,7 +228,7 @@ export function useShotsBySequence(
     staleTime?: number;
   }
 ) {
-  return useQuery<Shot[]>({
+  return useQuery<ShotWithImage[]>({
     queryKey: shotKeys.list(sequenceId ?? ''),
     queryFn: async () => {
       if (!sequenceId) throw new Error('sequenceId is required');
@@ -232,15 +269,18 @@ export function useGenerateVariants() {
     },
     onSuccess: async (_, { sequenceId, shotId }) => {
       // Optimistically update shot status to 'generating'
-      queryClient.setQueryData<Shot>(shotKeys.detail(shotId), (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          variantImageStatus: 'generating' as const,
-        };
-      });
+      queryClient.setQueryData<ShotWithImage>(
+        shotKeys.detail(shotId),
+        (oldShot) => {
+          if (!oldShot) return oldShot;
+          return {
+            ...oldShot,
+            variantImageStatus: 'generating' as const,
+          };
+        }
+      );
 
-      queryClient.setQueryData<Shot[]>(
+      queryClient.setQueryData<ShotWithImage[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -294,16 +334,19 @@ export function useSelectVariant() {
     },
     onSuccess: async (data, { sequenceId, shotId }) => {
       // Update shot queries with new thumbnail
-      queryClient.setQueryData<Shot>(shotKeys.detail(shotId), (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          thumbnailUrl: data.thumbnailUrl,
-          thumbnailStatus: 'generating' as const, // Upscale is running
-        };
-      });
+      queryClient.setQueryData<ShotWithImage>(
+        shotKeys.detail(shotId),
+        (oldShot) => {
+          if (!oldShot) return oldShot;
+          return {
+            ...oldShot,
+            thumbnailUrl: data.thumbnailUrl,
+            thumbnailStatus: 'generating' as const, // Upscale is running
+          };
+        }
+      );
 
-      queryClient.setQueryData<Shot[]>(
+      queryClient.setQueryData<ShotWithImage[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -336,7 +379,9 @@ export function useSetImageFromVariant() {
   const queryClient = useQueryClient();
 
   return useMutation<
-    { shotId: string; thumbnailUrl: string },
+    // thumbnailUrl mirrors the selected frame variant's `imageUrl`, which is
+    // nullable until the image completes (#989).
+    { shotId: string; thumbnailUrl: string | null },
     Error,
     { sequenceId: string; shotId: string; model: string }
   >({
@@ -352,19 +397,22 @@ export function useSetImageFromVariant() {
       });
     },
     onSuccess: async (data, { sequenceId, shotId, model }) => {
-      queryClient.setQueryData<Shot>(shotKeys.detail(shotId), (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          thumbnailUrl: data.thumbnailUrl,
-          thumbnailStatus: 'completed' as const,
-          imageModel: model,
-          videoUrl: null,
-          videoStatus: 'pending' as const,
-        };
-      });
+      queryClient.setQueryData<ShotWithImage>(
+        shotKeys.detail(shotId),
+        (oldShot) => {
+          if (!oldShot) return oldShot;
+          return {
+            ...oldShot,
+            thumbnailUrl: data.thumbnailUrl,
+            thumbnailStatus: 'completed' as const,
+            imageModel: model,
+            videoUrl: null,
+            videoStatus: 'pending' as const,
+          };
+        }
+      );
 
-      queryClient.setQueryData<Shot[]>(
+      queryClient.setQueryData<ShotWithImage[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -388,6 +436,24 @@ export function useSetImageFromVariant() {
       });
       await queryClient.invalidateQueries({
         queryKey: shotKeys.list(sequenceId),
+      });
+      // This repointed `frames.selectedImageVersionId`, which is what the
+      // editor resolves its model from (#1066). Without this the dropdown keeps
+      // the pre-Set model AND sends it as the explicit model on the next
+      // generation — a billed render in the model just replaced.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
+      });
+      // The selected image also feeds segment staleness (#986/#990).
+      await queryClient.invalidateQueries({
+        queryKey: segmentKeys.list(sequenceId),
+      });
+      // select() may restore the still's linked visual prompt (#1070).
+      await queryClient.invalidateQueries({
+        queryKey: promptVariantKeys.shot('visual', shotId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: shotStalenessNamespace,
       });
     },
   });
@@ -416,17 +482,20 @@ export function useSetVideoFromVariant() {
       });
     },
     onSuccess: async (data, { sequenceId, shotId, model }) => {
-      queryClient.setQueryData<Shot>(shotKeys.detail(shotId), (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          videoUrl: data.videoUrl,
-          videoStatus: 'completed' as const,
-          motionModel: model,
-        };
-      });
+      queryClient.setQueryData<ShotWithImage>(
+        shotKeys.detail(shotId),
+        (oldShot) => {
+          if (!oldShot) return oldShot;
+          return {
+            ...oldShot,
+            videoUrl: data.videoUrl,
+            videoStatus: 'completed' as const,
+            motionModel: model,
+          };
+        }
+      );
 
-      queryClient.setQueryData<Shot[]>(
+      queryClient.setQueryData<ShotWithImage[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -452,6 +521,161 @@ export function useSetVideoFromVariant() {
       await queryClient.invalidateQueries({
         queryKey: ['sequence-video-variants', sequenceId],
       });
+      // Repointed the segment's `selectedVideoVersionId` — the editor's model
+      // source (#1066). See useSetImageFromVariant for why this matters.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
+      });
+      // Repoints the segment's selected version (#986) — refresh the panel.
+      await queryClient.invalidateQueries({
+        queryKey: segmentKeys.list(sequenceId),
+      });
+    },
+  });
+}
+
+// Hook for selecting a SPECIFIC video version for a shot's render segment (#986)
+// — the version-switcher analog of useSetVideoFromVariant. Repoints the segment
+// and mirrors the shot's video for playback; refreshes shot + segment caches.
+export function useSelectSegmentVideoVersion() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { shotId: string; videoUrl: string | null },
+    Error,
+    { sequenceId: string; shotId: string; versionId: string }
+  >({
+    mutationFn: async (input) => {
+      return selectSegmentVideoVersionFn({ data: input });
+    },
+    onSuccess: async (data, { sequenceId, shotId }) => {
+      if (data.videoUrl) {
+        const videoUrl = data.videoUrl;
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (oldShots) =>
+            oldShots?.map((f) =>
+              f.id === shotId
+                ? { ...f, videoUrl, videoStatus: 'completed' as const }
+                : f
+            )
+        );
+      }
+      await queryClient.invalidateQueries({
+        queryKey: shotKeys.list(sequenceId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: segmentKeys.list(sequenceId),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-video-variants', sequenceId],
+      });
+      // Selecting a version repoints `selectedVideoVersionId`, which is the
+      // editor's model source (#1066) — keep the model dropdown in sync.
+      await queryClient.invalidateQueries({
+        queryKey: ['sequence-selected-models', sequenceId],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: shotKeys.videoVersions(shotId),
+      });
+    },
+  });
+}
+
+/**
+ * Image generation history for a shot's anchor frame (#1070). Newest first.
+ * Only fetched while the history sheet is open (`enabled`).
+ */
+export function useShotImageVersions(
+  args: { sequenceId: string; shotId: string },
+  options?: { enabled?: boolean }
+) {
+  return useQuery<ShotImageVersionRow[]>({
+    queryKey: shotKeys.imageVersions(args.shotId),
+    queryFn: () => listShotImageVersionsFn({ data: args }),
+    enabled: options?.enabled ?? true,
+    staleTime: 5_000,
+  });
+}
+
+/**
+ * Video render history for a shot's render segment (#1070). Newest first.
+ * Only fetched while the history sheet is open (`enabled`).
+ */
+export function useShotVideoVersions(
+  args: { sequenceId: string; shotId: string },
+  options?: { enabled?: boolean }
+) {
+  return useQuery<ShotVideoVersionRow[]>({
+    queryKey: shotKeys.videoVersions(args.shotId),
+    queryFn: () => listShotVideoVersionsFn({ data: args }),
+    enabled: options?.enabled ?? true,
+    staleTime: 5_000,
+  });
+}
+
+/**
+ * Select a specific image version for a shot's anchor frame (#1070) — the
+ * image analog of `useSelectSegmentVideoVersion`. Repoints the selection
+ * pointer and mirrors the still onto the frame. When the version was stamped
+ * with a `promptVersionId`, also restores that visual prompt so still + text
+ * stay paired.
+ */
+export function useSelectFrameImageVersion() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { shotId: string; thumbnailUrl: string | null },
+    Error,
+    { sequenceId: string; shotId: string; versionId: string }
+  >({
+    mutationFn: async (input) => selectFrameImageVersionFn({ data: input }),
+    onSuccess: async (data, { sequenceId, shotId }) => {
+      if (data.thumbnailUrl) {
+        const thumbnailUrl = data.thumbnailUrl;
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (oldShots) =>
+            oldShots?.map((f) =>
+              f.id === shotId
+                ? {
+                    ...f,
+                    thumbnailUrl,
+                    thumbnailStatus: 'completed' as const,
+                    videoUrl: null,
+                    videoStatus: 'pending' as const,
+                  }
+                : f
+            )
+        );
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.list(sequenceId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.detail(shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotKeys.imageVersions(shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['sequence-image-variants', sequenceId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['sequence-selected-models', sequenceId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: segmentKeys.list(sequenceId),
+        }),
+        // Prompt may have been restored with the still (#1070).
+        queryClient.invalidateQueries({
+          queryKey: promptVariantKeys.shot('visual', shotId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: shotStalenessNamespace,
+        }),
+      ]);
     },
   });
 }

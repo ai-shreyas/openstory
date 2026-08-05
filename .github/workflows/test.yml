@@ -9,18 +9,29 @@ on:
 permissions:
   contents: read
 
+# E2E is fully hermetic — LLM + fal.ai calls hit the aimock server, D1 + R2 are
+# local Miniflare, and login uses the dev email-OTP backdoor — so the suite needs
+# no real credentials. These fixed throwaway values replace the former `secrets.*`
+# + `environment: staging` wiring, which GitHub (correctly) withholds from fork
+# PRs; that was the sole reason e2e failed on external contributions.
+env:
+  E2E_BETTER_AUTH_SECRET: e2e-not-a-real-secret-do-not-use-in-production
+  E2E_GOOGLE_CLIENT_ID: test-google-client-id
+  E2E_GOOGLE_CLIENT_SECRET: test-google-client-secret
+  E2E_EMAIL_FROM: e2e@example.com
+
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
@@ -47,13 +58,13 @@ jobs:
     environment: staging
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
@@ -78,17 +89,16 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    environment: staging
     needs: build-e2e
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
@@ -115,28 +125,21 @@ jobs:
         # file. The built e2e path uses `-c dist/server/wrangler.json`, so the
         # file MUST live next to that config (`dist/server/.dev.vars`) —
         # writing it at the project root is invisible to `wrangler -c`.
-        env:
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          FAL_KEY: ${{ secrets.FAL_KEY }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        # All values are hermetic constants (see top-level `env:`): the worker
+        # only signs throwaway sessions, fal.ai/LLM go through aimock, and no
+        # test exercises real Google OAuth or email delivery.
         run: |
-          if [ -z "$BETTER_AUTH_SECRET" ]; then
-            echo "::error::BETTER_AUTH_SECRET is empty — secret not exposed to this job (check environment: staging scoping)"
-            exit 1
-          fi
           # No R2 creds or R2_PUBLIC_STORAGE_DOMAIN: e2e R2 is the local
           # Miniflare binding, with reads served by the worker's /r2/$ route.
           cat > dist/server/.dev.vars <<EOF
-          BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
+          BETTER_AUTH_SECRET=$E2E_BETTER_AUTH_SECRET
           BETTER_AUTH_URL=http://localhost:3001
           OPENROUTER_KEY=test-mock-key
           OPENROUTER_BASE_URL=http://localhost:4010
-          FAL_KEY=$FAL_KEY
-          GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
-          GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
-          EMAIL_FROM=$EMAIL_FROM
+          FAL_KEY=test-mock-key
+          GOOGLE_CLIENT_ID=$E2E_GOOGLE_CLIENT_ID
+          GOOGLE_CLIENT_SECRET=$E2E_GOOGLE_CLIENT_SECRET
+          EMAIL_FROM=$E2E_EMAIL_FROM
           E2E_TEST=true
           VITE_APP_URL=http://localhost:3001
           EOF
@@ -169,30 +172,30 @@ jobs:
           # Miniflare, so wrangler skips the remote-proxy auth check.
           BETTER_AUTH_URL: http://localhost:3001
           VITE_R2_PUBLIC_ASSETS_DOMAIN: ${{ vars.VITE_R2_PUBLIC_ASSETS_DOMAIN }}
-          # Auth - preview environment
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          # Hermetic constants — see top-level `env:`. The built worker reads
+          # auth/creds from dist/server/.dev.vars; these process.env values are
+          # only for any node-side test tooling and never leave the runner.
+          GOOGLE_CLIENT_ID: ${{ env.E2E_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ env.E2E_GOOGLE_CLIENT_SECRET }}
+          BETTER_AUTH_SECRET: ${{ env.E2E_BETTER_AUTH_SECRET }}
           # AI services — LLM calls mocked via aimock server, fal.ai via Playwright routes
-          FAL_KEY: ${{ secrets.FAL_KEY }}
+          FAL_KEY: test-mock-key
           OPENROUTER_KEY: test-mock-key
           OPENROUTER_BASE_URL: http://localhost:4010
-          # Email - preview environment
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_FROM: ${{ env.E2E_EMAIL_FROM }}
 
   e2e-full-pipeline:
     runs-on: ubuntu-latest
-    environment: staging
     needs: build-e2e
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
@@ -214,29 +217,21 @@ jobs:
       - name: Write .dev.vars for wrangler dev
         # See e2e job above. Built path uses `wrangler dev -c
         # dist/server/wrangler.json` which resolves `.dev.vars` relative to
-        # the config, so the file must live in dist/server/.
-        env:
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        # the config, so the file must live in dist/server/. Values are
+        # hermetic constants (see top-level `env:`).
         run: |
-          if [ -z "$BETTER_AUTH_SECRET" ]; then
-            echo "::error::BETTER_AUTH_SECRET is empty — secret not exposed to this job (check environment: staging scoping)"
-            exit 1
-          fi
           # No R2 creds or R2_PUBLIC_STORAGE_DOMAIN: e2e R2 is the local
           # Miniflare binding, with reads served by the worker's /r2/$ route.
           cat > dist/server/.dev.vars <<EOF
-          BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
+          BETTER_AUTH_SECRET=$E2E_BETTER_AUTH_SECRET
           BETTER_AUTH_URL=http://localhost:3001
           OPENROUTER_KEY=test-mock-key
           OPENROUTER_BASE_URL=http://localhost:4010
           FAL_KEY=test-mock-key
           FAL_PROXY_URL=http://localhost:4010/fal
-          GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
-          GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET
-          EMAIL_FROM=$EMAIL_FROM
+          GOOGLE_CLIENT_ID=$E2E_GOOGLE_CLIENT_ID
+          GOOGLE_CLIENT_SECRET=$E2E_GOOGLE_CLIENT_SECRET
+          EMAIL_FROM=$E2E_EMAIL_FROM
           E2E_TEST=true
           E2E_FULL_PIPELINE=true
           VITE_APP_URL=http://localhost:3001
@@ -263,14 +258,15 @@ jobs:
           # Miniflare, so wrangler skips the remote-proxy auth check.
           BETTER_AUTH_URL: http://localhost:3001
           VITE_R2_PUBLIC_ASSETS_DOMAIN: ${{ vars.VITE_R2_PUBLIC_ASSETS_DOMAIN }}
-          # Auth - preview environment
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          # Hermetic constants — see top-level `env:`. The built worker reads
+          # auth/creds from dist/server/.dev.vars; these process.env values are
+          # only for any node-side test tooling and never leave the runner.
+          GOOGLE_CLIENT_ID: ${{ env.E2E_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ env.E2E_GOOGLE_CLIENT_SECRET }}
+          BETTER_AUTH_SECRET: ${{ env.E2E_BETTER_AUTH_SECRET }}
           # AI services — both LLM and fal.ai go through aimock (port 4010)
           FAL_KEY: test-mock-key
           FAL_PROXY_URL: http://localhost:4010/fal
           OPENROUTER_KEY: test-mock-key
           OPENROUTER_BASE_URL: http://localhost:4010
-          # Email - preview environment
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_FROM: ${{ env.E2E_EMAIL_FROM }}

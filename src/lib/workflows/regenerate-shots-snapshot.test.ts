@@ -1,12 +1,18 @@
 /**
  * Behavioural tests for the regenerate-shots snapshot helpers.
  *
- * These cover the two critical paths the workflow branches on:
- *   - convergent: trigger-time and write-time hashes match → primary write
- *   - divergent: a character is recast mid-flight → write to shot_variants
+ * `buildRegenerateShotSnapshot` resolves a per-shot DTO + hash from live scoped
+ * state; `computeRegenerateShotsBatchHash` folds the per-shot DTOs into the
+ * start-time tamper-check hash. We verify the snapshot hash reacts to every
+ * input it binds (prompt, character/element references, model) and that the
+ * batch hash is order-independent and tamper-evident.
  *
- * The workflow itself orchestrates those writes; we verify here that the
- * helpers correctly detect divergence so the downstream branching is sound.
+ * The image still surface moved off `shots` onto the anchor `frame` in #989, so
+ * the visual prompt is now passed to `buildRegenerateShotSnapshot` explicitly
+ * (callers pass `frame.imagePrompt`) rather than read off the shot. The
+ * convergent/divergent write builders were retired with image divergence (#989)
+ * — image generation now appends a `frame_variants` version and repoints
+ * `frames.selectedImageVersionId`, so those helpers (and their tests) are gone.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -17,13 +23,14 @@ import type {
   SequenceLocation,
 } from '@/lib/db/schema';
 import {
-  buildConvergentWrites,
-  buildDivergentWrites,
   buildRegenerateShotSnapshot,
   computeRegenerateShotsBatchHash,
 } from './regenerate-shots-snapshot';
 
 const NOW = new Date('2026-04-29T00:00:00Z');
+
+/** The shot's default visual prompt, now passed explicitly (was a shot column). */
+const DEFAULT_PROMPT = 'A scene with Jack at the docks';
 
 function makeCharacter(overrides: Partial<Character> = {}): Character {
   const character: Character = {
@@ -58,25 +65,13 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   const shot: Shot = {
     id: 'f1',
     sequenceId: 'seq1',
+    sceneId: null,
+    shotNumber: null,
     orderIndex: 0,
     description: null,
     durationMs: 3000,
-    thumbnailUrl: null,
-    previewThumbnailUrl: null,
-    thumbnailPath: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    variantWorkflowRunId: null,
-    variantImageGeneratedAt: null,
-    variantImageError: null,
     videoUrl: null,
     videoPath: null,
-    thumbnailStatus: 'pending',
-    thumbnailWorkflowRunId: null,
-    thumbnailGeneratedAt: null,
-    thumbnailError: null,
-    imageModel: 'nano_banana_2',
-    imagePrompt: 'A scene with Jack at the docks',
     videoStatus: 'pending',
     videoWorkflowRunId: null,
     videoGeneratedAt: null,
@@ -90,12 +85,11 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     audioGeneratedAt: null,
     audioError: null,
     audioModel: null,
-    thumbnailInputHash: null,
-    variantImageInputHash: null,
     videoInputHash: null,
     audioInputHash: null,
-    visualPromptInputHash: null,
     motionPromptInputHash: null,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     metadata: {
       sceneId: 's1',
       sceneNumber: 1,
@@ -148,6 +142,7 @@ describe('buildRegenerateShotSnapshot', () => {
 
     const snapshotA = await buildRegenerateShotSnapshot({
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       characters,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -156,6 +151,7 @@ describe('buildRegenerateShotSnapshot', () => {
     });
     const snapshotB = await buildRegenerateShotSnapshot({
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       characters,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -171,6 +167,7 @@ describe('buildRegenerateShotSnapshot', () => {
     const shot = makeShot();
     const before = await buildRegenerateShotSnapshot({
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter({ sheetInputHash: 'jack-hash-v1' })],
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -179,6 +176,7 @@ describe('buildRegenerateShotSnapshot', () => {
     });
     const after = await buildRegenerateShotSnapshot({
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter({ sheetInputHash: 'jack-hash-v2' })],
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -192,7 +190,8 @@ describe('buildRegenerateShotSnapshot', () => {
   it('changes the snapshotInputHash when the imagePrompt changes', async () => {
     const characters = [makeCharacter()];
     const before = await buildRegenerateShotSnapshot({
-      shot: makeShot({ imagePrompt: 'Original prompt' }),
+      shot: makeShot(),
+      imagePrompt: 'Original prompt',
       characters,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -200,7 +199,8 @@ describe('buildRegenerateShotSnapshot', () => {
       aspectRatio: '16:9',
     });
     const after = await buildRegenerateShotSnapshot({
-      shot: makeShot({ imagePrompt: 'Edited prompt' }),
+      shot: makeShot(),
+      imagePrompt: 'Edited prompt',
       characters,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -214,6 +214,7 @@ describe('buildRegenerateShotSnapshot', () => {
     const shot = makeShot();
     const snapshot = await buildRegenerateShotSnapshot({
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter({ sheetInputHash: null })],
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -223,87 +224,14 @@ describe('buildRegenerateShotSnapshot', () => {
     expect(snapshot.characterSheetHashes).toEqual([]);
   });
 
-  it('falls back to metadata.prompts.visual.fullPrompt when imagePrompt is null', async () => {
-    const baseMetadata = makeShot().metadata;
-    if (!baseMetadata) throw new Error('test setup: base metadata missing');
-    const shot = makeShot({
-      imagePrompt: null,
-      metadata: {
-        ...baseMetadata,
-        prompts: {
-          visual: {
-            fullPrompt: 'AI-generated prompt from metadata',
-            negativePrompt: '',
-            components: {
-              sceneDescription: '',
-              subject: '',
-              environment: '',
-              lighting: '',
-              camera: '',
-              composition: '',
-              style: '',
-              technical: '',
-              atmosphere: '',
-            },
-          },
-        },
-      },
-    });
-    const snapshot = await buildRegenerateShotSnapshot({
-      shot,
-      characters: [makeCharacter()],
-      locations: NO_LOCATIONS,
-      elements: NO_ELEMENTS,
-      imageModel: 'nano_banana_2',
-      aspectRatio: '16:9',
-    });
-    expect(snapshot.imagePrompt).toBe('AI-generated prompt from metadata');
-  });
+  // The `metadata.prompts.visual` fallback was removed (#713): the visual
+  // prompt lives solely on `frame.imagePrompt`, passed in as `imagePrompt`.
 
-  it('detects a metadata-prompt change as a hash change (regen-prompt staleness)', async () => {
-    const baseMetadata = makeShot().metadata;
-    if (!baseMetadata) throw new Error('test setup: base metadata missing');
-    const buildWithMetaPrompt = (fullPrompt: string) =>
-      buildRegenerateShotSnapshot({
-        shot: makeShot({
-          imagePrompt: null,
-          metadata: {
-            ...baseMetadata,
-            prompts: {
-              visual: {
-                fullPrompt,
-                negativePrompt: '',
-                components: {
-                  sceneDescription: '',
-                  subject: '',
-                  environment: '',
-                  lighting: '',
-                  camera: '',
-                  composition: '',
-                  style: '',
-                  technical: '',
-                  atmosphere: '',
-                },
-              },
-            },
-          },
-        }),
-        characters: [makeCharacter()],
-        locations: NO_LOCATIONS,
-        elements: NO_ELEMENTS,
-        imageModel: 'nano_banana_2',
-        aspectRatio: '16:9',
-      });
-
-    const before = await buildWithMetaPrompt('Original AI prompt');
-    const after = await buildWithMetaPrompt('Regenerated AI prompt');
-    expect(after.snapshotInputHash).not.toBe(before.snapshotInputHash);
-  });
-
-  it('throws when both imagePrompt and metadata.prompts are absent', () => {
+  it('throws when imagePrompt is absent', () => {
     expect(
       buildRegenerateShotSnapshot({
-        shot: makeShot({ imagePrompt: null }),
+        shot: makeShot(),
+        imagePrompt: null,
         characters: [makeCharacter()],
         locations: NO_LOCATIONS,
         elements: NO_ELEMENTS,
@@ -316,7 +244,8 @@ describe('buildRegenerateShotSnapshot', () => {
   it('throws when imagePrompt is empty string and no metadata prompt', () => {
     expect(
       buildRegenerateShotSnapshot({
-        shot: makeShot({ imagePrompt: '' }),
+        shot: makeShot(),
+        imagePrompt: '',
         characters: [makeCharacter()],
         locations: NO_LOCATIONS,
         elements: NO_ELEMENTS,
@@ -343,6 +272,7 @@ describe('buildRegenerateShotSnapshot', () => {
   it('includes a referenced element’s reference hash in the snapshot', async () => {
     const snapshot = await buildRegenerateShotSnapshot({
       shot: shotMentioning('BOTTLE'),
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
       elements: [makeElement()],
@@ -357,6 +287,7 @@ describe('buildRegenerateShotSnapshot', () => {
   it('changes the snapshotInputHash when a referenced element image changes', async () => {
     const opts = {
       shot: shotMentioning('BOTTLE'),
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
       imageModel: 'nano_banana_2' as const,
@@ -380,6 +311,7 @@ describe('buildRegenerateShotSnapshot', () => {
   it('ignores elements the shot does not reference', async () => {
     const snapshot = await buildRegenerateShotSnapshot({
       shot: makeShot(), // empty script + no elementTags → no element matches
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
       elements: [makeElement()],
@@ -396,6 +328,7 @@ describe('computeRegenerateShotsBatchHash', () => {
     const shot2 = makeShot({ id: 'f2', orderIndex: 1 });
     const characters = [makeCharacter()];
     const opts = {
+      imagePrompt: DEFAULT_PROMPT,
       characters,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -425,6 +358,7 @@ describe('computeRegenerateShotsBatchHash', () => {
     const shot = makeShot();
     const opts = {
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
       imageModel: 'nano_banana_2' as const,
@@ -472,6 +406,7 @@ describe('computeRegenerateShotsBatchHash', () => {
     const shot = makeShot();
     const original = await buildRegenerateShotSnapshot({
       shot,
+      imagePrompt: DEFAULT_PROMPT,
       characters: [makeCharacter()],
       locations: NO_LOCATIONS,
       elements: NO_ELEMENTS,
@@ -506,59 +441,13 @@ describe('computeRegenerateShotsBatchHash', () => {
   });
 });
 
-describe('buildConvergentWrites', () => {
-  it('records the snapshot hash on the shot and resets variant divergence', () => {
-    const writes = buildConvergentWrites('hash-abc');
-    expect(writes.shot).toEqual({ thumbnailInputHash: 'hash-abc' });
-    expect(writes.variant).toEqual({
-      inputHash: 'hash-abc',
-      divergedAt: null,
-    });
-  });
-});
-
-describe('buildDivergentWrites', () => {
-  it('reverts the speculative primary (shot + variant) and emits an alternate row payload', () => {
-    const at = new Date('2026-04-30T00:00:00Z');
-    const writes = buildDivergentWrites('hash-xyz', at);
-
-    // Shot row: primary thumbnail fully cleared so the next reconciliation
-    // regenerates from current inputs and the user's live edits keep
-    // ownership.
-    expect(writes.shot).toEqual({
-      thumbnailUrl: null,
-      thumbnailPath: null,
-      thumbnailStatus: 'pending',
-      thumbnailWorkflowRunId: null,
-      thumbnailGeneratedAt: null,
-      thumbnailError: null,
-      thumbnailInputHash: null,
-    });
-
-    // Primary variant row: speculative URL/status cleared so the primary
-    // slot stops pointing at the diverged work that image-workflow pre-wrote.
-    expect(writes.primaryRevert).toEqual({
-      url: null,
-      storagePath: null,
-      previewUrl: null,
-      status: 'pending',
-      workflowRunId: null,
-      generatedAt: null,
-      error: null,
-      inputHash: null,
-    });
-
-    // Alternate row: divergence-specific fields. The workflow supplies
-    // shotId/sequenceId/variantType/model/url; the helper marks divergence.
-    expect(writes.divergentRow).toEqual({
-      inputHash: 'hash-xyz',
-      divergedAt: at,
-      status: 'completed',
-    });
-  });
-});
-
 // `validateSnapshotPayload` lived in the QStash `scoped-workflow` middleware
 // (removed in the Cloudflare Workflows cutover). Cloudflare workflows validate
 // the snapshot hash inline at `runImpl` start — see
 // `regenerate-shots-workflow.ts`.
+//
+// The `buildConvergentWrites` / `buildDivergentWrites` describe blocks were
+// removed in #989: image divergence is retired (image generation appends a
+// `frame_variants` version and repoints `frames.selectedImageVersionId` instead
+// of speculatively writing a primary thumbnail then reverting it), so those
+// helpers no longer exist.

@@ -10,8 +10,14 @@
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { promptVariantKeys } from '@/hooks/use-prompt-variants';
+import { sceneKeys } from '@/hooks/use-scenes';
 import { shotKeys } from '@/hooks/use-shots';
-import type { Shot } from '@/lib/db/schema';
+import type { Frame, Shot } from '@/lib/db/schema';
+import {
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
 import { updateQueryCacheFromEvent } from '@/lib/realtime/query-cache-updater';
 
 const SEQ = 'seq-1';
@@ -19,26 +25,19 @@ const OLD_THUMB = 'https://cdn/old-thumb.jpg';
 const OLD_VIDEO = 'https://cdn/old-video.mp4';
 const NEW_URL = 'https://cdn/added-model-output.mp4';
 
-function makeShot(overrides: Partial<Shot> = {}): Shot {
-  return {
+// The shots-list cache holds `ShotWithImage` (#989): a Shot (no image columns)
+// plus the anchor frame's still surface projected back under the legacy
+// `thumbnail*` DTO names the realtime handlers read/write. Behaviour is
+// unchanged — only the type moved.
+function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
+  const shot: Shot = {
     id: 'shot-1',
     sequenceId: SEQ,
+    sceneId: null,
+    shotNumber: null,
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
-    thumbnailUrl: OLD_THUMB,
-    thumbnailPath: null,
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId: null,
-    thumbnailGeneratedAt: null,
-    thumbnailError: null,
-    imageModel: 'nano_banana_2',
-    imagePrompt: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    variantWorkflowRunId: null,
-    variantImageGeneratedAt: null,
-    variantImageError: null,
     videoUrl: OLD_VIDEO,
     videoPath: null,
     videoStatus: 'completed',
@@ -47,6 +46,8 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     videoError: null,
     motionPrompt: null,
     motionModel: 'veo3',
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     audioUrl: null,
     audioPath: null,
     audioStatus: 'pending',
@@ -54,22 +55,42 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     audioGeneratedAt: null,
     audioError: null,
     audioModel: null,
-    thumbnailInputHash: null,
-    variantImageInputHash: null,
     videoInputHash: null,
     audioInputHash: null,
-    visualPromptInputHash: null,
     motionPromptInputHash: null,
-    previewThumbnailUrl: null,
     metadata: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides,
   };
+  const frame: Frame = {
+    id: 'shot-1',
+    shotId: 'shot-1',
+    sequenceId: SEQ,
+    orderIndex: 0,
+    role: 'first',
+    source: 'generated',
+    imageUrl: OLD_THUMB,
+    previewImageUrl: null,
+    imagePath: null,
+    imageStatus: 'completed',
+    imageWorkflowRunId: null,
+    imageGeneratedAt: null,
+    imageError: null,
+    imageModel: 'nano_banana_2',
+    imagePrompt: null,
+    selectedImageVersionId: null,
+    selectedImagePromptVersionId: null,
+    pendingPromoteVersionId: null,
+    imageInputHash: null,
+    visualPromptInputHash: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  return { ...projectShotWithImage(shot, frame), ...overrides };
 }
 
-function getCachedShot(qc: QueryClient): Shot | undefined {
-  return qc.getQueryData<Shot[]>(shotKeys.list(SEQ))?.[0];
+function getCachedShot(qc: QueryClient): ShotWithImage | undefined {
+  return qc.getQueryData<ShotWithImage[]>(shotKeys.list(SEQ))?.[0];
 }
 
 describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
@@ -201,6 +222,31 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       const invalidatedKeys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
       expect(invalidatedKeys).toContainEqual(['sequence-video-variants', SEQ]);
       expect(invalidatedKeys).toContainEqual(['sequence-video-models', SEQ]);
+      // Video tab version chips read segments — must refresh with history (#1076).
+      expect(invalidatedKeys).toContainEqual(['segments', 'list', SEQ]);
+    });
+
+    it('primary completion refreshes segments so version chips leave the spinning state (#1076)', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+      qc.setQueryData(shotKeys.list(SEQ), [
+        makeShot({ videoStatus: 'generating', videoError: null }),
+      ]);
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.video:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        videoUrl: NEW_URL,
+        model: 'veo3',
+      });
+
+      expect(getCachedShot(qc)?.videoStatus).toBe('completed');
+
+      vi.advanceTimersByTime(200);
+      const invalidatedKeys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(invalidatedKeys).toContainEqual(['segments', 'list', SEQ]);
+      expect(invalidatedKeys).toContainEqual([
+        ...shotKeys.videoVersions('shot-1'),
+      ]);
     });
 
     it('variant-only failure does not flip the primary video to failed', () => {
@@ -246,6 +292,128 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(shot?.videoError).toBe(
         'Motion generation rejected by content filter'
       );
+    });
+  });
+
+  // After #713 the regenerated prompt no longer rides in `metadata` — it's
+  // mirrored onto the frame/shot and projected server-side. The handler must
+  // refetch the shots list (re-runs that projection) and the version-history
+  // query, instead of relying on the now-inert in-place metadata patch (#991).
+  describe('generation.shot:updated (prompt regeneration #991)', () => {
+    it('visual-prompt refetches the shots list and the visual history query', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:updated', {
+        shotId: 'shot-1',
+        updateType: 'visual-prompt',
+        metadata: { sceneId: 'sc-1', sceneNumber: 1 },
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+      expect(keys).toContainEqual(promptVariantKeys.shot('visual', 'shot-1'));
+    });
+
+    it('motion-prompt refetches the shots list and the motion history query', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:updated', {
+        shotId: 'shot-1',
+        updateType: 'motion-prompt',
+        metadata: { sceneId: 'sc-1', sceneNumber: 1 },
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+      expect(keys).toContainEqual(promptVariantKeys.shot('motion', 'shot-1'));
+    });
+
+    it('a non-prompt updateType patches metadata in place without refetching the list', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:updated', {
+        shotId: 'shot-1',
+        updateType: 'music-design',
+        metadata: { sceneId: 'sc-1', sceneNumber: 2 },
+      });
+
+      // Music/audio design still travels in metadata — patched in place, no
+      // refetch.
+      expect(getCachedShot(qc)?.metadata?.sceneNumber).toBe(2);
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).not.toContainEqual(shotKeys.list(SEQ));
+      expect(keys).not.toContainEqual(
+        promptVariantKeys.shot('visual', 'shot-1')
+      );
+    });
+  });
+
+  // Stream-time scene persistence (#1072): each analysis scene writes a
+  // `scenes` row + links the shot, so the spine must refetch scenes (and
+  // shots) as soon as those events land — not only after bulk persist-scenes.
+  describe('generation.scene / shot creation invalidates scenes list (#1072)', () => {
+    it('generation.shot:created refetches shots and scenes', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:created', {
+        shotId: 'shot-1',
+        sceneId: 'analysis-1',
+        orderIndex: 0,
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
+    });
+
+    it('generation.scene:new refetches scenes and shots', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.scene:new', {
+        sceneId: 'analysis-1',
+        sceneNumber: 1,
+        title: 'Opening',
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+    });
+
+    it('generation.scene:updated patches title and refetches scenes/shots', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+      qc.setQueryData(shotKeys.list(SEQ), [
+        makeShot({
+          metadata: {
+            sceneId: 'sc-1',
+            sceneNumber: 1,
+            metadata: {
+              title: 'Old',
+              durationSeconds: 3,
+              location: 'INT',
+              timeOfDay: 'day',
+              storyBeat: 'open',
+            },
+            originalScript: { extract: 'x', dialogue: [] },
+          },
+        }),
+      ]);
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.scene:updated', {
+        sceneId: 'sc-1',
+        title: 'New title',
+      });
+
+      expect(getCachedShot(qc)?.metadata?.metadata?.title).toBe('New title');
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
     });
   });
 });

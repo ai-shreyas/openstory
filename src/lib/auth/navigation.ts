@@ -3,8 +3,6 @@
  * Helpers for navigating to auth pages with redirect preservation
  */
 
-import { Route as loginRoute } from '@/routes/_auth/login';
-
 /**
  * Get the redirect URL from query params
  * For use in auth pages to read the intended destination
@@ -28,7 +26,7 @@ export function getRedirectFromParams(
     // Only allow relative URLs (starting with /)
     if (redirectTo.startsWith('/') && !redirectTo.startsWith('//')) {
       // Prevent redirecting back to auth pages
-      if (!redirectTo.startsWith(loginRoute.fullPath)) {
+      if (!redirectTo.startsWith('/login')) {
         return redirectTo;
       }
     }

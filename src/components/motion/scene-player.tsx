@@ -16,7 +16,7 @@ import {
   getAspectRatioClassName,
 } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
-import type { Shot } from '@/types/database';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { AppImage } from '@/components/ui/app-image';
 import {
   AlertCircle,
@@ -26,13 +26,13 @@ import {
   Share2,
   VideoIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { VideoPlayer } from './video-player';
 import { VideoStateOverlay } from './video-state-overlay';
 
 type ScenePlayerProps = {
-  shots?: Shot[];
+  shots?: ShotWithImage[];
   selectedShotId?: string;
   aspectRatio: AspectRatio;
   /**
@@ -58,6 +58,11 @@ type ScenePlayerProps = {
    * pinned model's output.
    */
   modelMismatchLabel?: string | null;
+  /**
+   * Quiet stale chip (#1077) — the displayed image was generated from
+   * earlier inputs. Info-level: amber dot on a muted chip, no warning fill.
+   */
+  staleLabel?: string | null;
   progressMessage?: string;
   /**
    * In-flight retry state for the selected shot (#882) — rendered as
@@ -65,6 +70,11 @@ type ScenePlayerProps = {
    */
   retry?: { attempt: number; maxAttempts?: number };
   posterUrl?: string;
+  /**
+   * Extra node rendered absolutely inside the frame container (#986) — e.g. the
+   * starting-frame variants control. Positioned by the overlay itself.
+   */
+  frameOverlay?: React.ReactNode;
   onTimeUpdate?: (currentTime: number) => void;
   onEnded?: () => void;
 };
@@ -80,36 +90,32 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   overrideVideoUrl,
   badgeMessage,
   modelMismatchLabel,
+  staleLabel,
   progressMessage,
   retry,
   posterUrl,
+  frameOverlay,
   onTimeUpdate,
   onEnded,
 }) => {
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
 
   const imageDimensions = aspectRatioToDimensions(aspectRatio);
-  // Get current shot and next shot
-  const [currentShotIndex, setCurrentShotIndex] = useState(
-    shots?.findIndex((shot) => shot.id === selectedShotId) ?? -1
-  );
-  useEffect(() => {
-    // We could use a useMemo here, but we want to support not having to have a callback to set the selected shot id
-    setCurrentShotIndex(
-      shots?.findIndex((shot) => shot.id === selectedShotId) ?? -1
-    );
-  }, [selectedShotId, shots]);
-
+  // Derive the current shot synchronously from selection — do NOT park the
+  // index in useState+useEffect. That lagged one render behind selectedShotId,
+  // so on the image tab (where the VideoPlayer key is a constant empty src)
+  // the previous shot's still stayed on screen after switching shots (#1070).
+  const currentShotIndex =
+    shots?.findIndex((shot) => shot.id === selectedShotId) ?? -1;
   const currentShot =
     shots && currentShotIndex >= 0 ? shots[currentShotIndex] : undefined;
   const nextShot =
-    shots && currentShotIndex < shots.length - 1
+    shots && currentShotIndex >= 0 && currentShotIndex < shots.length - 1
       ? shots.find(
           (shot, index) =>
             shot.videoStatus === 'completed' &&
             shot.videoUrl &&
-            index > currentShotIndex,
-          currentShotIndex + 1
+            index > currentShotIndex
         )
       : undefined;
 
@@ -124,7 +130,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
         window.location.origin
       ).href;
       await navigator.clipboard.writeText(absoluteUrl);
-      toast.success('Image URL copied');
+      toast.success('Start frame URL copied');
     } catch {
       toast.error('Failed to copy URL');
     }
@@ -136,7 +142,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
       const absoluteUrl = new URL(currentShot.videoUrl, window.location.origin)
         .href;
       await navigator.clipboard.writeText(absoluteUrl);
-      toast.success('Video URL copied');
+      toast.success('Segment URL copied');
     } catch {
       toast.error('Failed to copy URL');
     }
@@ -301,7 +307,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
     : (overrideVideoUrl ?? currentShot.videoUrl ?? '');
 
   return (
-    <div className={cn('flex w-full flex-col', wrapperClassName)}>
+    <div className={cn('relative flex w-full flex-col', wrapperClassName)}>
       {hasFailedVideo ? (
         <div
           className={cn(
@@ -346,7 +352,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => void handleCopyImageUrl()}>
                   <Link className="h-4 w-4" />
-                  Copy scene image URL
+                  Copy start frame URL
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -365,6 +371,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               <span className="text-sm">Failed to generate video</span>
             </div>
           </div>
+          {frameOverlay}
         </div>
       ) : (
         <div
@@ -391,19 +398,19 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
                 {currentShot.thumbnailUrl && (
                   <DropdownMenuItem onClick={() => void handleCopyImageUrl()}>
                     <Link className="h-4 w-4" />
-                    Copy scene image URL
+                    Copy start frame URL
                   </DropdownMenuItem>
                 )}
                 {currentShot.videoUrl && (
                   <DropdownMenuItem onClick={() => void handleCopyVideoUrl()}>
                     <VideoIcon className="h-4 w-4" />
-                    Copy scene video URL
+                    Copy segment URL
                   </DropdownMenuItem>
                 )}
                 {hasCompletedVideo && downloadData?.downloadUrl && (
                   <DropdownMenuItem onClick={handleDownloadVideo}>
                     <Download className="h-4 w-4" />
-                    Download scene video
+                    Download segment video
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -424,11 +431,14 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             />
           )}
           <VideoPlayer
-            key={playbackVideoUrl} // Force re-render when video changes
+            // Remount when the selected shot OR the displayed media changes.
+            // Image-tab stills use an empty src, so keying only on playbackVideoUrl
+            // reused the previous shot's poster after a shot switch (#1070).
+            key={`${currentShot.id}:${playbackVideoUrl || displayImage || ''}`}
             src={playbackVideoUrl}
             posterSrc={displayImage}
             aspectRatio={aspectRatio}
-            className="w-full"
+            className="h-full w-full"
             autoPlay={shouldAutoPlay}
             onTimeUpdate={onTimeUpdate}
             onPause={handlePause}
@@ -445,14 +455,25 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             progressMessage={progressMessage}
             retry={retry}
           />
+          {/* Status badges sit under the top-left frame-variants control so they
+              don't cover it or the bottom video play controls (#1070). */}
           {badgeMessage && (
-            <span className="absolute top-2 left-2 z-10 rounded bg-primary/80 px-2 py-1 text-xs font-medium text-primary-foreground backdrop-blur-sm">
+            <span className="absolute top-12 left-2 z-10 rounded bg-primary/80 px-2 py-1 text-xs font-medium text-primary-foreground backdrop-blur-sm">
               {badgeMessage}
             </span>
           )}
           {modelMismatchLabel && !badgeMessage && (
-            <span className="absolute top-2 left-2 z-10 rounded bg-amber-500/90 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
+            <span className="absolute top-12 left-2 z-10 rounded bg-amber-500/90 px-2 py-1 text-xs font-medium text-white backdrop-blur-sm">
               {modelMismatchLabel}
+            </span>
+          )}
+          {staleLabel && !badgeMessage && !modelMismatchLabel && (
+            <span className="absolute top-12 left-2 z-10 flex items-center gap-1.5 rounded bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 rounded-full bg-amber-500"
+              />
+              {staleLabel}
             </span>
           )}
           {isPreviewImage && !isVariantPreview && (
@@ -460,11 +481,14 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
               Preview
             </span>
           )}
+          {frameOverlay}
         </div>
       )}
+      {/* Sits just under the frame; CanvasMediaStage reserves a caption band
+          so this is not clipped when 9:16 fills the stage (#1074). */}
       <p
         className={cn(
-          'text-xs italic py-1 transition-opacity duration-300',
+          'pointer-events-none absolute inset-x-0 top-full pt-1 text-center text-xs italic transition-opacity duration-300',
           isPreviewImage
             ? 'text-muted-foreground opacity-100'
             : 'opacity-0 select-none'

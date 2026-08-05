@@ -98,7 +98,8 @@ type GenerationSettingsProps = {
   recommendedAspectRatio?: string | null;
   /**
    * Active style-applied-defaults marker. When set, the trigger renders a
-   * sibling pill saying "From {styleName} · Reset". Cleared on user reset.
+   * sibling pill saying "From style · Reset" (fixed text — style names vary in
+   * length and would wrap the control row). Cleared on user reset.
    */
   appliedFromStyle?: { styleId: string; styleName: string } | null;
   /** Restore the pre-apply snapshot. Required when `appliedFromStyle` is set. */
@@ -147,7 +148,7 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
         </PopoverTrigger>
         {appliedFromStyle && onResetStyleDefaults && (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs">
-            <span>From {appliedFromStyle.styleName}</span>
+            <span>From style</span>
             <span aria-hidden="true" className="text-primary/40">
               ·
             </span>

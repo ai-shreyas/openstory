@@ -104,11 +104,17 @@ async function regenerateShotsIfNeeded(
           `[RecastLocationWorkflow:cf] Missing shots for ${input.locationName}: ${missing.join(', ')}`
         );
       }
+      // The image prompt mirror lives on each shot's anchor frame (#989) —
+      // keyed by shotId (NOT id-reuse).
+      const framesByShot = await scopedDb.frames.getAnchorsByShots(
+        shots.map((s) => s.id)
+      );
       const aspectRatio = sequence.aspectRatio;
       const shotSnapshots = await Promise.all(
         shots.map((shot) =>
           buildRegenerateShotSnapshot({
             shot,
+            imagePrompt: framesByShot.get(shot.id)?.imagePrompt ?? null,
             characters,
             locations,
             elements,

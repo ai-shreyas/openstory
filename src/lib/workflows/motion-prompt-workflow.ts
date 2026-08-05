@@ -1,174 +1,254 @@
 /**
- * Cloudflare Workflows port of `motionPromptWorkflow`.
+ * Per-scene motion prompt generation.
  *
- * Wave 3 mid-tier orchestrator: fans out one `motion-prompt-scene` child per
- * scene and awaits all results. Mirrors the QStash version
- * (`src/lib/workflows/motion-prompt-workflow.ts`) step for step — same control
- * flow, same side effects. The only differences are:
- *
- *   - Extends `OpenStoryWorkflowEntrypoint` instead of being built by
- *     `createScopedWorkflow`. Failure parity comes from the base class
- *     (see `base-workflow.ts`).
- *   - Reads payload from `event.payload` instead of `context.requestPayload`
- *     and the workflow run id from `event.instanceId` instead of
- *     `context.workflowRunId`.
- *   - The Promise.all over `context.invoke('motion-prompt-scene', ...)`
- *     becomes Promise.allSettled over `spawnAndAwaitChild` (Pattern 3 fan-out
- *     helpers in `await-child.ts`). Each child gets a deterministic
- *     instance ID and a unique event-type qualifier so siblings cannot match
- *     each other's completion events.
- *   - `failureFunction` → `onFailure`.
- *
- * Uses `Promise.allSettled` rather than `Promise.all` so that a single
- * child timeout (waitForEvent default: 30 minutes) does not kill the parent
- * — the parent still surfaces a terminal error, but only after every other
- * sibling has resolved one way or the other. */
+ * Extends `OpenStoryWorkflowEntrypoint` (failure handling from the base class,
+ * see base-workflow.ts); the streaming LLM call runs through
+ * `durableStreamingLLMCallCf`, driven by `step.do`. Spawned per scene by
+ * `MotionPromptBatchWorkflow`. */
 
-import type { MotionPrompt } from '@/lib/ai/scene-analysis.schema';
+import { computeMotionPromptInputHash } from '@/lib/ai/input-hash';
+import { narrowShotPromptContext } from '@/lib/ai/prompt-context';
+import {
+  motionPromptSchema,
+  type MotionPrompt,
+} from '@/lib/ai/scene-analysis.schema';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
+import { getShotPromptChannel, getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
-import { WorkflowValidationError } from '@/lib/workflow/errors';
-import type {
-  MotionPromptSceneWorkflowInput,
-  MotionPromptWorkflowInput,
-} from '@/lib/workflow/types';
+import type { MotionPromptWorkflowInput } from '@/lib/workflow/types';
+import { hydrateMotionPromptFromScene } from '@/lib/motion/hydrate-motion-prompt';
+import { durableStreamingLLMCallCf } from '@/lib/workflows/llm-call-helper';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-import { NonRetryableError } from 'cloudflare:workflows';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'motion-prompt']);
 
-type MotionPromptSceneWorkflowResult = {
+type MotionPromptWorkflowResult = {
   sceneId: string;
   motionPrompt: MotionPrompt;
 };
-
-type MotionPromptWorkflowResult = MotionPromptSceneWorkflowResult[];
 
 export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionPromptWorkflowInput> {
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MotionPromptWorkflowInput>>,
     step: WorkflowStep,
-    _scopedDb: ScopedDb
+    scopedDb: ScopedDb
   ): Promise<MotionPromptWorkflowResult> {
     const input = event.payload;
-    const parentInstanceId = event.instanceId;
     const {
-      scenes,
+      scene,
+      sceneBefore,
+      sceneAfter,
       aspectRatio,
       characterBible,
       locationBible,
-      elementBible,
+      elementBible = [],
       styleConfig,
       analysisModelId,
-      shotMapping,
       sequenceId,
-      startingFrameImageUrls,
+      shotId,
+      startingFrameImageUrl,
     } = input;
 
     // ============================================================
-    // Top-level validation (re-throws as NonRetryableError via the base
-    // class's WorkflowValidationError re-wrap). Inside step.do we use
-    // CF's NonRetryableError directly so the step machinery doesn't burn
-    // its retry budget on programmer errors.
+    // PHASE 3: Motion Prompt Generation (using durableLLMCall helper)
     // ============================================================
-    if (!sequenceId) {
-      throw new WorkflowValidationError(
-        '[MotionPromptWorkflow:cf] sequenceId is required for fan-out'
+
+    // The motion prompt is conditioned on the rendered starting frame (#929):
+    // it's passed to the LLM as a vision input so motion continues the exact
+    // pose/composition the image committed to, and the image URL is folded
+    // into the staleness hash so a re-render re-stales the prompt.
+    //
+    // CRITICAL: the still arrives as an INPUT (`startingFrameImageUrl`),
+    // snapshotted by the trigger when shot images finished — this workflow
+    // must NOT look it up from the DB. A workflow can run/retry/replay at any
+    // time, and a concurrent re-render could swap `shot.thumbnailUrl` mid-run;
+    // reading it here would condition the prompt on an image the trigger never
+    // saw. Null/absent → no still, text-only path.
+    if (!startingFrameImageUrl) {
+      logger.info(
+        `[MotionPromptWorkflow:cf] No starting frame provided for ${scene.sceneId}; generating motion prompt without vision input`
       );
     }
 
-    const childBinding = this.env.MOTION_PROMPT_SCENE_WORKFLOW;
+    // Narrow the bibles to this scene's entities (via `scene.continuity`, set
+    // by scene-split) before the LLM call, so the model and the staleness hash
+    // see the same minimal, scene-scoped input. See #867.
+    const narrowed = narrowShotPromptContext({
+      scene,
+      styleConfig,
+      characterBible,
+      locationBible,
+      elementBible,
+      aspectRatio,
+      analysisModel: analysisModelId,
+      startingFrameImageUrl: startingFrameImageUrl ?? null,
+    });
 
-    // ============================================================
-    // PHASE 3: Motion Prompt Generation — fan out per scene
-    // ============================================================
-    const settled = await Promise.allSettled(
-      scenes.map((scene, sceneIndex) => {
-        const sceneBefore = sceneIndex > 0 ? scenes[sceneIndex - 1] : undefined;
-        const sceneAfter =
-          sceneIndex < scenes.length - 1 ? scenes[sceneIndex + 1] : undefined;
-        const childPayload: MotionPromptSceneWorkflowInput = {
-          scene,
-          sceneBefore,
-          sceneAfter,
-          aspectRatio,
-          characterBible,
-          locationBible,
-          elementBible,
-          styleConfig,
-          analysisModelId,
-          teamId: input.teamId,
-          userId: input.userId,
-          sequenceId,
-          shotId: shotMapping?.find((f) => f.sceneId === scene.sceneId)?.shotId,
-          // Pass the rendered still per scene, snapshotted upstream (#929) —
-          // never looked up inside the child workflow.
-          startingFrameImageUrl:
-            startingFrameImageUrls?.[scene.sceneId] ?? null,
-        };
+    const promptVariables = {
+      // Deterministic per input: the note states what IS attached, never a
+      // hedged "when available". The pipeline path always has a still (the
+      // batch workflow fails a scene without one); the text-only wording only
+      // appears for explicit user regenerates before any image exists.
+      startingFrameNote: startingFrameImageUrl
+        ? 'The rendered starting frame is attached below as an image — animate strictly from it.'
+        : 'No rendered starting frame exists yet — derive the motion strictly from the scene data below.',
+      sceneBefore: sceneBefore
+        ? JSON.stringify(sceneBefore, null, 2)
+        : '(none)',
+      sceneAfter: sceneAfter ? JSON.stringify(sceneAfter, null, 2) : '(none)',
+      scene: JSON.stringify(scene, null, 2),
+      characterBible: JSON.stringify(narrowed.characterBible, null, 2),
+      locationBible: JSON.stringify(narrowed.locationBible, null, 2),
+      elementBible: JSON.stringify(narrowed.elementBible, null, 2),
+      styleConfig: JSON.stringify(styleConfig, null, 2),
+      aspectRatio,
+    };
 
-        return spawnAndAwaitChild<
-          MotionPromptSceneWorkflowInput,
-          MotionPromptSceneWorkflowResult
-        >(step, {
-          binding: childBinding,
-          parentBindingName: 'MOTION_PROMPT_WORKFLOW',
-          parentInstanceId,
-          childId: `motion-prompt-scene:${sequenceId}:${scene.sceneId}`,
-          childPayload,
-          spawnStepName: `spawn-mp-scene-${sceneIndex}`,
-          awaitStepName: `await-mp-scene-${sceneIndex}`,
-        });
-      })
+    logger.info(
+      `[MotionPromptWorkflow:cf] Generating motion prompt for scene ${scene.sceneId}`
     );
 
-    // Collect failures so we can surface a single descriptive error rather
-    // than whatever happened to land in the first rejected slot.
-    const failures: string[] = [];
-    const results: MotionPromptSceneWorkflowResult[] = [];
-    for (const [i, outcome] of settled.entries()) {
-      if (outcome.status === 'fulfilled') {
-        results.push(outcome.value);
-      } else {
-        const scene = scenes[i];
-        const reason =
-          outcome.reason instanceof Error
-            ? outcome.reason.message
-            : String(outcome.reason);
-        failures.push(`scene ${scene?.sceneId ?? `#${i}`}: ${reason}`);
+    const llmMotionPrompt: MotionPrompt = await durableStreamingLLMCallCf(
+      step,
+      {
+        name: 'motion-prompts',
+        phase: { number: 5, name: 'Writing motion prompts…' },
+        promptName: 'phase/motion-prompt-scene-generation-chat',
+        promptVariables,
+        modelId: analysisModelId,
+        responseSchema: motionPromptSchema,
+        additionalMetadata: { shotId },
+        reasoning: true,
+        // Attach the rendered still whenever we have one. The LLM helper owns
+        // the vision-routing policy: it runs the call on a vision-capable model
+        // (the chosen model if it sees images, else DEFAULT_VISION_MODEL —
+        // e.g. GLM-5.2 → Claude Sonnet, #944). The staleness hash always folds
+        // in the image regardless, so a re-render re-stales the prompt.
+        visionImageUrls: startingFrameImageUrl
+          ? [startingFrameImageUrl]
+          : undefined,
+      },
+      {
+        sequenceId,
+        workflowRunId: event.instanceId,
+        scopedDb,
+        shotPromptStream:
+          input.emitStreaming && shotId
+            ? { shotId, promptType: 'motion' }
+            : undefined,
       }
-    }
+    );
 
-    if (failures.length > 0) {
-      // Use a NonRetryableError here so CF doesn't retry the entire fan-out
-      // when a child has already exhausted its own retries. The base class
-      // will route this through onFailure + notifyParentOfFailure.
-      throw new NonRetryableError(
-        `[MotionPromptWorkflow:cf] Motion prompt generation failed for ${failures.length}/${scenes.length} scenes: ${failures.join('; ')}`,
-        'MotionPromptFanOutError'
-      );
-    }
+    // Mirror the analysis pipeline: dialogue lines come from the scene script
+    // when the LLM omits them (common on explicit regenerate runs).
+    const motionPrompt = hydrateMotionPromptFromScene(scene, llmMotionPrompt);
 
-    return results.map((result) => ({
-      sceneId: result.sceneId,
-      motionPrompt: result.motionPrompt,
-    }));
+    if (sequenceId && shotId) {
+      if (!motionPrompt.fullPrompt) {
+        throw new Error(
+          `Motion prompt generation returned empty fullPrompt for scene ${scene.sceneId}`
+        );
+      }
+
+      // Hash the same scene-scoped `narrowed` context the LLM was given above,
+      // so the stored hash equals the verify-time recompute by construction.
+      const inputHash = await computeMotionPromptInputHash(narrowed);
+
+      await step.do('save-motion-prompt-to-db', async () => {
+        // The motion prompt is NOT written into `scene.metadata` any more
+        // (#713). The version write mirrors its text onto `shot.motionPrompt`
+        // and repoints `selectedMotionPromptVersionId` — superseding any prior
+        // user override automatically (the override stays in history and can
+        // be restored).
+        if (input.targetVersionId) {
+          // #1085: complete the pre-created pending claim in place. Null =
+          // cancelled mid-flight; the output is deliberately discarded.
+          const completed =
+            await scopedDb.shotPromptVersions.completePendingAiVersion({
+              versionId: input.targetVersionId,
+              shotId,
+              text: motionPrompt.fullPrompt,
+              components: motionPrompt.components,
+              parameters: motionPrompt.parameters,
+              dialogue: motionPrompt.dialogue ?? null,
+              audio: motionPrompt.audio ?? null,
+              inputHash,
+              analysisModel: analysisModelId,
+            });
+          if (!completed) {
+            logger.info(
+              `[MotionPromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
+            );
+            return;
+          }
+        } else {
+          await scopedDb.shotPromptVersions.writeAiVersion({
+            shotId,
+            text: motionPrompt.fullPrompt,
+            components: motionPrompt.components,
+            parameters: motionPrompt.parameters,
+            dialogue: motionPrompt.dialogue ?? null,
+            audio: motionPrompt.audio ?? null,
+            inputHash,
+            analysisModel: analysisModelId,
+          });
+        }
+
+        // The prompt lives on `shot.motionPrompt` (mirror) now, not metadata;
+        // carry the base scene so the client refreshes the shot on this event.
+        await getGenerationChannel(sequenceId).emit('generation.shot:updated', {
+          shotId,
+          updateType: 'motion-prompt',
+          metadata: scene,
+        });
+
+        if (input.emitStreaming) {
+          await getShotPromptChannel(shotId).emit('shotPrompt.completed', {
+            promptType: 'motion',
+          });
+        }
+      });
+    }
+    return { sceneId: scene.sceneId, motionPrompt };
   }
 
-  protected override onFailure({
+  protected override async onFailure({
+    event,
     error,
+    scopedDb,
   }: {
     event: Readonly<WorkflowEvent<MotionPromptWorkflowInput>>;
     error: string;
     scopedDb: ScopedDb;
-  }): void {
-    // Mirror QStash's `failureFunction`, which returned a static string and
-    // performed no DB writes — per-scene failures already surface via the
-    // child workflow's own onFailure (e.g. shotPrompt.failed emits).
-    logger.error('[MotionPromptWorkflow:cf] Motion prompt generation failed', {
-      error,
-    });
+  }): Promise<void> {
+    logger.error('[MotionPromptWorkflow:cf] Failed', { error });
+    // #1085: fail the pending claim so it stops reading as "updating".
+    // Best-effort — the reconciler sweeps anything this misses.
+    if (event.payload.targetVersionId) {
+      try {
+        await scopedDb.shotPromptVersions.markTerminal(
+          event.payload.targetVersionId,
+          'failed'
+        );
+      } catch (dbErr) {
+        logger.warn('[MotionPromptWorkflow:cf] failed to mark claim failed', {
+          err: dbErr,
+        });
+      }
+    }
+    try {
+      const payload = event.payload;
+      if (payload.emitStreaming && payload.shotId) {
+        await getShotPromptChannel(payload.shotId).emit('shotPrompt.failed', {
+          promptType: 'motion',
+          error,
+        });
+      }
+    } catch (emitErr) {
+      logger.warn('[MotionPromptWorkflow:cf] failed to emit failure', {
+        err: emitErr,
+      });
+    }
   }
 }

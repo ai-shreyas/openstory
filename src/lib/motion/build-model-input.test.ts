@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   IMAGE_TO_VIDEO_MODELS,
+  getMotionReferenceEndpoint,
   safeImageToVideoModel,
   type ImageToVideoModel,
 } from '../ai/models';
 import { typedEntries } from '../utils/typed-object';
-import { buildModelInput } from './build-model-input';
+import { buildModelInput, buildReferenceVideoInput } from './build-model-input';
 import type { GenerateMotionOptions } from './motion-generation';
+
+const seedanceRefConfig = getMotionReferenceEndpoint('seedance_v2');
+if (!seedanceRefConfig) {
+  throw new Error('seedance_v2 must have a reference endpoint config');
+}
 
 const baseOptions: GenerateMotionOptions = {
   prompt: 'Camera dolly forward slowly',
@@ -183,6 +189,138 @@ describe('buildModelInput', () => {
         }
       });
     }
+  });
+
+  describe('reference images (#873)', () => {
+    const referenceImages = [
+      {
+        referenceImageUrl: 'https://example.com/jack-sheet.png',
+        description: 'Jack - tall man with a scar',
+        role: 'character' as const,
+      },
+      {
+        referenceImageUrl: 'https://example.com/logo.png',
+        description: 'ACME_LOGO - red circular badge',
+        role: 'element' as const,
+      },
+    ];
+
+    it('Kling emits an elements array with frontal + reference images', () => {
+      const result = build('kling_v3_pro', { referenceImages });
+      expect(result.elements).toEqual([
+        {
+          frontal_image_url: 'https://example.com/jack-sheet.png',
+          reference_image_urls: ['https://example.com/jack-sheet.png'],
+        },
+        {
+          frontal_image_url: 'https://example.com/logo.png',
+          reference_image_urls: ['https://example.com/logo.png'],
+        },
+      ]);
+    });
+
+    it('Kling appends an @ElementN legend matching the elements order', () => {
+      const result = build('kling_v3_pro', { referenceImages });
+      expect(result.prompt).toContain(baseOptions.prompt);
+      expect(result.prompt).toContain('@Element1: Jack - tall man with a scar');
+      expect(result.prompt).toContain(
+        '@Element2: ACME_LOGO - red circular badge'
+      );
+    });
+
+    it('Kling without references is unchanged (no elements key)', () => {
+      const result = build('kling_v3_pro');
+      expect(result).not.toHaveProperty('elements');
+      expect(result.prompt).toBe(baseOptions.prompt);
+    });
+
+    it('non-Kling models get no elements key and an unchanged prompt when no tokens are mentioned', () => {
+      for (const key of Object.keys(IMAGE_TO_VIDEO_MODELS)) {
+        if (key === 'kling_v3_pro') continue;
+        const result = build(safeImageToVideoModel(key), { referenceImages });
+        expect(result).not.toHaveProperty('elements');
+        expect(result.prompt).toBe(baseOptions.prompt);
+      }
+    });
+
+    it('non-Kling models substitute mentioned tokens with descriptions', () => {
+      const tokenRefs = [
+        {
+          referenceImageUrl: 'https://example.com/jack-sheet.png',
+          description: 'Jack - tall man with a scar',
+          role: 'character' as const,
+          token: 'Jack',
+        },
+        {
+          referenceImageUrl: 'https://example.com/logo.png',
+          description: 'ACME_LOGO - red circular badge',
+          role: 'element' as const,
+          token: 'ACME_LOGO',
+        },
+      ];
+      const result = build('grok_imagine_video_1_5', {
+        prompt: 'JACK holds up the ACME_LOGO to the camera',
+        referenceImages: tokenRefs,
+      });
+      expect(result).not.toHaveProperty('elements');
+      expect(result.prompt).toBe(
+        'Jack (tall man with a scar) holds up the ACME_LOGO (red circular badge) to the camera'
+      );
+    });
+  });
+
+  describe('buildReferenceVideoInput (#873 Seedance reference-to-video)', () => {
+    const referenceImages = [
+      {
+        referenceImageUrl: 'https://example.com/jack-sheet.png',
+        description: 'Jack - tall man with a scar',
+        role: 'character' as const,
+      },
+      {
+        referenceImageUrl: 'https://example.com/logo.png',
+        description: 'ACME_LOGO - red circular badge',
+        role: 'element' as const,
+      },
+    ];
+
+    const buildRef = (overrides: Partial<GenerateMotionOptions> = {}) =>
+      buildReferenceVideoInput(
+        { ...baseOptions, referenceImages, ...overrides },
+        IMAGE_TO_VIDEO_MODELS.seedance_v2,
+        'seedance_v2',
+        seedanceRefConfig
+      );
+
+    it('puts the still as @Image1 in image_urls and omits image_url', () => {
+      const result = buildRef();
+      expect(result).not.toHaveProperty('image_url');
+      expect(result.image_urls).toEqual([
+        baseOptions.imageUrl,
+        'https://example.com/jack-sheet.png',
+        'https://example.com/logo.png',
+      ]);
+    });
+
+    it('declares the still as the starting frame and legends unmentioned refs', () => {
+      const result = buildRef();
+      expect(result.prompt).toContain(baseOptions.prompt);
+      expect(
+        typeof result.prompt === 'string' &&
+          result.prompt.startsWith('Use @Image1 as the starting frame.')
+      ).toBe(true);
+      expect(result.prompt).toContain('@Image2: Jack - tall man with a scar');
+      expect(result.prompt).toContain(
+        '@Image3: ACME_LOGO - red circular badge'
+      );
+    });
+
+    it('applies the seedance resolution quality override', () => {
+      expect(buildRef().resolution).toBe('720p');
+    });
+
+    it('forwards generate_audio=false when caller suppresses audio', () => {
+      expect(buildRef({ generateAudio: false }).generate_audio).toBe(false);
+    });
   });
 
   describe('common behavior', () => {

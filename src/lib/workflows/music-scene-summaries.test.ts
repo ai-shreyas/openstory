@@ -73,28 +73,13 @@ describe('buildMusicSceneSummaries', () => {
     expect(summary.visualSummary).toBe('');
   });
 
-  it('uses prompts.visual.components.atmosphere when present', () => {
-    const scene = sceneWithMetadata({
-      prompts: {
-        visual: {
-          fullPrompt: 'full',
-          negativePrompt: '',
-          components: {
-            sceneDescription: '',
-            subject: '',
-            environment: '',
-            lighting: '',
-            camera: '',
-            composition: '',
-            style: '',
-            technical: '',
-            atmosphere: 'tense corporate',
-          },
-        },
-      },
+  it('uses the supplied per-scene visual summary when present (#713)', () => {
+    // The visual prompt moved off `scene.prompts` to `frame_prompt_versions`,
+    // so the caller threads it in via `visualSummaryBySceneId` keyed by sceneId.
+    const scene = sceneWithMetadata();
+    const [summary] = buildMusicSceneSummaries([scene], {
+      s1: 'tense corporate',
     });
-
-    const [summary] = buildMusicSceneSummaries([scene]);
     if (!summary) throw new Error('expected summary to be defined');
     expect(summary.visualSummary).toBe('tense corporate');
   });

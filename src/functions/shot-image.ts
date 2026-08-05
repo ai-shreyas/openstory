@@ -4,69 +4,40 @@ import {
   safeImageToVideoModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
+import { resolveUpscaleModel } from '@/lib/ai/resolve-asset-models';
 import {
   estimateImageCost,
   estimateStoryboardCost,
+  gateEstimate,
 } from '@/lib/billing/cost-estimation';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { requireCredits } from '@/lib/billing/preflight';
-import {
-  aspectRatioToImageSize,
-  getVariantGridConfig,
-} from '@/lib/constants/aspect-ratios';
-import type { SequenceLocation } from '@/lib/db/schema';
-import { locationMatchesTag } from '@/lib/db/scoped/sequence-locations';
+import { getVariantGridConfig } from '@/lib/constants/aspect-ratios';
 import { cropTileFromGrid } from '@/lib/image/image-crop';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
-import { buildElementReferenceImages } from '@/lib/prompts/element-prompt';
-import { buildLocationReferenceImages } from '@/lib/prompts/location-prompt';
-import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import {
   generateVariantSchema,
   regenerateShotSchema,
 } from '@/lib/schemas/shot.schemas';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
+import {
+  getSceneLocationReferenceImages,
+  prepareShotImageWorkflowInput,
+} from '@/lib/shots/shot-image-input';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type {
-  ShotImageSceneSnapshot,
-  ImageWorkflowInput,
   StoryboardWorkflowInput,
   ShotVariantWorkflowInput,
   UpscaleShotVariantWorkflowInput,
 } from '@/lib/workflow/types';
-import {
-  matchCharactersToScene,
-  matchElementsToScene,
-  matchLocationsToScene,
-} from '@/lib/workflows/scene-matching';
-import { computeShotImageSceneHash } from '@/lib/workflows/sheet-snapshots';
+import { matchCharactersToScene } from '@/lib/workflows/scene-matching';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { shotAccessMiddleware, sequenceAccessMiddleware } from './middleware';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Match locations by environmentTag or scene location and return reference images. */
-function getSceneLocationReferenceImages(
-  allLocations: SequenceLocation[],
-  environmentTag: string,
-  sceneLocation?: string
-): ReferenceImageDescription[] {
-  if (!environmentTag && !sceneLocation) return [];
-
-  const matchedLocations = allLocations.filter(
-    (loc) =>
-      (environmentTag && locationMatchesTag(loc, environmentTag)) ||
-      (sceneLocation && locationMatchesTag(loc, sceneLocation))
-  );
-
-  return buildLocationReferenceImages(matchedLocations);
-}
 
 // ---------------------------------------------------------------------------
 // Generate Shots (Storyboard Workflow)
@@ -88,6 +59,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -131,18 +103,14 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(generateImageInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, sequence, user } = context;
-
-    // Priority: provided > stored > AI-generated > description
-    const prompt =
-      data.prompt ||
-      shot.imagePrompt ||
-      shot.metadata?.prompts?.visual?.fullPrompt ||
-      shot.description;
-
-    if (!prompt) {
-      throw new Error('Shot has no prompt or description to regenerate from');
-    }
+    const {
+      shot,
+      frame,
+      sequence,
+      user,
+      scene: resolvedScene,
+      script,
+    } = context;
 
     // Auto-link any element/cast/location tags the user mentioned in their
     // edited prompt before computing reference attachment, so a freshly-
@@ -150,121 +118,102 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
     // updateShotFn does the same rescan, but the UI never calls it — the
     // regenerate buttons are the only persistence path for prompts today.
     const userEditedPrompt = data.prompt !== undefined;
+    let shotForInput = shot;
     const baseContinuity = shot.metadata?.continuity;
-    let continuity = baseContinuity;
-    if (userEditedPrompt && shot.metadata && baseContinuity) {
+    if (userEditedPrompt && data.prompt && shot.metadata && baseContinuity) {
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
         sequenceId: sequence.id,
         existing: baseContinuity,
-        promptText: prompt,
+        promptText: data.prompt,
       });
       if (rescan.changed) {
-        continuity = rescan.continuity;
-        await context.scopedDb.shots.update(shot.id, {
-          metadata: { ...shot.metadata, continuity: rescan.continuity },
-        });
+        const metadata = { ...shot.metadata, continuity: rescan.continuity };
+        await context.scopedDb.shots.update(shot.id, { metadata });
+        shotForInput = { ...shot, metadata };
       }
     }
 
-    const allCharacters = await context.scopedDb.characters.listWithSheets(
-      sequence.id
-    );
-    const matchedCharacters = matchCharactersToScene(
-      allCharacters,
-      continuity?.characterTags ?? []
-    );
-    const characterReferences =
-      buildCharacterReferenceImages(matchedCharacters);
-
-    const allLocations =
-      await context.scopedDb.sequenceLocations.listWithReferences(sequence.id);
-    const matchedLocations = matchLocationsToScene(
-      allLocations,
-      continuity?.environmentTag ?? '',
-      shot.metadata?.metadata?.location ?? ''
-    );
-    const locationReferences = getSceneLocationReferenceImages(
-      allLocations,
-      continuity?.environmentTag ?? '',
-      shot.metadata?.metadata?.location ?? ''
-    );
-
-    const allElements = await context.scopedDb.sequenceElements.list(
-      sequence.id
-    );
-    const matchedElements = matchElementsToScene(
-      allElements,
-      continuity?.elementTags ?? [],
-      shot.metadata?.originalScript.extract ?? ''
-    );
-    const elementReferences = buildElementReferenceImages(matchedElements);
-
-    const model =
-      data.model || safeTextToImageModel(shot.imageModel, DEFAULT_IMAGE_MODEL);
-
-    await requireCredits(
-      context.scopedDb,
-      estimateImageCost(model, sequence.aspectRatio, 1),
-      { errorMessage: 'Insufficient credits for image generation' }
-    );
-
-    // Build a per-scene snapshot so the image workflow records a non-null
-    // `thumbnailInputHash`. Without this the convergent write path stores
-    // `null`, and the staleness check loses the ability to flip back to
-    // 'stale' on a future prompt regenerate. The sceneId fallback covers
-    // legacy shots generated before scene metadata was attached.
-    const sortedHashes = (
-      values: ReadonlyArray<string | null | undefined>
-    ): string[] =>
-      values
-        .filter((v): v is string => typeof v === 'string' && v.length > 0)
-        .sort();
-    const sceneSnapshot: ShotImageSceneSnapshot = {
-      sceneId: shot.metadata?.sceneId ?? shot.id,
-      visualPrompt: prompt,
-      characterSheetHashes: sortedHashes(
-        matchedCharacters.map((c) => c.sheetInputHash)
-      ),
-      locationSheetHashes: sortedHashes(
-        matchedLocations.map((l) => l.referenceInputHash)
-      ),
-      elementReferenceHashes: sortedHashes(
-        matchedElements.map((e) => e.imageUrl)
-      ),
-    };
-    const snapshotInputHash = await computeShotImageSceneHash(
-      sceneSnapshot,
-      model,
-      sequence.aspectRatio
-    );
-
-    const workflowInput: ImageWorkflowInput = {
+    const workflowInput = await prepareShotImageWorkflowInput({
+      scopedDb: context.scopedDb,
+      sequence,
+      shot: shotForInput,
+      frame,
+      scriptExtract:
+        script?.extract ?? resolvedScene?.originalScript.extract ?? '',
       userId: user.id,
-      teamId: sequence.teamId,
-      prompt,
-      model,
-      imageSize: aspectRatioToImageSize(sequence.aspectRatio),
-      numImages: 1,
-      shotId: shot.id,
-      sequenceId: sequence.id,
-      aspectRatio: sequence.aspectRatio,
-      sceneSnapshot,
-      snapshotInputHash,
-      referenceImages: [
-        ...characterReferences,
-        ...locationReferences,
-        ...elementReferences,
-      ],
+      promptOverride: data.prompt,
+      modelOverride: data.model,
       userEditedPrompt,
-    };
-
-    const workflowRunId = await triggerWorkflow('/image', workflowInput, {
-      deduplicationId: `image-${shot.id}-${Date.now()}`,
-      label: buildWorkflowLabel(sequence.id),
     });
 
-    return { workflowRunId, shotId: shot.id };
+    // Server-side dedup (#1085): a live claim for exactly this snapshot hash
+    // means a run is already producing this render — a second click, second
+    // tab, or teammate must no-op instead of double-spending credits.
+    const liveClaims = await context.scopedDb.frameVariants.listLiveClaims(
+      frame.id
+    );
+    const existingClaim = liveClaims.find(
+      (c) => c.pendingInputHash === workflowInput.snapshotInputHash
+    );
+    if (existingClaim) {
+      return {
+        workflowRunId: existingClaim.workflowRunId,
+        shotId: shot.id,
+        alreadyInFlight: true,
+      } as const;
+    }
+
+    // Pre-create the claim row (#1085): in-flight work is representable
+    // (staleness reads 'updating'), and the workflow completes this row in
+    // place instead of appending its own. The partial unique index on live
+    // claims closes the check-then-insert race above — the loser lands in
+    // the catch and reports in-flight instead of double-billing.
+    let claim;
+    try {
+      claim = await context.scopedDb.frameVariants.createPendingClaim({
+        frameId: frame.id,
+        sequenceId: sequence.id,
+        model: workflowInput.model ?? DEFAULT_IMAGE_MODEL,
+        pendingInputHash: workflowInput.snapshotInputHash,
+      });
+    } catch (error) {
+      const raced = (
+        await context.scopedDb.frameVariants.listLiveClaims(frame.id)
+      ).find((c) => c.pendingInputHash === workflowInput.snapshotInputHash);
+      if (!raced) throw error;
+      return {
+        workflowRunId: raced.workflowRunId,
+        shotId: shot.id,
+        alreadyInFlight: true,
+      } as const;
+    }
+
+    let workflowRunId: string;
+    try {
+      workflowRunId = await triggerWorkflow(
+        '/image',
+        { ...workflowInput, targetVariantId: claim.id },
+        {
+          // Claim-scoped: stable across retries of THIS enqueue (CF collapses
+          // duplicate create()s), fresh per claim so a deliberate re-roll
+          // after completion still gets a new run.
+          deduplicationId: `image-${shot.id}-${claim.id}`,
+          label: buildWorkflowLabel(sequence.id),
+        }
+      );
+    } catch (error) {
+      // The claim must not outlive a trigger that never happened.
+      await context.scopedDb.frameVariants.markTerminal(
+        claim.id,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      );
+      throw error;
+    }
+    await context.scopedDb.frameVariants.update(claim.id, { workflowRunId });
+
+    return { workflowRunId, shotId: shot.id, alreadyInFlight: false } as const;
   });
 
 // ---------------------------------------------------------------------------
@@ -280,10 +229,10 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(generateVariantsInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, sequence, user } = context;
+    const { shot, frame, sequence, user } = context;
 
-    if (!shot.thumbnailUrl) {
-      throw new Error('Shot must have a thumbnail image to generate variants');
+    if (!frame.imageUrl) {
+      throw new Error('Shot must have a still image to generate variants');
     }
 
     const allCharacters = await context.scopedDb.characters.listWithSheets(
@@ -305,9 +254,17 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
     const numImages = data.numImages ?? 1;
     await requireCredits(
       context.scopedDb,
-      estimateImageCost(
-        data.model ?? DEFAULT_IMAGE_MODEL,
-        sequence.aspectRatio,
+      gateEstimate(
+        estimateImageCost(
+          data.model ?? DEFAULT_IMAGE_MODEL,
+          sequence.aspectRatio,
+          numImages,
+          { pricing: await getEffectiveFalPricing() }
+        ),
+        {
+          model: data.model ?? DEFAULT_IMAGE_MODEL,
+          operation: 'shot-variants',
+        },
         numImages
       ),
       { errorMessage: 'Insufficient credits for variant generation' }
@@ -320,8 +277,8 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
-      thumbnailUrl: shot.thumbnailUrl,
-      scenePrompt: shot.metadata?.prompts?.visual?.fullPrompt,
+      thumbnailUrl: frame.imageUrl,
+      scenePrompt: frame.imagePrompt ?? undefined,
       model: data.model,
       aspectRatio: sequence.aspectRatio,
       imageSize: data.imageSize || gridConfig.imageSize,
@@ -368,10 +325,17 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(selectVariantInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, sequence, user } = context;
+    const { shot, frame, sequence, user } = context;
 
-    if (!shot.variantImageUrl) {
-      throw new Error('Shot has no variant image to select from');
+    // The 3×3 grid sheet is the latest `kind:'framing'` `frame_variants` version
+    // (#989). Selecting a tile spawns a new framing version (the upscaled tile)
+    // pointing back at this sheet, then repoints the selection — never an
+    // overwrite.
+    const sheet = await context.scopedDb.frameVariants.getLatestGridSheet(
+      frame.id
+    );
+    if (!sheet?.url) {
+      throw new Error('Shot has no variant grid to select from');
     }
 
     const gridConfig = getVariantGridConfig(sequence.aspectRatio);
@@ -388,25 +352,11 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
     // and WASM-processing the grid image in-Worker. FAL fetches the cropped
     // tile directly from this URL when upscaling.
     const cropResult = await cropTileFromGrid({
-      gridImageUrl: shot.variantImageUrl,
+      gridImageUrl: sheet.url,
       row,
       col,
       gridCols: gridConfig.cols,
       gridRows: gridConfig.rows,
-    });
-
-    // Set cropped thumbnail URL and clear stale motion fields
-    await context.scopedDb.shots.update(shot.id, {
-      thumbnailUrl: cropResult.url,
-      thumbnailPath: null,
-      thumbnailStatus: 'generating',
-      thumbnailError: null,
-      videoUrl: null,
-      videoPath: null,
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoGeneratedAt: null,
-      videoError: null,
     });
 
     // Fetch character and location references for upscale consistency
@@ -426,9 +376,23 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       shot.metadata?.metadata?.location ?? ''
     );
 
+    // Price the model that will actually render the upscale (#1066) — the same
+    // resolution the workflow performs, so the estimate can't drift from the
+    // charge.
     await requireCredits(
       context.scopedDb,
-      estimateImageCost('nano_banana_2', sequence.aspectRatio, 1),
+      gateEstimate(
+        estimateImageCost(
+          resolveUpscaleModel(sheet.model),
+          sequence.aspectRatio,
+          1,
+          { pricing: await getEffectiveFalPricing() }
+        ),
+        {
+          model: resolveUpscaleModel(sheet.model),
+          operation: 'variant-upscale',
+        }
+      ),
       { errorMessage: 'Insufficient credits for variant upscale' }
     );
 
@@ -442,6 +406,13 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       aspectRatio: sequence.aspectRatio,
       characterReferences,
       locationReferences,
+      // The framing version the upscaled tile derives from (#989) — the upscale
+      // workflow records it as `frame_variants.sourceVariantId`.
+      sourceVariantId: sheet.id,
+      // Upscale on the model that generated the grid (#1066) — it's an edit of
+      // that model's output, and the version it writes becomes the frame's
+      // selection, i.e. what the shot resolves its model from.
+      sourceModel: sheet.model,
     };
 
     const workflowRunId = await triggerWorkflow(
@@ -475,31 +446,32 @@ export const setImageFromVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(setImageFromVariantInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot } = context;
+    const { shot, frame } = context;
 
-    const variant = await context.scopedDb.shotVariants.getByShotAndModel(
-      shot.id,
-      'image',
-      data.model
-    );
-
-    if (!variant || variant.status !== 'completed' || !variant.url) {
+    // The model's image versions live in `frame_variants` now (#989). Pick the
+    // latest completed one and SELECT it — a pointer repoint that mirrors its
+    // image fields onto the frame + logs `image.selected`. This is the #677 fix:
+    // selecting a model is a retained version + repoint, never an overwrite, so
+    // the old "set image shows old image" / false-staleness bugs disappear (the
+    // version carries its own inputHash; the mirror adopts it).
+    const versions = await context.scopedDb.frameVariants.listByGroup({
+      frameId: frame.id,
+      kind: 'model',
+      model: data.model,
+    });
+    const latest = [...versions]
+      .reverse()
+      .find((v) => v.status === 'completed' && v.url);
+    if (!latest) {
       throw new Error('No completed variant found for this model');
     }
 
+    await context.scopedDb.frameVariants.select(frame.id, latest.id, {
+      actorId: context.user.id,
+    });
+
+    // A new still invalidates downstream video (still on `shots` until Phase 3).
     await context.scopedDb.shots.update(shot.id, {
-      thumbnailUrl: variant.url,
-      thumbnailPath: variant.storagePath,
-      thumbnailStatus: 'completed',
-      thumbnailError: null,
-      imageModel: data.model,
-      // Adopt the promoted variant's input hash so the staleness check (which
-      // re-derives the current hash with the now-updated imageModel) compares
-      // like-for-like. Without this it diffs the new model's hash against the
-      // OLD model's stored hash and always reports a false "stale". (#545)
-      thumbnailInputHash: variant.inputHash,
-      // Clear stale video fields — the video was generated from the previous
-      // image, so it must be regenerated.
       videoUrl: null,
       videoPath: null,
       videoStatus: 'pending',
@@ -508,7 +480,7 @@ export const setImageFromVariantFn = createServerFn({ method: 'POST' })
       videoError: null,
     });
 
-    return { shotId: shot.id, thumbnailUrl: variant.url };
+    return { shotId: shot.id, thumbnailUrl: latest.url };
   });
 
 const setVideoFromVariantInputSchema = z.object({
@@ -518,39 +490,199 @@ const setVideoFromVariantInputSchema = z.object({
 });
 
 /**
- * Promote a model's video variant to the shot's primary video (#545) — the
- * motion analog of `setImageFromVariantFn`. Copies the variant's url/path into
- * `shots.video*` so the player and exports use it, non-destructively (the
- * variant row is retained, so the viewer can switch back). Unlike the image
- * version there is nothing downstream to invalidate — video is the terminal
- * artifact.
+ * Repoint a shot's primary video to a model's latest render (#545, re-routed to
+ * `video_variants` in #990) — the motion analog of `setImageFromVariantFn`.
+ * Selection is a pointer now: `videoVariants.select` mirrors the version onto
+ * `shots.video*` (so the player and exports use it), repoints the render
+ * segment's `selectedVideoVersionId` pointer, and logs a `video.selected` event
+ * — atomically and non-destructively (the version is retained, so the viewer
+ * can switch back).
  */
 export const setVideoFromVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(setVideoFromVariantInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot } = context;
-
-    const variant = await context.scopedDb.shotVariants.getByShotAndModel(
-      shot.id,
-      'video',
-      data.model
-    );
-
-    if (!variant || variant.status !== 'completed' || !variant.url) {
+    const { shot, scopedDb } = context;
+    // No render segment ⇒ the shot was never rendered, so no version to select.
+    if (!shot.renderSegmentId) {
       throw new Error('No completed video variant found for this model');
     }
 
-    await context.scopedDb.shots.update(shot.id, {
-      videoUrl: variant.url,
-      videoPath: variant.storagePath,
-      videoStatus: 'completed',
-      videoError: null,
-      videoGeneratedAt: new Date(),
-      videoInputHash: variant.inputHash,
-      durationMs: variant.durationMs,
-      motionModel: data.model,
+    // Pick the latest completed version for (segment, model).
+    const versions = await scopedDb.videoVariants.listByGroup({
+      renderSegmentId: shot.renderSegmentId,
+      model: data.model,
+    });
+    const completed = versions.filter((v) => v.status === 'completed' && v.url);
+    const latest = completed[completed.length - 1];
+    if (!latest || !latest.url) {
+      throw new Error('No completed video variant found for this model');
+    }
+    const videoUrl = latest.url;
+
+    await scopedDb.videoVariants.select(shot.id, latest.id, {
+      actorId: scopedDb.userId,
     });
 
-    return { shotId: shot.id, videoUrl: variant.url };
+    return { shotId: shot.id, videoUrl };
+  });
+
+const selectSegmentVideoVersionInputSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  versionId: ulidSchema,
+});
+
+/**
+ * Repoint a render segment's selection at a SPECIFIC version (#986) — the
+ * version-switcher analog of `setVideoFromVariantFn` (which only picks the
+ * latest for a model). `videoVariants.select` validates the version belongs to
+ * the shot's segment and is completed, repoints `selectedVideoVersionId`,
+ * mirrors the shot's `video*` columns, and logs `video.selected` — atomically.
+ */
+export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(selectSegmentVideoVersionInputSchema))
+  .handler(async ({ context, data }) => {
+    const { shot, scopedDb } = context;
+    const version = await scopedDb.videoVariants.select(
+      shot.id,
+      data.versionId,
+      { actorId: scopedDb.userId }
+    );
+    return { shotId: shot.id, videoUrl: version.url };
+  });
+
+// ---------------------------------------------------------------------------
+// Image / video version history (#1070)
+// ---------------------------------------------------------------------------
+
+/**
+ * Client-facing image version row for the history sheet. `selected` is derived
+ * from the frame's `selectedImageVersionId` pointer so the UI can mark Current
+ * without a second round-trip.
+ */
+export type ShotImageVersionRow = {
+  id: string;
+  model: string;
+  kind: 'model' | 'framing';
+  status: string;
+  url: string | null;
+  previewUrl: string | null;
+  createdAt: Date;
+  selected: boolean;
+};
+
+/**
+ * Client-facing video version row for the history sheet. Same shape as the
+ * segment panel's versions, plus the selection flag for Current.
+ */
+export type ShotVideoVersionRow = {
+  id: string;
+  model: string;
+  status: string;
+  url: string | null;
+  previewUrl: string | null;
+  createdAt: Date;
+  selected: boolean;
+};
+
+const shotHistoryListInputSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+});
+
+/**
+ * Append-only image generation history for a shot's anchor frame (#1070).
+ * Newest first. Only `kind: 'model'` rows — framing rows are the 3×3 grid
+ * sheet / tile picks used by the Frame variants picker, not still history.
+ * Includes in-flight / failed rows so the sheet can show progress and errors;
+ * discarded rows stay hidden (soft-hide is undoable elsewhere).
+ */
+export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(shotHistoryListInputSchema))
+  .handler(async ({ context }): Promise<ShotImageVersionRow[]> => {
+    const { frame, scopedDb } = context;
+    const versions = await scopedDb.frameVariants.listByFrame(frame.id);
+    // listByFrame is oldest-first (ULID asc); reverse for newest-first history.
+    return [...versions]
+      .reverse()
+      .filter((v) => v.kind === 'model')
+      .map((v) => ({
+        id: v.id,
+        model: v.model,
+        kind: v.kind,
+        status: v.status,
+        url: v.url,
+        previewUrl: v.previewUrl,
+        createdAt: v.createdAt,
+        selected: v.id === frame.selectedImageVersionId,
+      }));
+  });
+
+/**
+ * Append-only video render history for the shot's render segment (#1070).
+ * Newest first. Empty when the shot has never been assigned a segment.
+ */
+export const listShotVideoVersionsFn = createServerFn({ method: 'GET' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(shotHistoryListInputSchema))
+  .handler(async ({ context }): Promise<ShotVideoVersionRow[]> => {
+    const { shot, scopedDb } = context;
+    if (!shot.renderSegmentId) return [];
+
+    const [segment, versions] = await Promise.all([
+      scopedDb.renderSegments.getById(shot.renderSegmentId),
+      scopedDb.videoVariants.listBySegment(shot.renderSegmentId),
+    ]);
+    const selectedId = segment?.selectedVideoVersionId ?? null;
+    // listBySegment is oldest-first; reverse for newest-first history.
+    return [...versions].reverse().map((v) => ({
+      id: v.id,
+      model: v.model,
+      status: v.status,
+      url: v.url,
+      previewUrl: v.previewUrl,
+      createdAt: v.createdAt,
+      selected: v.id === selectedId,
+    }));
+  });
+
+const selectFrameImageVersionInputSchema = z.object({
+  sequenceId: ulidSchema,
+  shotId: ulidSchema,
+  versionId: ulidSchema,
+});
+
+/**
+ * Repoint a frame's selection at a SPECIFIC image version (#1070) — the image
+ * analog of `selectSegmentVideoVersionFn`. `frameVariants.select` validates the
+ * version belongs to the frame and is completed, mirrors image fields onto the
+ * frame, and logs `image.selected`. Downstream video is cleared so the player
+ * doesn't keep a clip conditioned on the previous still.
+ */
+export const selectFrameImageVersionFn = createServerFn({ method: 'POST' })
+  .middleware([shotAccessMiddleware])
+  .inputValidator(zodValidator(selectFrameImageVersionInputSchema))
+  .handler(async ({ context, data }) => {
+    const { shot, frame, scopedDb } = context;
+
+    const version = await scopedDb.frameVariants.select(
+      frame.id,
+      data.versionId,
+      { actorId: scopedDb.userId }
+    );
+
+    // A new still invalidates downstream video (same as setImageFromVariantFn).
+    await scopedDb.shots.update(shot.id, {
+      videoUrl: null,
+      videoPath: null,
+      videoStatus: 'pending',
+      videoWorkflowRunId: null,
+      videoGeneratedAt: null,
+      videoError: null,
+    });
+
+    return { shotId: shot.id, thumbnailUrl: version.url };
   });

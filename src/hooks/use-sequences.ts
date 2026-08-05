@@ -1,7 +1,6 @@
 import {
   addModelToSequenceFn,
   createSequenceFn,
-  getSequenceAudioModelsFn,
   getSequenceAudioVariantsFn,
   getSequenceFn,
   getSequencesFn,
@@ -30,21 +29,6 @@ export const sequenceKeys = {
   details: () => [...sequenceKeys.all, 'detail'] as const,
   detail: (id?: string) => [...sequenceKeys.details(), id] as const,
 };
-
-// Distinct audio models that have generated a track for this sequence (#546).
-// Drives the header audio-model dropdown. The realtime audio:progress handler
-// invalidates `['sequence-audio-models', sequenceId]`, matching this key.
-export function useSequenceAudioModels(sequenceId?: string) {
-  return useQuery<string[]>({
-    queryKey: ['sequence-audio-models', sequenceId ?? ''],
-    queryFn: async () => {
-      if (!sequenceId) throw new Error('sequenceId is required');
-      return getSequenceAudioModelsFn({ data: { sequenceId } });
-    },
-    enabled: !!sequenceId,
-    staleTime: 30_000,
-  });
-}
 
 // All music variant rows for a sequence (#546). Used by the music tab to
 // resolve playback through the active model's track.
@@ -120,6 +104,11 @@ export function useSetSequenceModel() {
         }),
         queryClient.invalidateQueries({
           queryKey: ['shots', 'list', sequenceId],
+        }),
+        // This repoints the selection on EVERY frame / segment in the sequence,
+        // which is what the editor resolves its model from (#1066).
+        queryClient.invalidateQueries({
+          queryKey: ['sequence-selected-models', sequenceId],
         }),
       ]);
     },

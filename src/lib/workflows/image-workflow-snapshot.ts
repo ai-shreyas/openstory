@@ -1,37 +1,31 @@
 /**
- * Snapshot DTO hashers + persist orchestration for `generateImageWorkflow`.
+ * Snapshot DTO hashers for the image workflow.
  *
  * `computeFromDto` hashes the inlined per-scene snapshot for the start-time
  * tamper check. `computeCurrent` re-resolves the live character / location /
  * element sheet hashes from the scoped DB so the workflow can detect upstream
- * drift between trigger and write time and route divergent results into
- * `shot_variants` instead of overwriting the primary thumbnail.
- *
- * See docs/architecture/workflow-snapshots-and-content-hash-staleness.md
- * § "Pillar 3: Divergence-on-completion".
+ * drift between trigger and write time. In #989 a drift no longer routes to a
+ * divergent `shot_variants` row — the image workflow simply appends the new
+ * `frame_variants` version without repointing `frames.selectedImageVersionId`
+ * (the retained-but-unselected version is the "divergence"). These hashers are
+ * the unchanged staleness inputs.
  */
 
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import type {
   CharacterMinimal,
-  NewShot,
-  NewShotVariant,
   SequenceElementMinimal,
   SequenceLocationMinimal,
 } from '@/lib/db/schema';
-import type { VariantType } from '@/lib/db/schema/shot-variants';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type {
   ShotImageSceneSnapshot,
   ImageWorkflowInput,
 } from '@/lib/workflow/types';
-import { buildDivergentRevertWrites } from './divergence-writes';
 import {
   computeShotImageSceneHash,
   resolveSceneShotImageReferences,
 } from './sheet-snapshots';
-
-export type ImageStorageResult = { url: string; path: string };
 
 /**
  * Subset of `Scene` actually read by `computeImageWorkflowHashCurrent` —
@@ -67,31 +61,6 @@ export type ImageHashScopedDb = {
   };
   sequenceElements: {
     list: (seqId: string) => Promise<SequenceElementMinimal[]>;
-  };
-};
-
-/**
- * Minimum scopedDb surface for `persistImageResult`. Same pattern as
- * `ImageHashScopedDb` — production `ScopedDb` satisfies it structurally.
- */
-export type PersistImageScopedDb = {
-  shots: {
-    update: (
-      id: string,
-      data: Partial<NewShot>,
-      opts?: { throwOnMissing?: boolean }
-    ) => Promise<{ id: string } | undefined>;
-  };
-  shotVariants: {
-    updateByShotAndModel: (
-      shotId: string,
-      type: VariantType,
-      model: string,
-      data: Partial<NewShotVariant>
-    ) => Promise<{ id: string } | null>;
-    insertDivergent: (
-      data: NewShotVariant & { inputHash: string; divergedAt: Date }
-    ) => Promise<{ id: string }>;
   };
 };
 
@@ -170,240 +139,4 @@ export async function computeImageWorkflowHashCurrent(
   };
 
   return computeShotImageSceneHash(currentSnapshot, model, aspectRatio);
-}
-
-/**
- * Convergent write also clears `variant.previewUrl` so a prior preview-mode
- * run can't leave a stale preview pointer attached to the converged primary.
- * Resets video lifecycle because a new thumbnail invalidates dependent motion.
- */
-export function buildImageConvergentWrites(opts: {
-  upload: ImageStorageResult;
-  snapshotHash: string | null;
-  promptHash: string | null;
-  generatedAt: Date;
-}): {
-  shot: Partial<NewShot>;
-  variant: Partial<NewShotVariant>;
-} {
-  const { upload, snapshotHash, promptHash, generatedAt } = opts;
-  return {
-    shot: {
-      thumbnailPath: upload.path,
-      thumbnailUrl: upload.url,
-      thumbnailStatus: 'completed',
-      thumbnailGeneratedAt: generatedAt,
-      thumbnailError: null,
-      thumbnailInputHash: snapshotHash,
-      videoUrl: null,
-      videoPath: null,
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoGeneratedAt: null,
-      videoError: null,
-    },
-    variant: {
-      url: upload.url,
-      storagePath: upload.path,
-      previewUrl: null,
-      status: 'completed',
-      generatedAt,
-      error: null,
-      promptHash,
-      inputHash: snapshotHash,
-    },
-  };
-}
-
-/**
- * `divergentRow` is the full INSERT payload for the divergent alternate. The
- * caller supplies shotId/sequenceId/variantType/model; this helper supplies
- * the content fields including the `inputHash` + `divergedAt` keys that match
- * the `shot_variants` divergent partial unique index.
- */
-export function buildImageDivergentWrites(opts: {
-  upload: ImageStorageResult;
-  snapshotHash: string;
-  promptHash: string | null;
-  divergedAt: Date;
-}): {
-  shot: Partial<NewShot>;
-  primaryRevert: Partial<NewShotVariant>;
-  divergentRow: Partial<NewShotVariant> & {
-    url: string;
-    storagePath: string;
-    inputHash: string;
-    divergedAt: Date;
-    status: 'completed';
-  };
-} {
-  const { upload, snapshotHash, promptHash, divergedAt } = opts;
-  return {
-    ...buildDivergentRevertWrites(),
-    divergentRow: {
-      url: upload.url,
-      storagePath: upload.path,
-      status: 'completed',
-      generatedAt: divergedAt,
-      error: null,
-      promptHash,
-      inputHash: snapshotHash,
-      divergedAt,
-    },
-  };
-}
-
-export type PersistImageOutcome =
-  | { status: 'divergent'; imageUrl: string; snapshotHash: string }
-  | { status: 'convergent'; imageUrl: string }
-  | { status: 'variant-only'; imageUrl: string }
-  | { status: 'shot-deleted' };
-
-/**
- * Pulled out of the workflow body so the call sequence is testable without
- * bootstrapping `createWorkflow`. The workflow remains responsible for the
- * `context.run` boundary and for resolving `currentHash` via
- * `context.snapshot.computeCurrent()` so retries re-resolve live state
- * cheaply without re-running this orchestration on a successful step.
- *
- * Idempotent on retry: `shots.update` and
- * `shotVariants.updateByShotAndModel` are last-write-wins, and
- * `shotVariants.insertDivergent` pre-checks `(shot, type, model, hash)`.
- */
-export async function persistImageResult(opts: {
-  scopedDb: PersistImageScopedDb;
-  shotId: string;
-  sequenceId: string;
-  model: string;
-  upload: ImageStorageResult;
-  snapshotHash: string | null;
-  currentHash: string | null;
-  promptHash: string | null;
-  emit: (
-    event: 'generation.image:progress',
-    payload: {
-      shotId: string;
-      status: 'pending' | 'completed';
-      model: string;
-      thumbnailUrl?: string;
-      variantOnly?: boolean;
-    }
-  ) => Promise<void>;
-  /**
-   * Variant-only (#547): write only this model's `shot_variants` row, never
-   * the primary `shots.*`. Skips divergence detection — with no primary to
-   * protect, there is nothing to diverge from.
-   */
-  variantOnly?: boolean;
-  now?: () => Date;
-}): Promise<PersistImageOutcome> {
-  const {
-    scopedDb,
-    shotId,
-    sequenceId,
-    model,
-    upload,
-    snapshotHash,
-    currentHash,
-    promptHash,
-    emit,
-    variantOnly,
-    now = () => new Date(),
-  } = opts;
-
-  if (variantOnly) {
-    // Reuse the convergent variant payload (url/path/status/hashes), but apply
-    // it ONLY to the variant row — the primary `shots.*` stay exactly as they
-    // were. A null update means the shot (and its cascade-deleted variant) is
-    // gone.
-    const { variant } = buildImageConvergentWrites({
-      upload,
-      snapshotHash,
-      promptHash,
-      generatedAt: now(),
-    });
-    const updated = await scopedDb.shotVariants.updateByShotAndModel(
-      shotId,
-      'image',
-      model,
-      variant
-    );
-    if (!updated) return { status: 'shot-deleted' };
-
-    await emit('generation.image:progress', {
-      shotId,
-      status: 'completed',
-      thumbnailUrl: upload.url,
-      model,
-      // Alternate model — the cache updater must not repoint the primary.
-      variantOnly: true,
-    });
-
-    return { status: 'variant-only', imageUrl: upload.url };
-  }
-
-  if (snapshotHash && currentHash !== snapshotHash) {
-    const writes = buildImageDivergentWrites({
-      upload,
-      snapshotHash,
-      promptHash,
-      divergedAt: now(),
-    });
-
-    const updatedShot = await scopedDb.shots.update(shotId, writes.shot, {
-      throwOnMissing: false,
-    });
-    if (!updatedShot) return { status: 'shot-deleted' };
-
-    await scopedDb.shotVariants.updateByShotAndModel(
-      shotId,
-      'image',
-      model,
-      writes.primaryRevert
-    );
-
-    await scopedDb.shotVariants.insertDivergent({
-      shotId,
-      sequenceId,
-      variantType: 'image',
-      model,
-      ...writes.divergentRow,
-    });
-
-    await emit('generation.image:progress', {
-      shotId,
-      status: 'pending',
-      model,
-    });
-
-    return { status: 'divergent', imageUrl: upload.url, snapshotHash };
-  }
-
-  const writes = buildImageConvergentWrites({
-    upload,
-    snapshotHash,
-    promptHash,
-    generatedAt: now(),
-  });
-
-  const updatedShot = await scopedDb.shots.update(shotId, writes.shot, {
-    throwOnMissing: false,
-  });
-  if (!updatedShot) return { status: 'shot-deleted' };
-
-  await scopedDb.shotVariants.updateByShotAndModel(
-    shotId,
-    'image',
-    model,
-    writes.variant
-  );
-
-  await emit('generation.image:progress', {
-    shotId,
-    status: 'completed',
-    thumbnailUrl: upload.url,
-    model,
-  });
-
-  return { status: 'convergent', imageUrl: upload.url };
 }

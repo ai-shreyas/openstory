@@ -11,17 +11,24 @@ import {
   safeTextToImageModel,
 } from '@/lib/ai/models';
 import {
+  resolveImageModel,
+  resolveVideoModel,
+} from '@/lib/ai/resolve-asset-models';
+import {
   estimateImageCost,
   estimateStoryboardCost,
   estimateVideoCost,
+  gateEstimate,
 } from '@/lib/billing/cost-estimation';
-import { addMicros, multiplyMicros, ZERO_MICROS } from '@/lib/billing/money';
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
-import type { Character, Sequence } from '@/lib/db/schema';
+import { type Character, type Sequence } from '@/lib/db/schema';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
-import { resolveMotionPrompt } from '@/lib/motion/resolve-motion-prompt';
+import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import { projectShotWithImage } from '@/lib/shots/shot-with-image';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -88,7 +95,21 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   await assertNoActiveStoryboard(context.scopedDb, sequence.id);
 
   const shots = await context.scopedDb.shots.listBySequence(sequence.id);
-  const summary = analyzeFailures(shots, sequence);
+  // The still-image surface lives on each shot's anchor frame now (#989).
+  // Project it back under the legacy thumbnail*/image* names — keyed by shotId,
+  // never by id-reuse — so the failure analysis and per-shot retry reads below
+  // are unchanged.
+  await context.scopedDb.shots.ensureAnchorFrames(shots);
+  const anchorsByShot = new Map(
+    (await context.scopedDb.frames.listAnchorsBySequence(sequence.id)).map(
+      (fr) => [fr.shotId, fr]
+    )
+  );
+  const shotsWithImage = shots.flatMap((shot) => {
+    const frame = anchorsByShot.get(shot.id);
+    return frame ? [projectShotWithImage(shot, frame)] : [];
+  });
+  const summary = analyzeFailures(shotsWithImage, sequence);
 
   if (!summary.hasFailed) {
     throw new Error('No failures found to retry');
@@ -111,6 +132,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         imageModel,
         aspectRatio: sequence.aspectRatio,
         videoModels: [videoModel],
+        pricing: await getEffectiveFalPricing(),
       }),
       {
         providers: ['fal', 'openrouter'],
@@ -142,45 +164,71 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   const retried: string[] = [];
   let totalCost = ZERO_MICROS;
 
-  const imageModel = safeTextToImageModel(
-    sequence.imageModel,
-    DEFAULT_IMAGE_MODEL
-  );
-  const videoModel = safeImageToVideoModel(
-    sequence.videoModel,
-    DEFAULT_VIDEO_MODEL
-  );
+  // Model identity lives on the version that produced each asset (#1066).
+  // Every shot here is in a failed state, so the FAILED attempt's model is the
+  // one the user actually asked for — it outranks the (older, still selected)
+  // successful version, which is what a retry would otherwise silently re-run.
+  // Four joins, no N+1.
+  const [
+    selectedImageModels,
+    selectedVideoModels,
+    failedImageModels,
+    failedVideoModels,
+  ] = await Promise.all([
+    context.scopedDb.frameVariants.listSelectedModelsBySequence(sequence.id),
+    context.scopedDb.videoVariants.listSelectedModelsBySequence(sequence.id),
+    context.scopedDb.frameVariants.listLastFailedModelsBySequence(sequence.id),
+    context.scopedDb.videoVariants.listLastFailedModelsBySequence(sequence.id),
+  ]);
+  const imageModelFor = (shot: (typeof shotsWithImage)[number]) =>
+    resolveImageModel({
+      lastFailedAttemptModel: failedImageModels.get(shot.id),
+      selectedVersionModel: selectedImageModels.get(shot.id),
+      sequenceModel: sequence.imageModel,
+    });
+  const videoModelFor = (shot: (typeof shotsWithImage)[number]) =>
+    resolveVideoModel({
+      lastFailedAttemptModel: failedVideoModels.get(shot.id),
+      selectedVersionModel: selectedVideoModels.get(shot.id),
+      sequenceModel: sequence.videoModel,
+    });
 
   // Collect failed items and estimate costs
-  const failedImageShots = shots.filter((f) => f.thumbnailStatus === 'failed');
-  const failedMotionShots = shots.filter(
+  const failedImageShots = shotsWithImage.filter(
+    (f) => f.thumbnailStatus === 'failed'
+  );
+  const failedMotionShots = shotsWithImage.filter(
     (f) => f.videoStatus === 'failed' && f.thumbnailUrl && f.motionPrompt
   );
   const hasMusicFailure =
     sequence.musicStatus === 'failed' && sequence.musicPrompt;
 
-  // Calculate total cost
-  if (failedImageShots.length > 0) {
+  // Calculate total cost — sum per shot since scenes may use different models.
+  const pricing = await getEffectiveFalPricing();
+  for (const shot of failedImageShots) {
     totalCost = addMicros(
       totalCost,
-      estimateImageCost(
-        imageModel,
-        sequence.aspectRatio,
-        failedImageShots.length
+      gateEstimate(
+        estimateImageCost(imageModelFor(shot), sequence.aspectRatio, 1, {
+          pricing,
+        }),
+        { model: imageModelFor(shot), operation: 'smart-retry:image' }
       )
     );
   }
 
   if (failedMotionShots.length > 0) {
     const { snapDuration } = await import('@/lib/motion/motion-generation');
-    const duration = snapDuration(undefined, videoModel);
-    totalCost = addMicros(
-      totalCost,
-      multiplyMicros(
-        estimateVideoCost(videoModel, duration),
-        failedMotionShots.length
-      )
-    );
+    for (const shot of failedMotionShots) {
+      const model = videoModelFor(shot);
+      totalCost = addMicros(
+        totalCost,
+        gateEstimate(
+          estimateVideoCost(model, snapDuration(undefined, model), { pricing }),
+          { model, operation: 'smart-retry:motion' }
+        )
+      );
+    }
   }
 
   // Single credit check for all retries
@@ -201,10 +249,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     // reported as retried (and must not clear the failed flag on their own).
     let triggeredImages = 0;
     for (const shot of failedImageShots) {
-      const prompt =
-        shot.imagePrompt ||
-        shot.metadata?.prompts?.visual?.fullPrompt ||
-        shot.description;
+      const prompt = shot.imagePrompt || shot.description;
 
       if (!prompt) continue;
 
@@ -218,7 +263,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         userId: user.id,
         teamId,
         prompt,
-        model: imageModel,
+        model: imageModelFor(shot),
         imageSize: aspectRatioToImageSize(sequence.aspectRatio),
         numImages: 1,
         shotId: shot.id,
@@ -241,14 +286,25 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     for (const shot of failedMotionShots) {
       if (!shot.thumbnailUrl) continue;
 
+      const shotVideoModel = videoModelFor(shot);
+      const selectedMotion =
+        await context.scopedDb.shotPromptVersions.getSelectedMotion(shot.id);
       const workflowInput: MotionWorkflowInput = {
         userId: user.id,
         teamId,
         shotId: shot.id,
         sequenceId: sequence.id,
         imageUrl: shot.thumbnailUrl,
-        prompt: resolveMotionPrompt(shot, videoModel),
-        model: videoModel,
+        prompt: resolveMotionPromptFromVersion(
+          selectedMotion,
+          {
+            motionPromptMirror: shot.motionPrompt,
+            characterTags: shot.metadata?.continuity?.characterTags,
+            description: shot.description,
+          },
+          shotVideoModel
+        ),
+        model: shotVideoModel,
         aspectRatio: sequence.aspectRatio,
         duration: shot.durationMs ? shot.durationMs / 1000 : undefined,
       };

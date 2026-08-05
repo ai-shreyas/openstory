@@ -1,5 +1,5 @@
 // vite.config.ts
-import { readFileSync } from 'node:fs';
+import { copyFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cloudflare } from '@cloudflare/vite-plugin';
 import contentCollections from '@content-collections/vite';
@@ -106,6 +106,54 @@ function reflectMetadataPolyfill(): import('vite').Plugin {
   };
 }
 
+/**
+ * Ships hue-shifted favicons outside production so environments are tellable
+ * apart in a tab strip: teal (env-icons/dev) on the dev server, amber
+ * (env-icons/staging) on any build that doesn't set CLOUDFLARE_ENV=production
+ * (PR previews, e2e). Production ships the canonical public/ icons untouched.
+ * The files are swapped rather than branching on icon URLs in the app, so
+ * manifest.json and anything else referencing /icon.svg stays correct.
+ */
+function envIcons(): Plugin {
+  const iconFiles = [
+    'icon.svg',
+    'icon-192.png',
+    'icon-512.png',
+    'apple-touch-icon.png',
+  ];
+  return {
+    name: 'env-icons',
+    configureServer(server) {
+      // Registered directly (not in a returned callback) so it runs before
+      // Vite's public-dir middleware.
+      server.middlewares.use((req, res, next) => {
+        const name = req.url?.split('?')[0]?.slice(1) ?? '';
+        if (!iconFiles.includes(name)) return next();
+        res.setHeader(
+          'Content-Type',
+          name.endsWith('.svg') ? 'image/svg+xml' : 'image/png'
+        );
+        res.end(
+          readFileSync(resolve(import.meta.dirname, 'env-icons/dev', name))
+        );
+      });
+    },
+    closeBundle() {
+      if (process.env.CLOUDFLARE_ENV === 'production') return;
+      // Icons are public-dir assets, which only the client environment
+      // copies into its outDir.
+      if (this.environment?.name !== 'client') return;
+      const { root, build } = this.environment.config;
+      for (const name of iconFiles) {
+        copyFileSync(
+          resolve(import.meta.dirname, 'env-icons/staging', name),
+          resolve(root, build.outDir, name)
+        );
+      }
+    },
+  };
+}
+
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
@@ -132,6 +180,7 @@ export default defineConfig({
     contentCollections(),
     isDev && devtools(),
     isDev && wranglerBindingsBanner(),
+    envIcons(),
     reflectMetadataPolyfill(),
     tailwindcss(),
     cloudflare({

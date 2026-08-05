@@ -4,20 +4,15 @@
  *
  * Note: the --individual flag hits the API once per model and may get rate-limited.
  *
- * Usage:
+ * Usage (Bun autoloads .env.local; use --env-file= to override):
  *   bun scripts/check-fal-estimate.ts              # Total estimate
  *   bun scripts/check-fal-estimate.ts --individual  # Per-model breakdown
  */
-import { getEnv } from '#env';
-import { getFalEndpointIds } from './fal-endpoints';
+import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';
+import { requireFalPricingKey } from './env-file';
 
 const allIds = getFalEndpointIds();
-
-const apiKey = getEnv().FAL_KEY;
-if (!apiKey) {
-  console.error('FAL_KEY not set');
-  process.exit(1);
-}
+const apiKey = requireFalPricingKey();
 
 type EstimateResponse = {
   estimate_type: string;

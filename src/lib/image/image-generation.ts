@@ -1,16 +1,10 @@
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
-import {
-  getEditEndpoint,
-  getTextToImageModelId,
-  IMAGE_MODELS,
-  type TextToImageModel,
-} from '@/lib/ai/models';
 import { type Microdollars } from '@/lib/billing/money';
 import {
-  DEFAULT_IMAGE_SIZE,
-  type ImageSize,
-} from '@/lib/constants/aspect-ratios';
+  buildImageRequest,
+  type ImageGenerationParams,
+} from '@/lib/image/build-image-request';
 
 import { getEnv } from '#env';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -26,29 +20,7 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'image', 'image-generation']);
 
-export type ImageGenerationParams = {
-  model: TextToImageModel;
-  prompt: string;
-  imageSize?: ImageSize;
-  numImages?: number;
-  seed?: number;
-  outputFormat?: 'jpeg' | 'png' | 'webp';
-  numInferenceSteps?: number;
-  guidanceScale?: number;
-  negativePrompt?: string;
-  loras?: Array<{ path: string; scale: number }>;
-  embeddings?: Array<{ path: string; tokens: string[] }>;
-
-  // Model-specific
-  style?: string;
-  colors?: Array<{ r: number; g: number; b: number }>;
-  resolution?: '1K' | '2K' | '4K';
-  enhancePrompt?: boolean;
-  safetyTolerance?: number;
-  acceleration?: 'none' | 'regular' | 'high';
-  enablePromptExpansion?: boolean;
-  referenceImageUrls?: string[];
-};
+export type { ImageGenerationParams } from '@/lib/image/build-image-request';
 
 /** Non-serializable options passed separately from ImageGenerationParams */
 export type ImageGenerationOptions = {
@@ -71,6 +43,16 @@ export type ImageGenerationResult = {
   metadata: {
     prompt: string;
     model: string;
+    /** Fal endpoint actually submitted to (billing denominator). */
+    endpointId: string;
+    /** Fal-reported billed unit count. Recorded as a `model_usage_observations`
+     * sample (the pricing cron's median reads that table, not the credit
+     * ledger) and also spread into the transaction metadata as a billing
+     * trail — see `recordFalUsageStep` (#1069). */
+    unitsBilled?: number;
+    /** Images this one call rendered. `unitsBilled` covers all of them, so the
+     * cron divides by it to get a per-image median (#1069). */
+    numImages?: number;
     dimensions: { width: number; height: number }[];
     file_sizes: number[];
     seed?: number;
@@ -81,42 +63,17 @@ export type ImageGenerationResult = {
   };
 };
 
-const ASPECT_RATIO_MAP: Record<ImageSize, string> = {
-  square_hd: '1:1',
-  portrait_16_9: '9:16',
-  landscape_16_9: '16:9',
-};
-
-function imageSizeToAspectRatio(imageSize: ImageSize): string {
-  return ASPECT_RATIO_MAP[imageSize];
-}
-
 function createFalAdapter(modelId: string, falApiKey?: string) {
   const key = falApiKey ?? getEnv().FAL_KEY;
   return key ? falImage(modelId, { apiKey: key }) : falImage(modelId);
-}
-
-function truncatePromptForModel(
-  prompt: string,
-  model: TextToImageModel
-): string {
-  const maxLength = IMAGE_MODELS[model].maxPromptLength;
-  if (prompt.length <= maxLength) return prompt;
-
-  logger.warn(
-    `Prompt truncated from ${prompt.length} to ${maxLength} chars for ${model}`
-  );
-  return prompt.slice(0, maxLength - 3) + '...';
 }
 
 export async function generateImageWithProvider(
   params: ImageGenerationParams,
   options?: ImageGenerationOptions
 ): Promise<ImageGenerationResult> {
-  const modelId = getTextToImageModelId(params.model);
-
   try {
-    return await generateImageInternal(params, modelId, options);
+    return await generateImageInternal(params, options);
   } catch (error) {
     const errorMessage = extractFalErrorMessage(error);
 
@@ -130,7 +87,6 @@ export async function generateImageWithProvider(
 // @TODO: TB Mar 2026 - this needs to be updated to be typesafe. Especially after the work put in on Tanstack AI to keep it safe
 async function generateImageInternal(
   rawParams: ImageGenerationParams,
-  modelId: string,
   options?: ImageGenerationOptions
 ): Promise<ImageGenerationResult> {
   // Get the fal API key - byok or global. Resolved BEFORE normalizing
@@ -153,17 +109,12 @@ async function generateImageInternal(
         ),
       }
     : rawParams;
-  const prompt = truncatePromptForModel(params.prompt, params.model);
   const startTime = Date.now();
 
-  const modelOptions = buildFalModelOptions(params);
-
-  // Switch to edit endpoint for models with reference images
-  let endpoint = modelId;
-  const editEndpoint = getEditEndpoint(params.model);
-  if (editEndpoint && params.referenceImageUrls?.length) {
-    endpoint = editEndpoint;
-  }
+  // The exact request fal receives — shared with the scene editor's
+  // optimised-prompt preview so the two can never drift.
+  const { endpointId: endpoint, input } = buildImageRequest(params);
+  const { prompt, ...modelOptions } = input;
 
   const adapter = createFalAdapter(endpoint, falApiKeyInfo.key);
 
@@ -214,7 +165,7 @@ async function generateImageInternal(
 
   // Exact cost from fal's reported billed units (resolution/style premiums are
   // already baked into the count by fal).
-  const cost = falCostFromUnits(endpoint, result.usage?.unitsBilled);
+  const cost = await falCostFromUnits(endpoint, result.usage?.unitsBilled);
 
   return {
     imageUrls,
@@ -225,180 +176,21 @@ async function generateImageInternal(
     metadata: {
       prompt: params.prompt,
       model: params.model,
+      endpointId: endpoint,
+      unitsBilled: result.usage?.unitsBilled,
+      // What the call actually returned, not what it was asked for: the median
+      // divides `unitsBilled` by this, so a partial return (3 of 4 images)
+      // recorded as 4 biases the per-image figure LOW — the direction that
+      // under-gates, which is #1069's failure mode (#1069).
+      numImages: imageUrls.length || params.numImages,
       dimensions: imageUrls.map(() => ({ width: 0, height: 0 })),
       file_sizes: imageUrls.map(() => 0),
       seed: params.seed,
       cost,
+      // The adapter sets `id` to fal's request id — the join key to the
+      // billing-events record the hourly reconcile audits this charge against.
+      requestId: result.id,
       usedOwnKey: falApiKeyInfo.source === 'team',
     },
   };
-}
-
-function buildFalModelOptions(
-  params: ImageGenerationParams
-): Record<string, unknown> {
-  switch (params.model) {
-    case 'flux_2_dev':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        num_inference_steps: params.numInferenceSteps ?? 28,
-        guidance_scale: params.guidanceScale ?? 2.5,
-        enable_safety_checker: true,
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.acceleration && { acceleration: params.acceleration }),
-        ...(params.enablePromptExpansion !== undefined && {
-          enable_prompt_expansion: params.enablePromptExpansion,
-        }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'flux_2_turbo':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        num_inference_steps: params.numInferenceSteps ?? 4,
-        guidance_scale: params.guidanceScale ?? 2.5,
-        enable_safety_checker: true,
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        sync_mode: false,
-      };
-
-    case 'flux_2_max':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        enable_safety_checker: true,
-        ...(params.safetyTolerance !== undefined && {
-          safety_tolerance: params.safetyTolerance.toString(),
-        }),
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'nano_banana_pro':
-    case 'nano_banana_2':
-      return {
-        aspect_ratio: imageSizeToAspectRatio(
-          params.imageSize ?? DEFAULT_IMAGE_SIZE
-        ),
-        resolution: params.resolution ?? '2K',
-        safety_tolerance: '6',
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'gpt_image_2':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        quality: 'high',
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'grok_imagine_image':
-      return {
-        aspect_ratio: imageSizeToAspectRatio(
-          params.imageSize ?? DEFAULT_IMAGE_SIZE
-        ),
-        resolution: (params.resolution ?? '2K').toLowerCase(),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'phota':
-      return {
-        aspect_ratio: imageSizeToAspectRatio(
-          params.imageSize ?? DEFAULT_IMAGE_SIZE
-        ),
-        // Phota only accepts '1K' or '4K' — map anything else to '1K'
-        resolution: params.resolution === '4K' ? '4K' : ('1K' as '1K' | '4K'),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'hunyuan_image_v3':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'qwen_image':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        enable_safety_checker: true,
-        enable_prompt_expansion: true,
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    case 'hidream_i1':
-      return {
-        image_size: { width: 1024, height: 1024 },
-        num_inference_steps: params.numInferenceSteps ?? 50,
-        guidance_scale: params.guidanceScale ?? 5,
-        enable_safety_checker: true,
-        ...(params.negativePrompt && {
-          negative_prompt: params.negativePrompt,
-        }),
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.outputFormat && { output_format: params.outputFormat }),
-        ...(params.loras && { loras: params.loras }),
-        sync_mode: false,
-      };
-
-    case 'seedream_v5':
-      return {
-        image_size: params.imageSize ?? DEFAULT_IMAGE_SIZE,
-        enable_safety_checker: true,
-        ...(params.seed !== undefined && { seed: params.seed }),
-        ...(params.numImages !== undefined && { num_images: params.numImages }),
-        ...(params.referenceImageUrls?.length && {
-          image_urls: params.referenceImageUrls,
-        }),
-        sync_mode: false,
-      };
-
-    default: {
-      const _exhaustive: never = params.model;
-      throw new Error(`Unsupported model: ${String(_exhaustive)}`);
-    }
-  }
 }

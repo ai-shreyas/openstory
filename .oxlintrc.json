@@ -14,7 +14,8 @@
   "ignorePatterns": [
     "**/mockServiceWorker.js",
     "*.gen.ts",
-    "src/components/ui/**/*.tsx"
+    "src/components/ui/**/*.tsx",
+    "containers/**"
   ],
   "rules": {
     "typescript/no-explicit-any": "error",
@@ -75,6 +76,9 @@
         "**/functions/middleware.ts",
         "**/workflow/base-workflow.ts",
         "**/cron/reconcile-all.ts",
+        "**/cron/reconcile-fal-billing.ts",
+        "**/cron/refresh-fal-pricing.ts",
+        "**/ai/fal-pricing-live.ts",
         "**/openrouter/callback.ts",
         "**/lib/test/seed.ts"
       ],

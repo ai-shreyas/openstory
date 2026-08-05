@@ -4,35 +4,16 @@ import { StyleLibraryView } from '@/components/style-library/style-library-view'
 import { PageDescription } from '@/components/typography/page-description';
 import { PageHeader } from '@/components/typography/page-header';
 import { useStyles } from '@/hooks/use-styles';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { z } from 'zod';
-
-// No `.default()` (mirrors the talent route): a default rewrites bare /styles
-// to a redirect, which sours the sitemap. Fallbacks live in the component.
-const searchParamsSchema = z.object({
-  category: z.string().optional(),
-});
+import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/_app/styles/')({
-  validateSearch: searchParamsSchema,
   component: StylesPage,
   staticData: { breadcrumb: 'Styles' },
 });
 
 function StylesPage() {
-  const { category = 'all' } = Route.useSearch();
-  const navigate = useNavigate();
   const { isAuthenticated } = useAuthGate();
   const { data: styles } = useStyles();
-
-  const handleCategoryChange = (next: string) =>
-    void navigate({
-      to: '/styles',
-      search: (prev) => ({
-        ...prev,
-        category: next === 'all' ? undefined : next,
-      }),
-    });
 
   return (
     <div className="h-full overflow-auto">
@@ -46,11 +27,7 @@ function StylesPage() {
           </PageDescription>
         </PageHeader>
 
-        <StyleLibraryView
-          styles={styles}
-          category={category}
-          onCategoryChange={handleCategoryChange}
-        />
+        <StyleLibraryView styles={styles} />
       </PageContainer>
     </div>
   );

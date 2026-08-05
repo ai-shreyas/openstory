@@ -85,10 +85,10 @@ export class MusicPromptWorkflow extends OpenStoryWorkflowEntrypoint<MusicPrompt
         );
 
         const previous =
-          await scopedDb.sequenceMusicPromptVariants.getLatest(sequenceId);
+          await scopedDb.sequenceMusicPromptVersions.getLatest(sequenceId);
         const source = previous ? 'regenerated' : 'ai-generated';
 
-        await scopedDb.sequenceMusicPromptVariants.write({
+        await scopedDb.sequenceMusicPromptVersions.write({
           sequenceId,
           prompt: musicDesignResult.prompt,
           tags: reinforcedTags,

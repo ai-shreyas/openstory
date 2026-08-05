@@ -37,6 +37,27 @@ export const realtimeSchema = {
     }),
   },
 
+  // Team billing ledger updates (#1090). Channel `billing:${teamId}`; the
+  // credit-balance pill subscribes only while visible so idle sessions pay no
+  // SSE cost. Payload is enough to patch the pill optimistically; clients also
+  // invalidate the balance + transactions queries.
+  billing: {
+    'balance:updated': z.object({
+      teamId: z.string(),
+      /** Post-mutation balance in USD. */
+      balanceUsd: z.number(),
+      /** Signed ledger amount in USD (negative for usage, positive for top-ups). */
+      amountUsd: z.number(),
+      transactionId: z.string(),
+      type: z.enum([
+        'credit_purchase',
+        'credit_usage',
+        'credit_refund',
+        'credit_adjustment',
+      ]),
+    }),
+  },
+
   // Per-shot prompt regeneration events. Lives on its own channel
   // (`shot-prompt:${shotId}`) so a client only pays the realtime cost while
   // it's actually viewing the shot, and history replay rebuilds the
@@ -520,4 +541,17 @@ export function getShotPromptChannel(shotId?: string): RealtimeChannelApi {
   return shotId
     ? realtimeChannel(`shot-prompt:${shotId}`)
     : noopChannel('shot-prompt');
+}
+
+/**
+ * Team-scoped billing channel for live credit-balance updates (#1090).
+ * Channel id: `billing:${teamId}`.
+ */
+export function getBillingChannel(teamId?: string): RealtimeChannelApi {
+  return teamId ? realtimeChannel(`billing:${teamId}`) : noopChannel('billing');
+}
+
+/** Stable channel id for a team's billing events (client subscribe + history). */
+export function billingChannelId(teamId: string): string {
+  return `billing:${teamId}`;
 }

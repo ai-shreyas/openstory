@@ -26,6 +26,7 @@ import type { ElementBibleEntry } from '@/lib/ai/scene-analysis.schema';
 import {
   deductWorkflowCredits,
   extractImageCost,
+  recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -171,6 +172,14 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
           }
         );
 
+        // Before the deduction guard — see recordFalUsageStep (#1069).
+        const falUsage = await recordFalUsageStep(
+          step,
+          scopedDb,
+          imageResult.metadata,
+          `record-fal-usage-${index}`
+        );
+
         await step.do(`deduct-credits-${index}`, async () => {
           await deductWorkflowCredits({
             scopedDb,
@@ -179,6 +188,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
             description: `Element reference (${generationParams.model})`,
             idempotencyKey: `${event.instanceId}:element-ref-${index}`,
             metadata: {
+              ...falUsage,
               model: generationParams.model,
               token: entry.token,
               sequenceId,

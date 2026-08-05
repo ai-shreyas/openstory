@@ -6,6 +6,7 @@
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getTransactionsFn } from '@/functions/billing';
+import { BILLING_TRANSACTIONS_KEY } from '@/hooks/use-billing-balance-realtime';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { CreditCard, ExternalLink } from 'lucide-react';
 import React from 'react';
@@ -73,7 +74,7 @@ export function TransactionSettings() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['billing-transactions'],
+    queryKey: [...BILLING_TRANSACTIONS_KEY],
     queryFn: ({ pageParam }) =>
       getTransactionsFn({
         data: { limit: PAGE_SIZE, offset: pageParam },

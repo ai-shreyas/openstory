@@ -44,6 +44,13 @@ export type MusicResult = {
   metadata: {
     model: string;
     provider: string;
+    /** Fal endpoint submitted to (billing denominator). */
+    endpointId: string;
+    /** Fal-reported billed unit count. Recorded as a `model_usage_observations`
+     * sample (the pricing cron's median reads that table, not the credit
+     * ledger) and also spread into the transaction metadata as a billing
+     * trail — see `recordFalUsageStep` (#1069). */
+    unitsBilled?: number;
     duration: number;
     cost: Microdollars;
     generatedAt: string;
@@ -179,7 +186,10 @@ async function callFalAudio(
   }
 
   // Exact cost from fal's reported billed units.
-  const cost = falCostFromUnits(modelConfig.id, result.usage?.unitsBilled);
+  const cost = await falCostFromUnits(
+    modelConfig.id,
+    result.usage?.unitsBilled
+  );
 
   return {
     success: true,
@@ -188,6 +198,8 @@ async function callFalAudio(
     metadata: {
       model: modelConfig.id,
       provider: modelConfig.provider,
+      endpointId: modelConfig.id,
+      unitsBilled: result.usage?.unitsBilled,
       duration: billedDuration,
       cost,
       generatedAt: new Date().toISOString(),

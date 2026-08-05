@@ -1,0 +1,1056 @@
+/**
+ * Acceptance tests for the prompt-variants helpers.
+ *
+ * These exercise issue #620's acceptance criteria end-to-end against an
+ * in-memory libSQL database with the real migrations applied:
+ *   - Editing a prompt produces a `'user-edit'` row; the prior text is
+ *     recoverable by reading the variant chain.
+ *   - Regenerating a prompt produces a `'regenerated'` row with a populated
+ *     `input_hash`.
+ *   - The cached pointer (`shots.motionPrompt` and `motionPromptInputHash`) is
+ *     updated by the helper sequentially after the variant insert (not
+ *     transactionally — see the helper docstring for the durability story).
+ *
+ * The VISUAL (image) prompt path moved to `frame_prompt_versions` in #989
+ * (keyed by the anchor frame id, resolved from the shot — frame ids ≠ shot ids)
+ * and is covered by `frame-prompt-versions.test.ts`; the shot helper now owns
+ * only the MOTION prompt, so these tests exercise it via `promptType: 'motion'`.
+ */
+
+import type { Database } from '@/lib/db/client';
+import { generateId } from '@/lib/db/id';
+import {
+  shotPromptVersions,
+  shots,
+  sequenceMusicPromptVersions,
+  sequences,
+  styles,
+  teams,
+  user,
+} from '@/lib/db/schema';
+import { relations } from '@/lib/db/schema/relations';
+import { type Client, createClient } from '@libsql/client';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/libsql';
+import { migrate } from 'drizzle-orm/libsql/migrator';
+import { createShotPromptVersionsMethods } from './shot-prompt-versions';
+import { createSequenceMusicPromptVersionsMethods } from './sequence-music-prompt-versions';
+
+let client: Client;
+let db: Database;
+let teamId = '';
+let sequenceId = '';
+let shotId = '';
+
+async function seed() {
+  await db.delete(shotPromptVersions);
+  await db.delete(sequenceMusicPromptVersions);
+  await db.delete(shots);
+  await db.delete(sequences);
+  await db.delete(styles);
+  await db.delete(teams);
+  await db.delete(user);
+
+  teamId = generateId();
+  sequenceId = generateId();
+
+  await db.insert(teams).values({ id: teamId, name: 'T', slug: 't' });
+  const [style] = await db
+    .insert(styles)
+    .values({
+      teamId,
+      name: 'default',
+      config: {
+        mood: 'neutral',
+        artStyle: 'cinematic',
+        lighting: 'natural',
+        colorPalette: ['#000', '#fff'],
+        cameraWork: 'static',
+        referenceFilms: [],
+        colorGrading: 'neutral',
+      },
+    })
+    .returning();
+  if (!style) throw new Error('test setup: style insert returned nothing');
+  await db.insert(sequences).values({
+    id: sequenceId,
+    teamId,
+    title: 'S',
+    styleId: style.id,
+  });
+  const [shot] = await db
+    .insert(shots)
+    .values({ sequenceId, orderIndex: 0 })
+    .returning();
+  if (!shot) throw new Error('test setup: shot insert returned nothing');
+  shotId = shot.id;
+}
+
+beforeAll(async () => {
+  client = createClient({ url: ':memory:' });
+  db = drizzle({ client, relations });
+  await migrate(db, { migrationsFolder: './drizzle/migrations' });
+});
+
+afterAll(() => {
+  client.close();
+});
+
+beforeEach(async () => {
+  await seed();
+});
+
+describe('shot_prompt_variants helper', () => {
+  it('user-edit with null inputHash appends a row and clears the cached hash', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    // Seed the cached column to mimic an existing AI-generated prompt.
+    await db
+      .update(shots)
+      .set({
+        motionPrompt: 'AI-generated prompt v1',
+        motionPromptInputHash: 'hash-v1',
+      })
+      .where(eq(shots.id, shotId));
+
+    // A user-edit recorded without an upstream hash (e.g., context was
+    // uncomputable at write time) writes null to both the row and the cache.
+    const variant = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'User edited prompt',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    expect(variant.source).toBe('user-edit');
+    expect(variant.text).toBe('User edited prompt');
+    expect(variant.inputHash).toBeNull();
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('User edited prompt');
+    expect(refreshed.motionPromptInputHash).toBeNull();
+  });
+
+  it('user-edit with a real inputHash stamps both the row and the cached column', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    await db
+      .update(shots)
+      .set({
+        motionPrompt: 'AI-generated prompt v1',
+        motionPromptInputHash: 'hash-v1',
+      })
+      .where(eq(shots.id, shotId));
+
+    const variant = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'User edited prompt',
+      source: 'user-edit',
+      inputHash: 'hash-at-edit-time',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(variant.source).toBe('user-edit');
+    expect(variant.inputHash).toBe('hash-at-edit-time');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('User edited prompt');
+    expect(refreshed.motionPromptInputHash).toBe('hash-at-edit-time');
+  });
+
+  it('regenerated prompt populates input_hash on both the row and the cached column', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    const variant = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v2',
+      source: 'regenerated',
+      inputHash: 'context-hash-abc',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(variant.source).toBe('regenerated');
+    expect(variant.inputHash).toBe('context-hash-abc');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('AI prompt v2');
+    expect(refreshed.motionPromptInputHash).toBe('context-hash-abc');
+    // The selection pointer must move to the written version — the render
+    // manifest snapshots this, and leaving it null reintroduced the #990
+    // null-reference bug. A regression dropping the pointer-set is otherwise
+    // invisible (motionPrompt/hash still update), so assert it explicitly.
+    expect(refreshed.selectedMotionPromptVersionId).toBe(variant.id);
+  });
+
+  it('preserves prior AI text in the variant chain after a user edit (recoverable history)', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'User edited prompt',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(2);
+    // Newest first.
+    const [latest, prior] = history;
+    if (!latest || !prior) throw new Error('test setup: history missing rows');
+    expect(latest.source).toBe('user-edit');
+    expect(prior.source).toBe('ai-generated');
+    expect(prior.text).toBe('AI prompt v1');
+    expect(prior.inputHash).toBe('context-hash-1');
+  });
+
+  it('ai-generated → regenerated → user-edit chain reflects the workflow source-discrimination flow', async () => {
+    // Mirrors the scene-prompt workflow's decision: source = previous ?
+    // 'regenerated' : 'ai-generated'. A regression that swaps the two would
+    // mislabel every regeneration as a first generation (or vice versa) and
+    // corrupt prompt history.
+    const methods = createShotPromptVersionsMethods(db);
+
+    const previousBeforeFirst = await methods.getLatest(shotId, 'motion');
+    expect(previousBeforeFirst).toBeNull();
+    const firstSource = previousBeforeFirst ? 'regenerated' : 'ai-generated';
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: firstSource,
+      inputHash: 'hash-v1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const previousBeforeSecond = await methods.getLatest(shotId, 'motion');
+    expect(previousBeforeSecond?.source).toBe('ai-generated');
+    const secondSource = previousBeforeSecond ? 'regenerated' : 'ai-generated';
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v2',
+      source: secondSource,
+      inputHash: 'hash-v2',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'User polished it',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history.map((r) => r.source)).toEqual([
+      'user-edit',
+      'regenerated',
+      'ai-generated',
+    ]);
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    // Cached column reflects the latest write (user-edit) and the hash is
+    // cleared since the cached value is no longer derived from upstream.
+    expect(refreshed.motionPrompt).toBe('User polished it');
+    expect(refreshed.motionPromptInputHash).toBeNull();
+  });
+
+  it('AI write is idempotent on (shot, type, input_hash) — a retry returns the existing row', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    const first = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const retried = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(retried.id).toBe(first.id);
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(1);
+  });
+
+  it('force-regen at the same input_hash appends a null-hash history row with the new text and keeps the cached hash tracking the live context', async () => {
+    // Mirrors the user-driven "Regenerate Prompt" path: the LLM is invoked
+    // again against unchanged upstream inputs, so the new completion's hash
+    // collides with the existing row. The helper must still record the new
+    // text in history (otherwise the user's regenerated prompt would be
+    // silently lost) while keeping the cached `*_prompt_input_hash` column
+    // tracking the real upstream hash so staleness detection stays correct.
+    const methods = createShotPromptVersionsMethods(db);
+
+    const first = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const forced = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Fresh LLM completion against same inputs',
+      source: 'regenerated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // A distinct row was inserted (not the existing one returned verbatim).
+    expect(forced.id).not.toBe(first.id);
+    // Bypasses the partial unique index via null `input_hash`.
+    expect(forced.inputHash).toBeNull();
+    expect(forced.source).toBe('regenerated');
+    expect(forced.text).toBe('Fresh LLM completion against same inputs');
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(2);
+    const [latest, prior] = history;
+    if (!latest || !prior) throw new Error('test setup: history missing rows');
+    expect(latest.text).toBe('Fresh LLM completion against same inputs');
+    expect(prior.text).toBe('AI prompt v1');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe(
+      'Fresh LLM completion against same inputs'
+    );
+    // Cached hash still reflects the live upstream so staleness detection
+    // doesn't fire spuriously after a force regeneration.
+    expect(refreshed.motionPromptInputHash).toBe('context-hash-1');
+    // Selection points at the freshly-forced row (not the deduped original),
+    // even though that row carries a null input_hash.
+    expect(refreshed.selectedMotionPromptVersionId).toBe(forced.id);
+  });
+
+  it('idempotent retry of the same text at the same hash still de-dupes (does not fall through to the null-hash branch)', async () => {
+    // Regression guard for the force-regen branch: it must only fire when
+    // `existing.text !== input.text`. A genuine workflow step retry submits
+    // the same text + same hash and should still collapse to one row.
+    const methods = createShotPromptVersionsMethods(db);
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'regenerated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(1);
+  });
+
+  it('a different input_hash produces a new row for the same shot+type', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI v1',
+      source: 'ai-generated',
+      inputHash: 'hash-a',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI v2',
+      source: 'regenerated',
+      inputHash: 'hash-b',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(2);
+  });
+
+  it('getByIdForShot refuses to return a sibling shot variant (cross-shot guard)', async () => {
+    // Restore handlers rely on this guard to refuse a `variantId` that
+    // belongs to a different shot in the same sequence — without it, a
+    // user could restore shot A's prompt onto shot B by passing the wrong
+    // variantId. The shot-access middleware only checks the parent shot.
+    const methods = createShotPromptVersionsMethods(db);
+
+    const [siblingShot] = await db
+      .insert(shots)
+      .values({ sequenceId, orderIndex: 1 })
+      .returning();
+    if (!siblingShot)
+      throw new Error('test setup: sibling shot insert returned nothing');
+
+    const ownVariant = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'belongs to shot A',
+      source: 'ai-generated',
+      inputHash: 'hash-A',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // Lookup with the sibling shot's id must not succeed.
+    const wrongShot = await methods.getByIdForShot(
+      ownVariant.id,
+      siblingShot.id
+    );
+    expect(wrongShot).toBeNull();
+
+    // Sanity: the same lookup with the owning shot's id does return it.
+    const rightShot = await methods.getByIdForShot(ownVariant.id, shotId);
+    expect(rightShot?.id).toBe(ownVariant.id);
+  });
+
+  it('restored row carries the source variant input_hash so staleness keeps tracking the original upstream context', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    // Original AI-generated prompt with a stored hash.
+    const original = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // User then edits the prompt, but the upstream context wasn't
+    // computable at edit time — both the row and the cached column go
+    // null. The restore-from-AI flow below must still re-populate the
+    // cached hash from the source row.
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'User edited prompt',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    // Restoring the original AI prompt must re-populate the cached hash so
+    // the staleness check resumes detecting upstream drift. A regression
+    // that drops the hash here silently disables staleness forever.
+    const restored = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: original.text,
+      components: original.components,
+      parameters: original.parameters,
+      source: 'restored',
+      inputHash: original.inputHash,
+      analysisModel: original.analysisModel,
+    });
+    expect(restored.inputHash).toBe('context-hash-1');
+    // Restore must append a NEW history row, not silently return the source
+    // AI row when its hash is still unique on the shot. The previous unique
+    // index keyed on (shot, type, input_hash) collapsed restore-of-existing-
+    // hash into onConflictDoNothing, dropping the audit row.
+    expect(restored.id).not.toBe(original.id);
+    expect(restored.source).toBe('restored');
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(3);
+    expect(history.map((r) => r.source)).toEqual([
+      'restored',
+      'user-edit',
+      'ai-generated',
+    ]);
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('AI prompt v1');
+    expect(refreshed.motionPromptInputHash).toBe('context-hash-1');
+  });
+
+  it('restoring an AI prompt that is currently live still appends a restored row (audit trail)', async () => {
+    // Without the partial-index `source != 'restored'` exclusion, this case
+    // hit onConflictDoNothing and silently returned the original AI row.
+    const methods = createShotPromptVersionsMethods(db);
+
+    const original = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt v1',
+      source: 'ai-generated',
+      inputHash: 'context-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const restored = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: original.text,
+      components: original.components,
+      parameters: original.parameters,
+      source: 'restored',
+      inputHash: original.inputHash,
+      analysisModel: original.analysisModel,
+    });
+
+    expect(restored.id).not.toBe(original.id);
+    expect(restored.source).toBe('restored');
+    expect(restored.inputHash).toBe('context-hash-1');
+
+    const history = await methods.listByShot(shotId, 'motion');
+    expect(history).toHaveLength(2);
+  });
+
+  it('restored row from a user-edit source carries null hash (no staleness opinion to forward)', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    const userEdit = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Hand-written prompt',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    // Restoring a user-edit must not synthesize a hash out of nothing —
+    // the source had none, so the restored row keeps null.
+    const restored = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: userEdit.text,
+      components: userEdit.components,
+      parameters: userEdit.parameters,
+      source: 'restored',
+      inputHash: userEdit.inputHash,
+      analysisModel: userEdit.analysisModel,
+    });
+    expect(restored.inputHash).toBeNull();
+    expect(restored.analysisModel).toBeNull();
+  });
+
+  it('getLatestWithInputHash skips null-hash user-edits and returns the most recent hashed row', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+
+    // 1) An AI prompt with a real hash.
+    const ai = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'AI prompt',
+      source: 'ai-generated',
+      inputHash: 'ai-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    // 2) A later user-edit with no upstream context (null hash).
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Hand-typed prompt',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    // getLatest returns the most recent row regardless of hash.
+    const latest = await methods.getLatest(shotId, 'motion');
+    expect(latest?.inputHash).toBeNull();
+
+    // getLatestWithInputHash skips the user-edit and returns the AI row.
+    const latestHashed = await methods.getLatestWithInputHash(shotId, 'motion');
+    expect(latestHashed?.id).toBe(ai.id);
+    expect(latestHashed?.inputHash).toBe('ai-hash-1');
+  });
+
+  it('getSelectedMotion returns the version the shot points at', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+    const written = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Selected motion prompt',
+      source: 'ai-generated',
+      inputHash: 'sel-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const selected = await methods.getSelectedMotion(shotId);
+    expect(selected?.id).toBe(written.id);
+    expect(selected?.text).toBe('Selected motion prompt');
+  });
+
+  it('getSelectedMotion returns null (does not throw) when the pointer is orphaned', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+    // Pointer set to a version id that has no row (deleted/broken FK).
+    await db
+      .update(shots)
+      .set({ selectedMotionPromptVersionId: generateId() })
+      .where(eq(shots.id, shotId));
+
+    expect(await methods.getSelectedMotion(shotId)).toBeNull();
+  });
+
+  it('select repoints the shot at an existing version and mirrors it', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+    const v1 = await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Motion v1',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    await methods.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Motion v2',
+      source: 'regenerated',
+      inputHash: 'hash-2',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // The shot currently points at v2; restore v1.
+    const restored = await methods.select(shotId, v1.id, { actorId: null });
+    expect(restored.id).toBe(v1.id);
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(v1.id);
+    expect(refreshed.motionPrompt).toBe('Motion v1');
+    expect(refreshed.motionPromptInputHash).toBe('hash-1');
+  });
+
+  it('select refuses a version id that belongs to another shot', async () => {
+    const methods = createShotPromptVersionsMethods(db);
+    const [otherShot] = await db
+      .insert(shots)
+      .values({ sequenceId, orderIndex: 1 })
+      .returning();
+    if (!otherShot) throw new Error('test setup: other shot insert failed');
+    const foreign = await methods.write({
+      shotId: otherShot.id,
+      promptType: 'motion',
+      text: 'Foreign motion prompt',
+      source: 'ai-generated',
+      inputHash: 'foreign-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    await expect(
+      methods.select(shotId, foreign.id, { actorId: null })
+    ).rejects.toThrow(/not found/);
+  });
+});
+
+describe('shotPromptVersions.completePendingAiVersion', () => {
+  it('completes the claim in place and mirrors onto the shot', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Regenerated motion prompt',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Regenerated motion prompt');
+    expect(refreshed.motionPromptInputHash).toBe('live-hash');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(claim.id);
+  });
+
+  it('a post-click user edit keeps the mirror — the run completes to history only', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const edit = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Post-click hand edit',
+      source: 'user-edit',
+      inputHash: null,
+      analysisModel: null,
+    });
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Older run output',
+      inputHash: 'other-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.status).toBe('completed');
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Post-click hand edit');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(edit.id);
+  });
+
+  it('returns null for a claim cancelled mid-flight and never mirrors', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    await db
+      .update(shots)
+      .set({ motionPrompt: 'Original', motionPromptInputHash: 'hash-0' })
+      .where(eq(shots.id, shotId));
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+    await m.markTerminal(claim.id, 'cancelled');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Should be discarded',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(completed).toBeNull();
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Original');
+  });
+
+  it('restore demotes live claims so completion never remirrors', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const original = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Original motion',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'live-hash',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    await m.select(shotId, original.id, { actorId: null });
+
+    const [demoted] = await db
+      .select()
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.id, claim.id));
+    expect(demoted?.pendingInputHash).toBeNull();
+
+    await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Would clobber restore',
+      inputHash: 'live-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const [refreshed] = await db
+      .select()
+      .from(shots)
+      .where(eq(shots.id, shotId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.motionPrompt).toBe('Original motion');
+    expect(refreshed.selectedMotionPromptVersionId).toBe(original.id);
+  });
+});
+
+describe('sequence_music_prompt_variants helper', () => {
+  it('user-edit clears musicPromptInputHash and overwrites the cached prompt/tags', async () => {
+    const methods = createSequenceMusicPromptVersionsMethods(db);
+
+    await db
+      .update(sequences)
+      .set({
+        musicPrompt: 'AI music v1',
+        musicTags: 'epic,cinematic',
+        musicPromptInputHash: 'music-hash-1',
+      })
+      .where(eq(sequences.id, sequenceId));
+
+    const variant = await methods.write({
+      sequenceId,
+      prompt: 'User edited music prompt',
+      tags: 'rock,fast',
+      source: 'user-edit',
+    });
+
+    expect(variant.source).toBe('user-edit');
+
+    const [refreshed] = await db
+      .select()
+      .from(sequences)
+      .where(eq(sequences.id, sequenceId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.musicPrompt).toBe('User edited music prompt');
+    expect(refreshed.musicTags).toBe('rock,fast');
+    expect(refreshed.musicPromptInputHash).toBeNull();
+  });
+
+  it('ai-generated → regenerated chain on music variants mirrors the music-prompt workflow flow', async () => {
+    const methods = createSequenceMusicPromptVersionsMethods(db);
+
+    const previousBeforeFirst = await methods.getLatest(sequenceId);
+    expect(previousBeforeFirst).toBeNull();
+    const firstSource = previousBeforeFirst ? 'regenerated' : 'ai-generated';
+
+    await methods.write({
+      sequenceId,
+      prompt: 'AI music v1',
+      tags: 'epic',
+      source: firstSource,
+      inputHash: 'music-hash-v1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const previousBeforeSecond = await methods.getLatest(sequenceId);
+    expect(previousBeforeSecond?.source).toBe('ai-generated');
+    const secondSource = previousBeforeSecond ? 'regenerated' : 'ai-generated';
+
+    await methods.write({
+      sequenceId,
+      prompt: 'AI music v2',
+      tags: 'epic,driving',
+      source: secondSource,
+      inputHash: 'music-hash-v2',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const history = await methods.listBySequence(sequenceId);
+    expect(history.map((r) => r.source)).toEqual([
+      'regenerated',
+      'ai-generated',
+    ]);
+
+    const [refreshed] = await db
+      .select()
+      .from(sequences)
+      .where(eq(sequences.id, sequenceId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.musicPrompt).toBe('AI music v2');
+    expect(refreshed.musicPromptInputHash).toBe('music-hash-v2');
+  });
+
+  it('AI music write is idempotent on (sequence, input_hash) — a retry returns the existing row', async () => {
+    const methods = createSequenceMusicPromptVersionsMethods(db);
+
+    const first = await methods.write({
+      sequenceId,
+      prompt: 'AI music',
+      tags: 'epic',
+      source: 'ai-generated',
+      inputHash: 'music-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const retried = await methods.write({
+      sequenceId,
+      prompt: 'AI music',
+      tags: 'epic',
+      source: 'ai-generated',
+      inputHash: 'music-hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    expect(retried.id).toBe(first.id);
+
+    const history = await methods.listBySequence(sequenceId);
+    expect(history).toHaveLength(1);
+  });
+
+  it('regenerated music prompt populates the input hash on the sequence row', async () => {
+    const methods = createSequenceMusicPromptVersionsMethods(db);
+
+    await methods.write({
+      sequenceId,
+      prompt: 'AI music v2',
+      tags: 'epic',
+      source: 'regenerated',
+      inputHash: 'music-context-hash',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const [refreshed] = await db
+      .select()
+      .from(sequences)
+      .where(eq(sequences.id, sequenceId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.musicPrompt).toBe('AI music v2');
+    expect(refreshed.musicPromptInputHash).toBe('music-context-hash');
+  });
+
+  it('getByIdForSequence refuses to return a sibling sequence variant (cross-sequence guard)', async () => {
+    const methods = createSequenceMusicPromptVersionsMethods(db);
+
+    // Reuse the seeded style so we can satisfy the not-null styleId on
+    // sequences without duplicating the style fixture here.
+    const [seededSequence] = await db
+      .select()
+      .from(sequences)
+      .where(eq(sequences.id, sequenceId));
+    if (!seededSequence)
+      throw new Error('test setup: seeded sequence not found');
+    const otherSequenceId = generateId();
+    await db.insert(sequences).values({
+      id: otherSequenceId,
+      teamId,
+      title: 'Other',
+      styleId: seededSequence.styleId,
+    });
+
+    const ownVariant = await methods.write({
+      sequenceId,
+      prompt: 'belongs to sequence A',
+      tags: 'epic',
+      source: 'ai-generated',
+      inputHash: 'music-hash-A',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    const wrongSequence = await methods.getByIdForSequence(
+      ownVariant.id,
+      otherSequenceId
+    );
+    expect(wrongSequence).toBeNull();
+
+    const rightSequence = await methods.getByIdForSequence(
+      ownVariant.id,
+      sequenceId
+    );
+    expect(rightSequence?.id).toBe(ownVariant.id);
+  });
+
+  it('restored music row carries the source variant input_hash so sequence staleness keeps tracking upstream context', async () => {
+    const methods = createSequenceMusicPromptVersionsMethods(db);
+
+    const original = await methods.write({
+      sequenceId,
+      prompt: 'AI music v1',
+      tags: 'epic',
+      source: 'ai-generated',
+      inputHash: 'music-hash-v1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    await methods.write({
+      sequenceId,
+      prompt: 'User edit',
+      tags: 'rock',
+      source: 'user-edit',
+    });
+
+    const restored = await methods.write({
+      sequenceId,
+      prompt: original.prompt,
+      tags: original.tags,
+      source: 'restored',
+      inputHash: original.inputHash,
+      analysisModel: original.analysisModel,
+    });
+    expect(restored.inputHash).toBe('music-hash-v1');
+    // Restore must append a new audit row even when the source AI hash is
+    // still unique on the sequence.
+    expect(restored.id).not.toBe(original.id);
+    expect(restored.source).toBe('restored');
+
+    const history = await methods.listBySequence(sequenceId);
+    expect(history).toHaveLength(3);
+    expect(history.map((r) => r.source)).toEqual([
+      'restored',
+      'user-edit',
+      'ai-generated',
+    ]);
+
+    const [refreshed] = await db
+      .select()
+      .from(sequences)
+      .where(eq(sequences.id, sequenceId));
+    if (!refreshed) throw new Error('test setup: refresh failed');
+    expect(refreshed.musicPrompt).toBe('AI music v1');
+    expect(refreshed.musicPromptInputHash).toBe('music-hash-v1');
+  });
+});

@@ -1,5 +1,7 @@
 # Staleness and divergence UX
 
+> **Scene → Shot → Frame.** Image selection is a pointer repoint on `frame_variants` (#989) — there is no divergent-image `stale:detected` path. See [scene-shot-frame-redesign.md](./scene-shot-frame-redesign.md).
+
 Companion to [workflow-snapshots-and-content-hash-staleness.md](./workflow-snapshots-and-content-hash-staleness.md). The architecture doc is intentionally backend-heavy — it specifies hashes, snapshots, and divergence routing but punts on what the user sees. This is the answer.
 
 The architecture surfaces two new states through a single realtime event (`generation.stale:detected`) and a derived `isStale(entity, artifact)` reader. Both states need UI, but they're meaningfully different — and conflating them is the most likely way the UX fails.
@@ -8,14 +10,15 @@ The architecture surfaces two new states through a single realtime event (`gener
 
 We use two names, deliberately. Treat them as load-bearing — copy in the UI sticks to these terms.
 
-| Term                    | When it applies                                                                                                                                        | What it means to the user                                                                                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Stale**               | `computeInputHash(entity) !== entity.<artifact>_input_hash`, derived at read time.                                                                     | "What you're looking at was generated from inputs that have since changed. The image / video / sheet itself is fine, but it's no longer the answer to the question you're asking."              |
-| **Divergent alternate** | A `frame_variants` row (or stage 2 sheet variant) with `diverged_at IS NOT NULL`, produced when a workflow finished but its inputs changed mid-flight. | "You started a regeneration. While it was running, you (or your collaborator) edited an upstream input. Rather than overwrite the new inputs with old work, we set this aside as an alternate." |
+| Term                         | When it applies                                                                                                                                                              | What it means to the user                                                                                                                                                                       |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Stale**                    | Fresh hash ≠ stored `*InputHash` on the parent row (caller computes fresh hash; scoped `isStale` compares). Derived at read time.                                            | "What you're looking at was generated from inputs that have since changed. The image / video / sheet itself is fine, but it's no longer the answer to the question you're asking."              |
+| **Divergent alternate**      | A `*_variants` row with `divergedAt IS NOT NULL` (sheets, music, shot video/audio) — **not** images (#989). Produced when a workflow finished but inputs changed mid-flight. | "You started a regeneration. While it was running, you (or your collaborator) edited an upstream input. Rather than overwrite the new inputs with old work, we set this aside as an alternate." |
+| **Unselected image version** | A `frame_variants` row that exists but is not pointed to by `frames.selectedImageVersionId` — includes mid-flight drift (#989) and explicit model compares.                  | "Another still exists for this shot. Pick it from the version picker / model compare UI." — no `stale:detected` toast; selection is `frameVariants.select`.                                     |
 
-A single artifact can be **stale**, **have a divergent alternate**, both, or neither. The UI handles them as distinct, composable states.
+A single shot can be **stale**, **have a divergent alternate** (sheet/music/video), **have unselected image versions**, any combination, or none. The UI handles staleness and divergent alternates as distinct, composable states.
 
-A frame can also have **per-model alternates** — that's the existing `frame_variants` rows generated when the user explicitly tries a different model. Those are _not_ divergent alternates and don't surface either of the new affordances. The `diverged_at` column is what distinguishes the two.
+**Per-model image versions** (`frame_variants`, `kind: 'model'`) from explicit "try another model" are neither stale nor divergent alternates — they're normal version history. **`divergedAt`** on `shot_variants` / sheet variants marks workflow-time divergence; `frame_variants` has no `divergedAt`.
 
 ## Two new shared primitives
 
@@ -30,7 +33,7 @@ Both are slim, non-modal, sit inline with the artifact they describe, and reuse 
 Props:
 
 - `artifact: 'thumbnail' | 'video' | 'audio' | 'sheet' | 'visual-prompt' | 'motion-prompt' | 'music-prompt'`
-- `entityType: 'frame' | 'character' | 'location' | 'library-location' | 'talent' | 'sequence'`
+- `entityType: 'shot' | 'character' | 'location' | 'library-location' | 'talent' | 'sequence'` (matches `StalenessEntityType` in `staleness-indicator.tsx` and `realtimeSchema.generation['stale:detected']`)
 - `onRegenerate: () => void`
 - `onDismiss?: () => void` — soft-dismiss for this session only; doesn't change DB state.
 - `density?: 'inline' | 'corner-dot'` — `inline` for detail views, `corner-dot` for cards / lists.
@@ -60,12 +63,14 @@ When both states apply at once (the live primary is stale **and** there's a dive
 
 ## Divergence resolution flow
 
-The default flow:
+The default flow (**sheets / music / shot video-audio only** — not images):
 
-1. Workflow finishes, recomputes `currentInputHash`, finds it diverges from `snapshotInputHash`. Writes to `frame_variants` with `diverged_at = now()`. Emits `stale:detected` with the new `divergedVariantId`.
-2. Sonner toast on the affected sequence's view: _"An alternate version is available for Scene 4."_ Click → focuses the frame detail.
-3. `<DivergentAlternateBanner>` appears in-place (frame detail right rail; corner dot on the scene card).
+1. Workflow finishes, recomputes current hash, finds it diverges from `snapshotInputHash`. Inserts a `*_variants` row with `divergedAt = now()` (e.g. `sheet-divergence.ts`, `music-workflow.ts`). Emits `generation.stale:detected` with the new `divergedVariantId`.
+2. Sonner toast on the affected sequence's view: _"An alternate version is available for Scene 4."_ Click → focuses the shot detail.
+3. `<DivergentAlternateBanner>` appears in-place (detail right rail; corner dot on the scene card for sheet/music paths that surface it).
 4. User picks one of three branches:
+
+**Image mid-flight drift (#989)** does not use this flow: `image-workflow` retains an unselected `frame_variants` version and resets `imageStatus` without emitting `stale:detected`. The user switches primaries via the version picker (`frameVariants.select`).
 
 ### Compare
 
@@ -106,12 +111,11 @@ version. The motion video, if any, will be marked stale.
 [ Cancel ]  [ Promote ]
 ```
 
-The "motion video, if any, will be marked stale" copy adapts based on which downstream artifacts exist for the entity. The mutation:
+The "motion video, if any, will be marked stale" copy adapts based on which downstream artifacts exist for the entity. The mutation depends on artifact type:
 
-1. Copies the variant's `url` / `path` into the primary slot on `frames` (`thumbnailUrl`, `thumbnailPath`, etc.).
-2. Sets the matching `*_input_hash` column on `frames` to the variant's `input_hash`.
-3. Deletes the variant row (or sets `discarded_at` — see below).
-4. Emits `image:progress` / `video:progress` / `audio:progress` with `status: completed` so existing realtime listeners refresh.
+- **Images (#989):** promotion is retired — `buildPromoteUpdate` throws for `variantType === 'image'`. Switching primaries uses `frameVariants.select` (pointer repoint + mirror), not a divergent-alternate promote.
+- **Shot video / audio:** copies the `shot_variants` row's `url` / `storagePath` into `shots.videoUrl` / `audioUrl` (and matching `*InputHash`), clears `divergedAt` or sets `discardedAt`, emits `video:progress` / `audio:progress` with `status: completed`.
+- **Sheets:** copies into the live entity via `characters.updateSheet` / location/talent equivalents; clears the divergent variant row or sets `discardedAt`; `sheet-divergence.ts` already emitted `stale:detected` at insert time.
 
 ### Discard
 
@@ -121,30 +125,29 @@ Soft-delete: set `discarded_at = now()` on the variant row. UI hides discarded v
 
 One row per `(entityType, artifact)` from the `stale:detected` payload. "Stage" is the architecture-doc stage that lands the backend support.
 
-| Entity / artifact            | Surface (card)                                                 | Surface (detail)                                                        | Stage |
-| ---------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------- | ----- |
-| `frame` / `thumbnail`        | corner dot on `scene-list-item`                                | inline banner on `scenes-view` image-prompt tab                         | 1     |
-| `frame` / `video`            | (none — same card; covered by thumbnail dot if both)           | inline banner on motion-prompt tab                                      | 1     |
-| `frame` / `audio`            | (none)                                                         | inline banner on (future) audio tab                                     | 1     |
-| `frame` / `variant-image`    | (none — internal; only matters for the divergence path itself) | banner inside the per-model variants area in `scene-script-prompts.tsx` | 1     |
-| `character` / `sheet`        | corner dot on `talent-card`                                    | inline banner above sheet image in `character-detail-view`              | 2     |
-| `location` / `sheet`         | corner dot on `location-card`                                  | inline banner above reference image in `location-detail-view`           | 2     |
-| `library-location` / `sheet` | corner dot on `location-library-card`                          | inline banner in `location-library` edit dialog                         | 2     |
-| `talent` / `sheet`           | corner dot on `talent-library-card`                            | inline banner in `talent-library` edit dialog                           | 2     |
-| `sequence` / merged video    | (none)                                                         | inline banner above scene player when merged-video is stale             | 3     |
-| `sequence` / music           | (none)                                                         | inline banner in `music-view`                                           | 3     |
-| `frame` / `visual-prompt`    | (none)                                                         | "prompt stale" badge on image-prompt tab + history sheet                | 4     |
-| `frame` / `motion-prompt`    | (none)                                                         | "prompt stale" badge on motion-prompt tab + history sheet               | 4     |
-| `sequence` / `music-prompt`  | (none)                                                         | "prompt stale" badge in `music-view` + history sheet                    | 4     |
+| Entity / artifact            | Surface (card)                                                 | Surface (detail)                                                                | Status                                                      |
+| ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `shot` / `thumbnail`         | (none — no staleness corner dot on `scene-list-item` today)    | inline banner via `ShotStalenessBanners` / `scene-script-prompts.tsx` image tab | shipped (staleness); image divergence banner retired (#989) |
+| `shot` / `video`             | divergent corner dot when `shot_variants` divergent row exists | inline staleness + divergent banner on motion tab in `scene-script-prompts.tsx` | partial                                                     |
+| `shot` / `audio`             | (none)                                                         | inline banner on (future) audio tab                                             | deferred                                                    |
+| `character` / `sheet`        | corner dot on `talent-card`                                    | inline banner above sheet image in `character-detail-view`                      | shipped                                                     |
+| `location` / `sheet`         | corner dot on `location-card`                                  | inline banner above reference image in `location-detail-view`                   | shipped                                                     |
+| `library-location` / `sheet` | corner dot on `location-library-card`                          | inline banner in `location-library` edit dialog                                 | shipped                                                     |
+| `talent` / `sheet`           | corner dot on `talent-library-card`                            | inline banner in `talent-library` edit dialog                                   | shipped                                                     |
+| `sequence` / video (render)  | (none)                                                         | inline banner when segment video is stale (#990)                                | deferred                                                    |
+| `sequence` / `music`         | (none)                                                         | inline banner in `music-view` + divergent via `stale:detected`                  | partial                                                     |
+| `shot` / `visual-prompt`     | (none)                                                         | staleness corner dot on image-prompt tab (`scene-script-prompts.tsx`)           | shipped                                                     |
+| `shot` / `motion-prompt`     | (none)                                                         | staleness corner dot on motion-prompt tab                                       | shipped                                                     |
+| `sequence` / `music-prompt`  | (none)                                                         | "prompt stale" badge in `music-view` + history sheet                            | deferred                                                    |
 
-Stage 1 is the only row block we commit to in v1. The rest is sketched so that when the matching stage backend ticket is picked up, the UI work has a clear home and consistent vocabulary.
+Rows marked **shipped** or **partial** reflect what exists in the codebase today; **deferred** rows are sketched so matching backend/UI tickets have a documented home.
 
 ## Bulk operations
 
 Single proposal, deferred to stage 1.5 or stage 2:
 
 - A "Stale" filter pill at the top of the scene list (`scene-list.tsx`) that hides non-stale frames.
-- When the filter is active, a "Regenerate all stale" CTA appears next to the filter, triggering one `regenerateFramesWorkflow` for the union of stale frames.
+- When the filter is active, a "Regenerate all stale" CTA appears next to the filter, triggering one `regenerateShotsWorkflow` for the union of stale shots.
 
 Not in v1. Listed here so it has a documented home when we pick it up.
 
@@ -152,15 +155,11 @@ Not in v1. Listed here so it has a documented home when we pick it up.
 
 Backend implementation details that need to be in place before the divergence UI works correctly:
 
-1. **`frame_variants` unique indexes** (resolved in #615). The schema now carries two partial unique indexes instead of a single `(frameId, variantType, model)` constraint:
-   - `frame_variants_primary_key` on `(frameId, variantType, model)` WHERE `diverged_at IS NULL` — at most one primary slot per model. `image-workflow`'s speculative upsert and convergent reconcile both target this index.
-   - `frame_variants_divergent_key` on `(frameId, variantType, model, input_hash)` WHERE `diverged_at IS NOT NULL` — divergent alternates distinguished by input-hash, so multiple divergences of the same model can coexist.
+1. **Divergent indexes live on `shot_variants` (video/audio), not `frame_variants` (images).** `shot_variants` carries `shot_variants_primary_key` (WHERE `divergedAt IS NULL`) and `shot_variants_divergent_key` (WHERE `divergedAt IS NOT NULL`). The comparison dialog and corner-dot queries for video divergence filter `divergedAt IS NOT NULL` on `shot_variants`.
 
-   Implication for the UI: the corner-dot count and the comparison dialog both query `diverged_at IS NOT NULL` rows. A frame can have multiple divergent alternates of the same model (one per distinct `input_hash`), and the dialog should list them in `diverged_at` order.
+   **`frame_variants` (#989)** has no `divergedAt` — flat image versions indexed by `(frameId, kind, model)`. Mid-flight image drift surfaces as an unselected version, not a divergent alternate banner.
 
-2. **`promptHash` vs `input_hash`.** `frame_variants.promptHash` already exists (`frame-variants.ts`). Either reuse it as the new `input_hash` (rename) or add `input_hash` as a separate column — #614's call. The UI reads through the scoped getter, so as long as one of them is the canonical staleness signal, the UI is unaffected.
-
-   _Status_: Stage 1 added `input_hash` as a separate column alongside `promptHash`. `input_hash` is the canonical staleness signal; `promptHash` is unchanged.
+2. **`promptHash` vs `inputHash` on `frame_variants`.** Both columns exist; **`inputHash` is canonical** for staleness. `promptHash` is retained for legacy reads. UI and workflows should compare `inputHash`.
 
 ## Out of scope for v1
 
@@ -173,5 +172,5 @@ Backend implementation details that need to be in place before the divergence UI
 
 ## Open questions
 
-- **Toast frequency.** If a long workflow lands many divergent variants in quick succession (a recast that diverges across N frames), do we toast once with a count, or once per frame? Default: debounce to one toast per sequence per 5s with a count.
-- **Promote-while-generating.** What happens if the user clicks Promote on a variant while a fresh regenerate is already in flight? Default: confirm dialog warns and offers to cancel the in-flight workflow, then promotes. Implementation depends on QStash cancel-by-id.
+- **Toast frequency.** If a long workflow lands many divergent variants in quick succession (a recast that diverges across N shots), do we toast once with a count, or once per shot? Default: debounce to one toast per sequence per 5s with a count.
+- **Promote-while-generating.** What happens if the user clicks Promote on a variant while a fresh regenerate is already in flight? Default: confirm dialog warns and offers to cancel the in-flight workflow, then promotes. Implementation depends on tracking the relevant Cloudflare Workflows instance ids and terminating the in-flight run safely before promotion.

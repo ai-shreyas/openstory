@@ -1,4 +1,6 @@
 import { GitHubIcon } from '@/components/icons/github-icon';
+import { XIcon } from '@/components/icons/x-icon';
+import { YouTubeIcon } from '@/components/icons/youtube-icon';
 import {
   OpenStoryIcon,
   OpenStoryLogo,
@@ -16,19 +18,18 @@ import {
   SidebarSeparator,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { FeedbackDialog } from '@/components/feedback/feedback-dialog';
 import { useLowBalanceWarning } from '@/hooks/use-low-balance-warning';
+import { MODELS_ENABLED } from '@/lib/flags';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
-import { Route as galleryRoute } from '@/routes/_app/gallery/index';
-import { Route as locationsRoute } from '@/routes/_app/locations/index';
-import { Route as sequencesRoute } from '@/routes/_app/sequences/index';
-import { Route as sequencesNewRoute } from '@/routes/_app/sequences/new';
-import { Route as stylesRoute } from '@/routes/_app/styles/index';
-import { Route as talentRoute } from '@/routes/_app/talent/index';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  BadgeDollarSign,
+  Boxes,
   Clapperboard,
   LifeBuoy,
+  Mail,
   MapPin,
   Palette,
   Plus,
@@ -39,11 +40,14 @@ import { CreditBalancePill } from './credit-balance-pill';
 import { UserSidebarFooter } from './user-sidebar-footer';
 
 const navLinks = [
-  { to: sequencesRoute.to, label: 'Sequences', icon: Video },
-  { to: stylesRoute.to, label: 'Styles', icon: Palette },
-  { to: talentRoute.to, label: 'Talent', icon: Users },
-  { to: locationsRoute.to, label: 'Locations', icon: MapPin },
-  { to: galleryRoute.to, label: 'Gallery', icon: Clapperboard },
+  { to: '/sequences', label: 'Sequences', icon: Video },
+  { to: '/styles', label: 'Styles', icon: Palette },
+  { to: '/talent', label: 'Talent', icon: Users },
+  { to: '/locations', label: 'Locations', icon: MapPin },
+  { to: '/gallery', label: 'Gallery', icon: Clapperboard },
+  ...(MODELS_ENABLED
+    ? [{ to: '/models', label: 'Models', icon: Boxes } as const]
+    : []),
 ] as const;
 
 export function AppSidebar() {
@@ -51,6 +55,7 @@ export function AppSidebar() {
 
   const { isMobile, setOpenMobile } = useSidebar();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   useEffect(() => {
     if (isMobile) setOpenMobile(false);
@@ -60,7 +65,7 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <Link
-          to={sequencesRoute.to}
+          to="/sequences"
           className="flex h-10 items-center px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
         >
           <OpenStoryLogo
@@ -79,7 +84,7 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild tooltip="New sequence">
-                  <Link to={sequencesNewRoute.to}>
+                  <Link to="/sequences/new">
                     <Plus />
                     <span>New sequence</span>
                   </Link>
@@ -99,7 +104,6 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
-              <CreditBalancePill />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -107,11 +111,28 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Help">
+            <SidebarMenuButton asChild tooltip="Guide">
               <Link to="/docs">
                 <LifeBuoy />
-                <span>Help</span>
+                <span>Guide</span>
               </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Pricing">
+              <Link to="/pricing">
+                <BadgeDollarSign />
+                <span>Pricing</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Feedback"
+              onClick={() => setFeedbackOpen(true)}
+            >
+              <Mail />
+              <span>Feedback</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -122,12 +143,35 @@ export function AppSidebar() {
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="YouTube">
+              <a
+                href={SITE_CONFIG.youtubeHref}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <YouTubeIcon className="size-4" />
+                <span>YouTube</span>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild tooltip="Follow OpenStory">
+              <a href={SITE_CONFIG.xHref} target="_blank" rel="noreferrer">
+                <XIcon className="size-4" />
+                <span>Follow OpenStory</span>
+              </a>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
         <SidebarSeparator />
+        {/* Quiet status chip — not a nav peer of Sequences/Gallery (#1090). */}
+        <CreditBalancePill />
         <SidebarMenu>
           <UserSidebarFooter />
         </SidebarMenu>
       </SidebarFooter>
+      <FeedbackDialog open={feedbackOpen} onOpenChange={setFeedbackOpen} />
     </Sidebar>
   );
 }

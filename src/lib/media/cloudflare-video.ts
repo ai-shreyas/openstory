@@ -49,11 +49,13 @@ function buildMediaUrl(options: string, src: string): string {
 /**
  * A still-frame poster (jpg) extracted from the first frame of the video, sized
  * to `width`. Returns `undefined` for non-transformable sources so the caller
- * can fall back to the browser's own first-shot render.
+ * can fall back to the browser's own first-frame render.
  */
 export function videoPosterUrl(src: string, width = 640): string | undefined {
   if (!isTransformableVideoUrl(src)) return undefined;
-  return buildMediaUrl(`mode=shot,time=0s,format=jpg,width=${width}`, src);
+  // `mode=frame` is Cloudflare's Media Transformations literal for still-image
+  // extraction (video still frame, NOT our domain Shot) — do not rename.
+  return buildMediaUrl(`mode=frame,time=0s,format=jpg,width=${width}`, src);
 }
 
 /**

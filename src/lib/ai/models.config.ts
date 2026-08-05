@@ -5,25 +5,35 @@
 
 export const SCRIPT_ANALYSIS_MODELS = [
   {
-    id: 'x-ai/grok-4.3',
-    name: 'Grok 4.3',
+    id: 'x-ai/grok-4.5',
+    name: 'Grok 4.5',
     provider: 'xAI',
     license: 'proprietary' as const,
     qualityRank: 1,
-    contextWindow: 1_048_576,
+    contextWindow: 500_000,
     // Accepts image input — required so the motion-prompt pass can be
     // conditioned on the rendered starting frame (#929). Conservative: only
     // models known to accept image input are `true`; text-only models fall
     // back to the text-only motion prompt path.
     vision: true,
-    description: 'Frontier xAI reasoning model with 1M context',
+    description: 'Frontier xAI reasoning model with 500K context',
   },
   {
-    id: 'anthropic/claude-sonnet-4.6',
-    name: 'Claude Sonnet 4.6',
+    id: 'anthropic/claude-fable-5',
+    name: 'Claude Fable 5',
     provider: 'Anthropic',
     license: 'proprietary' as const,
     qualityRank: 2,
+    contextWindow: 1_000_000,
+    vision: true,
+    description: 'Most intelligent Anthropic model, new tier above Opus',
+  },
+  {
+    id: 'anthropic/claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    provider: 'Anthropic',
+    license: 'proprietary' as const,
+    qualityRank: 3,
     contextWindow: 1_000_000,
     vision: true,
     description: 'State-of-the-art coding and structured output',
@@ -33,7 +43,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Grok 4.20',
     provider: 'xAI',
     license: 'proprietary' as const,
-    qualityRank: 3,
+    qualityRank: 4,
     contextWindow: 2_000_000,
     vision: true,
     description: 'Lowest hallucination rate, flagship agentic model',
@@ -43,7 +53,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Claude Opus 4.8',
     provider: 'Anthropic',
     license: 'proprietary' as const,
-    qualityRank: 4,
+    qualityRank: 5,
     contextWindow: 1_000_000,
     vision: true,
     description: 'Frontier reasoning and coding',
@@ -53,7 +63,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Mistral Small 4',
     provider: 'Mistral',
     license: 'open-source' as const,
-    qualityRank: 5,
+    qualityRank: 6,
     contextWindow: 262_144,
     vision: true,
     description: 'Apache 2.0, 119B MoE, multimodal + agentic coding',
@@ -63,7 +73,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'DeepSeek V3.2',
     provider: 'DeepSeek',
     license: 'open-source' as const,
-    qualityRank: 6,
+    qualityRank: 7,
     contextWindow: 163_840,
     // Text-only.
     vision: false,
@@ -74,7 +84,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GLM-5.2',
     provider: 'Z.ai',
     license: 'open-source' as const,
-    qualityRank: 7,
+    qualityRank: 8,
     contextWindow: 1_048_576,
     // GLM-5.2 is text-only. Image-bearing calls (the vision-conditioned motion
     // path, #929) transparently route to `DEFAULT_VISION_MODEL` — see
@@ -89,7 +99,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Gemini 3.1 Pro',
     provider: 'Google',
     license: 'proprietary' as const,
-    qualityRank: 8,
+    qualityRank: 9,
     contextWindow: 1_048_576,
     vision: true,
     description: 'Frontier multimodal reasoning with 1M context',
@@ -99,7 +109,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GPT-5.5',
     provider: 'OpenAI',
     license: 'proprietary' as const,
-    qualityRank: 9,
+    qualityRank: 10,
     contextWindow: 1_050_000,
     vision: true,
     description: 'Latest GPT-5 series with 1M context',
@@ -109,7 +119,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Gemini 3 Flash',
     provider: 'Google',
     license: 'proprietary' as const,
-    qualityRank: 10,
+    qualityRank: 11,
     contextWindow: 1_048_576,
     vision: true,
     description: 'Fast multimodal with 1M context',
@@ -119,7 +129,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GPT-5.4 Mini',
     provider: 'OpenAI',
     license: 'proprietary' as const,
-    qualityRank: 11,
+    qualityRank: 12,
     contextWindow: 400_000,
     vision: true,
     description: 'Fast reasoning with configurable effort modes',
@@ -129,7 +139,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Seed 2.0 Mini',
     provider: 'ByteDance',
     license: 'proprietary' as const,
-    qualityRank: 12,
+    qualityRank: 13,
     contextWindow: 262_144,
     vision: true,
     description: 'Fast multimodal with 4 reasoning effort modes',
@@ -139,7 +149,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GPT-5.4 Nano',
     provider: 'OpenAI',
     license: 'proprietary' as const,
-    qualityRank: 13,
+    qualityRank: 14,
     contextWindow: 400_000,
     vision: true,
     description: 'Fastest and most cost-efficient GPT-5.4 variant',
@@ -207,7 +217,7 @@ export function analysisModelSupportsVision(modelId: string): boolean {
  * (GLM's vision siblings can't do strict structured outputs — see #942/#944).
  */
 export const DEFAULT_VISION_MODEL: AnalysisModelId =
-  'anthropic/claude-sonnet-4.6';
+  'anthropic/claude-sonnet-5';
 
 /**
  * Resolve which model should actually run a call given whether it carries image
@@ -226,7 +236,7 @@ export function resolveVisionModel(
 /**
  * Default model to use when none is specified
  */
-export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId = 'x-ai/grok-4.3';
+export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId = 'x-ai/grok-4.5';
 
 /**
  * Image generation models are now in src/lib/ai/models.ts

@@ -1,33 +1,53 @@
 import { Skeleton } from '@/components/ui/skeleton';
-import type { Style } from '@/lib/db/schema/libraries';
 import { cn } from '@/lib/utils';
-import { AppImage } from '@/components/ui/app-image';
-import { MoreHorizontal } from 'lucide-react';
+import { Info, MoreHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getStyleGradient } from './style-gradient';
+import type { StyleRecommendation } from '@/hooks/use-styles';
+import {
+  buildRecommendationReasoningMap,
+  catalogueWithoutRecommendations,
+  RECOMMENDED_STYLE_SLOT_COUNT,
+  resolveRecommendedStyles,
+} from '@/lib/style/prioritize-recommended-styles';
+import { StyleDetailDialog } from '@/components/style/style-detail-dialog';
+import { StyleInlineTile } from '@/components/style/style-inline-tile';
 import { StyleSelectionDialog } from './style-selection-dialog';
+import type { Style } from '@/lib/db/schema/libraries';
 
-const StyleTileBackground: React.FC<{ style: Style }> = ({ style }) => {
-  const [imgError, setImgError] = useState(false);
-
-  return style.previewUrl && !imgError ? (
-    <AppImage
-      key={style.id}
-      src={style.previewUrl}
-      layout="fullWidth"
-      alt={style.name}
-      className="h-full w-full object-cover"
-      onError={() => setImgError(true)}
-    />
-  ) : (
-    <div
-      className="h-full w-full"
-      style={{
-        background: getStyleGradient(style.config.colorPalette),
-      }}
-    />
-  );
-};
+/**
+ * Keep specific styles on screen without reordering the strip: any catalogue
+ * style in `keep` that fell outside the visible head is swapped into the tail
+ * slots (deduped, order preserved). Used so the current selection and the last
+ * browse-dialog pick always stay reachable, even when they sit deep in the
+ * catalogue.
+ */
+function keepStylesVisible(
+  head: Style[],
+  catalogue: Style[],
+  max: number,
+  keep: Array<Style | null>
+): Style[] {
+  if (max <= 0) return head;
+  const inCatalogue = new Set(catalogue.map((s) => s.id));
+  const inHead = new Set(head.map((s) => s.id));
+  const extras: Style[] = [];
+  const seen = new Set<string>();
+  for (const style of keep) {
+    if (
+      !style ||
+      seen.has(style.id) ||
+      inHead.has(style.id) ||
+      !inCatalogue.has(style.id)
+    ) {
+      continue;
+    }
+    seen.add(style.id);
+    extras.push(style);
+  }
+  if (extras.length === 0) return head;
+  const tail = extras.slice(0, max);
+  return [...head.slice(0, max - tail.length), ...tail];
+}
 
 type StyleSelectorProps = {
   styles: Style[];
@@ -35,6 +55,8 @@ type StyleSelectorProps = {
   onStyleSelect: (styleId: string) => void;
   loading?: boolean;
   disabled?: boolean;
+  recommendations?: StyleRecommendation[];
+  recommendationsLoading?: boolean;
 };
 
 export function StyleSelector({
@@ -43,25 +65,32 @@ export function StyleSelector({
   onStyleSelect,
   loading = false,
   disabled = false,
+  recommendations,
+  recommendationsLoading = false,
 }: StyleSelectorProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [detailStyle, setDetailStyle] = useState<Style | null>(null);
+  // The last style chosen from the "browse all" dialog. It stays pinned into
+  // the strip even after other tiles are selected, and only clears when the
+  // composer remounts (i.e. a fresh sequence).
+  const [pinnedStyleId, setPinnedStyleId] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [focusableIndex, setFocusableIndex] = useState(0);
   const [visibleCount, setVisibleCount] = useState(10);
 
-  // Calculate columns from container width using ResizeObserver
+  const reservedSlots = 1;
+
   useEffect(() => {
     const container = gridRef.current;
     if (!container) return;
 
     const calculateColumns = (width: number) => {
-      const tileSize = 65; // min tile width in px
-      const gap = 12; // gap-3 = 12px
+      const tileSize = 65;
+      const gap = 12;
       const columns = Math.floor((width + gap) / (tileSize + gap));
-      setVisibleCount(Math.max(3, columns)); // min 3 columns
+      setVisibleCount(Math.max(3, columns));
     };
 
-    // Initial calculation
     calculateColumns(container.clientWidth);
 
     const observer = new ResizeObserver((entries) => {
@@ -74,46 +103,102 @@ export function StyleSelector({
     return () => observer.disconnect();
   }, []);
 
-  // Reorder styles to place selected style at the beginning if it exists
-  const reorderedStyles = useMemo(() => {
-    if (!selectedStyleId) return styles;
+  const showRecommendations =
+    recommendationsLoading || (recommendations?.length ?? 0) > 0;
 
-    const selectedIndex = styles.findIndex((s) => s.id === selectedStyleId);
-    if (selectedIndex === -1) return styles;
+  const recommendedStyles = useMemo(
+    () =>
+      showRecommendations
+        ? resolveRecommendedStyles(styles, recommendations)
+        : [],
+    [styles, recommendations, showRecommendations]
+  );
 
-    // If selected style is already in the visible positions, don't reorder
-    if (selectedIndex < visibleCount - 1) return styles;
+  const reasoningByStyleId = useMemo(
+    () => buildRecommendationReasoningMap(recommendations),
+    [recommendations]
+  );
 
-    // Move selected style to the front
-    const selectedStyle = styles[selectedIndex];
-    if (!selectedStyle) return styles;
-    return [selectedStyle, ...styles.filter((s) => s.id !== selectedStyleId)];
-  }, [styles, selectedStyleId, visibleCount]);
+  const showRecommendationSkeleton =
+    showRecommendations &&
+    recommendationsLoading &&
+    recommendedStyles.length === 0;
 
-  // Always reserve last slot for "More" button, show visibleCount - 1 styles
-  const visibleStyles = reorderedStyles.slice(0, visibleCount - 1);
-  const hiddenCount = reorderedStyles.length - visibleStyles.length;
+  const recommendationSlotCount = showRecommendations
+    ? showRecommendationSkeleton
+      ? RECOMMENDED_STYLE_SLOT_COUNT
+      : recommendedStyles.length
+    : 0;
 
-  // Reset focusable index when styles change or selected style changes
+  const catalogueStyles = useMemo(
+    () =>
+      catalogueWithoutRecommendations(
+        styles,
+        showRecommendations ? recommendations : undefined
+      ),
+    [styles, recommendations, showRecommendations]
+  );
+
+  const selectedStyle = styles.find((s) => s.id === selectedStyleId) ?? null;
+  const pinnedStyle = pinnedStyleId
+    ? (styles.find((s) => s.id === pinnedStyleId) ?? null)
+    : null;
+
+  const maxCatalogueSlots = Math.max(
+    0,
+    visibleCount - reservedSlots - recommendationSlotCount
+  );
+  // Show the first N catalogue tiles in stable order (selecting must never
+  // shuffle tiles to the front). Keep the current selection visible — it may
+  // come from outside the strip (a URL `?style=`, the browse dialog) — plus the
+  // last browse-dialog pick, which stays pinned while other tiles are selected.
+  const visibleCatalogueStyles = keepStylesVisible(
+    catalogueStyles.slice(0, maxCatalogueSlots),
+    catalogueStyles,
+    maxCatalogueSlots,
+    [pinnedStyle, selectedStyle]
+  );
+
+  const moreIndex = recommendationSlotCount + visibleCatalogueStyles.length;
+  const totalItems = moreIndex + 1;
+
+  const shownStyleIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const style of recommendedStyles) ids.add(style.id);
+    for (const style of visibleCatalogueStyles) ids.add(style.id);
+    return ids;
+  }, [recommendedStyles, visibleCatalogueStyles]);
+
+  const hiddenCount = Math.max(0, styles.length - shownStyleIds.size);
+
   useEffect(() => {
-    if (visibleStyles.length === 0) return;
-
-    // If a style is selected, make it focusable
-    const selectedIndex = visibleStyles.findIndex(
+    const recIndex = recommendedStyles.findIndex(
       (s) => s.id === selectedStyleId
     );
-    if (selectedIndex !== -1) {
-      setFocusableIndex(selectedIndex);
-    } else {
-      // Otherwise, first item is focusable
-      setFocusableIndex(0);
+    if (recIndex !== -1) {
+      setFocusableIndex(recIndex);
+      return;
     }
-  }, [selectedStyleId, visibleStyles]);
 
-  // Handle arrow key navigation (single row, so left/right only)
+    const catalogueIndex = visibleCatalogueStyles.findIndex(
+      (s) => s.id === selectedStyleId
+    );
+    if (catalogueIndex !== -1) {
+      setFocusableIndex(recommendationSlotCount + catalogueIndex);
+      return;
+    }
+
+    if (totalItems > 0) setFocusableIndex(0);
+  }, [
+    selectedStyleId,
+    recommendedStyles,
+    visibleCatalogueStyles,
+    recommendationSlotCount,
+    totalItems,
+  ]);
+
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent, currentIndex: number) => {
-      const totalItems = visibleStyles.length + 1; // styles + "More" button
       let nextIndex = currentIndex;
 
       switch (event.key) {
@@ -141,17 +226,21 @@ export function StyleSelector({
 
       if (nextIndex !== currentIndex) {
         setFocusableIndex(nextIndex);
-        const buttons = gridRef.current?.querySelectorAll('button');
-        const nextButton = buttons?.[nextIndex];
-        if (nextButton instanceof HTMLElement) {
-          nextButton.focus();
+        // The style tiles and the trailing "More" tile carry the roving
+        // tabindex, in render order — index them directly.
+        const tiles = gridRef.current?.querySelectorAll('[data-style-tile]');
+        const nextTile = tiles?.[nextIndex];
+        if (nextTile instanceof HTMLElement) {
+          nextTile.focus();
         }
       }
     },
-    [visibleStyles.length]
+    [totalItems]
   );
 
   const handleStyleSelect = (styleId: string) => {
+    // Pin the browse-dialog pick so it stays in the strip afterwards.
+    setPinnedStyleId(styleId);
     onStyleSelect(styleId);
     setDialogOpen(false);
   };
@@ -160,87 +249,113 @@ export function StyleSelector({
     <>
       <div
         ref={gridRef}
-        className="grid grid-cols-[repeat(auto-fill,minmax(65px,1fr))] gap-3 overflow-hidden p-2"
+        className="grid w-full grid-cols-[repeat(auto-fill,minmax(65px,1fr))] gap-3 py-2"
         role="grid"
         aria-label="Style selection"
       >
-        {loading
-          ? Array.from({ length: visibleCount }).map((_, i) => (
-              <Skeleton key={i} className="aspect-square rounded-lg" />
-            ))
-          : visibleStyles.map((style, index) => (
-              <button
-                key={style.id}
-                type="button"
-                onClick={() => onStyleSelect(style.id)}
-                onKeyDown={(e) => handleKeyDown(e, index)}
-                tabIndex={index === focusableIndex ? 0 : -1}
-                disabled={disabled}
-                className={cn(
-                  'group relative aspect-square rounded-lg overflow-hidden',
-                  'border-2 transition-all duration-200',
-                  'hover:scale-105 hover:shadow-lg',
-                  'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-                  'disabled:opacity-50 disabled:cursor-not-allowed',
-                  selectedStyleId === style.id
-                    ? 'border-primary shadow-md scale-105'
-                    : 'border-transparent hover:border-primary/50'
-                )}
-                aria-label={`Select ${style.name} style`}
-              >
-                {/* Background Image / Gradient Fallback */}
-                <StyleTileBackground style={style} />
+        {loading ? (
+          Array.from({ length: visibleCount }).map((_, i) => (
+            <Skeleton key={i} className="aspect-square rounded-lg" />
+          ))
+        ) : (
+          <>
+            {showRecommendationSkeleton
+              ? Array.from({ length: RECOMMENDED_STYLE_SLOT_COUNT }, (_, i) => (
+                  <Skeleton
+                    key={`rec-skeleton-${i}`}
+                    className="aspect-square rounded-lg"
+                  />
+                ))
+              : recommendedStyles.map((style, index) => (
+                  <StyleInlineTile
+                    key={style.id}
+                    style={style}
+                    selected={selectedStyleId === style.id}
+                    disabled={disabled}
+                    recommended
+                    reasoning={reasoningByStyleId.get(style.id)}
+                    tabIndex={index === focusableIndex ? 0 : -1}
+                    onSelect={onStyleSelect}
+                    onKeyDown={(e) => handleKeyDown(e, index)}
+                  />
+                ))}
 
-                {/* Name Overlay on Image */}
-                <div className="absolute inset-x-0 bottom-0 p-2 bg-linear-to-t from-black/80 via-black/60 to-transparent">
-                  <p className="text-xs font-medium text-white text-center line-clamp-2">
-                    {style.name}
-                  </p>
-                </div>
+            {visibleCatalogueStyles.map((style, index) => {
+              const unifiedIndex = recommendationSlotCount + index;
+              return (
+                <StyleInlineTile
+                  key={style.id}
+                  style={style}
+                  selected={selectedStyleId === style.id}
+                  disabled={disabled}
+                  tabIndex={unifiedIndex === focusableIndex ? 0 : -1}
+                  onSelect={onStyleSelect}
+                  onKeyDown={(e) => handleKeyDown(e, unifiedIndex)}
+                />
+              );
+            })}
 
-                {/* Selection Indicator */}
-                {selectedStyleId === style.id && (
-                  <div className="absolute inset-0 bg-primary/10 pointer-events-none" />
-                )}
-              </button>
-            ))}
-
-        {/* More Options Tile - Always show as last item in grid */}
-        {!loading && (
-          <button
-            type="button"
-            onClick={() => setDialogOpen(true)}
-            onKeyDown={(e) => handleKeyDown(e, visibleStyles.length)}
-            tabIndex={visibleStyles.length === focusableIndex ? 0 : -1}
-            disabled={disabled}
-            className={cn(
-              'aspect-square rounded-lg overflow-hidden',
-              'border-2 border-dashed border-muted-foreground/30',
-              'flex flex-col items-center justify-center gap-2',
-              'hover:border-primary hover:bg-muted/50',
-              'transition-all duration-200',
-              'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-            aria-label={`View all ${styles.length} styles`}
-          >
-            <MoreHorizontal className="h-5 w-5 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground font-medium text-center">
-              {hiddenCount > 0
-                ? `+${hiddenCount} More`
-                : `View All (${reorderedStyles.length})`}
-            </span>
-          </button>
+            <button
+              type="button"
+              data-style-tile
+              onClick={() => setDialogOpen(true)}
+              onKeyDown={(e) => handleKeyDown(e, moreIndex)}
+              tabIndex={moreIndex === focusableIndex ? 0 : -1}
+              disabled={disabled}
+              className={cn(
+                'aspect-square rounded-lg overflow-hidden',
+                'border-2 border-dashed border-muted-foreground/30',
+                'flex flex-col items-center justify-center gap-2',
+                'hover:border-primary hover:bg-muted/50',
+                'transition-all duration-200',
+                'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+              aria-label={`View all ${styles.length} styles`}
+            >
+              <MoreHorizontal className="h-5 w-5 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground font-medium text-center">
+                {hiddenCount > 0
+                  ? `+${hiddenCount} More`
+                  : `View All (${styles.length})`}
+              </span>
+            </button>
+          </>
+        )}
+      </div>
+      {/* Reserve the info-line height so it never shifts the layout when the
+          selection resolves — skeleton while styles load, then the link. */}
+      <div className="flex min-h-5 items-center">
+        {loading ? (
+          <Skeleton className="h-4 w-40" />
+        ) : (
+          selectedStyle && (
+            <button
+              type="button"
+              onClick={() => setDetailStyle(selectedStyle)}
+              className="inline-flex w-fit items-center gap-1.5 self-start rounded-sm px-1 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Info className="size-3.5" />
+              View {selectedStyle.name} details
+            </button>
+          )
         )}
       </div>
 
-      {/* Full Style Selection Dialog */}
       <StyleSelectionDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         styles={styles}
-        selectedStyleId={selectedStyleId}
         onStyleSelect={handleStyleSelect}
+      />
+
+      <StyleDetailDialog
+        style={detailStyle}
+        open={detailStyle !== null}
+        onOpenChange={(open) => {
+          if (!open) setDetailStyle(null);
+        }}
+        onUseStyle={onStyleSelect}
       />
     </>
   );

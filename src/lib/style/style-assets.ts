@@ -118,6 +118,17 @@ export const SPECIALIZED_CATEGORY = 'specialized';
 const SMALL_CATEGORY_THRESHOLD = 3;
 
 /**
+ * Categories that sink to the end of the list (after the A–Z run), in this
+ * order, just before the "Specialized" catch-all. Everything else sorts A–Z.
+ */
+const TRAILING_CATEGORY_ORDER = ['animation', 'animatic', SPECIALIZED_CATEGORY];
+
+function categorySortRank(category: string): number {
+  const index = TRAILING_CATEGORY_ORDER.indexOf(category);
+  return index === -1 ? 0 : index + 1;
+}
+
+/**
  * Raw category keys (including the uncategorized bucket) that hold fewer than
  * `SMALL_CATEGORY_THRESHOLD` styles in the given catalogue, and therefore
  * collapse into the trailing "Specialized" group.
@@ -177,9 +188,11 @@ export function groupStylesByCategory(styles: Style[]): StyleCategoryGroup[] {
       styles: [...groupStyles].sort((a, b) => a.name.localeCompare(b.name)),
     }))
     .sort((a, b) => {
-      // "Specialized" always sinks to the end; everything else A–Z by label.
-      if (a.category === SPECIALIZED_CATEGORY) return 1;
-      if (b.category === SPECIALIZED_CATEGORY) return -1;
+      // Animation, Animatic, then "Specialized" sink to the end (in that
+      // order); everything else sorts A–Z by label.
+      const rankDelta =
+        categorySortRank(a.category) - categorySortRank(b.category);
+      if (rankDelta !== 0) return rankDelta;
       return a.label.localeCompare(b.label);
     });
 }

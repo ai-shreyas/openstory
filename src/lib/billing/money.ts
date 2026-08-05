@@ -12,7 +12,6 @@
 export type Microdollars = number & { readonly __brand: 'Microdollars' };
 
 const MICROS_PER_USD = 1_000_000;
-const MICROS_PER_CENT = 10_000;
 
 /** Brand a raw integer as Microdollars (no conversion, just type cast) */
 export function micros(value: number): Microdollars {
@@ -27,10 +26,6 @@ export function usdToMicros(usd: number): Microdollars {
 
 export function microsToUsd(micros: Microdollars): number {
   return micros / MICROS_PER_USD;
-}
-
-export function microsToUsdCents(micros: Microdollars): number {
-  return micros / MICROS_PER_CENT;
 }
 
 export function microsToDisplayUsd(micros: Microdollars): string {

@@ -9,9 +9,14 @@ import {
   DEFAULT_ASPECT_RATIO,
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
-import { sequences, shots } from '@/lib/db/schema';
+import { frames, sequences, shots } from '@/lib/db/schema';
 import type { NewSequence, Sequence, Shot, Style } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
+import {
+  projectShotMissingFrame,
+  projectShotWithImage,
+  type ShotWithImage,
+} from '@/lib/shots/shot-with-image';
 import { ValidationError } from '@/lib/errors';
 import { and, asc, desc, eq, inArray, isNull, lt, not, or } from 'drizzle-orm';
 
@@ -132,7 +137,7 @@ function createSequencesReadMethods(db: Database, teamId: string) {
      * applied via the join so caller-supplied ids from another team simply
      * return nothing rather than leak.
      */
-    listShotsByIds: async (sequenceIds: string[]): Promise<Shot[]> => {
+    listShotsByIds: async (sequenceIds: string[]): Promise<ShotWithImage[]> => {
       if (sequenceIds.length === 0) return [];
       // Chunk the ids to stay under D1's bound-parameter ceiling. Each chunk
       // holds all of a sequence's shots (we split on sequence boundaries), so
@@ -148,6 +153,12 @@ function createSequencesReadMethods(db: Database, teamId: string) {
             .select()
             .from(shots)
             .innerJoin(sequences, eq(shots.sequenceId, sequences.id))
+            // Anchor frame holds the image surface (#989) — the shot's first
+            // frame (orderIndex 0), joined by shotId (NOT id-reuse).
+            .leftJoin(
+              frames,
+              and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
+            )
             .where(
               and(
                 inArray(shots.sequenceId, batch),
@@ -155,7 +166,13 @@ function createSequencesReadMethods(db: Database, teamId: string) {
               )
             )
             .orderBy(asc(shots.sequenceId), asc(shots.orderIndex))
-            .then((rows) => rows.map((row) => row.shots))
+            .then((rows) =>
+              rows.map((row) =>
+                row.frames
+                  ? projectShotWithImage(row.shots, row.frames)
+                  : projectShotMissingFrame(row.shots)
+              )
+            )
         )
       );
       return results.flat();

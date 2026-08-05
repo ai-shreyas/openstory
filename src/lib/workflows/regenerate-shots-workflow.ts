@@ -27,7 +27,6 @@
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { getGenerationChannel } from '@/lib/realtime';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
@@ -41,9 +40,6 @@ import type {
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import {
-  buildConvergentWrites,
-  buildDivergentWrites,
-  buildRegenerateShotSnapshot,
   computeRegenerateShotsBatchHash,
   emitRecastEvent,
 } from '@/lib/workflows/regenerate-shots-snapshot';
@@ -72,7 +68,9 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
   protected override async runImpl(
     event: Readonly<WorkflowEvent<RegenerateShotsWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    // The reconcile pass that used scopedDb is retired (#989): image-workflow now
+    // appends + selects each version itself.
+    _scopedDb: ScopedDb
   ): Promise<RegenerateShotsResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -222,237 +220,23 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
       };
     });
 
-    // Shared batch reads — pulled out of the per-shot loop so each shot's
-    // reconcile step is independent (one shot's DB blip can't poison the
-    // batch's character/location lookup).
-    const allCharacters = await step.do('load-characters', () =>
-      scopedDb.characters.listWithSheets(sequenceId)
+    // Image-workflow (#989) appends + selects each new version itself, and on a
+    // mid-flight input drift retains the version WITHOUT repointing the primary.
+    // There is no separate divergence reconcile here anymore — a successful
+    // image result means the frame's primary was (re)generated.
+    const succeeded = imageResults.filter(
+      (r): r is Extract<ShotResult, { success: true }> => r.success
     );
-    const allLocations = await step.do('load-locations', () =>
-      scopedDb.sequenceLocations.listWithReferences(sequenceId)
-    );
-    const allElements = await step.do('load-elements', () =>
-      scopedDb.sequenceElements.list(sequenceId)
-    );
+    const succeededShotIds = succeeded.map((r) => r.shotId);
 
-    type ReconcileOutcome =
-      | { kind: 'convergent' }
-      | { kind: 'divergent' }
-      | { kind: 'skipped-deleted' }
-      | { kind: 'failed'; error: string };
-
-    const reconcileOutcomes = new Map<string, ReconcileOutcome>();
-
-    // Per-shot `step.do` so one shot's failure does not abort siblings.
-    // Known-permanent states return tagged outcomes (no retries burned).
-    // Unknown throws propagate inside the step so CF applies its retry
-    // policy; only after retries exhaust does the outer catch convert to a
-    // `failed` outcome.
-    for (const result of imageResults) {
-      if (!result.success) continue;
-
-      let outcome: ReconcileOutcome;
-      try {
-        outcome = await step.do(
-          `reconcile-shot-${result.shotId}`,
-          async (): Promise<ReconcileOutcome> => {
-            const snapshot = snapshots.find((s) => s.shotId === result.shotId);
-            if (!snapshot) {
-              // Invariant: imageResults is built from snapshots. Permanent
-              // (programmer-error) state — surface but don't retry.
-              return {
-                kind: 'failed',
-                error: `imageResults produced shotId=${result.shotId} not in snapshots`,
-              };
-            }
-
-            const liveShot = await scopedDb.shots.getById(result.shotId);
-            if (!liveShot) {
-              // Shot was deleted mid-flight. The speculative thumbnail was
-              // already written by image-workflow, but its row is gone —
-              // there's nothing left to reconcile. Skipped, not failed.
-              return { kind: 'skipped-deleted' };
-            }
-
-            const currentSnapshot = await buildRegenerateShotSnapshot({
-              shot: liveShot,
-              characters: allCharacters,
-              locations: allLocations,
-              elements: allElements,
-              imageModel,
-              aspectRatio,
-            });
-
-            if (
-              currentSnapshot.snapshotInputHash === snapshot.snapshotInputHash
-            ) {
-              const writes = buildConvergentWrites(snapshot.snapshotInputHash);
-              await scopedDb.shots.update(result.shotId, writes.shot);
-              const updated = await scopedDb.shotVariants.updateByShotAndModel(
-                result.shotId,
-                'image',
-                imageModel,
-                writes.variant
-              );
-              if (!updated) {
-                return {
-                  kind: 'failed',
-                  error: `Convergent reconcile: no shot_variants row for shot=${result.shotId} model=${imageModel} — image-workflow's dual-write must run before regenerate-shots reconciles.`,
-                };
-              }
-              return { kind: 'convergent' };
-            }
-
-            // Divergent path. Read the primary variant first so its R2-tracked
-            // storage fields (storagePath/previewUrl/shotVariantUrl) carry
-            // forward to the divergent alternate — clearing the primary
-            // without copying would leave the speculative R2 object untracked.
-            //
-            // Write order (revert-then-insert):
-            //   1. Revert the speculative primary thumbnail on the shot row.
-            //   2. Revert the speculative URL on the primary variant row so
-            //      the primary slot stops pointing at diverged work.
-            //   3. Insert (or no-op on retry) a divergent alternate row
-            //      preserving the diverged result for comparison/promotion.
-            // Steps 1 and 2 must precede 3: if step 3 fails, the user keeps
-            // ownership of their live edits (no stale primary), at the cost
-            // of losing the diverged result. The inverse would leave the UI
-            // saying "diverged" while the speculative thumbnail still owned
-            // the primary.
-            const primaryVariant =
-              await scopedDb.shotVariants.getByShotAndModel(
-                result.shotId,
-                'image',
-                imageModel
-              );
-
-            const divergedAt = new Date();
-            const writes = buildDivergentWrites(
-              snapshot.snapshotInputHash,
-              divergedAt
-            );
-
-            await scopedDb.shots.update(result.shotId, writes.shot);
-
-            const reverted = await scopedDb.shotVariants.updateByShotAndModel(
-              result.shotId,
-              'image',
-              imageModel,
-              writes.primaryRevert
-            );
-            if (!reverted) {
-              return {
-                kind: 'failed',
-                error: `Divergent reconcile: no primary shot_variants row to revert for shot=${result.shotId} model=${imageModel} — image-workflow's dual-write must run before regenerate-shots reconciles.`,
-              };
-            }
-
-            const divergentVariant =
-              await scopedDb.shotVariants.insertDivergent({
-                shotId: result.shotId,
-                sequenceId,
-                variantType: 'image',
-                model: imageModel,
-                url: result.imageUrl,
-                storagePath: primaryVariant?.storagePath ?? null,
-                previewUrl: primaryVariant?.previewUrl ?? null,
-                shotVariantUrl: primaryVariant?.shotVariantUrl ?? null,
-                shotVariantPath: primaryVariant?.shotVariantPath ?? null,
-                ...writes.divergentRow,
-              });
-
-            const channel = getGenerationChannel(sequenceId);
-            await channel.emit('generation.image:progress', {
-              shotId: result.shotId,
-              status: 'pending',
-              model: imageModel,
-            });
-
-            await channel.emit('generation.stale:detected', {
-              entityType: 'shot',
-              entityId: result.shotId,
-              artifact: 'thumbnail',
-              snapshotInputHash: snapshot.snapshotInputHash,
-              divergedVariantId: divergentVariant.id,
-            });
-
-            logger.info(
-              `[RegenerateShotsWorkflow:cf] Diverged shot ${result.shotId}: snapshot=${snapshot.snapshotInputHash.slice(0, 8)} current=${currentSnapshot.snapshotInputHash.slice(0, 8)}`
-            );
-
-            return { kind: 'divergent' };
-          }
-        );
-      } catch (err) {
-        // CF exhausted retries on this shot's step. Capture as a failed
-        // outcome so siblings still reconcile.
-        outcome = {
-          kind: 'failed',
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-
-      reconcileOutcomes.set(result.shotId, outcome);
-      if (outcome.kind === 'failed') {
-        logger.error(
-          `[RegenerateShotsWorkflow:cf] Reconcile failed for shot ${result.shotId}: ${outcome.error}`
-        );
-      } else if (outcome.kind === 'skipped-deleted') {
-        logger.warn(
-          `[RegenerateShotsWorkflow:cf] Shot ${result.shotId} deleted mid-flight; skipping reconciliation`
-        );
-      }
-    }
-
-    // Single pass over reconcileOutcomes with an exhaustive switch.
-    // Adding a new ReconcileOutcome variant fails compile here (the `never`
-    // assignment) instead of silently dropping those shots from every tally.
-    const convergentShotIds: string[] = [];
-    const divergedShotIds: string[] = [];
-    const skippedDeletedShotIds: string[] = [];
-    const reconcileFailedShotIds: string[] = [];
-    for (const [shotId, outcome] of reconcileOutcomes) {
-      switch (outcome.kind) {
-        case 'convergent':
-          convergentShotIds.push(shotId);
-          break;
-        case 'divergent':
-          divergedShotIds.push(shotId);
-          break;
-        case 'skipped-deleted':
-          skippedDeletedShotIds.push(shotId);
-          break;
-        case 'failed':
-          reconcileFailedShotIds.push(shotId);
-          break;
-        default: {
-          const _exhaustive: never = outcome;
-          throw new Error(
-            `[RegenerateShotsWorkflow:cf] Unhandled ReconcileOutcome: ${JSON.stringify(_exhaustive)}`
-          );
-        }
-      }
-    }
-
-    // Shot variants (the 3x3 grid in the Variants tab) are derived from the
-    // primary thumbnail. Image-workflow regenerated the primary; without this
-    // step the grid keeps showing the pre-recast character. Fire-and-forget:
-    // each variant runs as its own workflow so this batch returns as soon as
-    // primaries are reconciled. Only fan out for convergent shots — divergent
-    // shots preserve the user's live primary, so their existing shot
-    // variants are still correct.
+    // Regenerate the 3×3 grid sheet for each (re)imaged shot — it is derived
+    // from the primary still and would otherwise show the pre-recast subject.
+    // Fire-and-forget; each variant runs as its own workflow.
     await step.do('trigger-variant-regen', async () => {
-      const convergentShotIdSet = new Set(convergentShotIds);
-      const convergent = imageResults.filter(
-        (r): r is Extract<ShotResult, { success: true }> =>
-          r.success && convergentShotIdSet.has(r.shotId)
-      );
-
       await Promise.all(
-        convergent.map(async (result) => {
+        succeeded.map(async (result) => {
           const snapshot = snapshots.find((s) => s.shotId === result.shotId);
           if (!snapshot) return;
-
           await triggerWorkflow<ShotVariantWorkflowInput>(
             '/variant-image',
             {
@@ -483,15 +267,10 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
       );
     });
 
-    // Success = shots whose primary write was reconciled (convergent kept
-    // the primary; divergent saved an alternate). Image-generation failures,
-    // deleted-mid-flight skips, and reconcile failures don't count.
-    const imageFailedShotIds = imageResults
+    const failedShots = imageResults
       .filter((r) => !r.success)
       .map((r) => r.shotId);
-
-    const failedShots = [...imageFailedShotIds, ...reconcileFailedShotIds];
-    const successCount = convergentShotIds.length + divergedShotIds.length;
+    const successCount = succeededShotIds.length;
 
     await step.do('emit-complete', async () => {
       await emitRecastEvent({
@@ -505,14 +284,14 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     });
 
     logger.info(
-      `[RegenerateShotsWorkflow:cf] Completed: ${successCount} success, ${failedShots.length} failed, ${divergedShotIds.length} diverged, ${skippedDeletedShotIds.length} skipped-deleted`
+      `[RegenerateShotsWorkflow] Completed: ${successCount} success, ${failedShots.length} failed`
     );
 
     return {
       totalShots: snapshots.length,
       successCount,
       failedShots,
-      divergedShotIds,
+      divergedShotIds: [],
     };
   }
 

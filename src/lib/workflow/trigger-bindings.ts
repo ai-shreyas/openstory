@@ -32,8 +32,8 @@ const TRIGGER_TO_BINDING: Record<string, keyof CloudflareEnv> = {
   'library-location-sheet': 'LIBRARY_LOCATION_SHEET_WORKFLOW',
   'variant-image': 'SHOT_VARIANT_WORKFLOW',
   'upscale-variant': 'UPSCALE_SHOT_VARIANT_WORKFLOW',
-  'visual-prompt-scene': 'VISUAL_PROMPT_SCENE_WORKFLOW',
-  'motion-prompt-scene': 'MOTION_PROMPT_SCENE_WORKFLOW',
+  'frame-prompt': 'FRAME_PROMPT_WORKFLOW',
+  'motion-prompt': 'MOTION_PROMPT_WORKFLOW',
   'music-prompt': 'MUSIC_PROMPT_WORKFLOW',
   'recast-character': 'RECAST_CHARACTER_WORKFLOW',
   'location-matching': 'LOCATION_MATCHING_WORKFLOW',
@@ -41,15 +41,18 @@ const TRIGGER_TO_BINDING: Record<string, keyof CloudflareEnv> = {
   'talent-matching': 'TALENT_MATCHING_WORKFLOW',
   'character-sheet-from-bible': 'CHARACTER_BIBLE_WORKFLOW',
   'location-sheet-from-bible': 'LOCATION_BIBLE_WORKFLOW',
-  'visual-prompts': 'VISUAL_PROMPT_WORKFLOW',
-  'motion-prompts': 'MOTION_PROMPT_WORKFLOW',
+  'frame-prompts-batch': 'FRAME_PROMPT_BATCH_WORKFLOW',
+  'motion-prompts-batch': 'MOTION_PROMPT_BATCH_WORKFLOW',
   'motion-music-prompts': 'MOTION_MUSIC_PROMPTS_WORKFLOW',
   'regenerate-shots': 'REGENERATE_SHOTS_WORKFLOW',
+  'update-stale-shots': 'UPDATE_STALE_SHOTS_WORKFLOW',
   'recast-location': 'RECAST_LOCATION_WORKFLOW',
   'replace-element': 'REPLACE_ELEMENT_WORKFLOW',
   'scene-split': 'SCENE_SPLIT_WORKFLOW',
   storyboard: 'STORYBOARD_WORKFLOW',
   'analyze-script': 'ANALYZE_SCRIPT_WORKFLOW',
+  'sequence-export': 'SEQUENCE_EXPORT_WORKFLOW',
+  asset: 'ASSET_WORKFLOW',
 };
 
 export type CfTriggerResult = { workflowRunId: string };
@@ -90,19 +93,40 @@ export function getCfBindingForTriggerPath(
 }
 
 /**
+ * Extract the workflow (trigger) name from a stored run id. Two id shapes
+ * exist:
+ *
+ *   - Top-level runs (`buildInstanceId`): `${envSlug}_${workflowName}_${suffix}`
+ *     — the name is the second underscore-delimited segment.
+ *   - Child runs (`buildChildInstanceId`): the sanitized semantic child id,
+ *     `${workflowName}_${...}_r${hash}` (child ids are built as
+ *     `<trigger-key>:<...>` and `:` sanitizes to `_`) — the name is the FIRST
+ *     segment. Without this branch the reconciler treated every parent-spawned
+ *     child render as unresolvable and false-failed it mid-flight.
+ *
+ * Segment[1] is tried first so top-level ids can never be misread as child
+ * ids. Returns null when neither segment maps (legacy QStash ids, E2E mock
+ * ids).
+ */
+export function workflowNameFromRunId(runId: string): string | null {
+  const segments = runId.split('_');
+  for (const segment of [segments[1], segments[0]]) {
+    if (segment && segment in TRIGGER_TO_BINDING) return segment;
+  }
+  return null;
+}
+
+/**
  * Resolve the CF binding for a stored workflow run id, used by the
- * reconciler to query instance status. Run ids built by `buildInstanceId`
- * have the shape `${envSlug}_${workflowName}_${suffix}` — the workflow name
- * is the second underscore-delimited segment. Returns null for ids that don't
- * map to a known workflow (e.g. legacy QStash run ids), so callers can treat
- * them as unresolvable.
+ * reconciler to query instance status. Returns null for ids that don't map
+ * to a known workflow (see {@link workflowNameFromRunId}), so callers can
+ * treat them as unresolvable.
  */
 export function getCfBindingForRunId(
   runId: string,
   env: CloudflareEnv
 ): Workflow<unknown> | null {
-  const segments = runId.split('_');
-  const workflowName = segments[1];
+  const workflowName = workflowNameFromRunId(runId);
   if (!workflowName) return null;
   const bindingName = TRIGGER_TO_BINDING[workflowName];
   if (!bindingName) return null;

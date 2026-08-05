@@ -149,18 +149,22 @@ testWithUser.describe('Full Sequence Pipeline', () => {
         }
       });
 
-      // 1. Open the new-sequence page and wait for hydration.
+      // 1. Open the new-sequence page.
       await page.goto('/sequences/new');
-      await expect(
-        page.getByRole('grid', { name: 'Style selection' })
-      ).toBeVisible({ timeout: 15_000 });
 
-      // 2. Select a style by clicking the first one (also confirms hydration).
-      await page
+      // 2. Select the first style tile. Target the tile by its accessible
+      // name (`Select <name> style`) and wait for it to exist — the grid
+      // container renders immediately (before styles load) and its only
+      // button is then the "View all" browse trigger, which would open the
+      // style dialog instead of selecting.
+      // Waiting for a real tile also confirms the styles query resolved and
+      // React has hydrated.
+      const firstStyle = page
         .getByRole('grid', { name: 'Style selection' })
-        .getByRole('button')
-        .first()
-        .click();
+        .getByRole('button', { name: /^Select .* style$/ })
+        .first();
+      await expect(firstStyle).toBeVisible({ timeout: 15_000 });
+      await firstStyle.click();
 
       // 3. Type a short script — a 30-second makeup ad.
       const script = `
@@ -175,7 +179,8 @@ to camera.
 SCARLETT (V.O.)
 One shade. One summer.
 
-CLOSE ON LIPS — Scarlett swipes the colour, blots, smiles.
+CLOSE ON THE TUBE — the coral bullet twists up and catches the
+light. Scarlett smiles at her reflection, the colour already hers.
 
 EXT. BONDI BEACH PROMENADE - CONTINUOUS
 
@@ -252,6 +257,23 @@ SUPER:  CORAL.  OUT NOW.
         resolve(import.meta.dirname, '../fixtures/broadcast-mic.jpg')
       );
 
+      // 7b. Switch image generation to Grok Imagine (quality). Its content
+      // checker is far less likeness-strict than GPT Image 2's, which kept
+      // rejecting talent-referenced beauty shots during fixture recording
+      // (makeup on a referenced face = OpenAI's blocked likeness class).
+      await page.getByRole('button', { name: 'Generation settings' }).click();
+      await page.getByRole('button', { name: /^Image Models?:/ }).click();
+      await page
+        .getByRole('menuitemcheckbox', { name: 'Grok Imagine Image Quality' })
+        .click();
+      await page.keyboard.press('Escape'); // checkbox items keep the menu open
+      await expect(
+        page.getByRole('button', {
+          name: 'Image Models: Grok Imagine Image Quality',
+        })
+      ).toBeVisible();
+      await page.keyboard.press('Escape'); // close the settings popover
+
       // 8. Generate — should kick off the workflow chain and navigate.
       // Vision analysis (analyzeDraftElementFn) is the long pole here; it can
       // take ~15-20s when aimock falls back to upstream, so give it headroom.
@@ -269,6 +291,14 @@ SUPER:  CORAL.  OUT NOW.
         throw new Error(`Failed to extract sequence id from ${page.url()}`);
       }
       createdSequenceId = sequenceId;
+
+      // Progressive reveal (#1091): analysis lands on the forced script view —
+      // the canvas has nothing to show until the first shot preview arrives.
+      // Assert immediately after the redirect, before any preview can land
+      // and auto-reveal the canvas.
+      await expect(
+        page.getByRole('radio', { name: 'Show the script' })
+      ).toHaveAttribute('data-state', 'on');
 
       // 9. Wait for storyboard + shot images to land in the DB.
       //
@@ -292,14 +322,11 @@ SUPER:  CORAL.  OUT NOW.
         )
         .toBe(true);
 
-      // 10. Trigger motion generation, then wait for the scene-list footer
-      //     button to leave the DOM. The footer renders a single dynamic-
-      //     label button (`Writing motion prompts…` / `Composing music…` /
-      //     `Generating…` / `Generate {N} / {M} shot(s)`), gated by
-      //     `showButton = notStartedShots > 0 || isMotionInProgress`
-      //     (src/components/scenes/scene-list.tsx). Once motion + music are
-      //     fully done it unmounts — that's the most truthful "pipeline
-      //     finished" UX signal.
+      // 10. Trigger motion generation, then wait on the DB for every shot's
+      //     video + the sequence music to complete. The scene-list footer
+      //     unmounts as soon as shots flip to `generating` (progress moves
+      //     to MotionProgressBanner), so "button gone" is not a completion
+      //     signal — only a start signal (#1072).
       const motionButton = page
         .getByRole('button', { name: /Generate \d+ ?\/ ?\d+ shots?/i })
         .first();
@@ -307,54 +334,67 @@ SUPER:  CORAL.  OUT NOW.
       await expect(motionButton).toBeEnabled({ timeout: t(120_000) });
       await motionButton.click();
 
-      await expect(
-        page.getByRole('button', {
-          name: /Writing motion prompts|Composing music|Generating|Generate \d+ ?\/ ?\d+ shots?/i,
-        })
-      ).toHaveCount(0, { timeout: t(600_000) });
+      await expect
+        .poll(
+          async () => {
+            const shots = await getTestSequenceShots(sequenceId);
+            if (shots.length === 0) return false;
+            const videosDone = shots.every(
+              (f) => f.videoStatus === 'completed' && !!f.videoUrl
+            );
+            if (!videosDone) return false;
+            const status = await getTestSequenceStatus(sequenceId);
+            return status?.musicStatus === 'completed' && !!status.musicUrl;
+          },
+          { timeout: t(600_000), intervals: [2_000, 5_000, 10_000] }
+        )
+        .toBe(true);
 
       // 11. Per-scene playback: click through every scene-list-item and
       //     assert the active <video> in the ScenePlayer is decodable.
       //     The list item carries `data-testid="scene-list-item"` so we can
-      //     enumerate without relying on title text.
+      //     enumerate without relying on title text. Shots are nested under
+      //     scene-group headers after stream-time scene persistence (#1072).
       //
       //     The player only shows the scene's <video> on a video tab; the
       //     default "Variants" tab (the multi-model scene-review UX, #545)
       //     shows the still image instead — leaving the only <video> in the
       //     DOM the hidden next-scene prefetch (`<video preload="auto">`).
-      //     Select the Motion tab once (it persists across scene selection) so
+      //     Select the Video tab once (it persists across scene selection) so
       //     each scene's player renders its <video>; that player video is
       //     ordered before the prefetch in the DOM, so `.first()` resolves to
       //     it.
+      // Progressive reveal (#1091): the first preview auto-revealed the canvas
+      // (no explicit view in the URL), so by now the toggle is enabled AND the
+      // canvas is the active view — the playback checks below depend on it.
+      const canvasToggle = page.getByRole('radio', {
+        name: 'Show the canvas',
+      });
+      await expect(canvasToggle).toBeEnabled();
+      await expect(canvasToggle).toHaveAttribute('data-state', 'on');
+
       const sceneItems = page.locator('[data-testid="scene-list-item"]');
       const sceneCount = await sceneItems.count();
       expect(sceneCount, 'sequence has at least one scene').toBeGreaterThan(0);
       await sceneItems.first().click();
-      await page.getByRole('tab', { name: 'Motion' }).click();
+      await page.getByRole('tab', { name: 'Video' }).click();
       const playerVideo = page.locator('video').first();
       for (let i = 0; i < sceneCount; i++) {
         await sceneItems.nth(i).click();
         await expectPlayableMedia(playerVideo, `scene ${i + 1} video`);
       }
 
-      // 12. Music playback at /sequences/:id/music — the view renders a
-      //     native <audio controls src={musicUrl} preload="metadata"> once
-      //     `musicStatus === 'completed'` (src/components/music/music-view.tsx).
-      await page.goto(`/sequences/${sequenceId}/music`);
+      // 12. Music playback in the Scenes editor Music facet (#986).
+      await page.goto(`/sequences/${sequenceId}/scenes?facet=music`);
       await expectPlayableMedia(
         page.locator('audio').first(),
         'sequence music'
       );
 
-      // 13. Live playback at /sequences/:id/theatre — TheatreView now uses
-      //     the mediabunny SequencePlayer which renders to a <canvas>, not a
-      //     <video>. The PlayerControls (and therefore the Play button) only
-      //     mount once SequencePlayerEngine.prepare() resolves, which means
-      //     every scene video + the music URL decoded successfully via
-      //     mediabunny's UrlSource. A visible Play button is a strong signal
-      //     that the underlying media is healthy.
-      //     (src/components/theatre/sequence-player.tsx)
-      await page.goto(`/sequences/${sequenceId}/theatre`);
+      // 13. Whole-sequence playback in the Scenes canvas (#986) — nothing
+      //     selected uses SequencePlayer (mediabunny → <canvas>). Play only
+      //     mounts after prepare() resolves.
+      await page.goto(`/sequences/${sequenceId}/scenes`);
 
       // Wait for either the Play button (success) or the player error state.
       // A hanging prepare() (common with raw AI-generated motion clips during

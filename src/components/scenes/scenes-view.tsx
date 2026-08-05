@@ -1,34 +1,50 @@
 import { GenerationProgressBanner } from '@/components/generation/generation-progress-banner';
 import { MotionProgressBanner } from '@/components/generation/motion-progress-banner';
-import { ScenePlayer } from '@/components/motion/scene-player';
+import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
+import { DivergenceCompareDialog } from '@/components/scenes/divergence-compare-dialog';
 import { MobileSceneDrawer } from '@/components/scenes/mobile-scene-drawer';
-import { SceneList } from '@/components/scenes/scene-list';
+import { CanvasViewToggle } from '@/components/scenes/canvas-view-toggle';
+import { CopyScriptButton } from '@/components/scenes/copy-script-button';
+import { SceneCanvas } from '@/components/scenes/scene-canvas';
+import { SceneScriptDocument } from '@/components/scenes/scene-script-document';
 import type { BatchGenerateMotionArgs } from '@/components/scenes/scene-list';
+import { SceneList } from '@/components/scenes/scene-list';
+import { SceneModelBar } from '@/components/scenes/scene-model-bar';
 import {
   SceneScriptPrompts,
+  tabsForScope,
   type TabValue,
 } from '@/components/scenes/scene-script-prompts';
 import { FailureSummaryBanner } from '@/components/sequence/failure-summary-banner';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { batchGenerateMotionFn } from '@/functions/motion-functions';
+import { getDivergentVariantPromptDiffFn } from '@/functions/prompt-variants';
 import { smartRetryFn } from '@/functions/smart-retry';
+import { useActiveImageModel } from '@/hooks/use-active-image-model';
+import { useActiveVideoModel } from '@/hooks/use-active-video-model';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
+import { useFalBillingGate } from '@/hooks/use-billing-gate';
+import { useSceneSelection } from '@/hooks/use-scene-selection';
+import { useSequenceSegments } from '@/hooks/use-segments';
+import { useScenesBySequence } from '@/hooks/use-scenes';
+import {
+  shotIsStale,
+  useSceneShotStaleness,
+  useSequenceShotStaleness,
+} from '@/hooks/use-shot-staleness';
+import { errorMessage, isInsufficientCreditsError } from '@/lib/errors';
+import { sequenceKeys, useSequence } from '@/hooks/use-sequences';
 import {
   shotKeys,
   useDiscardVariant,
   useDivergentVariants,
-  useShotsBySequence,
   usePromoteVariantToPrimary,
+  useSequenceImageVariants,
+  useSequenceSelectedModels,
   useSequenceVideoVariants,
+  useShotsBySequence,
   useUndiscardVariant,
 } from '@/hooks/use-shots';
-import { useActiveImageModel } from '@/hooks/use-active-image-model';
-import { useActiveVideoModel } from '@/hooks/use-active-video-model';
-import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
-import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
-import { DivergenceCompareDialog } from '@/components/scenes/divergence-compare-dialog';
-import { getDivergentVariantPromptDiffFn } from '@/functions/prompt-variants';
-import { sequenceKeys, useSequence } from '@/hooks/use-sequences';
 import { useStyle } from '@/hooks/use-styles';
 import {
   DEFAULT_IMAGE_MODEL,
@@ -39,16 +55,27 @@ import {
   safeAudioModel,
   safeImageToVideoModel,
   safeTextToImageModel,
+  type ImageToVideoModel,
+  type TextToImageModel,
 } from '@/lib/ai/models';
 import {
-  DEFAULT_ASPECT_RATIO,
-  type AspectRatio,
-} from '@/lib/constants/aspect-ratios';
+  selectionScope,
+  selectionShots,
+  type SceneFacet,
+  type ScenesSearch,
+} from '@/lib/scenes/scene-selection';
+import { formatShotSpan } from '@/lib/scenes/scene-segments';
+import {
+  resolveImageModel,
+  resolveVideoModel,
+} from '@/lib/ai/resolve-asset-models';
+import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
+import type { FrameVariant, SceneRow, ShotVariant } from '@/lib/db/schema';
+import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
-import { getSequenceImageVariantsFn } from '@/functions/shots';
-import type { Shot, ShotVariant } from '@/lib/db/schema';
+import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -56,13 +83,66 @@ import { useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
+/**
+ * Minimal coverage row shared by video (`shot_variants`) and image
+ * (`frame_variants`, #989) variants. Image variants have no `divergedAt`
+ * (divergence is retired for images), so it's optional and treated as never
+ * divergent.
+ */
+type SceneModelVariant = {
+  model: string;
+  // FrameVariant's wider union (adds 'cancelled', #1085); shot-variant rows
+  // assign into it unchanged.
+  status: FrameVariant['status'];
+  url: string | null;
+  discardedAt: Date | null;
+  divergedAt?: Date | null;
+};
+
+/**
+ * Per-model generation status across a scene's shots (#909) — feeds the scene
+ * bar's ✓/⟳/! dropdown markers. The model the selected shot currently resolves
+ * to (#1066) is marked `set`; completed wins over in-flight/failed.
+ * Divergent/discarded alternates ignored.
+ */
+function buildSceneModelStatuses<V extends SceneModelVariant>(
+  variantsByShot: Map<string, V[]>,
+  shotIds: ReadonlySet<string>,
+  setModel: string
+): Map<string, ModelGenerationStatus> {
+  const completed = new Set<string>();
+  const generating = new Set<string>();
+  const failed = new Set<string>();
+  for (const shotId of shotIds) {
+    for (const v of variantsByShot.get(shotId) ?? []) {
+      if ((v.divergedAt ?? null) !== null || v.discardedAt !== null) continue;
+      if (v.status === 'completed' && v.url) completed.add(v.model);
+      else if (v.status === 'generating' || v.status === 'pending')
+        generating.add(v.model);
+      else if (v.status === 'failed') failed.add(v.model);
+    }
+  }
+  const map = new Map<string, ModelGenerationStatus>();
+  for (const m of failed) map.set(m, 'failed');
+  for (const m of generating) map.set(m, 'generating');
+  for (const m of completed) map.set(m, 'completed');
+  map.set(setModel, 'set');
+  return map;
+}
+
 type ScenesViewProps = {
   sequenceId: string;
+  search?: ScenesSearch;
 };
+
+/** Facet tokens ARE tab values (#986); no facet in the URL → default tab. */
+function facetToTab(facet?: SceneFacet): TabValue {
+  return facet ?? 'cast';
+}
 
 const CompareWithPromptDiff: React.FC<{
   sequenceId: string;
-  shot: Shot;
+  shot: ShotWithImage;
   variant: ShotVariant;
   onClose: () => void;
   onPromote: () => void;
@@ -104,15 +184,6 @@ const CompareWithPromptDiff: React.FC<{
   );
 };
 
-// Full class names required for Tailwind JIT to detect at build time
-// Split into max-width (for the wrapper, enables centering) and max-height (for the player div)
-const PLAYER_MAX_W_BY_RATIO: Record<AspectRatio, string> = {
-  '16:9': 'max-w-[calc(50vh*1.7777777777777777)]',
-  '9:16': 'max-w-[calc(50vh*0.5625)]',
-  '1:1': 'max-w-[50vh]',
-};
-const PLAYER_MAX_H = 'max-h-[50vh]';
-
 type RegenerationType = 'image' | 'motion' | 'scene-variants';
 
 function addToSet(prev: Set<string>, id: string): Set<string> {
@@ -141,21 +212,37 @@ function isTerminalStatus(status: string | null): boolean {
   return status === 'completed' || status === 'failed';
 }
 
-function isInsufficientCreditsError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message.includes('INSUFFICIENT_CREDITS') ||
-      error.message.includes('Insufficient credits'))
-  );
-}
-
-export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
+export const ScenesView: React.FC<ScenesViewProps> = ({
+  sequenceId,
+  search = {},
+}) => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const posthog = usePostHog();
 
-  const [selectedShotId, setSelectedShotId] = useState<string | undefined>();
-  const [selectedTab, setSelectedTab] = useState<TabValue>('scene-variants');
+  const { showGate: showBillingGate } = useFalBillingGate();
+
+  const {
+    selection,
+    handleSelectScene,
+    handleFocusScene,
+    handleSelectShot,
+    handleClearSelection,
+    handleAscendSelection,
+    setFacet,
+    view,
+    setView,
+  } = useSceneSelection({ search, sequenceId });
+
+  const [selectedTab, setSelectedTab] = useState<TabValue>(() =>
+    facetToTab(search.facet)
+  );
+
+  useEffect(() => {
+    if (search.facet) {
+      setSelectedTab(facetToTab(search.facet));
+    }
+  }, [search.facet]);
 
   const [regeneratingImages, setRegeneratingImages] = useState<Set<string>>(
     () => new Set()
@@ -167,16 +254,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     Set<string>
   >(() => new Set());
 
-  const [imageModelOverride, setImageModelOverride] = useState<string | null>(
-    null
-  );
-
-  // Per-scene video-model preview (#545) — the motion mirror of
-  // imageModelOverride. Transient: resets on shot switch.
-  const [videoModelOverride, setVideoModelOverride] = useState<string | null>(
-    null
-  );
-
   // Poll sequence while a motion batch is in flight so per-shot statuses stay
   // fresh. The refetchInterval fn reads from the query cache each tick to
   // avoid a circular dependency between sequence state and the poll condition.
@@ -184,7 +261,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     refetchInterval: (query) => {
       const seq = query.state.data;
       if (!seq) return false;
-      const cachedShots = queryClient.getQueryData<Shot[]>(
+      const cachedShots = queryClient.getQueryData<ShotWithImage[]>(
         shotKeys.list(sequenceId)
       );
       return cachedShots?.some((f) => f.videoStatus === 'generating')
@@ -196,10 +273,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
   const isProcessing = sequence?.status === 'processing';
   const { data: style } = useStyle(sequence?.styleId ?? '');
   const styleCategory = style?.category ?? undefined;
-  const sequenceMotionModel = safeImageToVideoModel(
-    sequence?.videoModel,
-    DEFAULT_VIDEO_MODEL
-  );
   const sequenceMusicModel = safeAudioModel(
     sequence?.musicModel,
     DEFAULT_MUSIC_MODEL
@@ -237,18 +310,91 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
 
   // Fetch shots — only poll when processing AND realtime has failed.
   // Otherwise realtime events keep the cache fresh via updateQueryCacheFromEvent.
-  const { data: shots } = useShotsBySequence(
+  const { data: shots, error: shotsError } = useShotsBySequence(
     sequenceId,
     shouldPoll ? { refetchInterval: 2000 } : undefined
   );
 
-  // Fetch image variants for this sequence
-  const { data: imageVariants } = useQuery<ShotVariant[]>({
-    queryKey: ['sequence-image-variants', sequenceId],
-    queryFn: () => getSequenceImageVariantsFn({ data: { sequenceId } }),
-    staleTime: 30_000,
-    enabled: !!sequenceId,
-  });
+  // Progressive reveal (#1091): while the script is being split the canvas has
+  // nothing to show, so the Script view is forced and the Canvas toggle stays
+  // disabled. When the first shot preview lands the override drops away and —
+  // unless the user explicitly chose the script view (URL `view=script`) —
+  // the derived view falls back to the canvas default, auto-revealing the
+  // first images as they arrive. No effect, no state: pure derivation.
+  const canvasReady =
+    !isProcessing ||
+    (shots?.some((s) => s.thumbnailUrl || s.previewThumbnailUrl) ?? false);
+  const effectiveView = canvasReady ? view : 'script';
+
+  // Escape progressive zoom-out (#986):
+  // 1) blur the focused editing field (exit typing)
+  // 2) else yield to an open dialog/menu/popover
+  // 3) else walk selection up a level: shot → scene → sequence
+  // Capture phase so we still see the key when a focused control stops bubbling.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.repeat) return;
+
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        const isEditingField =
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          target.isContentEditable;
+
+        if (isEditingField) {
+          // Leave the field first; a second Esc ascends selection.
+          e.preventDefault();
+          e.stopPropagation();
+          target.blur();
+          return;
+        }
+
+        // Only yield to overlays that are currently open — a closed dialog
+        // still in the tree (or a focused control inside a non-modal panel)
+        // must not swallow Esc.
+        if (
+          target.closest(
+            [
+              '[role="dialog"][data-state="open"]',
+              '[role="alertdialog"][data-state="open"]',
+              '[role="menu"][data-state="open"]',
+              '[role="listbox"][data-state="open"]',
+              '[data-radix-popper-content-wrapper] [data-state="open"]',
+              '[data-state="open"][role="combobox"]',
+            ].join(', ')
+          )
+        ) {
+          return;
+        }
+      }
+
+      if (
+        document.querySelector(
+          [
+            '[role="dialog"][data-state="open"]',
+            '[role="alertdialog"][data-state="open"]',
+            '[data-slot="dialog-content"][data-state="open"]',
+            '[data-slot="sheet-content"][data-state="open"]',
+          ].join(', ')
+        )
+      ) {
+        return;
+      }
+
+      if (handleAscendSelection(shots ?? [])) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [handleAscendSelection, shots]);
+
+  // Fetch image variants for this sequence (frame_variants kind:'model', #989)
+  const { data: imageVariants } = useSequenceImageVariants(sequenceId);
 
   // Video variants + viewer-local active video model (#545). When the viewer
   // pins a model in the header dropdown, the player resolves every shot's
@@ -256,6 +402,18 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
   // (legacy) video.
   const { data: videoVariants } = useSequenceVideoVariants(sequenceId);
   const { activeVideoModel } = useActiveVideoModel(sequenceId);
+
+  // Render segments (#986/#990) — group the shot strip into per-video segments
+  // and drive the segment-aware Video tab. Poll while motion is in flight so a
+  // freshly-rendered segment's version + staleness land without a manual reload.
+  const anyVideoGenerating = useMemo(
+    () => shots?.some((f) => f.videoStatus === 'generating') ?? false,
+    [shots]
+  );
+  const { data: segments, error: segmentsError } = useSequenceSegments(
+    sequenceId,
+    anyVideoGenerating ? { refetchInterval: 2000 } : undefined
+  );
 
   const videoVariantsByShot = useMemo(() => {
     const map = new Map<string, ShotVariant[]>();
@@ -273,11 +431,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
   // model's image for each shot (falling back to the legacy thumbnail when the
   // model has no completed image for a shot).
   const { activeImageModel } = useActiveImageModel(sequenceId);
+  // Image variants are frame_variants now; each carries its owning `shotId`
+  // (frame ids ≠ shot ids, #989), so key the map by shot id. The query already
+  // returns only kind:'model', non-discarded rows.
   const imageVariantsByShot = useMemo(() => {
-    const map = new Map<string, ShotVariant[]>();
+    const map = new Map<string, FrameVariant[]>();
     if (!imageVariants) return map;
     for (const v of imageVariants) {
-      if (v.variantType !== 'image') continue;
       const list = map.get(v.shotId) ?? [];
       list.push(v);
       map.set(v.shotId, list);
@@ -301,7 +461,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
         ?.some(
           (v) =>
             v.model === activeImageModel &&
-            v.divergedAt === null &&
             v.discardedAt === null &&
             v.status === 'completed' &&
             v.url
@@ -338,8 +497,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
           {
             onError: (error) => {
               toast.error('Failed to restore alternate', {
-                description:
-                  error instanceof Error ? error.message : 'Unknown error',
+                description: errorMessage(error),
               });
             },
           }
@@ -358,8 +516,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
           },
           onError: (error) => {
             toast.error('Failed to discard alternate', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -391,8 +548,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
           },
           onError: (error) => {
             toast.error('Failed to promote alternate', {
-              description:
-                error instanceof Error ? error.message : 'Unknown error',
+              description: errorMessage(error),
             });
           },
         }
@@ -401,10 +557,272 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     [sequenceId, promoteVariant]
   );
 
-  const curSelectedShotId = selectedShotId || shots?.[0]?.id;
+  const curSelectedShotId = selection.shotId;
   const selectedShot = useMemo(
-    () => shots?.find((shot) => shot.id === curSelectedShotId),
+    () =>
+      curSelectedShotId
+        ? shots?.find((shot) => shot.id === curSelectedShotId)
+        : undefined,
     [shots, curSelectedShotId]
+  );
+
+  const scope = selectionScope(selection);
+
+  // The render segment (#986) the selected shot belongs to, plus a span label
+  // built from the covered shots' 1-based numbers — feeds the Video tab's
+  // segment panel. Undefined until the shot is rendered into a segment.
+  const selectedSegment = useMemo(
+    () =>
+      curSelectedShotId
+        ? segments?.find((s) => s.shotIds.includes(curSelectedShotId))
+        : undefined,
+    [segments, curSelectedShotId]
+  );
+  const selectedSegmentSpanLabel = useMemo(() => {
+    if (!selectedSegment || !shots) return undefined;
+    const numberById = new Map(
+      shots.map((f) => [f.id, f.shotNumber ?? f.orderIndex + 1])
+    );
+    const numbers = selectedSegment.shotIds
+      .map((id) => numberById.get(id))
+      .filter((n): n is number => n != null);
+    return formatShotSpan(numbers);
+  }, [selectedSegment, shots]);
+
+  // Tabs are level-aware (#986). `selectedTab` holds the user's last pick; when
+  // the scope changes so that pick is no longer offered, fall back to the first
+  // tab for the new scope without mutating state — every downstream consumer
+  // reads `effectiveTab` so the panel, canvas, and previews stay in agreement.
+  const visibleTabs = useMemo(() => tabsForScope(scope), [scope]);
+  const effectiveTab = useMemo(
+    () =>
+      visibleTabs.some((t) => t.value === selectedTab)
+        ? selectedTab
+        : (visibleTabs[0]?.value ?? 'cast'),
+    [visibleTabs, selectedTab]
+  );
+
+  // Shot ids in scope; `null` = whole sequence, so facets show the full
+  // library. Facet MEMBERSHIP is resolved server-side (see use-scene-facets) —
+  // this only says which shots are selected.
+  const facetShotIds = useMemo(() => {
+    if (scope === 'sequence') return null;
+    return (shots ? selectionShots(selection, shots) : []).map((s) => s.id);
+  }, [scope, selection, shots]);
+
+  // Scenes group the shots; they carry no model of their own (#1066) — model
+  // identity lives on the selected frame_variants / video_variants row.
+  const { data: scenes, error: scenesError } = useScenesBySequence(sequenceId);
+  const scenesById = useMemo(() => {
+    const map = new Map<string, SceneRow>();
+    for (const scene of scenes ?? []) map.set(scene.id, scene);
+    return map;
+  }, [scenes]);
+  // At shot scope the selection is that shot's own scene; at scene scope it can
+  // be several (#986).
+  const selectedScenes = useMemo(() => {
+    if (scope === 'shot' && selectedShot?.sceneId) {
+      const scene = scenesById.get(selectedShot.sceneId);
+      return scene ? [scene] : [];
+    }
+    if (scope === 'scenes') {
+      return selection.sceneIds
+        .map((id) => scenesById.get(id))
+        .filter((s): s is SceneRow => s != null);
+    }
+    return [];
+  }, [scope, selectedShot, selection.sceneIds, scenesById]);
+
+  // The scene the Script facet targets: exactly one, or none. At shot scope
+  // that's the shot's own scene; at scene scope the single selected scene. A
+  // multi-scene selection leaves it undefined so the facet reads rather than
+  // silently writing to whichever scene happened to be first.
+  const scriptScene =
+    selectedScenes.length === 1 ? selectedScenes[0] : undefined;
+  // Canonical text is the SELECTED script version, which `getShotsFn` already
+  // overlays onto each shot's metadata (#1030). Falls back to the scene row's
+  // analysis-time script for a scene whose shots haven't loaded yet.
+  const scriptText = useMemo(() => {
+    if (!scriptScene) return undefined;
+    const sceneShot = shots?.find((s) => s.sceneId === scriptScene.id);
+    return (
+      sceneShot?.metadata?.originalScript.extract ??
+      scriptScene.originalScript?.extract
+    );
+  }, [scriptScene, shots]);
+
+  // Batched staleness for the in-focus scene's shots (#1077): feeds the scene
+  // panel's stale-shot summary, the left-rail dots and the canvas chip, and
+  // primes the per-shot staleness cache. `scriptScene` is the shot's own scene
+  // at shot scope, so this covers both scopes.
+  const { data: sceneStaleness, isError: sceneStalenessFailed } =
+    useSceneShotStaleness({
+      sequenceId,
+      sceneId: scriptScene?.id,
+    });
+  // Sequence scope has no focused scene — its summary covers every shot.
+  // Gated so the whole-sequence hash recompute only runs while that panel
+  // is actually showing.
+  const { data: sequenceStaleness, isError: sequenceStalenessFailed } =
+    useSequenceShotStaleness({
+      sequenceId,
+      enabled: scope === 'sequence',
+    });
+  const scriptSceneShots = useMemo(
+    () =>
+      scriptScene && shots
+        ? shots.filter((s) => s.sceneId === scriptScene.id)
+        : undefined,
+    [scriptScene, shots]
+  );
+  const scopeStaleness =
+    scope === 'sequence' ? sequenceStaleness : sceneStaleness;
+  // A failed staleness check must not render as "everything is up to date":
+  // with no data every downstream consumer draws a confidently clean UI (no
+  // dots, no chips, no summary) off the back of a request that errored.
+  const scopeStalenessFailed =
+    scope === 'sequence' ? sequenceStalenessFailed : sceneStalenessFailed;
+  const scopeShots = scope === 'sequence' ? shots : scriptSceneShots;
+  const staleShotIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const [shotId, staleness] of Object.entries(scopeStaleness ?? {})) {
+      if (shotIsStale(staleness)) set.add(shotId);
+    }
+    return set;
+  }, [scopeStaleness]);
+
+  // Model identity lives on the version that produced the asset (#1066), so the
+  // tabs target whatever the selected shot's selected image/video version was
+  // rendered with. A pick in the dropdown is a per-request override for the
+  // NEXT generation — it becomes durable once that version is selected, so it's
+  // held in view state rather than written anywhere.
+  //
+  // A pick therefore has to EXPIRE, or it outranks fresher server truth forever
+  // (it sits at the `explicit` tier, above everything). It carries the model it
+  // was made against, and stops applying as soon as that changes — which covers
+  // the pick's own generation completing, a "Set", a sequence-wide Set, and a
+  // teammate's change alike. Derived during render, so no effect syncs state.
+  // A FAILED generation doesn't move the selection, so the pick survives for a
+  // retry, which is the behaviour you want.
+  const { data: selectedModels } = useSequenceSelectedModels(sequenceId);
+  const [imageModelPick, setImageModelPick] = useState<{
+    shotId: string;
+    model: TextToImageModel;
+    basedOn: string | null;
+  } | null>(null);
+  const [videoModelPick, setVideoModelPick] = useState<{
+    shotId: string;
+    model: ImageToVideoModel;
+    basedOn: string | null;
+  } | null>(null);
+
+  const selectedImageModelForShot = curSelectedShotId
+    ? (selectedModels?.imageModelByShot[curSelectedShotId] ?? null)
+    : null;
+  const selectedVideoModelForShot = curSelectedShotId
+    ? (selectedModels?.videoModelByShot[curSelectedShotId] ?? null)
+    : null;
+
+  // A pick applies only to its own shot, and only while the model it was made
+  // against still stands.
+  const activeImagePick =
+    imageModelPick &&
+    imageModelPick.shotId === curSelectedShotId &&
+    imageModelPick.basedOn === selectedImageModelForShot
+      ? imageModelPick.model
+      : null;
+  const activeVideoPick =
+    videoModelPick &&
+    videoModelPick.shotId === curSelectedShotId &&
+    videoModelPick.basedOn === selectedVideoModelForShot
+      ? videoModelPick.model
+      : null;
+
+  const resolvedImageModel = resolveImageModel({
+    explicit: activeImagePick,
+    // Show the model a retry would actually run for a failed shot, so the
+    // dropdown and the server agree (#1066).
+    lastFailedAttemptModel: curSelectedShotId
+      ? selectedModels?.failedImageModelByShot[curSelectedShotId]
+      : null,
+    selectedVersionModel: selectedImageModelForShot,
+    sequenceModel: sequence?.imageModel,
+  });
+  const resolvedVideoModel = resolveVideoModel({
+    explicit: activeVideoPick,
+    lastFailedAttemptModel: curSelectedShotId
+      ? selectedModels?.failedVideoModelByShot[curSelectedShotId]
+      : null,
+    selectedVersionModel: selectedVideoModelForShot,
+    sequenceModel: sequence?.videoModel,
+  });
+
+  // Per-model coverage for the selected scene's shots — feeds the scene bar's
+  // Look/Motion dropdown markers (which models have generated, and how many).
+  const sceneShotIds = useMemo(() => {
+    const set = new Set<string>();
+    if (!shots) return set;
+    const targetSceneIds = new Set(selectedScenes.map((s) => s.id as string));
+    if (targetSceneIds.size === 0) {
+      if (scope === 'sequence') {
+        for (const s of shots) set.add(s.id);
+      }
+      return set;
+    }
+    for (const s of shots) {
+      if (s.sceneId && targetSceneIds.has(s.sceneId)) set.add(s.id);
+    }
+    return set;
+  }, [selectedScenes, shots, scope]);
+  const sceneImageModelStatuses = useMemo(
+    () =>
+      buildSceneModelStatuses(
+        imageVariantsByShot,
+        sceneShotIds,
+        resolvedImageModel
+      ),
+    [imageVariantsByShot, sceneShotIds, resolvedImageModel]
+  );
+  const sceneVideoModelStatuses = useMemo(
+    () =>
+      buildSceneModelStatuses(
+        videoVariantsByShot,
+        sceneShotIds,
+        resolvedVideoModel
+      ),
+    [videoVariantsByShot, sceneShotIds, resolvedVideoModel]
+  );
+
+  const handleImageModelChange = useCallback(
+    (model: TextToImageModel) => {
+      if (!curSelectedShotId) return;
+      setImageModelPick({
+        shotId: curSelectedShotId,
+        model,
+        basedOn: selectedImageModelForShot,
+      });
+    },
+    [curSelectedShotId, selectedImageModelForShot]
+  );
+  const handleVideoModelChange = useCallback(
+    (model: ImageToVideoModel) => {
+      if (!curSelectedShotId) return;
+      setVideoModelPick({
+        shotId: curSelectedShotId,
+        model,
+        basedOn: selectedVideoModelForShot,
+      });
+    },
+    [curSelectedShotId, selectedVideoModelForShot]
+  );
+
+  const resolvedSequenceImageModel = safeTextToImageModel(
+    sequence?.imageModel,
+    DEFAULT_IMAGE_MODEL
+  );
+  const resolvedSequenceVideoModel = safeImageToVideoModel(
+    sequence?.videoModel,
+    DEFAULT_VIDEO_MODEL
   );
 
   // In-flight retry state (#882) for the selected shot. Image retry matters
@@ -416,46 +834,42 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     return r?.image ?? r?.video;
   }, [generationState.shotRetries, curSelectedShotId]);
 
-  // Filter variants for the currently selected shot
+  // Filter variants for the currently selected shot (by owning shotId — frame
+  // ids ≠ shot ids, #989).
   const selectedShotVariants = useMemo(() => {
     if (!imageVariants || !curSelectedShotId) return undefined;
-    return imageVariants.filter(
-      (v) => v.shotId === curSelectedShotId && v.variantType === 'image'
-    );
+    return imageVariants.filter((v) => v.shotId === curSelectedShotId);
   }, [imageVariants, curSelectedShotId]);
 
-  // Reset model overrides when switching shots
-  useEffect(() => {
-    setImageModelOverride(null);
-    setVideoModelOverride(null);
-  }, [curSelectedShotId]);
+  // The image-prompt tab targets the shot's resolved look model (#1066); its
+  // variant + Set/Generate state track that model. The header pin (#547) stays
+  // a viewer-local *display* concern, handled in the player remap below.
+  const effectiveImageModel = resolvedImageModel;
 
-  // Derive variant preview state from model override + variants. The
-  // sequence-level header pin (#547) sits below an explicit per-scene override
-  // but above the shot's own model, so the previewed variant + Set/Generate
-  // state track whatever the header switched to.
-  const effectiveImageModel =
-    imageModelOverride ??
-    activeImageModel ??
-    safeTextToImageModel(selectedShot?.imageModel, DEFAULT_IMAGE_MODEL);
-
+  // Newest-first match for the tab model. `.find` on oldest-first order used to
+  // return the EARLIEST version, so "Set Image" appeared whenever the latest
+  // (selected) still didn't match v1's url — the opposite of what setImage
+  // actually applies (latest completed). Prefer an in-flight row so Regenerate
+  // shows Generating… mid-roll; else the latest completed (matches
+  // `setImageFromVariantFn`).
   const variantForSelectedModel = useMemo(() => {
     if (!selectedShotVariants) return undefined;
-    return selectedShotVariants.find((v) => v.model === effectiveImageModel);
+    const forModel = selectedShotVariants.filter(
+      (v) => v.model === effectiveImageModel
+    );
+    if (forModel.length === 0) return undefined;
+    const newestFirst = [...forModel].reverse();
+    return (
+      newestFirst.find((v) => v.status === 'generating') ??
+      newestFirst.find((v) => v.status === 'completed' && v.url) ??
+      newestFirst[0]
+    );
   }, [selectedShotVariants, effectiveImageModel]);
 
-  // Video equivalent (#545): the selected scene's video variant for the
-  // effective video model (override → shot's own model). Excludes divergent /
+  // Motion mirror: the shot's resolved video model (#1066) drives the
+  // motion-prompt tab's variant + Set/Generate state. Excludes divergent /
   // discarded alternates so only the primary per-model row is matched.
-  // `null` = unknown: a never-generated shot has no recorded `motionModel`, so
-  // we surface no model rather than silently asserting DEFAULT_VIDEO_MODEL
-  // (which would attribute a model the scene was never generated with).
-  const effectiveVideoModel =
-    videoModelOverride ??
-    activeVideoModel ??
-    (selectedShot?.motionModel
-      ? safeImageToVideoModel(selectedShot.motionModel, DEFAULT_VIDEO_MODEL)
-      : null);
+  const effectiveVideoModel = resolvedVideoModel;
 
   const videoVariantForSelectedModel = useMemo(() => {
     if (!curSelectedShotId) return undefined;
@@ -469,87 +883,40 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
       );
   }, [videoVariantsByShot, curSelectedShotId, effectiveVideoModel]);
 
-  // Per-model generation status for the selected scene (#545) — feeds the
-  // ✓/⟳/! markers in the image + video model dropdowns. Primary rows only
-  // (divergent/discarded alternates are excluded).
-  // The "set" model is the one whose variant is the shot's live primary
-  // (url match), falling back to the shot's recorded model for legacy shots
-  // with no variant row. It gets the distinct ✓-in-circle marker; other
-  // completed models show a plain ✓ (selectable, then "Set" to promote).
-  const imageModelStatuses = useMemo(() => {
-    const map = new Map<string, ModelGenerationStatus>();
-    const variants = (selectedShotVariants ?? []).filter(
-      (v) => v.divergedAt === null && v.discardedAt === null
-    );
-    const primaryUrl = selectedShot?.thumbnailUrl ?? null;
-    const setModel = primaryUrl
-      ? (variants.find((v) => v.url === primaryUrl)?.model ??
-        selectedShot?.imageModel ??
-        null)
-      : null;
-    for (const v of variants) {
-      map.set(v.model, v.model === setModel ? 'set' : v.status);
-    }
-    if (setModel && !map.has(setModel)) map.set(setModel, 'set');
-    return map;
-  }, [
-    selectedShotVariants,
-    selectedShot?.thumbnailUrl,
-    selectedShot?.imageModel,
-  ]);
-
-  const videoModelStatuses = useMemo(() => {
-    const map = new Map<string, ModelGenerationStatus>();
-    if (!curSelectedShotId) return map;
-    const variants = (videoVariantsByShot.get(curSelectedShotId) ?? []).filter(
-      (v) => v.divergedAt === null && v.discardedAt === null
-    );
-    const primaryUrl = selectedShot?.videoUrl ?? null;
-    const setModel = primaryUrl
-      ? (variants.find((v) => v.url === primaryUrl)?.model ??
-        selectedShot?.motionModel ??
-        null)
-      : null;
-    for (const v of variants) {
-      map.set(v.model, v.model === setModel ? 'set' : v.status);
-    }
-    if (setModel && !map.has(setModel)) map.set(setModel, 'set');
-    return map;
-  }, [
-    videoVariantsByShot,
-    curSelectedShotId,
-    selectedShot?.videoUrl,
-    selectedShot?.motionModel,
-  ]);
-
+  // Canvas badges for the image/motion tabs. The model dropdown is a pick for
+  // the *next* generation (#1066) — do NOT swap the canvas to another model's
+  // still/clip while browsing models. That showed non-current media (and often
+  // looked like the wrong model) and fought the "applies to the next
+  // generation" copy. Set Image / Set Video in the inspector still repoint
+  // selection when the user opts in.
   const { previewVariantUrl, previewVariantVideoUrl, playerBadgeMessage } =
     useMemo(() => {
       const none = {
-        previewVariantUrl: null,
-        previewVariantVideoUrl: null,
-        playerBadgeMessage: null,
+        previewVariantUrl: null as string | null,
+        previewVariantVideoUrl: null as string | null,
+        playerBadgeMessage: null as string | null,
       };
       if (!selectedShot) return none;
 
-      // Image preview (image-prompt tab)
-      if (selectedTab === 'image-prompt') {
-        if (
-          variantForSelectedModel?.status === 'completed' &&
-          variantForSelectedModel.url &&
-          variantForSelectedModel.url !== selectedShot.thumbnailUrl
-        ) {
-          return {
-            ...none,
-            previewVariantUrl: variantForSelectedModel.url,
-            playerBadgeMessage: 'Click Set Image to use',
-          };
-        }
-        const shotImageModel = safeTextToImageModel(
+      if (effectiveTab === 'image-prompt') {
+        const currentImageModel = safeTextToImageModel(
           selectedShot.imageModel,
           DEFAULT_IMAGE_MODEL
         );
+        // Same rule as the inspector Set Image button: only when the dropdown
+        // model is not the one that produced the current primary still.
         if (
-          effectiveImageModel !== shotImageModel &&
+          variantForSelectedModel?.status === 'completed' &&
+          variantForSelectedModel.url &&
+          effectiveImageModel !== currentImageModel
+        ) {
+          return {
+            ...none,
+            playerBadgeMessage: 'Click Set Image to use this model',
+          };
+        }
+        if (
+          effectiveImageModel !== currentImageModel &&
           !variantForSelectedModel
         ) {
           return {
@@ -560,29 +927,23 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
         return none;
       }
 
-      // Video preview (motion-prompt tab) — mirror of the image flow (#545)
-      if (selectedTab === 'motion-prompt') {
-        if (
-          videoVariantForSelectedModel?.status === 'completed' &&
-          videoVariantForSelectedModel.url &&
-          videoVariantForSelectedModel.url !== selectedShot.videoUrl
-        ) {
-          return {
-            ...none,
-            previewVariantVideoUrl: videoVariantForSelectedModel.url,
-            playerBadgeMessage: 'Click Set Video to use',
-          };
-        }
-        const shotVideoModel = safeImageToVideoModel(
+      if (effectiveTab === 'motion-prompt') {
+        const currentVideoModel = safeImageToVideoModel(
           selectedShot.motionModel,
           DEFAULT_VIDEO_MODEL
         );
-        // Only prompt when a specific model is picked (effectiveVideoModel) and
-        // differs from the shot's current one with no variant yet. A null
-        // (unknown) model means there's nothing specific to generate here.
         if (
-          effectiveVideoModel &&
-          effectiveVideoModel !== shotVideoModel &&
+          videoVariantForSelectedModel?.status === 'completed' &&
+          videoVariantForSelectedModel.url &&
+          effectiveVideoModel !== currentVideoModel
+        ) {
+          return {
+            ...none,
+            playerBadgeMessage: 'Click Set Video to use this model',
+          };
+        }
+        if (
+          effectiveVideoModel !== currentVideoModel &&
           !videoVariantForSelectedModel
         ) {
           return {
@@ -595,7 +956,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
 
       return none;
     }, [
-      selectedTab,
+      effectiveTab,
       selectedShot,
       effectiveImageModel,
       variantForSelectedModel,
@@ -614,7 +975,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     // on the image-prompt tab, where the per-shot preview overlay + prompt
     // panel govern the displayed image (avoids desyncing them from the header).
     const pinImage =
-      activeImageModel && imageVariants && selectedTab !== 'image-prompt';
+      activeImageModel && imageVariants && effectiveTab !== 'image-prompt';
     const pinVideo = activeVideoModel && videoVariants;
     if (!pinImage && !pinVideo) return shots;
     return shots.map((f) => {
@@ -628,7 +989,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
           ?.find(
             (v) =>
               v.model === activeImageModel &&
-              v.divergedAt === null &&
               v.discardedAt === null &&
               v.status === 'completed' &&
               v.url
@@ -658,7 +1018,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
     });
   }, [
     shots,
-    selectedTab,
+    effectiveTab,
     activeImageModel,
     imageVariants,
     imageVariantsByShot,
@@ -758,33 +1118,24 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
       void queryClient.invalidateQueries({ queryKey: ['shots', sequenceId] });
     } catch (error) {
       if (isInsufficientCreditsError(error)) {
-        toast.error('Insufficient credits', {
-          description: 'Add credits to retry.',
-          action: {
-            label: 'Add Credits',
-            onClick: () => {
-              window.location.href = '/credits';
-            },
-          },
-        });
+        showBillingGate();
         void queryClient.invalidateQueries({
           queryKey: BILLING_BALANCE_KEY,
         });
       } else {
         toast.error('Failed to retry', {
-          description: error instanceof Error ? error.message : 'Unknown error',
+          description: errorMessage(error),
         });
       }
     } finally {
       setIsRetrying(false);
     }
-  }, [sequenceId, queryClient]);
+  }, [sequenceId, queryClient, showBillingGate]);
 
   // Handler for batch motion generation (server determines eligible shots)
   const handleBatchMotionGeneration = useCallback(
     async ({
       includeMusic,
-      motionModel,
       musicModel,
       generateAudio,
     }: BatchGenerateMotionArgs) => {
@@ -803,12 +1154,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
       // derived banner state shows the banner immediately — no separate state.
       const eligibleSet = new Set(eligibleShotIds);
       const now = new Date();
-      queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-        old?.map((f) =>
-          eligibleSet.has(f.id)
-            ? { ...f, videoStatus: 'generating', updatedAt: now }
-            : f
-        )
+      queryClient.setQueryData<ShotWithImage[]>(
+        shotKeys.list(sequenceId),
+        (old) =>
+          old?.map((f) =>
+            eligibleSet.has(f.id)
+              ? { ...f, videoStatus: 'generating', updatedAt: now }
+              : f
+          )
       );
       if (includeMusic) {
         queryClient.setQueryData<Sequence>(
@@ -821,7 +1174,8 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
         sequence_id: sequenceId,
         include_music: includeMusic,
         eligible_shot_count: eligibleShotIds.length,
-        motion_model: motionModel,
+        // Motion model is resolved per shot server-side, from each shot's
+        // selected video version (#1066).
         music_model: includeMusic ? musicModel : undefined,
         generate_audio: generateAudio,
       });
@@ -831,7 +1185,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
           data: {
             sequenceId,
             includeMusic,
-            model: motionModel,
             musicModel: includeMusic ? musicModel : undefined,
             generateAudio,
           },
@@ -847,10 +1200,12 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
           removeAllFromSet(prev, eligibleShotIds)
         );
         // Roll back optimistic cache updates
-        queryClient.setQueryData<Shot[]>(shotKeys.list(sequenceId), (old) =>
-          old?.map((f) =>
-            eligibleSet.has(f.id) ? { ...f, videoStatus: 'pending' } : f
-          )
+        queryClient.setQueryData<ShotWithImage[]>(
+          shotKeys.list(sequenceId),
+          (old) =>
+            old?.map((f) =>
+              eligibleSet.has(f.id) ? { ...f, videoStatus: 'pending' } : f
+            )
         );
         if (includeMusic) {
           void queryClient.invalidateQueries({
@@ -859,15 +1214,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
         }
 
         if (isInsufficientCreditsError(error)) {
-          toast.error('Insufficient credits', {
-            description: 'Add credits to generate motion for all shots.',
-            action: {
-              label: 'Add Credits',
-              onClick: () => {
-                window.location.href = '/credits';
-              },
-            },
-          });
+          showBillingGate();
           void queryClient.invalidateQueries({
             queryKey: BILLING_BALANCE_KEY,
           });
@@ -876,7 +1223,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
         }
       }
     },
-    [sequenceId, shots, queryClient, posthog]
+    [sequenceId, shots, queryClient, posthog, showBillingGate]
   );
 
   const musicPromptsReady = !!(sequence?.musicPrompt && sequence.musicTags);
@@ -930,13 +1277,18 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
       )}
 
       <div className="flex flex-1 min-h-0">
-        {/* Desktop: Scene List sidebar */}
-        <div className="hidden md:block pl-4 py-4">
+        <div className="hidden md:block shrink-0 pl-4 py-4">
           <SceneList
             shots={shots}
-            selectedShotId={curSelectedShotId}
+            scenes={scenes}
+            segments={segments}
+            loadError={shotsError ?? scenesError}
+            segmentsError={segmentsError}
+            selection={selection}
             aspectRatio={aspectRatio}
-            onSelectShot={setSelectedShotId}
+            onSelectScene={handleSelectScene}
+            onSelectShot={handleSelectShot}
+            onClearSelection={handleClearSelection}
             regeneratingImages={regeneratingImages}
             regeneratingMotion={regeneratingMotion}
             onBatchGenerateMotion={handleBatchMotionGeneration}
@@ -946,21 +1298,19 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
             }
             divergentVariants={divergentVariants}
             onCompareDivergent={(variant) => setCompareVariant(variant)}
-            initialMotionModel={sequenceMotionModel}
             initialMusicModel={sequenceMusicModel}
-            styleCategory={styleCategory}
             modelMissingShotIds={shotsMissingActiveImage}
             modelMissingLabel={activeImageModelLabel}
+            staleShotIds={staleShotIds}
           />
         </div>
 
-        {/* Mobile: Bottom drawer */}
         <div className="md:hidden">
           <MobileSceneDrawer
             shots={shots}
             selectedShotId={curSelectedShotId}
             aspectRatio={aspectRatio}
-            onSelectShot={setSelectedShotId}
+            onSelectShot={handleSelectShot}
             regeneratingImages={regeneratingImages}
             regeneratingMotion={regeneratingMotion}
             onBatchGenerateMotion={handleBatchMotionGeneration}
@@ -968,69 +1318,189 @@ export const ScenesView: React.FC<ScenesViewProps> = ({ sequenceId }) => {
             hideBatchButton={
               phaseConfig.autoGenerateMotion && isGenerationActive
             }
-            initialMotionModel={sequenceMotionModel}
             initialMusicModel={sequenceMusicModel}
-            styleCategory={styleCategory}
           />
         </div>
 
-        {/* Main content area */}
-        <ScrollArea className="flex-1 px-4 md:px-8 gap-8 flex flex-col pb-20 md:pb-0 pt-4">
-          <div className="flex flex-1 min-h-0 justify-center pb-8">
-            <ScenePlayer
-              shots={playerShots}
-              selectedShotId={curSelectedShotId}
-              aspectRatio={aspectRatio}
-              onSelectShot={setSelectedShotId}
-              selectedTab={selectedTab}
-              overrideImageUrl={previewVariantUrl}
-              overrideVideoUrl={previewVariantVideoUrl}
-              badgeMessage={playerBadgeMessage}
-              modelMismatchLabel={
-                selectedTab === 'scene-variants' &&
-                activeImageModelLabel &&
-                curSelectedShotId &&
-                shotsMissingActiveImage.has(curSelectedShotId)
-                  ? `Not generated with ${activeImageModelLabel}`
-                  : null
+        <div className="flex flex-1 min-h-0 min-w-0 flex-col md:flex-row">
+          <div className="flex flex-1 min-h-0 min-w-0 flex-col">
+            <CanvasViewToggle
+              view={effectiveView}
+              onViewChange={setView}
+              canvasDisabled={!canvasReady}
+              trailing={
+                effectiveView === 'script' ? (
+                  <CopyScriptButton sequenceId={sequenceId} />
+                ) : null
               }
-              progressMessage={
-                generationState.phases.find((p) => p.status === 'active')
-                  ?.phaseName
-              }
-              retry={selectedShotRetry}
-              posterUrl={sequence?.posterUrl ?? undefined}
-              className={PLAYER_MAX_H}
-              wrapperClassName={PLAYER_MAX_W_BY_RATIO[aspectRatio]}
             />
-          </div>
-          <SceneScriptPrompts
-            shot={selectedShot}
-            sequenceId={sequenceId}
-            selectedTab={selectedTab}
-            onTabChange={setSelectedTab}
-            regeneratingImages={regeneratingImages}
-            regeneratingMotion={regeneratingMotion}
-            regeneratingSceneVariants={regeneratingSceneVariants}
-            onRegenerateStart={handleRegenerateStart}
-            aspectRatio={aspectRatio}
-            variantForSelectedModel={variantForSelectedModel}
-            videoVariantForSelectedModel={videoVariantForSelectedModel}
-            imageModelStatuses={imageModelStatuses}
-            videoModelStatuses={videoModelStatuses}
-            onImageModelChange={setImageModelOverride}
-            onVideoModelChange={setVideoModelOverride}
-            styleCategory={styleCategory}
-            sequenceMotionModel={sequenceMotionModel}
-            styleName={styleName}
-            recommendedImageModel={recommendedImageModel}
-            recommendedVideoModel={recommendedVideoModel}
-            shotDivergentVariants={divergentVariants?.filter(
-              (v) => v.shotId === curSelectedShotId
+            {effectiveView === 'script' ? (
+              <SceneScriptDocument
+                sequenceId={sequenceId}
+                scenes={scenes}
+                shots={shots}
+                selectedSceneIds={selectedScenes.map((s) => s.id)}
+                onSelectScene={handleFocusScene}
+              />
+            ) : (
+              <SceneCanvas
+                selection={selection}
+                shots={shots}
+                loadError={shotsError}
+                playerShots={playerShots}
+                sequence={sequence}
+                aspectRatio={aspectRatio}
+                selectedTab={effectiveTab}
+                overrideImageUrl={previewVariantUrl}
+                overrideVideoUrl={previewVariantVideoUrl}
+                badgeMessage={playerBadgeMessage}
+                modelMismatchLabel={
+                  effectiveTab === 'image-prompt' &&
+                  activeImageModelLabel &&
+                  curSelectedShotId &&
+                  shotsMissingActiveImage.has(curSelectedShotId)
+                    ? `Not generated with ${activeImageModelLabel}`
+                    : null
+                }
+                staleLabel={
+                  effectiveTab === 'image-prompt' &&
+                  curSelectedShotId &&
+                  !regeneratingImages.has(curSelectedShotId)
+                    ? scopeStaleness?.[curSelectedShotId]?.thumbnail === 'stale'
+                      ? 'Out of date'
+                      : scopeStaleness?.[curSelectedShotId]?.thumbnail ===
+                          'updating'
+                        ? 'Updating…'
+                        : null
+                    : null
+                }
+                progressMessage={
+                  generationState.phases.find((p) => p.status === 'active')
+                    ?.phaseName
+                }
+                retry={selectedShotRetry}
+                onSelectShot={handleSelectShot}
+                sceneImageModel={resolvedImageModel}
+                regeneratingSceneVariants={regeneratingSceneVariants}
+                onGenerateSceneVariantsStart={(id) =>
+                  handleRegenerateStart(id, 'scene-variants')
+                }
+              />
             )}
-            onCompareDivergent={(variant) => setCompareVariant(variant)}
-          />
-        </ScrollArea>
+          </div>
+
+          {/* Mirrors SceneList's inset card: outer div owns the padding, inner
+              owns the rounded border — so both rails read as the same object. */}
+          <div className="hidden md:block shrink-0 pr-4 py-4">
+            <div className="flex h-full w-[380px] lg:w-[420px] flex-col rounded-lg border bg-background">
+              <SceneModelBar
+                scope={scope}
+                sequenceId={sequenceId}
+                resolvedSequenceImageModel={resolvedSequenceImageModel}
+                resolvedSequenceVideoModel={resolvedSequenceVideoModel}
+                styleId={sequence?.styleId ?? undefined}
+                aspectRatio={aspectRatio}
+                analysisModel={sequence?.analysisModel ?? undefined}
+              />
+              <ScrollArea className="flex-1 min-h-0 px-4 pb-4">
+                <SceneScriptPrompts
+                  shot={selectedShot}
+                  sequenceId={sequenceId}
+                  selectedTab={effectiveTab}
+                  visibleTabs={visibleTabs}
+                  onTabChange={(tab) => {
+                    setSelectedTab(tab);
+                    setFacet(tab);
+                  }}
+                  regeneratingImages={regeneratingImages}
+                  regeneratingMotion={regeneratingMotion}
+                  onRegenerateStart={handleRegenerateStart}
+                  aspectRatio={aspectRatio}
+                  variantForSelectedModel={variantForSelectedModel}
+                  videoVariantForSelectedModel={videoVariantForSelectedModel}
+                  segment={selectedSegment}
+                  segmentSpanLabel={selectedSegmentSpanLabel}
+                  resolvedImageModel={resolvedImageModel}
+                  resolvedVideoModel={resolvedVideoModel}
+                  imageModelStatuses={sceneImageModelStatuses}
+                  videoModelStatuses={sceneVideoModelStatuses}
+                  onImageModelChange={handleImageModelChange}
+                  onVideoModelChange={handleVideoModelChange}
+                  styleName={styleName}
+                  recommendedImageModel={recommendedImageModel}
+                  recommendedVideoModel={recommendedVideoModel}
+                  styleCategory={styleCategory}
+                  shotDivergentVariants={divergentVariants?.filter(
+                    (v) => v.shotId === curSelectedShotId
+                  )}
+                  onCompareDivergent={(variant) => setCompareVariant(variant)}
+                  facetShotIds={facetShotIds}
+                  musicEditable={scope === 'sequence'}
+                  scriptSceneId={scriptScene?.id}
+                  scriptText={scriptText}
+                  scopeShots={scopeShots}
+                  scopeStaleness={scopeStaleness}
+                  scopeStalenessFailed={scopeStalenessFailed}
+                  onSelectShot={handleSelectShot}
+                />
+              </ScrollArea>
+            </div>
+          </div>
+
+          <div className="md:hidden shrink-0 border-t bg-background pb-20 max-h-[45vh]">
+            <ScrollArea className="h-full px-4 pt-4 max-h-[45vh]">
+              <SceneModelBar
+                scope={scope}
+                sequenceId={sequenceId}
+                resolvedSequenceImageModel={resolvedSequenceImageModel}
+                resolvedSequenceVideoModel={resolvedSequenceVideoModel}
+                styleId={sequence?.styleId ?? undefined}
+                aspectRatio={aspectRatio}
+                analysisModel={sequence?.analysisModel ?? undefined}
+              />
+              <SceneScriptPrompts
+                shot={selectedShot}
+                sequenceId={sequenceId}
+                selectedTab={effectiveTab}
+                visibleTabs={visibleTabs}
+                onTabChange={(tab) => {
+                  setSelectedTab(tab);
+                  setFacet(tab);
+                }}
+                regeneratingImages={regeneratingImages}
+                regeneratingMotion={regeneratingMotion}
+                onRegenerateStart={handleRegenerateStart}
+                aspectRatio={aspectRatio}
+                variantForSelectedModel={variantForSelectedModel}
+                videoVariantForSelectedModel={videoVariantForSelectedModel}
+                segment={selectedSegment}
+                segmentSpanLabel={selectedSegmentSpanLabel}
+                resolvedImageModel={resolvedImageModel}
+                resolvedVideoModel={resolvedVideoModel}
+                imageModelStatuses={sceneImageModelStatuses}
+                videoModelStatuses={sceneVideoModelStatuses}
+                onImageModelChange={handleImageModelChange}
+                onVideoModelChange={handleVideoModelChange}
+                styleName={styleName}
+                recommendedImageModel={recommendedImageModel}
+                recommendedVideoModel={recommendedVideoModel}
+                styleCategory={styleCategory}
+                shotDivergentVariants={divergentVariants?.filter(
+                  (v) => v.shotId === curSelectedShotId
+                )}
+                onCompareDivergent={(variant) => setCompareVariant(variant)}
+                facetShotIds={facetShotIds}
+                musicEditable={scope === 'sequence'}
+                scriptSceneId={scriptScene?.id}
+                scriptText={scriptText}
+                scopeShots={scopeShots}
+                scopeStaleness={scopeStaleness}
+                scopeStalenessFailed={scopeStalenessFailed}
+                onSelectShot={handleSelectShot}
+              />
+            </ScrollArea>
+          </div>
+        </div>
       </div>
 
       {compareVariant &&

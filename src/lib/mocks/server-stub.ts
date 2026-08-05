@@ -27,6 +27,11 @@ const handler: ProxyHandler<typeof target> = {
             '[storybook-server-stub] A server-only fn was awaited. The promise will hang to preserve any pre-populated query cache. If your story is stuck on a skeleton, pre-populate via queryClient.setQueryData(...).'
           );
         }
+        // Return the stub so manual chains (`fn().then(...).catch(...)`) stay
+        // thenable instead of yielding undefined. `await` ignores this return
+        // value and waits for a resolve/reject that never fires, so the hang
+        // semantics are preserved either way.
+        return stub;
       };
     }
     if (prop === '__esModule') return true;
