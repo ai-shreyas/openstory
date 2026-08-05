@@ -218,8 +218,8 @@ export function createSequenceElementsMethods(db: Database) {
     /**
      * Rename an element's token and rewrite every reference to the old token
      * across the sequence: `sequences.script`, `scenes.continuity` +
-     * the selected `scene_script_versions` extract, and the user-edit
-     * `imagePrompt`/`motionPrompt` overrides on the anchor frame / shot.
+     * the selected `scene_script_versions` extract, the anchor frame's
+     * `imagePrompt` and the selected `shot_prompt_versions` motion text.
      *
      * All writes (element row, script, shot deltas) run in a single
      * `db.batch()` — one transaction — so a mid-cascade failure can't leave
@@ -301,23 +301,35 @@ export function createSequenceElementsMethods(db: Database) {
         frameRows.map((f) => [f.shotId, f.imagePrompt])
       );
       const frameIdByShot = new Map(frameRows.map((f) => [f.shotId, f.id]));
-      const shotsWithImagePrompt = allShots.map((s) => ({
+      // The motion prompt is the *selected* `shot_prompt_versions` row (#713):
+      // both the token scan and the rewrite target that row.
+      const selectedMotionRows = await db
+        .select({
+          shotId: shots.id,
+          versionId: shotPromptVersions.id,
+          text: shotPromptVersions.text,
+        })
+        .from(shots)
+        .innerJoin(
+          shotPromptVersions,
+          eq(shots.selectedMotionPromptVersionId, shotPromptVersions.id)
+        )
+        .where(eq(shots.sequenceId, sequenceId));
+      const motionPromptByShot = new Map(
+        selectedMotionRows.map((r) => [r.shotId, r.text])
+      );
+      const selectedMotionVersionByShot = new Map(
+        selectedMotionRows.map((r) => [r.shotId, r.versionId])
+      );
+      const shotsWithPrompts = allShots.map((s) => ({
         ...s,
         imagePrompt: imagePromptByShot.get(s.id) ?? null,
+        motionPrompt: motionPromptByShot.get(s.id) ?? null,
       }));
       const deltas = buildShotRenameDeltas(
-        shotsWithImagePrompt,
+        shotsWithPrompts,
         oldToken,
         newToken
-      );
-      // metadata/motionPrompt → shots; imagePrompt mirror → the anchor frame.
-      // The motion prompt is resolved from the *selected* `shot_prompt_versions`
-      // row now (#713), so a rename must rewrite that row's text too — updating
-      // only the `shot.motionPrompt` mirror would leave the render reading the
-      // un-renamed version. (Image resolution reads the `frame.imagePrompt`
-      // mirror directly, so the frame update below suffices there.)
-      const selectedMotionVersionByShot = new Map(
-        allShots.map((s) => [s.id, s.selectedMotionPromptVersionId])
       );
       const selectedScriptRows = await db
         .select({ version: sceneScriptVersions })
@@ -367,17 +379,11 @@ export function createSequenceElementsMethods(db: Database) {
       );
 
       const shotStatements = deltas.flatMap((delta) => {
-        const set: Record<string, unknown> = { updatedAt: now };
-        if (delta.motionPrompt !== undefined)
-          set.motionPrompt = delta.motionPrompt;
         const selectedMotionVersionId = selectedMotionVersionByShot.get(
           delta.shotId
         );
         const anchorFrameId = frameIdByShot.get(delta.shotId);
         return [
-          ...(Object.keys(set).length > 1
-            ? [db.update(shots).set(set).where(eq(shots.id, delta.shotId))]
-            : []),
           ...(delta.motionPrompt !== undefined && selectedMotionVersionId
             ? [
                 db

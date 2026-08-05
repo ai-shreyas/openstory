@@ -175,10 +175,10 @@ export async function computeShotStaleness(args: {
   let visualPrompt: ArtifactStaleness = 'untracked';
   let motionPrompt: ArtifactStaleness = 'untracked';
 
-  // Reference hash resolution: prefer the cached column on `shots`, but
-  // fall back to the most recent variant with a non-null `inputHash` for
-  // shots whose cached column was nulled by a pre-fix user-edit. Without
-  // the fallback, those shots are stuck at `'untracked'` permanently.
+  // Reference hash resolution: prefer the SELECTED version's `inputHash`, but
+  // fall back to the most recent version with a non-null one for prompts whose
+  // selected row carries a null hash (a pre-fix user-edit, or the force-regen
+  // path). Without the fallback, those are stuck at `'untracked'` permanently.
   if (scene) {
     // The fallback read is inside the try: it is exactly the transient-D1 case
     // the catch exists for, and outside it one bad read rejects the caller's
@@ -217,7 +217,9 @@ export async function computeShotStaleness(args: {
 
   if (scene) {
     try {
-      let referenceHash = shot.motionPromptInputHash;
+      let referenceHash =
+        (await scopedDb.shotPromptVersions.getSelectedMotion(shot.id))
+          ?.inputHash ?? null;
       if (!referenceHash) {
         const fallback =
           await scopedDb.shotPromptVersions.getLatestWithInputHash(

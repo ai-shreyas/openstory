@@ -15,6 +15,8 @@ import { frames } from '@/lib/db/schema/frames';
 import { renderSegments } from '@/lib/db/schema/render-segments';
 import { videoVariants } from '@/lib/db/schema/video-variants';
 import { getPrimaryVideoByShotIds } from './video-variants';
+import { getSelectedMotionByShotIds } from './shot-prompt-versions';
+import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
@@ -251,14 +253,19 @@ export function createAdminMethods(db: Database) {
       )
       .where(eq(shots.sequenceId, sequenceId))
       .orderBy(asc(shots.orderIndex));
-    const primaryByShot = await getPrimaryVideoByShotIds(
-      db,
-      rows.map((r) => r.shots.id)
-    );
+    const shotIds = rows.map((r) => r.shots.id);
+    const [primaryByShot, selectedMotionByShot] = await Promise.all([
+      getPrimaryVideoByShotIds(db, shotIds),
+      getSelectedMotionByShotIds(db, shotIds),
+    ]);
     return rows.map((row) => {
+      const selectedMotion = selectedMotionByShot.get(row.shots.id);
       const video = {
         selectedVideo: row.video_variants,
         primaryVideo: primaryByShot.get(row.shots.id) ?? null,
+        motionPromptData: selectedMotion
+          ? motionPromptFromVersion(selectedMotion)
+          : null,
       };
       return row.frames
         ? projectShotWithImage(row.shots, row.frames, {

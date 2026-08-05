@@ -290,8 +290,14 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
     // No-op guard: don't append a `user-edit` identical to the live prompt —
     // mirrors `shouldRecordUserEdit` in the render workflows so a Save with no
     // actual change doesn't spawn a duplicate history row.
+    const selectedMotion =
+      data.promptType === 'motion'
+        ? await scopedDb.shotPromptVersions.getSelectedMotion(shot.id)
+        : null;
     const currentPrompt =
-      data.promptType === 'visual' ? frame.imagePrompt : shot.motionPrompt;
+      data.promptType === 'visual'
+        ? frame.imagePrompt
+        : (selectedMotion?.text ?? null);
     if (currentPrompt !== null && currentPrompt === text) {
       return { unchanged: true } as const;
     }
@@ -342,15 +348,12 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
     // user-edit so audio-capable models keep their enrichment after a free-text
     // edit (mirrors the motion-workflow user-edit path). `components` /
     // `parameters` stay null on a hand edit.
-    const selected = await scopedDb.shotPromptVersions.getSelectedMotion(
-      shot.id
-    );
     const inserted = await scopedDb.shotPromptVersions.write({
       shotId: shot.id,
       promptType: 'motion',
       text,
-      dialogue: selected?.dialogue ?? null,
-      audio: selected?.audio ?? null,
+      dialogue: selectedMotion?.dialogue ?? null,
+      audio: selectedMotion?.audio ?? null,
       source: 'user-edit',
       inputHash,
       analysisModel,
@@ -516,7 +519,8 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
     const storedHash =
       data.promptType === 'visual'
         ? frame.visualPromptInputHash
-        : shot.motionPromptInputHash;
+        : ((await scopedDb.shotPromptVersions.getSelectedMotion(shot.id))
+            ?.inputHash ?? null);
     if (!data.force && isPromptUpToDate(storedHash, liveHash)) {
       return {
         workflowRunId: null,
@@ -878,7 +882,11 @@ export const getDivergentVariantPromptDiffFn = createServerFn({
         `Shot ${variant.shotId} missing for variant ${variant.id}`
       );
     }
-    const live = shotRow.motionPrompt;
+    const live = (
+      await context.scopedDb.shotPromptVersions.getSelectedMotion(
+        variant.shotId
+      )
+    )?.text;
     if (!live) return null;
     if (live === matched.text) return null;
 

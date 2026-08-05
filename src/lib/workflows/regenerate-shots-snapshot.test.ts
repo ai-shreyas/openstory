@@ -70,8 +70,6 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     shotNumber: null,
     orderIndex: 0,
     durationMs: 3000,
-    motionPrompt: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     createdAt: NOW,

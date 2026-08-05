@@ -31,7 +31,6 @@ const baseShot: ShotWithImage = {
   videoWorkflowRunId: null,
   videoGeneratedAt: null,
   videoError: null,
-  motionPrompt: null,
   motionModel: null,
   motionPromptData: null,
   selectedMotionPromptVersionId: null,
@@ -39,7 +38,6 @@ const baseShot: ShotWithImage = {
   thumbnailInputHash: 'live-hash',
   videoInputHash: null,
   visualPromptInputHash: null,
-  motionPromptInputHash: null,
   createdAt: NOW,
   updatedAt: NOW,
   frame: {

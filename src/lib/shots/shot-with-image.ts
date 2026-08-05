@@ -93,7 +93,10 @@ export type ShotWithImage = Shot & {
  */
 export function projectShotMissingFrame(
   shot: Shot,
-  video: Pick<ShotProjectionSources, 'selectedVideo' | 'primaryVideo'>
+  video: Pick<
+    ShotProjectionSources,
+    'selectedVideo' | 'primaryVideo' | 'motionPromptData'
+  >
 ): ShotWithImage {
   const frame: Frame = {
     // Synthetic in-memory placeholder ONLY — never persisted and never used for

@@ -25,10 +25,15 @@ export const updateShotSchema = createUpdateSchema(shots, {
     createdAt: true,
     updatedAt: true,
   })
-  // The image prompt lives on the anchor frame since #989 (not a `shots`
-  // column). Accept it here as an explicit field; `updateShotFn` routes it to
-  // `frame_prompt_versions` rather than the shots UPDATE.
-  .extend({ imagePrompt: z.string().nullable().optional() });
+  // Neither prompt is a `shots` column any more — the image prompt lives on the
+  // anchor frame (#989) and the motion prompt on its selected version (#713).
+  // Accept both here as explicit fields; `updateShotFn` routes them to
+  // `frame_prompt_versions` / `shot_prompt_versions` rather than the shots
+  // UPDATE.
+  .extend({
+    imagePrompt: z.string().nullable().optional(),
+    motionPrompt: z.string().nullable().optional(),
+  });
 
 export const regenerateShotSchema = z.object({
   regenerateDescription: z.boolean().optional(),

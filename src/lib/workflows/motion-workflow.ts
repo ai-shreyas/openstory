@@ -207,11 +207,14 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           return { shotDeleted: true, videoVersionId: null, sceneId: null };
         }
 
+        const selectedMotion = input.userEditedPrompt
+          ? await scopedDb.shotPromptVersions.getSelectedMotion(shot.id)
+          : null;
         if (
           shouldRecordUserEdit({
             userEditedPrompt: input.userEditedPrompt,
             prompt: input.prompt,
-            currentPrompt: shot.motionPrompt,
+            currentPrompt: selectedMotion?.text ?? null,
           })
         ) {
           let userEditInputHash: string | null = null;

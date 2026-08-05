@@ -59,7 +59,6 @@ const generateMockShot = (
       'completed',
       'failed',
     ]),
-    motionPrompt: null,
     motionModel: faker.helpers.arrayElement([
       'veo3_1',
       'kling_v3_pro',
@@ -71,7 +70,6 @@ const generateMockShot = (
     thumbnailInputHash: null,
     videoInputHash: null,
     visualPromptInputHash: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     previewThumbnailUrl: null,

@@ -125,9 +125,12 @@ export function analyzeFailures(
     });
   }
 
-  // Failed motion (only shots with thumbnails AND motionPrompt)
+  // Failed motion (only shots with thumbnails AND a motion prompt)
   const failedMotionShots = shots.filter(
-    (f) => f.videoStatus === 'failed' && f.thumbnailUrl && f.motionPrompt
+    (f) =>
+      f.videoStatus === 'failed' &&
+      f.thumbnailUrl &&
+      f.motionPromptData?.fullPrompt
   );
   if (failedMotionShots.length > 0) {
     groups.push({
@@ -142,9 +145,9 @@ export function analyzeFailures(
     });
   }
 
-  // Detect missing motion prompts (images completed but no motionPrompt)
+  // Detect missing motion prompts (images completed but no motion prompt)
   const shotsWithImageButNoMotionPrompt = shots.filter(
-    (f) => f.thumbnailStatus === 'completed' && !f.motionPrompt
+    (f) => f.thumbnailStatus === 'completed' && !f.motionPromptData?.fullPrompt
   );
   if (
     shotsWithImageButNoMotionPrompt.length > 0 &&

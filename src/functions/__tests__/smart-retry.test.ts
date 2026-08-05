@@ -128,15 +128,13 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     videoWorkflowRunId: null,
     videoGeneratedAt: null,
     videoError: null,
-    motionPrompt: 'slow pan',
     motionModel: null,
-    motionPromptData: null,
+    motionPromptData: { fullPrompt: 'slow pan', dialogue: null, audio: null },
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     thumbnailInputHash: null,
     videoInputHash: null,
     visualPromptInputHash: null,
-    motionPromptInputHash: null,
     previewThumbnailUrl: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -209,7 +207,7 @@ function makeContext(
   // backfill guarantees one exists wherever a prompt does.
   const motionVersionByShot = new Map(
     shots.flatMap((s) =>
-      s.motionPrompt
+      s.motionPromptData
         ? [
             [
               s.id,
@@ -217,7 +215,7 @@ function makeContext(
                 id: `${s.id}-mv`,
                 shotId: s.id,
                 promptType: 'motion' as const,
-                text: s.motionPrompt,
+                text: s.motionPromptData.fullPrompt,
                 components: null,
                 parameters: null,
                 dialogue: null,
@@ -236,8 +234,14 @@ function makeContext(
         : []
     )
   );
-  const getSelectedMotion = vi.fn(
-    async (shotId: string) => motionVersionByShot.get(shotId) ?? null
+  const getSelectedMotionByShots = vi.fn(
+    async (shotIds: string[]) =>
+      new Map(
+        shotIds.flatMap((shotId) => {
+          const version = motionVersionByShot.get(shotId);
+          return version ? [[shotId, version] as const] : [];
+        })
+      )
   );
   const stub = {
     shots: { listBySequence, ensureAnchorFrames },
@@ -270,7 +274,7 @@ function makeContext(
       ),
     },
     characters: { listWithSheets },
-    shotPromptVersions: { getSelectedMotion },
+    shotPromptVersions: { getSelectedMotionByShots },
     sequence: vi.fn(() => ({ updateStatus, updateMusicFields })),
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only what executeSmartRetry touches
@@ -425,7 +429,11 @@ describe('executeSmartRetry — partial retry status reset', () => {
       videoStatus: 'failed',
       thumbnailStatus: 'completed',
       thumbnailUrl: 'https://cdn/thumb.jpg',
-      motionPrompt: 'slow pan across the lab',
+      motionPromptData: {
+        fullPrompt: 'slow pan across the lab',
+        dialogue: null,
+        audio: null,
+      },
       durationMs: 5000,
     });
     const { context, updateStatus } = makeContext(makeSequence(), [shot]);

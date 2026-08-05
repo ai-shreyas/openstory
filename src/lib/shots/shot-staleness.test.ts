@@ -39,6 +39,8 @@ const sequence = {
 function makeScopedDb(overrides: {
   visualFallbackHash?: string | null;
   motionFallbackHash?: string | null;
+  /** `inputHash` of the shot's SELECTED motion version — the reference hash. */
+  motionSelectedHash?: string | null;
   /** Live visual claim for the 'updating' overlay (#1085). */
   visualLiveClaim?: { id: string } | null;
   /** Live motion claim for the 'updating' overlay (#1085). */
@@ -72,6 +74,9 @@ function makeScopedDb(overrides: {
     },
     shotPromptVersions: {
       getLatest: vi.fn().mockResolvedValue(null),
+      getSelectedMotion: vi
+        .fn()
+        .mockResolvedValue({ inputHash: overrides.motionSelectedHash ?? null }),
       getLatestWithInputHash: vi
         .fn()
         .mockResolvedValue(
@@ -91,10 +96,7 @@ function makeScopedDb(overrides: {
   });
 }
 
-const shot = asStub<Shot>({
-  id: 'shot-1',
-  motionPromptInputHash: 'motion-stored',
-});
+const shot = asStub<Shot>({ id: 'shot-1' });
 const frame = asStub<Frame>({
   id: 'frame-1',
   imagePrompt: 'a prompt',
@@ -113,7 +115,7 @@ describe('computeShotStaleness', () => {
     computeMotionPromptInputHash.mockResolvedValue('motion-moved');
 
     const result = await computeShotStaleness({
-      scopedDb: makeScopedDb({}),
+      scopedDb: makeScopedDb({ motionSelectedHash: 'motion-stored' }),
       sequence,
       shot,
       frame,
@@ -134,7 +136,7 @@ describe('computeShotStaleness', () => {
     });
   });
 
-  it('falls back to the latest version hash when the cached column is null', async () => {
+  it('falls back to the latest version hash when the selected one has none', async () => {
     buildRegenerateShotSnapshot.mockResolvedValue({
       snapshotInputHash: 'image-stored',
     });
@@ -148,7 +150,7 @@ describe('computeShotStaleness', () => {
         motionFallbackHash: 'motion-stored',
       }),
       sequence,
-      shot: { ...shot, motionPromptInputHash: null },
+      shot,
       frame: { ...frame, visualPromptInputHash: null },
       selectedImage: selectedImage('image-stored'),
       scene,
@@ -173,6 +175,7 @@ describe('computeShotStaleness', () => {
 
     const result = await computeShotStaleness({
       scopedDb: makeScopedDb({
+        motionSelectedHash: 'motion-old',
         visualLiveClaim: { id: 'fpv-claim' },
         motionLiveClaim: { id: 'spv-claim' },
         imageLiveClaims: [
@@ -182,7 +185,7 @@ describe('computeShotStaleness', () => {
       sequence,
       // Force thumbnail stale by storing a hash the snapshot won't match, so
       // the direct image-claim path is what promotes it to 'updating'.
-      shot: { ...shot, motionPromptInputHash: 'motion-old' },
+      shot,
       frame: { ...frame, visualPromptInputHash: 'visual-old' },
       selectedImage: selectedImage('image-old'),
       scene,

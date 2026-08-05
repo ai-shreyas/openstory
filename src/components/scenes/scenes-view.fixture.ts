@@ -347,8 +347,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_veo3_1_r-qzer8o',
     videoGeneratedAt: new Date('2026-06-02T00:19:03.000Z'),
     videoError: null,
-    motionPrompt:
-      'Locked eye-level probe lens macro frame holds steady on a luminous serum droplet clinging to a glass dropper tip against a seamless warm ivory-to-blush gradient. The droplet releases and descends in ultra-slow motion, stretching into a languid weightless ribbon that narrows and falls below frame over the full duration. Soft edge light and gentle backlight keep the serum glowing translucent gold throughout the descent.',
     motionModel: 'veo3_1',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -362,8 +360,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       '5e35aef7cbcca388535f8280c210c9f8c4961f0f40720138df3fd8fdbf57a2db',
-    motionPromptInputHash:
-      '8712d23c15cd7b2fa15e51c851a1e6ed44d754eb5e997dff340ed563836065a6',
     sceneId: '01KT2TQ072YB92D8NWRQC5W9C6',
     shotNumber: 1,
   },
@@ -395,8 +391,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_kling_v3_pro_r-1crr24',
     videoGeneratedAt: new Date('2026-06-02T00:14:57.000Z'),
     videoError: null,
-    motionPrompt:
-      'Slow macro push-in descends straight down from directly above the porcelain surface while gently rotating two degrees clockwise. A generous curl of dense cream dispenses from below frame, coiling outward in a smooth, deliberate spiral that builds ridges and peaks. The forming swirl gradually fills the frame, transforming the surface texture into an abstract landscape of peaks and valleys. The low raking key light shifts subtly across the moving ridges, accentuating depth and sheen. A faint atmospheric hum underscores the intimate, tactile motion.',
     motionModel: 'kling_v3_pro',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -410,8 +404,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       '6a0661a6909ede6efb155a60703eb80a3bd0a16f07fc3e79a5a23285bcd03be6',
-    motionPromptInputHash:
-      '8a1cb524606a6055e779a0d958f7a269744da29d444d02c0930b396aafa40cda',
     sceneId: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
     shotNumber: 1,
   },
@@ -443,8 +435,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_kling_v3_pro_r-1crr24',
     videoGeneratedAt: new Date('2026-06-02T00:15:17.000Z'),
     videoError: null,
-    motionPrompt:
-      'Low-angle macro lens positioned almost parallel to the skin surface executes an imperceptibly slow clockwise rotational drift. The fingertip presses gently downward, the cream yielding and spreading in a thin even veil while a subtle rose flush blooms outward from the contact point in extreme slow motion.',
     motionModel: 'kling_v3_pro',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -458,8 +448,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       '9a5a8fb49c2420a571ced29213472cc5bc8611ffffabec608e321fc8d0a614ef',
-    motionPromptInputHash:
-      '1c1c244ef3466f36d3c556d38446a53bfd007b7953a0b2647fbc49a94fe9985f',
     sceneId: '01KT2TQ4BPDYFBAG7AHWAAY43C',
     shotNumber: 1,
   },
@@ -491,8 +479,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_kling_v3_pro_r-1crr24',
     videoGeneratedAt: new Date('2026-06-02T00:15:04.000Z'),
     videoError: null,
-    motionPrompt:
-      'Probe-lens positioned low and slightly ahead of the path, the deep brown-rose lipstick bullet glides smoothly toward camera in extreme slow motion across luminous dewy wrist skin, laying down a saturated glossy color ribbon that blooms behind it. Rack focus shifts gradually from the moving bullet tip to the settling trail. Fine hairs along the wrist catch the rear illumination. The glistening pigment settles with soft sheen.',
     motionModel: 'kling_v3_pro',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -506,8 +492,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       'c24b43ff12503d783dfd1513eecf8989160d3f1b2ae13dccc964ff2db63dfb9d',
-    motionPromptInputHash:
-      '488cfb63a7e74a8209df5cdedf2b6631effc178d6590f49bd22eb6ab084ba1f3',
     sceneId: '01KT2TQ6B0MH3VDAXH16G54X33',
     shotNumber: 1,
   },
@@ -539,8 +523,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_kling_v3_pro_r-1crr24',
     videoGeneratedAt: new Date('2026-06-02T00:15:18.000Z'),
     videoError: null,
-    motionPrompt:
-      "Slow barely perceptible push-in on a centered vertical portrait filling the 9:16 frame from chin to crown. The woman's face begins in complete stillness with eyes closed and lashes resting against luminous dewy skin, lips slightly parted. The eyes then open slowly and unhurriedly, the gaze turning direct, sovereign and steady toward camera. Subtle skin texture and warm gold rim light remain constant as framing tightens gently throughout the six-second shot.",
     motionModel: 'kling_v3_pro',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -554,8 +536,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       '08e0c43484383c9d78261fe4ea2983a1e08e331e40ec3d3e21aff6ed66a8c46b',
-    motionPromptInputHash:
-      '6d892b0d86f77dce5c7dda7f142e3b323246687963fe463cf1cb67ac60633672',
     sceneId: '01KT2TQ8E692CA985WMB9SNXMX',
     shotNumber: 1,
   },
@@ -587,8 +567,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_kling_v3_pro_r-1crr24',
     videoGeneratedAt: new Date('2026-06-02T00:14:32.000Z'),
     videoError: null,
-    motionPrompt:
-      'Static locked frame with the hero product perfectly centered and motionless on a pure warm-white surface. Soft glowing key light from upper left casts a discreet golden edge light along its right silhouette. Background gradient holds steady from ivory to the softest peach. No camera movement. Product remains still and inevitable throughout the shot.',
     motionModel: 'kling_v3_pro',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -602,8 +580,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       'ce5025d3e93003b0aa943a6e2de0135317b332454bdf1520957d56d5a00f8272',
-    motionPromptInputHash:
-      'd701fc7910fcb2f386b6b53283fc8905c46fcf9af1e63eee64b8f264e29fb299',
     sceneId: '01KT2TQA9A3SYCK47G14S0YB8Y',
     shotNumber: 1,
   },
@@ -635,8 +611,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
       'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_kling_v3_pro_r-1crr24',
     videoGeneratedAt: new Date('2026-06-02T00:14:18.000Z'),
     videoError: null,
-    motionPrompt:
-      'Camera locked in static straight-on framing on a centered white brand logo against a smooth warm ivory gradient. Logo remains perfectly still with no movement or animation. The frame holds clean and composed before a gentle fade begins at the close of the shot.',
     motionModel: 'kling_v3_pro',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -650,8 +624,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
     videoInputHash: null,
     visualPromptInputHash:
       '02b2e4d327ff65d6106eace0deb7d9972ff93ead0d90b4014a0711fd3e7c29d5',
-    motionPromptInputHash:
-      'a3b9ad1f8be7b282e117084326ec4b3203813cb8452a305f6cd0c9c1e60eaa59',
     sceneId: '01KT2TQAY2YNXFX1GVKP7HK43K',
     shotNumber: 1,
   },

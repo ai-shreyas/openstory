@@ -385,9 +385,13 @@ export const updateShotFn = createServerFn({ method: 'POST' })
     const imagePromptChanged =
       updateData.imagePrompt !== undefined &&
       updateData.imagePrompt !== context.frame.imagePrompt;
+    const selectedMotion =
+      updateData.motionPrompt === undefined
+        ? null
+        : await context.scopedDb.shotPromptVersions.getSelectedMotion(shotId);
     const motionPromptChanged =
       updateData.motionPrompt !== undefined &&
-      updateData.motionPrompt !== context.shot.motionPrompt;
+      updateData.motionPrompt !== (selectedMotion?.text ?? null);
     const sceneContinuity = context.scene?.continuity;
     if ((imagePromptChanged || motionPromptChanged) && sceneContinuity) {
       const promptText = [
@@ -415,11 +419,15 @@ export const updateShotFn = createServerFn({ method: 'POST' })
       }
     }
 
-    // The image prompt lives on the anchor frame (#989), not a `shots` column.
-    // Persist a changed prompt as a user-edit `frame_prompt_versions` row (which
-    // mirrors it onto `frame.imagePrompt` + repoints the pointer), then drop it
-    // from the shots UPDATE.
-    const { imagePrompt: editedImagePrompt, ...shotUpdate } = updateData;
+    // Neither prompt is a `shots` column: the image prompt lives on the anchor
+    // frame (#989) and the motion prompt on its selected `shot_prompt_versions`
+    // row (#713). Persist each changed prompt as a user-edit version (which
+    // mirrors + repoints the pointer), then drop both from the shots UPDATE.
+    const {
+      imagePrompt: editedImagePrompt,
+      motionPrompt: editedMotionPrompt,
+      ...shotUpdate
+    } = updateData;
     if (
       imagePromptChanged &&
       typeof editedImagePrompt === 'string' &&
@@ -428,6 +436,23 @@ export const updateShotFn = createServerFn({ method: 'POST' })
       await context.scopedDb.framePromptVersions.write({
         frameId: context.frame.id,
         text: editedImagePrompt,
+        source: 'user-edit',
+        inputHash: null,
+        analysisModel: null,
+        createdBy: context.user.id,
+      });
+    }
+    if (
+      motionPromptChanged &&
+      typeof editedMotionPrompt === 'string' &&
+      editedMotionPrompt.length > 0
+    ) {
+      await context.scopedDb.shotPromptVersions.write({
+        shotId,
+        promptType: 'motion',
+        text: editedMotionPrompt,
+        dialogue: selectedMotion?.dialogue ?? null,
+        audio: selectedMotion?.audio ?? null,
         source: 'user-edit',
         inputHash: null,
         analysisModel: null,

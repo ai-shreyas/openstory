@@ -1,8 +1,8 @@
 /**
  * Cascade an element token rename through every place the old token can be
  * referenced: sequence script text, per-shot metadata (continuity tags,
- * original script extract, prompt strings), and the user-edited
- * imagePrompt/motionPrompt overrides on the shot row.
+ * original script extract, prompt strings), the anchor frame's `imagePrompt`
+ * and the shot's selected motion prompt version.
  *
  * The rewrite is whole-word and case-insensitive on the haystack side (so a
  * lowercase mention inside script prose is still rewritten), but always emits
@@ -62,13 +62,15 @@ export type ShotRenameDelta = {
 
 /**
  * Compute per-shot deltas for a token rename. Shots with no references return
- * null. The image prompt lives on the anchor frame now (#989), so callers pass
- * each shot augmented with its frame's `imagePrompt`; the applier routes the
- * resulting `delta.imagePrompt` to the frame, and `metadata`/`motionPrompt` to
- * the shot.
+ * null. Neither prompt lives on the shot row: callers pass each shot augmented
+ * with its anchor frame's `imagePrompt` (#989) and its selected motion prompt
+ * version's text (#713); the applier routes `delta.imagePrompt` to the frame
+ * and `delta.motionPrompt` to that version row.
  */
 export function buildShotRenameDeltas(
-  shots: ReadonlyArray<Shot & { imagePrompt: string | null }>,
+  shots: ReadonlyArray<
+    Shot & { imagePrompt: string | null; motionPrompt: string | null }
+  >,
   oldToken: string,
   newToken: string
 ): ShotRenameDelta[] {

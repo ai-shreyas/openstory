@@ -31,7 +31,10 @@ import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { type Character, type Sequence, type Shot } from '@/lib/db/schema';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
-import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import {
+  motionPromptFromVersion,
+  resolveMotionPromptFromVersion,
+} from '@/lib/motion/resolve-motion-prompt';
 import { projectShotWithImage } from '@/lib/shots/shot-with-image';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -109,29 +112,35 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       (fr) => [fr.shotId, fr]
     )
   );
-  const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
-    await Promise.all([
-      context.scopedDb.frameVariants.getSelectedByFrameIds(
-        [...anchorsByShot.values()].map((fr) => fr.id)
-      ),
-      context.scopedDb.videoVariants.getSelectedByShotIds(
-        shots.map((s) => s.id)
-      ),
-      context.scopedDb.videoVariants.getPrimaryByShotIds(
-        shots.map((s) => s.id)
-      ),
-    ]);
+  const [
+    selectedByFrame,
+    selectedVideoByShot,
+    primaryVideoByShot,
+    selectedMotionByShot,
+  ] = await Promise.all([
+    context.scopedDb.frameVariants.getSelectedByFrameIds(
+      [...anchorsByShot.values()].map((fr) => fr.id)
+    ),
+    context.scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
+    context.scopedDb.videoVariants.getPrimaryByShotIds(shots.map((s) => s.id)),
+    context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
+      shots.map((s) => s.id)
+    ),
+  ]);
   const shotsWithImage = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
-    return frame
-      ? [
-          projectShotWithImage(shot, frame, {
-            selectedImage: selectedByFrame.get(frame.id) ?? null,
-            selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
-            primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
-          }),
-        ]
-      : [];
+    if (!frame) return [];
+    const selectedMotion = selectedMotionByShot.get(shot.id);
+    return [
+      projectShotWithImage(shot, frame, {
+        selectedImage: selectedByFrame.get(frame.id) ?? null,
+        selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+        primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
+        motionPromptData: selectedMotion
+          ? motionPromptFromVersion(selectedMotion)
+          : null,
+      }),
+    ];
   });
   const sceneContext = await loadSceneContextBySequence(
     context.scopedDb,
@@ -231,7 +240,10 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     (f) => f.thumbnailStatus === 'failed'
   );
   const failedMotionShots = shotsWithImage.filter(
-    (f) => f.videoStatus === 'failed' && f.thumbnailUrl && f.motionPrompt
+    (f) =>
+      f.videoStatus === 'failed' &&
+      f.thumbnailUrl &&
+      f.motionPromptData?.fullPrompt
   );
   const hasMusicFailure =
     sequence.musicStatus === 'failed' && sequence.musicPrompt;
@@ -322,8 +334,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
 
       const shotVideoModel = videoModelFor(shot);
       const scene = sceneOf(shot);
-      const selectedMotion =
-        await context.scopedDb.shotPromptVersions.getSelectedMotion(shot.id);
+      const selectedMotion = selectedMotionByShot.get(shot.id) ?? null;
       const workflowInput: MotionWorkflowInput = {
         userId: user.id,
         teamId,

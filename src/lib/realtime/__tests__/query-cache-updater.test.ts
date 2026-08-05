@@ -41,10 +41,8 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     shotNumber: null,
     orderIndex: 0,
     durationMs: 3000,
-    motionPrompt: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    motionPromptInputHash: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

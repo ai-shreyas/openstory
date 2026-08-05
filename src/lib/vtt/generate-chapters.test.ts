@@ -13,8 +13,6 @@ const createTestShot = (overrides: Partial<Shot>): Shot => ({
   durationMs: 3000,
   createdAt: new Date(),
   updatedAt: new Date(),
-  motionPrompt: null,
-  motionPromptInputHash: null,
   selectedMotionPromptVersionId: null,
   renderSegmentId: null,
   ...overrides,

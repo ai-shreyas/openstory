@@ -10,6 +10,8 @@ import {
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
 import { getPrimaryVideoByShotIds } from './video-variants';
+import { getSelectedMotionByShotIds } from './shot-prompt-versions';
+import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import {
   frameVariants,
   frames,
@@ -202,22 +204,27 @@ function createSequencesReadMethods(db: Database, teamId: string) {
             )
             .orderBy(asc(shots.sequenceId), asc(shots.orderIndex))
             .then(async (rows) => {
-              const primaryByShot = await getPrimaryVideoByShotIds(
-                db,
-                rows.map((r) => r.shots.id)
-              );
-              return rows.map((row) =>
-                row.frames
+              const shotIds = rows.map((r) => r.shots.id);
+              const [primaryByShot, selectedMotionByShot] = await Promise.all([
+                getPrimaryVideoByShotIds(db, shotIds),
+                getSelectedMotionByShotIds(db, shotIds),
+              ]);
+              return rows.map((row) => {
+                const selectedMotion = selectedMotionByShot.get(row.shots.id);
+                const video = {
+                  selectedVideo: row.video_variants,
+                  primaryVideo: primaryByShot.get(row.shots.id) ?? null,
+                  motionPromptData: selectedMotion
+                    ? motionPromptFromVersion(selectedMotion)
+                    : null,
+                };
+                return row.frames
                   ? projectShotWithImage(row.shots, row.frames, {
                       selectedImage: row.frame_variants,
-                      selectedVideo: row.video_variants,
-                      primaryVideo: primaryByShot.get(row.shots.id) ?? null,
+                      ...video,
                     })
-                  : projectShotMissingFrame(row.shots, {
-                      selectedVideo: row.video_variants,
-                      primaryVideo: primaryByShot.get(row.shots.id) ?? null,
-                    })
-              );
+                  : projectShotMissingFrame(row.shots, video);
+              });
             })
         )
       );

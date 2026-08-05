@@ -60,7 +60,6 @@ export const shots = snakeCase.table(
     // segment-scoped, so shot-scoped video state could never be more than a
     // fan-out of one render's.
     // DB-Audit: drop after backfilling version rows for pre-#713 shots — mirror of the selected `shot_prompt_versions.text`, written only by `mirrorSelection` and read only as the legacy fallback when the pointer is null.
-    motionPrompt: text(), // User-updated motion prompt (overrides AI-generated prompt from metadata)
     // Soft pointer (no FK) to the selected `shot_prompt_versions` row. Written
     // by `mirrorSelection` on every prompt write; the render manifest snapshots
     // it, so a null here means the manifest records no prompt.
@@ -82,8 +81,6 @@ export const shots = snakeCase.table(
     // AI prompt has been generated yet, or when the most recent version was a
     // user-edit (which has no upstream input surface). The visual (image) prompt
     // equivalent moved to `frames.visualPromptInputHash` in #989.
-    // DB-Audit: drop with `motionPrompt` — mirror of `shot_prompt_versions.inputHash`, set in the same lockstep write.
-    motionPromptInputHash: text(),
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())
       .notNull(),

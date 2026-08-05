@@ -34,9 +34,42 @@ import { buildEventInsert } from './sequence-events';
 
 const logger = getLogger(['openstory', 'db', 'shot-prompt-versions']);
 
-// `getSelectedMotionByShots` binds one id param per shot; 90 keeps each query
+// `getSelectedMotionByShotIds` binds one id param per shot; 90 keeps each query
 // under D1's 100-bound-parameter ceiling (matches SHOTS_BY_IDS_BATCH).
 const SELECTED_MOTION_BY_SHOTS_BATCH = 90;
+
+/**
+ * Selected motion prompt version for each shot, keyed by shotId. Powers the
+ * read-side projection that feeds the client motion preview (the structured
+ * dialogue/audio data the assembled preview needs). Shots with no selected
+ * motion version are absent from the map.
+ *
+ * Exported off the methods object so read paths that build a `ShotWithImage`
+ * from raw joins (sequences/admin) can resolve it without a scoped instance.
+ */
+export async function getSelectedMotionByShotIds(
+  db: Database,
+  shotIds: string[]
+): Promise<Map<string, ShotPromptVersion>> {
+  if (shotIds.length === 0) return new Map();
+  // Chunk the id list to stay under D1's 100-bound-parameter ceiling — this
+  // runs on the getShotsFn read path with every shot of a sequence, so a
+  // long sequence (#1019) would otherwise overflow the limit and throw.
+  const result = new Map<string, ShotPromptVersion>();
+  for (let i = 0; i < shotIds.length; i += SELECTED_MOTION_BY_SHOTS_BATCH) {
+    const batch = shotIds.slice(i, i + SELECTED_MOTION_BY_SHOTS_BATCH);
+    const rows = await db
+      .select({ shotId: shots.id, version: shotPromptVersions })
+      .from(shots)
+      .innerJoin(
+        shotPromptVersions,
+        eq(shots.selectedMotionPromptVersionId, shotPromptVersions.id)
+      )
+      .where(inArray(shots.id, batch));
+    for (const r of rows) result.set(r.shotId, r.version);
+  }
+  return result;
+}
 
 type WriteShotPromptVersionBase = {
   shotId: string;
@@ -115,26 +148,14 @@ export function createShotPromptVersionsMethods(db: Database) {
    * force-regen path in `write` mirrors the real upstream `inputHash` while the
    * version row itself carries a null hash — see `write`.
    */
-  const mirrorSelection = (
-    shotId: string,
-    selection: { text: string; inputHash: string | null; versionId: string }
-  ) =>
+  const selectVersion = (shotId: string, versionId: string) =>
     db
       .update(shots)
       .set({
-        motionPrompt: selection.text,
-        motionPromptInputHash: selection.inputHash,
-        selectedMotionPromptVersionId: selection.versionId,
+        selectedMotionPromptVersionId: versionId,
         updatedAt: new Date(),
       })
       .where(eq(shots.id, shotId));
-
-  const mirrorOntoShot = (shotId: string, version: ShotPromptVersion) =>
-    mirrorSelection(shotId, {
-      text: version.text,
-      inputHash: version.inputHash,
-      versionId: version.id,
-    });
 
   /**
    * Revoke the mirror right of every live motion claim on this shot (#1085)
@@ -292,11 +313,7 @@ export function createShotPromptVersionsMethods(db: Database) {
       // Demote live claims in the same batch so a concurrent
       // completePendingAiVersion cannot clobber this write (#1095 TOCTOU).
       await db.batch([
-        mirrorSelection(input.shotId, {
-          text: input.text,
-          inputHash: nextHash,
-          versionId: version.id,
-        }),
+        selectVersion(input.shotId, version.id),
         demoteLiveClaims(input.shotId),
       ]);
 
@@ -486,7 +503,7 @@ export function createShotPromptVersionsMethods(db: Database) {
         if (retired.length === 0) return null;
         // Re-evaluate AFTER the terminal transition (#1095 TOCTOU).
         if (await stillHoldsMirrorRight(input.shotId, claim.id)) {
-          await mirrorOntoShot(input.shotId, conflicting);
+          await selectVersion(input.shotId, conflicting.id);
         }
         return conflicting;
       }
@@ -514,11 +531,7 @@ export function createShotPromptVersionsMethods(db: Database) {
 
       // Mirror right re-checked after we own the terminal write (#1085/#1095).
       if (await stillHoldsMirrorRight(input.shotId, claim.id)) {
-        await mirrorSelection(input.shotId, {
-          text: input.text,
-          inputHash: input.inputHash,
-          versionId: updated.id,
-        });
+        await selectVersion(input.shotId, updated.id);
       }
       return updated;
     },
@@ -556,34 +569,11 @@ export function createShotPromptVersionsMethods(db: Database) {
       return row?.version ?? null;
     },
 
-    /**
-     * Selected motion prompt version for each shot, keyed by shotId. Powers the
-     * read-side projection that feeds the client motion preview (the structured
-     * dialogue/audio data the assembled preview needs). Shots with no selected
-     * motion version are absent from the map.
-     */
-    getSelectedMotionByShots: async (
+    /** @see getSelectedMotionByShotIds */
+    getSelectedMotionByShots: (
       shotIds: string[]
-    ): Promise<Map<string, ShotPromptVersion>> => {
-      if (shotIds.length === 0) return new Map();
-      // Chunk the id list to stay under D1's 100-bound-parameter ceiling — this
-      // runs on the getShotsFn read path with every shot of a sequence, so a
-      // long sequence (#1019) would otherwise overflow the limit and throw.
-      const result = new Map<string, ShotPromptVersion>();
-      for (let i = 0; i < shotIds.length; i += SELECTED_MOTION_BY_SHOTS_BATCH) {
-        const batch = shotIds.slice(i, i + SELECTED_MOTION_BY_SHOTS_BATCH);
-        const rows = await db
-          .select({ shotId: shots.id, version: shotPromptVersions })
-          .from(shots)
-          .innerJoin(
-            shotPromptVersions,
-            eq(shots.selectedMotionPromptVersionId, shotPromptVersions.id)
-          )
-          .where(inArray(shots.id, batch));
-        for (const r of rows) result.set(r.shotId, r.version);
-      }
-      return result;
-    },
+    ): Promise<Map<string, ShotPromptVersion>> =>
+      getSelectedMotionByShotIds(db, shotIds),
 
     /**
      * Repoint the shot at an existing motion prompt version (a restore / undo)
@@ -630,7 +620,7 @@ export function createShotPromptVersionsMethods(db: Database) {
       }
 
       await db.batch([
-        mirrorOntoShot(shotId, version),
+        selectVersion(shotId, version.id),
         // An explicit repoint revokes in-flight claims' mirror rights (#1085).
         demoteLiveClaims(shotId),
         buildEventInsert(db, {

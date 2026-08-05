@@ -10,6 +10,11 @@
  * Migrations run against an empty DB, so the backfill no-ops at setup — these
  * tests seed the legacy shape AFTER migrating, then execute the migration's own
  * statements (read verbatim from the shipped SQL) and assert the result.
+ *
+ * #1067 removes the mirror columns this backfill reads, so drizzle can no
+ * longer write them: the harness re-adds them when the migrated DB lacks them
+ * and seeds them with raw SQL. The migration file itself is history and stays
+ * verbatim.
  */
 
 import type { Database } from '@/lib/db/client';
@@ -94,10 +99,22 @@ async function seed() {
     .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
 }
 
+async function ensureLegacyMirrorColumns(): Promise<void> {
+  const info = await client.execute('PRAGMA table_info(`shots`)');
+  const present = new Set(
+    info.rows.flatMap((row) => (typeof row.name === 'string' ? [row.name] : []))
+  );
+  for (const column of ['motion_prompt', 'motion_prompt_input_hash']) {
+    if (present.has(column)) continue;
+    await client.execute(`ALTER TABLE \`shots\` ADD COLUMN \`${column}\` text`);
+  }
+}
+
 beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: './drizzle/migrations' });
+  await ensureLegacyMirrorColumns();
 });
 
 afterAll(() => {
@@ -114,11 +131,20 @@ async function insertShot(values: {
   motionPromptInputHash?: string | null;
   selectedMotionPromptVersionId?: string | null;
 }) {
+  const {
+    motionPrompt = null,
+    motionPromptInputHash = null,
+    ...shotValues
+  } = values;
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, ...values })
+    .values({ sequenceId, ...shotValues })
     .returning();
   if (!shot) throw new Error('seed: shot insert returned nothing');
+  await client.execute({
+    sql: 'UPDATE `shots` SET `motion_prompt` = ?, `motion_prompt_input_hash` = ? WHERE `id` = ?',
+    args: [motionPrompt, motionPromptInputHash, shot.id],
+  });
   return shot;
 }
 

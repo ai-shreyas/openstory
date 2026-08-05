@@ -23,6 +23,7 @@ import { generateId } from '@/lib/db/id';
 import {
   dbSceneId,
   scenes,
+  shotPromptVersions,
   shots,
   sequenceElements,
   sequences,
@@ -112,12 +113,33 @@ async function insertSceneWithShot(args: {
     })
     .returning();
   if (!scene) throw new Error('test setup: scene insert returned nothing');
-  await db.insert(shots).values({
-    sequenceId,
-    sceneId: scene.id,
-    orderIndex: args.orderIndex,
-    motionPrompt: args.motionPrompt ?? null,
-  });
+  const [shot] = await db
+    .insert(shots)
+    .values({
+      sequenceId,
+      sceneId: scene.id,
+      orderIndex: args.orderIndex,
+    })
+    .returning();
+  if (!shot) throw new Error('test setup: shot insert returned nothing');
+  // The motion prompt IS the shot's selected `shot_prompt_versions` row (#713).
+  if (args.motionPrompt) {
+    const [version] = await db
+      .insert(shotPromptVersions)
+      .values({
+        shotId: shot.id,
+        promptType: 'motion',
+        text: args.motionPrompt,
+        source: 'ai-generated',
+      })
+      .returning();
+    if (!version)
+      throw new Error('test setup: version insert returned nothing');
+    await db
+      .update(shots)
+      .set({ selectedMotionPromptVersionId: version.id })
+      .where(eq(shots.id, shot.id));
+  }
   return scene;
 }
 
@@ -291,11 +313,15 @@ describe('cascadeRename', () => {
       .where(eq(scenes.id, taggedScene.id));
     expect(renamedScene?.continuity?.elementTags).toEqual(['BRAND']);
 
-    const [renamedShot] = await db
-      .select({ motionPrompt: shots.motionPrompt })
+    const [renamedVersion] = await db
+      .select({ text: shotPromptVersions.text })
       .from(shots)
+      .innerJoin(
+        shotPromptVersions,
+        eq(shots.selectedMotionPromptVersionId, shotPromptVersions.id)
+      )
       .where(eq(shots.sceneId, taggedScene.id));
-    expect(renamedShot?.motionPrompt).toBe('Push in on the BRAND.');
+    expect(renamedVersion?.text).toBe('Push in on the BRAND.');
 
     // Workflow-step replay: the cached pre-rename token is the oldToken.
     // Everything already carries BRAND, so the cascade must be a no-op.

@@ -49,13 +49,15 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     videoWorkflowRunId: null,
     videoGeneratedAt: null,
     videoError: null,
-    motionPrompt: 'Camera pan left',
     motionModel: null,
-    motionPromptData: null,
+    motionPromptData: {
+      fullPrompt: 'Camera pan left',
+      dialogue: null,
+      audio: null,
+    },
     videoInputHash: null,
     thumbnailInputHash: null,
     visualPromptInputHash: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
     previewThumbnailUrl: null,
@@ -279,7 +281,7 @@ describe('analyzeFailures', () => {
     const shots = [
       makeShot({
         thumbnailStatus: 'completed',
-        motionPrompt: null,
+        motionPromptData: null,
         videoStatus: 'pending',
       }),
     ];
@@ -317,7 +319,9 @@ describe('analyzeFailures', () => {
   test('pipeline statusError with only missing prompts forces full retry (#1072)', () => {
     // Scene-split crashed after streaming shots; motion/music phases never
     // ran. Do not claim "music prompt generation failed" or offer smart-retry.
-    const shots = [makeShot({ motionPrompt: null, videoStatus: 'pending' })];
+    const shots = [
+      makeShot({ motionPromptData: null, videoStatus: 'pending' }),
+    ];
     const sequence = makeSequence({
       status: 'failed',
       musicPrompt: null,

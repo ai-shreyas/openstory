@@ -274,15 +274,17 @@ describe('backfill scenes migration', () => {
   });
 
   it('leaves the shot’s other columns untouched', async () => {
-    // The backfill writes only sceneId + shotNumber. This pinned the video
-    // mirror until #1067 phase 2d dropped it (video state is derived from the
-    // segment's `video_variants` now); the surviving columns carry the same
+    // The backfill writes only sceneId + shotNumber. This pinned the video and
+    // motion-prompt mirrors until #1067 dropped them (video state derives from
+    // the segment's `video_variants`, the motion prompt from the selected
+    // `shot_prompt_versions` row); the surviving columns carry the same
     // guarantee.
+    const selectedMotionPromptVersionId = generateId();
     const shot = await insertShot(
       {
         orderIndex: 0,
-        motionPrompt: 'A slow dolly in',
         durationMs: 4200,
+        selectedMotionPromptVersionId,
       },
       sceneFixture()
     );
@@ -290,7 +292,9 @@ describe('backfill scenes migration', () => {
     await runBackfill();
 
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.motionPrompt).toBe('A slow dolly in');
+    expect(reread?.selectedMotionPromptVersionId).toBe(
+      selectedMotionPromptVersionId
+    );
     expect(reread?.durationMs).toBe(4200);
   });
 });
