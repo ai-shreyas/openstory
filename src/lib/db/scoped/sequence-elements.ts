@@ -27,7 +27,7 @@ import {
 } from '@/lib/sequence-elements/cascade-rename';
 import {
   enrichShotWithSceneScript,
-  loadSelectedScriptsBySequenceFromDb,
+  loadSceneContextBySequenceFromDb,
   scriptExtract,
 } from '@/lib/scenes/scene-script';
 import { matchElementsToScene } from '@/lib/workflows/scene-matching';
@@ -286,7 +286,7 @@ export function createSequenceElementsMethods(db: Database) {
           .select()
           .from(shots)
           .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+        loadSceneContextBySequenceFromDb(db, sequenceId),
       ]);
       const allShots = allShotsRaw.map((shot) =>
         enrichShotWithSceneScript(shot, scriptBySceneId)
@@ -294,7 +294,11 @@ export function createSequenceElementsMethods(db: Database) {
       // The image prompt lives on each shot's anchor frame now (#989) — keyed
       // by shotId (orderIndex 0), never by id-reuse.
       const frameRows = await db
-        .select({ shotId: frames.shotId, imagePrompt: frames.imagePrompt })
+        .select({
+          id: frames.id,
+          shotId: frames.shotId,
+          imagePrompt: frames.imagePrompt,
+        })
         .from(frames)
         .where(
           and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0))
@@ -302,6 +306,7 @@ export function createSequenceElementsMethods(db: Database) {
       const imagePromptByShot = new Map(
         frameRows.map((f) => [f.shotId, f.imagePrompt])
       );
+      const frameIdByShot = new Map(frameRows.map((f) => [f.shotId, f.id]));
       const shotsWithImagePrompt = allShots.map((s) => ({
         ...s,
         imagePrompt: imagePromptByShot.get(s.id) ?? null,
@@ -353,6 +358,7 @@ export function createSequenceElementsMethods(db: Database) {
         const selectedMotionVersionId = selectedMotionVersionByShot.get(
           delta.shotId
         );
+        const anchorFrameId = frameIdByShot.get(delta.shotId);
         return [
           ...(Object.keys(set).length > 1
             ? [db.update(shots).set(set).where(eq(shots.id, delta.shotId))]
@@ -365,12 +371,12 @@ export function createSequenceElementsMethods(db: Database) {
                   .where(eq(shotPromptVersions.id, selectedMotionVersionId)),
               ]
             : []),
-          ...(delta.imagePrompt !== undefined
+          ...(delta.imagePrompt !== undefined && anchorFrameId
             ? [
                 db
                   .update(frames)
                   .set({ imagePrompt: delta.imagePrompt, updatedAt: now })
-                  .where(eq(frames.id, delta.shotId)),
+                  .where(eq(frames.id, anchorFrameId)),
               ]
             : []),
         ];
@@ -417,7 +423,7 @@ export function createSequenceElementsMethods(db: Database) {
           .select()
           .from(shots)
           .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+        loadSceneContextBySequenceFromDb(db, sequenceId),
       ]);
 
       return allShotsRaw
@@ -460,7 +466,7 @@ export function createSequenceElementsMethods(db: Database) {
             .select()
             .from(shots)
             .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-          loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+          loadSceneContextBySequenceFromDb(db, sequenceId),
           // A shot "has video" when its render segment points at a live version
           // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
           db

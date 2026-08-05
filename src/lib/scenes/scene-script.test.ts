@@ -7,6 +7,7 @@ import {
   resolveSceneForShot,
 } from './scene-script';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import { dbSceneId, type SceneRow } from '@/lib/db/schema';
 
 const sceneFixture = (overrides: Partial<Scene> = {}): Scene => ({
   sceneId: 'scene-1',
@@ -57,35 +58,67 @@ describe('overlaySceneScript', () => {
   });
 });
 
+const sceneRowFixture = (overrides: Partial<SceneRow> = {}): SceneRow => ({
+  id: dbSceneId('scene-row-1'),
+  sequenceId: 'seq-1',
+  orderIndex: 0,
+  location: 'Office',
+  timeOfDay: 'DAY',
+  storyBeat: 'setup',
+  title: 'Office',
+  continuity: null,
+  musicDesign: null,
+  originalScript: { extract: 'Scene row copy.', dialogue: [] },
+  selectedScriptVersionId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...overrides,
+});
+
 describe('resolveSceneForShot', () => {
-  it('returns overlaid scene and script without mutating the shot', () => {
-    const shot = {
-      id: 'shot-1',
-      sceneId: 'scene-row-1',
-      metadata: sceneFixture({
-        originalScript: { extract: 'Legacy shot copy.', dialogue: [] },
-      }),
-    } as const;
+  const shot = { id: 'shot-1', sceneId: 'scene-row-1', durationMs: 5000 };
+
+  it('composes the scene from the scene row, not the shot', () => {
     const { scene, script } = resolveSceneForShot(shot, {
-      extract: 'Canonical scene copy.',
-      dialogue: [],
+      scene: sceneRowFixture(),
+      script: { extract: 'Canonical scene copy.', dialogue: [] },
     });
     expect(script?.extract).toBe('Canonical scene copy.');
     expect(scene?.originalScript.extract).toBe('Canonical scene copy.');
-    expect(shot.metadata.originalScript.extract).toBe('Legacy shot copy.');
+    expect(scene?.metadata?.title).toBe('Office');
+    expect(scene?.sceneId).toBe('scene-row-1');
+    expect(scene?.sceneNumber).toBe(1);
   });
 
-  it('resolves from a preloaded script map', () => {
-    const shot = {
-      id: 'shot-1',
-      sceneId: 'scene-row-1',
-      metadata: sceneFixture(),
-    } as const;
+  it('derives durationSeconds from the shot, not a stored copy', () => {
+    const { scene } = resolveSceneForShot(
+      { ...shot, durationMs: 7500 },
+      { scene: sceneRowFixture(), script: null }
+    );
+    expect(scene?.metadata?.durationSeconds).toBe(7.5);
+  });
+
+  it('resolves from a preloaded map', () => {
     const { script } = resolveSceneForShot(
       shot,
-      new Map([['scene-row-1', { extract: 'From map.', dialogue: [] }]])
+      new Map([
+        [
+          'scene-row-1',
+          {
+            scene: sceneRowFixture(),
+            script: { extract: 'From map.', dialogue: [] },
+          },
+        ],
+      ])
     );
     expect(script?.extract).toBe('From map.');
+  });
+
+  it('resolves null for a shot with no scene', () => {
+    expect(resolveSceneForShot({ ...shot, sceneId: null }, new Map())).toEqual({
+      scene: null,
+      script: null,
+    });
   });
 });
 
@@ -119,7 +152,13 @@ describe('enrichShotWithSceneScript', () => {
     const enriched = enrichShotWithSceneScript(
       shot,
       new Map([
-        ['scene-row-1', { extract: 'Canonical scene copy.', dialogue: [] }],
+        [
+          'scene-row-1',
+          {
+            scene: sceneRowFixture(),
+            script: { extract: 'Canonical scene copy.', dialogue: [] },
+          },
+        ],
       ])
     );
     expect(enriched.metadata?.originalScript.extract).toBe(

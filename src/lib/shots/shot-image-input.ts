@@ -1,3 +1,4 @@
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
 /**
  * Image-regeneration trigger input builder (#1077) — the exact payload
  * assembly `generateShotImageFn` performs (reference matching, model
@@ -70,6 +71,8 @@ export async function prepareShotImageWorkflowInput(args: {
   };
   shot: Shot;
   frame: Frame;
+  /** The shot's scene, composed from `scenes` + its selected script version. */
+  scene: Scene | null;
   /** Selected scene-script extract, for element matching. */
   scriptExtract: string;
   userId: string;
@@ -83,6 +86,7 @@ export async function prepareShotImageWorkflowInput(args: {
     sequence,
     shot,
     frame,
+    scene,
     scriptExtract,
     userId,
     promptOverride,
@@ -98,7 +102,7 @@ export async function prepareShotImageWorkflowInput(args: {
     throw new Error('Shot has no prompt or description to regenerate from');
   }
 
-  const continuity = shot.metadata?.continuity;
+  const continuity = scene?.continuity;
 
   const allCharacters = await scopedDb.characters.listWithSheets(sequence.id);
   const matchedCharacters = matchCharactersToScene(
@@ -113,12 +117,12 @@ export async function prepareShotImageWorkflowInput(args: {
   const matchedLocations = matchLocationsToScene(
     allLocations,
     continuity?.environmentTag ?? '',
-    shot.metadata?.metadata?.location ?? ''
+    scene?.metadata?.location ?? ''
   );
   const locationReferences = getSceneLocationReferenceImages(
     allLocations,
     continuity?.environmentTag ?? '',
-    shot.metadata?.metadata?.location ?? ''
+    scene?.metadata?.location ?? ''
   );
 
   const allElements = await scopedDb.sequenceElements.list(sequence.id);
@@ -167,7 +171,7 @@ export async function prepareShotImageWorkflowInput(args: {
       .filter((v): v is string => typeof v === 'string' && v.length > 0)
       .sort();
   const sceneSnapshot: ShotImageSceneSnapshot = {
-    sceneId: shot.metadata?.sceneId ?? shot.id,
+    sceneId: scene?.sceneId ?? shot.id,
     visualPrompt: prompt,
     characterSheetHashes: sortedHashes(
       matchedCharacters.map((c) => c.sheetInputHash)

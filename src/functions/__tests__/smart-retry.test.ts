@@ -19,7 +19,10 @@ import { describe, expect, test, vi } from 'vitest';
 import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
 import type { Sequence, VideoVariant } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
+import {
+  frameFixtureFor,
+  primaryVideoFixtureFor,
+} from '@/lib/mocks/frame-fixtures';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
@@ -219,11 +222,18 @@ function makeContext(
     videoVariants: {
       listSelectedModelsBySequence: listSelectedVideoModels,
       listLastFailedModelsBySequence: listFailedVideoModels,
-      // The video surface is projected from the segment's selected version
-      // (#1067 phase 2d). Empty is faithful here: every fixture shot has
-      // `videoUrl: null` / a failed-or-pending video, and only a COMPLETED
-      // version is ever selectable.
+      // Video status derives from the segment's newest primary render (#1067),
+      // so each fixture shot's videoStatus becomes a variant row.
       getSelectedByShotIds: vi.fn(async () => new Map<string, VideoVariant>()),
+      getPrimaryByShotIds: vi.fn(
+        async () =>
+          new Map(
+            shots.flatMap((s) => {
+              const primary = primaryVideoFixtureFor(s);
+              return primary ? [[s.id, primary]] : [];
+            })
+          )
+      ),
     },
     characters: { listWithSheets },
     shotPromptVersions: { getSelectedMotion },

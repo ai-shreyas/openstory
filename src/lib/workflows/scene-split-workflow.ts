@@ -102,7 +102,6 @@ async function persistStreamedSceneAndShot(
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
       (scene.metadata?.durationSeconds || 3) * 1000
     ),
-    videoStatus: 'pending',
     sceneId: sceneRow.id,
     shotNumber: 1,
   } satisfies NewShot);
@@ -506,7 +505,6 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                 // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
                 (scene.metadata?.durationSeconds || 3) * 1000
               ),
-              videoStatus: 'pending',
               sceneId: sceneIdByOrderIndex.get(index) ?? null,
               shotNumber: 1,
             }) satisfies NewShot

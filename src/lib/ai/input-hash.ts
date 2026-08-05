@@ -361,7 +361,8 @@ export type PromptSceneContextHashInput = {
  */
 function sceneInputContext(scene: Scene) {
   return {
-    sceneId: scene.sceneId,
+    // No `sceneId`: identity is not content. Hashing it made a prompt stale
+    // when a scene was re-analysed under a new id without its text changing.
     sceneNumber: scene.sceneNumber,
     originalScript: scene.originalScript,
     metadata: scene.metadata

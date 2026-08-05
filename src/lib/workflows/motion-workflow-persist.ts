@@ -111,23 +111,6 @@ export type MotionEmit = (
   payload: MotionVideoProgressPayload
 ) => Promise<void>;
 
-/**
- * The shot-owned in-flight write for `set-generating-status`. Model identity
- * lives on the `video_variants` version the workflow appends alongside this
- * (#1067 phase 2d dropped the `shots.motionModel` mirror; `resolve-asset-models`
- * already forbade reading it). What stays here is the primary render's status +
- * run id, which no selection pointer can carry — `videoVariants.select` only
- * ever points at a `completed` version.
- */
-export function buildMotionGeneratingShotWrite(opts: {
-  workflowRunId: string;
-}): Partial<NewShot> {
-  return {
-    videoStatus: 'generating',
-    videoWorkflowRunId: opts.workflowRunId,
-  };
-}
-
 export type PersistMotionOutcome =
   | { status: 'completed'; videoUrl: string }
   | { status: 'shot-deleted' };
@@ -281,11 +264,6 @@ export async function persistMotionFailure(opts: {
     opts;
 
   if (!variantOnly) {
-    await scopedDb.shots.update(
-      shotId,
-      { videoStatus: 'failed', videoError: error },
-      { throwOnMissing: false }
-    );
     // Drop auto-promote if this run owned it (#1070).
     const shot = await scopedDb.shots.getById(shotId);
     if (shot?.renderSegmentId) {

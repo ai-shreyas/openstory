@@ -77,11 +77,6 @@ export type PersistUpscaleScopedDb = {
       opts: { actorId: string | null }
     ) => Promise<{ id: string }>;
   };
-  renderSegments: {
-    // Dropping the segment's chosen render is how a new still invalidates the
-    // downstream video (#1067 phase 2d).
-    clearSelectionByShot: (shotId: string) => Promise<void>;
-  };
   frames: {
     // The helper only needs the anchor's id (frame id ≠ shot id, #989).
     getAnchorByShot: (shotId: string) => Promise<{ id: string } | null>;
@@ -140,18 +135,6 @@ export async function persistUpscaleSelection(params: {
   }
 
   await scopedDb.frameVariants.select(frame.id, versionId, { actorId });
-
-  // A new still invalidates the shot's downstream video (#1067 phase 2d).
-  await scopedDb.renderSegments.clearSelectionByShot(shotId);
-  await scopedDb.shots.update(
-    shotId,
-    {
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoError: null,
-    },
-    { throwOnMissing: false }
-  );
 
   await emit({ shotId, status: 'completed', thumbnailUrl: url });
   return { selected: true };

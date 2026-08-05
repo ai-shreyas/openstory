@@ -7,39 +7,31 @@
  *
  *   - completed: flip the version to `completed`, log `video.rendered`, and (for
  *     a primary render) repoint the shot's selection via `videoVariants.select`
- *     (which mirrors `shots.video*` + the render segment's selection pointer). A `variantOnly`
+ *     (which repoints the render segment's selection pointer). A `variantOnly`
  *     render skips the select. Shot-deleted mid-flight skips the select too.
- *   - failed: mark the version failed by workflow run id and (primary only) flip
- *     the legacy `shots.video*` status.
+ *   - failed: mark the version failed by workflow run id — the shot's video
+ *     status derives from that row since #1067 phase 2d, so nothing is written
+ *     to `shots`.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { NewShot, NewVideoVariant } from '@/lib/db/schema';
 import type { RecordEventInput } from '@/lib/db/scoped/sequence-events';
 import {
-  buildMotionGeneratingShotWrite,
   type MotionVideoProgressPayload,
   persistMotionCompletion,
   persistMotionFailure,
   type PersistMotionScopedDb,
 } from './motion-workflow-persist';
 
+// `buildMotionGeneratingShotWrite` is gone: the in-flight state is the appended
+// `video_variants` row, covered by `persistMotionFailure` + shot-with-image.
+
 const upload = {
   url: 'https://r2/seq/shot-veo.mp4',
   path: 'team/seq/shot.mp4',
 };
 const NOW = new Date('2026-06-02T00:00:00Z');
-
-describe('buildMotionGeneratingShotWrite', () => {
-  it('stamps the shot-owned in-flight state with the run id', () => {
-    // No `motionModel`: model identity lives on the `video_variants` version
-    // the workflow appends alongside this (#1067 phase 2d dropped the mirror).
-    expect(buildMotionGeneratingShotWrite({ workflowRunId: 'run-1' })).toEqual({
-      videoStatus: 'generating',
-      videoWorkflowRunId: 'run-1',
-    });
-  });
-});
 
 type CallName =
   | 'videoVariants.update'
@@ -306,7 +298,7 @@ describe('persistMotionCompletion', () => {
 });
 
 describe('persistMotionFailure', () => {
-  it('primary: flips the legacy shot status + marks the version failed, emits with the reason', async () => {
+  it('primary: marks the version failed (no shot write) and emits with the reason', async () => {
     const spy = buildScopedDbSpy();
     const emits: Array<{ event: string; payload: MotionVideoProgressPayload }> =
       [];
@@ -323,17 +315,15 @@ describe('persistMotionFailure', () => {
     });
 
     expect(spy.callOrder).toEqual([
-      'shots.update',
       'shots.getById',
       'renderSegments.getById',
       'videoVariants.getById',
       // pending row's run id is 'run-1' in the spy, not 'run-9' — no clear
       'videoVariants.markFailedByWorkflowRun',
     ]);
-    expect(spy.shotUpdates[0]?.data).toEqual({
-      videoStatus: 'failed',
-      videoError: 'fal 500',
-    });
+    // The failure lives on the version row only — the shot has no video columns
+    // to flip since #1067 phase 2d, so `videoStatus`/`videoError` derive from it.
+    expect(spy.shotUpdates).toEqual([]);
     expect(spy.markFailed).toEqual([{ runId: 'run-9', error: 'fal 500' }]);
     expect(emits).toEqual([
       {
@@ -348,7 +338,7 @@ describe('persistMotionFailure', () => {
     ]);
   });
 
-  it('variant-only: marks the version failed only, never touches the legacy columns', async () => {
+  it('variant-only: marks the version failed without resolving the primary slot', async () => {
     const spy = buildScopedDbSpy();
 
     await persistMotionFailure({

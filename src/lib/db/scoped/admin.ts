@@ -14,6 +14,7 @@ import { frameVariants } from '@/lib/db/schema/frame-variants';
 import { frames } from '@/lib/db/schema/frames';
 import { renderSegments } from '@/lib/db/schema/render-segments';
 import { videoVariants } from '@/lib/db/schema/video-variants';
+import { getPrimaryVideoByShotIds } from './video-variants';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
@@ -250,14 +251,22 @@ export function createAdminMethods(db: Database) {
       )
       .where(eq(shots.sequenceId, sequenceId))
       .orderBy(asc(shots.orderIndex));
-    return rows.map((row) =>
-      row.frames
+    const primaryByShot = await getPrimaryVideoByShotIds(
+      db,
+      rows.map((r) => r.shots.id)
+    );
+    return rows.map((row) => {
+      const video = {
+        selectedVideo: row.video_variants,
+        primaryVideo: primaryByShot.get(row.shots.id) ?? null,
+      };
+      return row.frames
         ? projectShotWithImage(row.shots, row.frames, {
             selectedImage: row.frame_variants,
-            selectedVideo: row.video_variants,
+            ...video,
           })
-        : projectShotMissingFrame(row.shots, row.video_variants)
-    );
+        : projectShotMissingFrame(row.shots, video);
+    });
   }
 
   // ---- User activity reporting ----

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { createInsertSchema, createUpdateSchema } from 'drizzle-orm/zod';
-import { shots, SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
+import { shots } from '@/lib/db/schema/shots';
 import { IMAGE_MODELS, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
 import { sceneSchema } from '@/lib/ai/scene-analysis.schema';
 
@@ -17,7 +17,6 @@ const createShotSchema = createInsertSchema(shots, {
   description: (schema) => schema.min(1).max(5000),
   durationMs: (schema) => schema.min(1),
   metadata: () => sceneSchema.nullable().optional(),
-  videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 }).omit({
   id: true,
   createdAt: true,
@@ -28,7 +27,6 @@ export const updateShotSchema = createUpdateSchema(shots, {
   description: (schema) => schema.min(1).max(5000),
   durationMs: (schema) => schema.min(1),
   metadata: () => sceneSchema.nullable().optional(),
-  videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 })
   .omit({
     id: true,

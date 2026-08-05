@@ -1,7 +1,7 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "add56cce-427d-4e77-a09e-3037c69113e2",
+  "id": "54b4e3ec-9d28-4f7f-bed0-6c52492624f6",
   "prevIds": ["4d5c0109-92e0-4d9b-ab78-8cc4d6141e6c"],
   "ddl": [
     {
@@ -4658,36 +4658,6 @@
       "type": "text",
       "notNull": false,
       "autoincrement": false,
-      "default": "'pending'",
-      "generated": null,
-      "name": "video_status",
-      "entityType": "columns",
-      "table": "shots"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "video_workflow_run_id",
-      "entityType": "columns",
-      "table": "shots"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "video_error",
-      "entityType": "columns",
-      "table": "shots"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
       "default": null,
       "generated": null,
       "name": "motion_prompt",
@@ -6321,6 +6291,16 @@
       "default": null,
       "generated": null,
       "name": "error",
+      "entityType": "columns",
+      "table": "video_variants"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "true",
+      "generated": null,
+      "name": "is_primary",
       "entityType": "columns",
       "table": "video_variants"
     },

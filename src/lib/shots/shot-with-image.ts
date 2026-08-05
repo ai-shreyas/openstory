@@ -12,23 +12,9 @@
  * `variantImageUrl` / `variantImageStatus` are the 3×3 grid sheet, a
  * `kind:'framing'` `frame_variants` version.
  *
- * The still's url/path/model/hash come from the SELECTED `frame_variants` row;
- * this file is the only place that knows that.
- *
- * The VIDEO surface works the same way as of #1067 phase 2d: `videoUrl` /
- * `videoPath` / `videoGeneratedAt` / `videoInputHash` / `motionModel` were
- * columns on `shots` mirroring the selected render; they are now projected from
- * the `video_variants` row `render_segments.selectedVideoVersionId` points at
- * (a shot reaches its segment via `shots.renderSegmentId`). The projected names
- * are unchanged, so the client and realtime cache contract is untouched.
- *
- * `videoStatus` / `videoError` / `videoWorkflowRunId` deliberately REMAIN real
- * `shots` columns and are NOT projected: `videoVariants.select` refuses any
- * version that is not `completed`, so the selection pointer structurally cannot
- * carry in-flight or failed state, and `persistMotionFailure` records a failure
- * on the shot only for a PRIMARY render (`!variantOnly`) — a distinction stored
- * nowhere on the variant row. Same reasoning that kept `frames.imageStatus` /
- * `imageError` / `imageWorkflowRunId`.
+ * The still's url/path/model/hash come from the SELECTED `frame_variants` row,
+ * and the video's from the `video_variants` row the shot's render segment points
+ * at (#1067); this file is the only place that knows either.
  */
 
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
@@ -43,33 +29,37 @@ export type ShotGridSheet = {
 
 /**
  * The version rows a shot's surface is projected from. An object (not
- * positional args) so adding a source can't silently re-bind an existing one,
- * and so every read path names what it resolved.
- *
- * `selectedImage` and `selectedVideo` are REQUIRED (not optional) so a new read
- * path can't silently project a null surface onto a shot that has one.
+ * positional args) so adding a source can't silently re-bind an existing one.
+ * The version fields are REQUIRED so a new read path can't silently project an
+ * empty surface onto a shot that has one.
  */
 export type ShotProjectionSources = {
   /** The anchor frame's selected `frame_variants` row. */
   selectedImage: FrameVariant | null;
-  /**
-   * The `video_variants` row the shot's segment points at
-   * (`render_segments.selectedVideoVersionId`), resolved via
-   * `videoVariants.getSelectedByShotIds` / `getSelectedByShot`.
-   */
+  /** The version `render_segments.selectedVideoVersionId` points at. */
   selectedVideo: VideoVariant | null;
+  /**
+   * The newest non-`variantOnly` render for the shot's segment — its lifecycle
+   * IS the shot's video status. Separate from `selectedVideo` because only a
+   * `completed` version is ever selectable, so the pointer alone can never
+   * express generating/failed.
+   */
+  primaryVideo: VideoVariant | null;
   gridSheet?: ShotGridSheet | null;
   motionPromptData?: AssemblableMotionPrompt | null;
 };
 
 export type ShotWithImage = Shot & {
-  /** Video surface — from the segment's selected version, not a shot column. */
+  /** Video surface — from the segment's versions, not from `shots` columns. */
   videoUrl: VideoVariant['url'];
   videoPath: VideoVariant['storagePath'];
   videoGeneratedAt: VideoVariant['generatedAt'];
   videoInputHash: VideoVariant['inputHash'];
   /** Null when never rendered — absent means absent, not a default. */
   motionModel: VideoVariant['model'] | null;
+  videoStatus: VideoVariant['status'] | null;
+  videoError: VideoVariant['error'];
+  videoWorkflowRunId: VideoVariant['workflowRunId'];
   thumbnailUrl: FrameVariant['url'];
   previewThumbnailUrl: Frame['previewImageUrl'];
   thumbnailPath: FrameVariant['storagePath'];
@@ -103,7 +93,7 @@ export type ShotWithImage = Shot & {
  */
 export function projectShotMissingFrame(
   shot: Shot,
-  selectedVideo: VideoVariant | null
+  video: Pick<ShotProjectionSources, 'selectedVideo' | 'primaryVideo'>
 ): ShotWithImage {
   const frame: Frame = {
     // Synthetic in-memory placeholder ONLY — never persisted and never used for
@@ -129,12 +119,8 @@ export function projectShotMissingFrame(
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,
   };
-  // A frameless shot still has a video surface: video hangs off the shot's
-  // render segment, not off the frame.
-  return projectShotWithImage(shot, frame, {
-    selectedImage: null,
-    selectedVideo,
-  });
+  // A frameless shot still has a video surface: video hangs off the segment.
+  return projectShotWithImage(shot, frame, { selectedImage: null, ...video });
 }
 
 export function projectShotWithImage(
@@ -142,7 +128,13 @@ export function projectShotWithImage(
   frame: Frame,
   sources: ShotProjectionSources
 ): ShotWithImage {
-  const { selectedImage, selectedVideo, gridSheet, motionPromptData } = sources;
+  const {
+    selectedImage,
+    selectedVideo,
+    primaryVideo,
+    gridSheet,
+    motionPromptData,
+  } = sources;
   return {
     ...shot,
     videoUrl: selectedVideo?.url ?? null,
@@ -150,6 +142,13 @@ export function projectShotWithImage(
     videoGeneratedAt: selectedVideo?.generatedAt ?? null,
     videoInputHash: selectedVideo?.inputHash ?? null,
     motionModel: selectedVideo?.model ?? null,
+    // The newest primary render's lifecycle wins — re-rolling over a good
+    // video reads 'generating', which is why this can't derive from the
+    // selection pointer. The pointer is only the fallback for a selection with
+    // no primary render behind it (pre-#1067 backfilled rows).
+    videoStatus: primaryVideo?.status ?? (selectedVideo ? 'completed' : null),
+    videoError: primaryVideo?.error ?? null,
+    videoWorkflowRunId: primaryVideo?.workflowRunId ?? null,
     thumbnailUrl: selectedImage?.url ?? null,
     previewThumbnailUrl: frame.previewImageUrl,
     thumbnailPath: selectedImage?.storagePath ?? null,

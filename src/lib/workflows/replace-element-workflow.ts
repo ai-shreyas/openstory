@@ -359,11 +359,6 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
           );
         }
         if (selectedVideoByShot.get(shot.id)?.url) {
-          await scopedDb.shots.update(
-            shot.id,
-            { videoStatus: 'generating', videoError: null },
-            { throwOnMissing: false }
-          );
           await safeEmit(sequenceId, `video-progress:${shot.id}`, () =>
             getGenerationChannel(sequenceId).emit('generation.video:progress', {
               shotId: shot.id,
@@ -553,11 +548,6 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
               'WorkflowValidationError'
             );
           }
-
-          await scopedDb.shots.update(shot.id, {
-            videoStatus: 'generating',
-            videoError: null,
-          });
 
           const childPayload: MotionWorkflowInput = {
             userId: input.userId,

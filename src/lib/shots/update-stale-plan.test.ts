@@ -70,7 +70,7 @@ vi.doMock('@/lib/shots/shot-staleness', () => ({
   ),
 }));
 vi.doMock('@/lib/scenes/scene-script', () => ({
-  loadSelectedScriptsBySequence: vi.fn(() => Promise.resolve(new Map())),
+  loadSceneContextBySequence: vi.fn(() => Promise.resolve(new Map())),
   resolveSceneForShot: vi.fn((shot: Shot) => ({
     scene: shot.metadata ?? null,
     script: null,

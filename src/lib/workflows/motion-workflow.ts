@@ -53,7 +53,6 @@ import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { MotionWorkflowInput } from '@/lib/workflow/types';
 import {
-  buildMotionGeneratingShotWrite,
   persistMotionCompletion,
   persistMotionFailure,
 } from '@/lib/workflows/motion-workflow-persist';
@@ -198,18 +197,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           return { shotDeleted: false, videoVersionId: null, sceneId: null };
         }
 
-        const generatingShotWrite = buildMotionGeneratingShotWrite({
-          workflowRunId,
-        });
-
-        // Variant-only (#547): don't stamp the shot's in-flight columns —
-        // read the shot instead. The per-model `video_variants` version (opened
-        // below) carries the in-flight state; the primary video is left intact.
-        const shot = input.variantOnly
-          ? await scopedDb.shots.getById(input.shotId)
-          : await scopedDb.shots.update(input.shotId, generatingShotWrite, {
-              throwOnMissing: false,
-            });
+        const shot = await scopedDb.shots.getById(input.shotId);
 
         if (!shot) {
           logger.info(
@@ -325,6 +313,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             inputHash: await computeVideoManifestInputHash(manifest, model),
             status: 'generating',
             workflowRunId,
+            isPrimary: !input.variantOnly,
           });
           openedVideoVersionId = version.id;
           // Primary motion claims auto-promote; last kickoff wins (#1070).

@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Storybook mock data uses intentional type assertions */
+import type { VideoVariant } from '@/lib/db/schema';
 import type { Shot } from '@/types/database';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
@@ -23,11 +24,33 @@ type Story = StoryObj<typeof ScenePlayer>;
 // mock rows carry the legacy `thumbnail*`/`image*` names the player still reads
 // (the `ShotWithImage` projection); mirror them back onto a concrete anchor
 // `Frame` (id == shot.id) so each row matches what `getShotsFn` returns.
+/**
+ * The segment's newest primary render — the row a shot's video lifecycle is
+ * derived from (#1067). `videoFixtureFor` is url-gated, so a render that never
+ * produced one borrows an empty url and puts the real (null) one back.
+ */
+const primaryVideoFixture = (
+  shot: Omit<ShotWithImage, 'frame'>
+): VideoVariant | null => {
+  const status = shot.videoStatus;
+  if (status === null) return null;
+  const row = videoFixtureFor({ ...shot, videoUrl: shot.videoUrl ?? '' });
+  if (!row) return null;
+  return {
+    ...row,
+    url: shot.videoUrl,
+    status,
+    error: shot.videoError,
+    workflowRunId: shot.videoWorkflowRunId,
+  };
+};
+
 const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
   const { frame, selectedVersion } = frameFixtureFor(shot);
   return projectShotWithImage(shot, frame, {
     selectedImage: selectedVersion,
     selectedVideo: videoFixtureFor(shot),
+    primaryVideo: primaryVideoFixture(shot),
     gridSheet: {
       url: shot.variantImageUrl,
       status: shot.variantImageStatus,

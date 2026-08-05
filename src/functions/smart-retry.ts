@@ -105,12 +105,18 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       (fr) => [fr.shotId, fr]
     )
   );
-  const [selectedByFrame, selectedVideoByShot] = await Promise.all([
-    context.scopedDb.frameVariants.getSelectedByFrameIds(
-      [...anchorsByShot.values()].map((fr) => fr.id)
-    ),
-    context.scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
-  ]);
+  const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
+    await Promise.all([
+      context.scopedDb.frameVariants.getSelectedByFrameIds(
+        [...anchorsByShot.values()].map((fr) => fr.id)
+      ),
+      context.scopedDb.videoVariants.getSelectedByShotIds(
+        shots.map((s) => s.id)
+      ),
+      context.scopedDb.videoVariants.getPrimaryByShotIds(
+        shots.map((s) => s.id)
+      ),
+    ]);
   const shotsWithImage = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
     return frame
@@ -118,6 +124,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
           projectShotWithImage(shot, frame, {
             selectedImage: selectedByFrame.get(frame.id) ?? null,
             selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+            primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
           }),
         ]
       : [];

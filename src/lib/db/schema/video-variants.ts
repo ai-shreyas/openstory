@@ -87,6 +87,14 @@ export const videoVariants = snakeCase.table(
     generatedAt: integer({ mode: 'timestamp' }),
     error: text(),
 
+    // Was this render seeking the segment's primary slot, or just adding a
+    // model alongside it (`variantOnly`, #547)? Without this the two are
+    // indistinguishable once a render fails, since failure clears
+    // `pendingPromoteVersionId` — which is why the shot kept its own
+    // `video_status`/`video_error` copy until #1067 phase 2d. The segment's
+    // in-flight/failed state is the newest primary version's.
+    isPrimary: integer({ mode: 'boolean' }).default(true).notNull(),
+
     // SHA-256 over the manifest → O(1) staleness of THIS version.
     inputHash: text(),
 

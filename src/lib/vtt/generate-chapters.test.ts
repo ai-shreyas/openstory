@@ -20,12 +20,9 @@ const createTestShot = (overrides: Partial<Shot>): Shot => ({
   orderIndex: 0,
   description: null,
   durationMs: 3000,
-  videoStatus: 'pending',
   metadata: null,
   createdAt: new Date(),
   updatedAt: new Date(),
-  videoWorkflowRunId: null,
-  videoError: null,
   motionPrompt: null,
   motionPromptInputHash: null,
   selectedMotionPromptVersionId: null,
@@ -39,7 +36,6 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 5000,
-        videoStatus: 'completed',
         metadata: createTestScene({
           sceneNumber: 1,
           metadata: {
@@ -55,7 +51,6 @@ describe('generateChaptersVTT', () => {
         id: '2',
         orderIndex: 1,
         durationMs: 3000,
-        videoStatus: 'completed',
         metadata: createTestScene({
           sceneNumber: 2,
           metadata: {
@@ -83,13 +78,11 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 3000,
-        videoStatus: 'completed',
       }),
       createTestShot({
         id: '2',
         orderIndex: 1,
         durationMs: 2000,
-        videoStatus: 'completed',
       }),
     ];
 
@@ -104,7 +97,6 @@ describe('generateChaptersVTT', () => {
     const shots: Shot[] = [
       createTestShot({
         durationMs: null,
-        videoStatus: 'completed',
       }),
     ];
 
@@ -118,19 +110,16 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 5000,
-        videoStatus: 'completed',
       }),
       createTestShot({
         id: '2',
         orderIndex: 1,
         durationMs: 7000,
-        videoStatus: 'completed',
       }),
       createTestShot({
         id: '3',
         orderIndex: 2,
         durationMs: 4000,
-        videoStatus: 'completed',
       }),
     ];
 
@@ -149,13 +138,11 @@ describe('generateChaptersVTT', () => {
       createTestShot({
         id: '1',
         durationMs: 3600000,
-        videoStatus: 'completed',
       }),
       createTestShot({
         id: '2',
         orderIndex: 1,
         durationMs: 125000,
-        videoStatus: 'completed',
       }),
     ];
 
@@ -181,7 +168,6 @@ describe('generateChaptersVTT', () => {
     const shots: Shot[] = [
       createTestShot({
         durationMs: 3000,
-        videoStatus: 'completed',
         metadata: createTestScene({
           sceneNumber: 5,
           metadata: {
@@ -251,7 +237,6 @@ describe('generateChaptersVTT', () => {
     const shots: Shot[] = [
       createTestShot({
         durationMs: 1234, // 1.234 seconds
-        videoStatus: 'completed',
       }),
     ];
 

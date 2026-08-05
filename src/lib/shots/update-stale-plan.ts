@@ -37,7 +37,7 @@ import type { ScopedDb } from '@/lib/db/scoped';
 import { getLogger } from '@/lib/observability/logger';
 import { assembleSequenceSegments } from '@/lib/scenes/scene-segments';
 import {
-  loadSelectedScriptsBySequence,
+  loadSceneContextBySequence,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import {
@@ -211,7 +211,7 @@ export async function computePlan(args: {
   const [anchorRows, scriptBySceneId, characters, locations, elements, style] =
     await Promise.all([
       scopedDb.frames.listAnchorsBySequence(sequenceId),
-      loadSelectedScriptsBySequence(scopedDb, sequenceId),
+      loadSceneContextBySequence(scopedDb, sequenceId),
       scopedDb.characters.listWithSheets(sequenceId),
       scopedDb.sequenceLocations.listWithReferences(sequenceId),
       scopedDb.sequenceElements.list(sequenceId),

@@ -105,6 +105,7 @@ describe('projectShotWithImage', () => {
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: version,
       selectedVideo: null,
+      primaryVideo: null,
       gridSheet: { url: 'https://cdn/grid.png', status: 'completed' },
     });
 
@@ -131,6 +132,7 @@ describe('projectShotWithImage', () => {
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: null,
       selectedVideo: null,
+      primaryVideo: null,
     });
 
     expect(projected.thumbnailUrl).toBeNull();
@@ -150,6 +152,7 @@ describe('projectShotWithImage', () => {
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
       selectedVideo: null,
+      primaryVideo: null,
       gridSheet: { url: 'https://cdn/grid.png', status: 'generating' },
     });
 
@@ -164,6 +167,7 @@ describe('projectShotWithImage', () => {
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
       selectedVideo: null,
+      primaryVideo: null,
     });
 
     expect(projected.variantImageUrl).toBeNull();
@@ -182,6 +186,7 @@ describe('projectShotWithImage', () => {
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
       selectedVideo: video,
+      primaryVideo: null,
     });
 
     expect(projected.videoUrl).toBe(video.url);
@@ -189,9 +194,61 @@ describe('projectShotWithImage', () => {
     expect(projected.videoGeneratedAt).toBe(video.generatedAt);
     expect(projected.videoInputHash).toBe(video.inputHash);
     expect(projected.motionModel).toBe('kling_25_turbo_pro');
-    // Not projected — these stay real `shots` columns.
-    expect(projected.videoStatus).toBe(shot.videoStatus);
-    expect(projected.videoError).toBe(shot.videoError);
+    // A selection with no primary render behind it (a backfilled row) still
+    // reads as completed — the pointer is the fallback lifecycle.
+    expect(projected.videoStatus).toBe('completed');
+    expect(projected.videoError).toBeNull();
+    expect(projected.videoWorkflowRunId).toBeNull();
+  });
+
+  it('takes the lifecycle from the newest PRIMARY render, not the selection', () => {
+    // Re-rolling over a good video must read `generating` while the selected
+    // (previous) render keeps playing.
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+    const selected = makeVideo(shot);
+    const primary: VideoVariant = {
+      ...selected,
+      id: 'vv-inflight',
+      url: null,
+      storagePath: null,
+      status: 'generating',
+      error: null,
+      workflowRunId: 'run-motion-1',
+    };
+
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: makeVersion(shot),
+      selectedVideo: selected,
+      primaryVideo: primary,
+    });
+
+    expect(projected.videoStatus).toBe('generating');
+    expect(projected.videoWorkflowRunId).toBe('run-motion-1');
+    expect(projected.videoUrl).toBe(selected.url);
+  });
+
+  it('surfaces the primary render’s failure over the selected version', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+    const primary: VideoVariant = {
+      ...makeVideo(shot),
+      id: 'vv-failed',
+      url: null,
+      storagePath: null,
+      status: 'failed',
+      error: 'fal 500',
+    };
+
+    const projected = projectShotWithImage(shot, frame, {
+      selectedImage: makeVersion(shot),
+      selectedVideo: null,
+      primaryVideo: primary,
+    });
+
+    expect(projected.videoStatus).toBe('failed');
+    expect(projected.videoError).toBe('fal 500');
+    expect(projected.videoUrl).toBeNull();
   });
 
   it('nulls the video surface when the segment has no selected version', () => {
@@ -201,6 +258,7 @@ describe('projectShotWithImage', () => {
     const projected = projectShotWithImage(shot, frame, {
       selectedImage: makeVersion(shot),
       selectedVideo: null,
+      primaryVideo: null,
     });
 
     expect(projected.videoUrl).toBeNull();
@@ -209,6 +267,7 @@ describe('projectShotWithImage', () => {
     expect(projected.videoInputHash).toBeNull();
     // Like imageModel: null, NOT a default — nothing was ever rendered.
     expect(projected.motionModel).toBeNull();
+    expect(projected.videoStatus).toBeNull();
   });
 });
 
@@ -216,7 +275,10 @@ describe('projectShotMissingFrame', () => {
   it('preserves a frameless shot with a null image surface (never drops it)', () => {
     const shot = makeShot();
 
-    const projected = projectShotMissingFrame(shot, null);
+    const projected = projectShotMissingFrame(shot, {
+      selectedVideo: null,
+      primaryVideo: null,
+    });
 
     expect(projected.id).toBe(shot.id);
     expect(projected.thumbnailUrl).toBeNull();
@@ -233,10 +295,14 @@ describe('projectShotMissingFrame', () => {
     const shot = makeShot();
     const video = makeVideo(shot);
 
-    const projected = projectShotMissingFrame(shot, video);
+    const projected = projectShotMissingFrame(shot, {
+      selectedVideo: video,
+      primaryVideo: video,
+    });
 
     expect(projected.videoUrl).toBe(video.url);
     expect(projected.motionModel).toBe('kling_25_turbo_pro');
+    expect(projected.videoStatus).toBe('completed');
     expect(projected.thumbnailUrl).toBeNull();
   });
 });

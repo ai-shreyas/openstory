@@ -31,7 +31,7 @@ import {
   videoVariants,
 } from '@/lib/db/schema';
 import { getDb } from '#db-client';
-import { and, desc, eq, isNull, like, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, sql } from 'drizzle-orm';
 
 export type CreatedTestUser = {
   id: string;
@@ -716,6 +716,18 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
     )
     .where(eq(shots.sequenceId, sequenceId));
   const videoByShot = new Map(videoRows.map((v) => [v.shotId, v.videoUrl]));
+  const primaryRows = await db
+    .select({ shotId: shots.id, status: videoVariants.status })
+    .from(shots)
+    .innerJoin(
+      videoVariants,
+      eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+    )
+    .where(
+      and(eq(shots.sequenceId, sequenceId), eq(videoVariants.isPrimary, true))
+    )
+    .orderBy(asc(videoVariants.id));
+  const statusByShot = new Map(primaryRows.map((v) => [v.shotId, v.status]));
   // The still-image surface lives on each shot's anchor frame now (#989);
   // project it back under the legacy thumbnail* names — keyed by shotId
   // (orderIndex 0), never by id-reuse.
@@ -741,7 +753,7 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
         thumbnailUrl: frame?.imageUrl ?? null,
         thumbnailStatus: frame?.imageStatus ?? null,
         videoUrl: videoByShot.get(row.id) ?? null,
-        videoStatus: row.videoStatus,
+        videoStatus: statusByShot.get(row.id) ?? null,
       };
     })
     .sort((a, b) => a.orderIndex - b.orderIndex);

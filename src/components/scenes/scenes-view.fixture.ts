@@ -1,13 +1,34 @@
 // AUTO-GENERATED Storybook fixture — real rows from local D1 (sequence 01KT2TPG5WYQ15H79SAV88EH45),
 // media URLs swapped for public placeholders. Do NOT hand-edit.
 // Regenerate via: bun scripts/generate-scenes-view-fixture.ts
-import { dbSceneId, type SceneRow } from '@/lib/db/schema';
+import { dbSceneId, type SceneRow, type VideoVariant } from '@/lib/db/schema';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
 } from '@/lib/shots/shot-with-image';
 import type { Sequence, Style } from '@/types/database';
+
+/**
+ * The segment's newest primary render — the row a shot's video lifecycle is
+ * derived from (#1067). `videoFixtureFor` is url-gated, so a render that never
+ * produced one borrows an empty url and puts the real (null) one back.
+ */
+function primaryVideoFixture(
+  shot: Omit<ShotWithImage, 'frame'>
+): VideoVariant | null {
+  const status = shot.videoStatus;
+  if (status === null) return null;
+  const row = videoFixtureFor({ ...shot, videoUrl: shot.videoUrl ?? '' });
+  if (!row) return null;
+  return {
+    ...row,
+    url: shot.videoUrl,
+    status,
+    error: shot.videoError,
+    workflowRunId: shot.videoWorkflowRunId,
+  };
+}
 
 export const fixtureSequence: Sequence = {
   id: '01KT2TPG5WYQ15H79SAV88EH45',
@@ -835,6 +856,7 @@ export const fixtureShots: ShotWithImage[] = fixtureShotRows.map((shot) => {
   return projectShotWithImage(shot, frame, {
     selectedImage: selectedVersion,
     selectedVideo: videoFixtureFor(shot),
+    primaryVideo: primaryVideoFixture(shot),
     gridSheet: {
       url: shot.variantImageUrl,
       status: shot.variantImageStatus,

@@ -27,16 +27,32 @@ import type { NewVideoVariant, VideoVariant } from '@/lib/db/schema';
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { buildRenderSegmentSelect } from './render-segments';
 import { buildEventInsert } from './sequence-events';
-import {
-  buildShotVideoSelectionWrite,
-  type CompletedVideoVariant,
-} from './shots';
 
 /** The grouping key that makes a flat row set read as a "variant" (segment). */
 export type VideoVariantGroup = {
   renderSegmentId: string;
   model: string;
 };
+
+export async function getPrimaryVideoByShotIds(
+  db: Database,
+  shotIds: string[]
+): Promise<Map<string, VideoVariant>> {
+  if (shotIds.length === 0) return new Map();
+  const rows = await db
+    .select({ shotId: shots.id, version: videoVariants })
+    .from(shots)
+    .innerJoin(
+      videoVariants,
+      eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+    )
+    .where(and(inArray(shots.id, shotIds), eq(videoVariants.isPrimary, true)))
+    .orderBy(asc(videoVariants.id));
+  // asc by id (≈ time) → last write per shot wins.
+  const byShot = new Map<string, VideoVariant>();
+  for (const r of rows) byShot.set(r.shotId, r.version);
+  return byShot;
+}
 
 export function createVideoVariantsMethods(db: Database) {
   return {
@@ -310,6 +326,33 @@ export function createVideoVariantsMethods(db: Database) {
     },
 
     /**
+     * The newest PRIMARY version per shot — the render whose lifecycle IS the
+     * shot's video status (#1067 phase 2d). `variantOnly` renders are excluded
+     * so an added model failing never reads as the shot's video failing.
+     *
+     * Discarded rows are NOT excluded: discarding hides a version from the
+     * picker, but a discarded failure is still the last thing that happened to
+     * the primary slot.
+     */
+    getPrimaryByShotIds: (shotIds: string[]) =>
+      getPrimaryVideoByShotIds(db, shotIds),
+
+    /** Single-shot {@link getPrimaryByShotIds}. */
+    getPrimaryByShot: async (shotId: string): Promise<VideoVariant | null> => {
+      const rows = await db
+        .select({ version: videoVariants })
+        .from(shots)
+        .innerJoin(
+          videoVariants,
+          eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+        )
+        .where(and(eq(shots.id, shotId), eq(videoVariants.isPrimary, true)))
+        .orderBy(desc(videoVariants.id))
+        .limit(1);
+      return rows[0]?.version ?? null;
+    },
+
+    /**
      * The newest FAILED version for a shot's segment, or null. The single-shot
      * analog of {@link listLastFailedModelsBySequence}.
      */
@@ -366,20 +409,13 @@ export function createVideoVariantsMethods(db: Database) {
           `VideoVariant ${versionId} is '${version.status}', not 'completed' — cannot select an unfinished video`
         );
       }
-      // A completed version is expected to carry its output url/path; a missing
-      // one would mirror null onto the shot and blank a good video. Assert it
-      // here so `CompletedVideoVariant` (and the mirror) stays provably non-null.
+      // A completed version must carry its output, or selecting it would
+      // project a null video over a good one.
       if (!version.url || !version.storagePath) {
         throw new Error(
           `VideoVariant ${versionId} is 'completed' but missing its url/storagePath — cannot select`
         );
       }
-      const completedVersion: CompletedVideoVariant = {
-        ...version,
-        status: 'completed',
-        url: version.url,
-        storagePath: version.storagePath,
-      };
 
       const [shot] = await db
         .select({
@@ -414,7 +450,6 @@ export function createVideoVariantsMethods(db: Database) {
       if (shouldClearPending) {
         await db.batch([
           buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-          buildShotVideoSelectionWrite(db, shotId, completedVersion),
           db
             .update(renderSegments)
             .set({
@@ -440,7 +475,6 @@ export function createVideoVariantsMethods(db: Database) {
       } else {
         await db.batch([
           buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-          buildShotVideoSelectionWrite(db, shotId, completedVersion),
           buildEventInsert(db, {
             sequenceId: shot.sequenceId,
             actorId: opts.actorId,

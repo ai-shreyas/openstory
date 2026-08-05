@@ -1,3 +1,4 @@
+import type { VideoVariant } from '@/lib/db/schema';
 import type { Shot } from '@/types/database';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
@@ -6,6 +7,27 @@ import {
 } from '@/lib/shots/shot-with-image';
 import type { Meta, StoryObj } from '@storybook/react';
 import { SceneListItem } from './scene-list-item';
+
+/**
+ * The segment's newest primary render — the row a shot's video lifecycle is
+ * derived from (#1067). `videoFixtureFor` is url-gated, so a render that never
+ * produced one borrows an empty url and puts the real (null) one back.
+ */
+const primaryVideoFixture = (
+  shot: Omit<ShotWithImage, 'frame'>
+): VideoVariant | null => {
+  const status = shot.videoStatus;
+  if (status === null) return null;
+  const row = videoFixtureFor({ ...shot, videoUrl: shot.videoUrl ?? '' });
+  if (!row) return null;
+  return {
+    ...row,
+    url: shot.videoUrl,
+    status,
+    error: shot.videoError,
+    workflowRunId: shot.videoWorkflowRunId,
+  };
+};
 
 // The still IMAGE surface moved off `shots` onto the anchor frame in #989. The
 // mock carries the legacy `thumbnail*`/`image*` names the card still reads (the
@@ -16,6 +38,7 @@ const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
   return projectShotWithImage(shot, frame, {
     selectedImage: selectedVersion,
     selectedVideo: videoFixtureFor(shot),
+    primaryVideo: primaryVideoFixture(shot),
     gridSheet: {
       url: shot.variantImageUrl,
       status: shot.variantImageStatus,

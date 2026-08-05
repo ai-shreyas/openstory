@@ -563,12 +563,16 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           fr,
         ])
       );
-      const [selectedByFrame, selectedVideoByShot] = await Promise.all([
-        scopedDb.frameVariants.getSelectedByFrameIds(
-          [...anchorsByShot.values()].map((fr) => fr.id)
-        ),
-        scopedDb.videoVariants.getSelectedByShotIds(allShots.map((s) => s.id)),
-      ]);
+      const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
+        await Promise.all([
+          scopedDb.frameVariants.getSelectedByFrameIds(
+            [...anchorsByShot.values()].map((fr) => fr.id)
+          ),
+          scopedDb.videoVariants.getSelectedByShotIds(
+            allShots.map((s) => s.id)
+          ),
+          scopedDb.videoVariants.getPrimaryByShotIds(allShots.map((s) => s.id)),
+        ]);
       const shotsWithImage = allShots.flatMap((shot) => {
         const frame = anchorsByShot.get(shot.id);
         return frame
@@ -576,6 +580,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
               projectShotWithImage(shot, frame, {
                 selectedImage: selectedByFrame.get(frame.id) ?? null,
                 selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+                primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
               }),
             ]
           : [];
@@ -697,9 +702,11 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     // The image prompt lives on the anchor frame now (#989); load frames so each
     // shot's stored prompt can seed its `/image` run.
     await scopedDb.shots.ensureAnchorFrames(allShots);
-    const imageFramesById = new Map(
+    // Keyed by shotId: frame ids are NOT shot ids (#989), and the lookup below
+    // holds a shot.
+    const imageFramesByShotId = new Map(
       (await scopedDb.frames.listBySequence(sequence.id)).map((fr) => [
-        fr.id,
+        fr.shotId,
         fr,
       ])
     );
@@ -723,7 +730,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         characters,
         locations,
         elements,
-        imagePrompt: imageFramesById.get(f.id)?.imagePrompt ?? null,
+        imagePrompt: imageFramesByShotId.get(f.id)?.imagePrompt ?? null,
         // Adding a model never repoints the primary — it lands as an alternate
         // variant only. Promote later with "Set". (#547)
         variantOnly: true,
@@ -836,33 +843,11 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
       if (latestByFrame.size === 0) {
         throw new Error('That model has not generated anything to set');
       }
-      // Resolve each frame's owning shot — frame ids are NOT shot ids (#989) —
-      // so the now-stale video reset targets the right shot row.
-      const shotIdByFrame = new Map(
-        (await scopedDb.frames.getByIds([...latestByFrame.keys()])).map((f) => [
-          f.id,
-          f.shotId,
-        ])
-      );
       let imageCount = 0;
       for (const [frameId, version] of latestByFrame) {
         await scopedDb.frameVariants.select(frameId, version.id, {
           actorId: user.id,
         });
-        const ownerShotId = shotIdByFrame.get(frameId);
-        if (ownerShotId) {
-          // A new still invalidates downstream video (#1067 phase 2d).
-          await scopedDb.renderSegments.clearSelectionByShot(ownerShotId);
-          await scopedDb.shots.update(
-            ownerShotId,
-            {
-              videoStatus: 'pending',
-              videoWorkflowRunId: null,
-              videoError: null,
-            },
-            { throwOnMissing: false }
-          );
-        }
         imageCount++;
       }
       return { count: imageCount, variantType, model };

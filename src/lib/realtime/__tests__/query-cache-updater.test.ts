@@ -42,9 +42,6 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
-    videoStatus: 'completed',
-    videoWorkflowRunId: null,
-    videoError: null,
     motionPrompt: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -95,6 +92,8 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     ...projectShotWithImage(shot, frame, {
       selectedImage: selectedVersion,
       selectedVideo,
+      // That same render is the segment's primary, so the shot reads `completed`.
+      primaryVideo: selectedVideo,
     }),
     ...overrides,
   };

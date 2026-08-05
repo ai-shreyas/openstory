@@ -1,3 +1,4 @@
+import type { VideoVariant } from '@/lib/db/schema';
 import type { Style } from '@/lib/db/schema/libraries';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
@@ -96,6 +97,25 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
 /** The two DB rows `buildSequenceState` projects a shot's image surface from. */
 const anchorFixture = (shot: Omit<ShotWithImage, 'frame'>) =>
   frameFixtureFor(shot, `frame-${shot.id}`);
+
+/**
+ * The segment's newest primary render — the row the shot's video lifecycle is
+ * derived from (#1067). `videoFixtureFor` is url-gated, so a render that never
+ * produced one borrows an empty url and puts the real (null) one back.
+ */
+function primaryVideoFixture(shot: ShotWithImage): VideoVariant | null {
+  const status = shot.videoStatus;
+  if (status === null) return null;
+  const row = videoFixtureFor({ ...shot, videoUrl: shot.videoUrl ?? '' });
+  if (!row) return null;
+  return {
+    ...row,
+    url: shot.videoUrl,
+    status,
+    error: shot.videoError,
+    workflowRunId: shot.videoWorkflowRunId,
+  };
+}
 
 function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   return {
@@ -197,6 +217,13 @@ function depsWithShots(
           shots.flatMap((s) => {
             const selected = videoFixtureFor(s);
             return selected ? [[s.id, selected]] : [];
+          })
+        ),
+      getPrimaryByShotIds: async () =>
+        new Map(
+          shots.flatMap((s) => {
+            const primary = primaryVideoFixture(s);
+            return primary ? [[s.id, primary]] : [];
           })
         ),
     },

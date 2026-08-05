@@ -4,11 +4,13 @@
  * `selectShotVariantFn` no longer writes the still synchronously — it triggers
  * this workflow, which upscales the chosen 3×3 tile and then REPOINTS the
  * frame's primary still at the upscaled version (pointer + mirror via
- * `frameVariants.select`), resetting the shot's downstream video. The e2e suite
- * can't observe that async repoint hermetically, so the outcome is pinned here:
- * `persistUpscaleSelection` completes the in-flight version, repoints the frame,
- * and resets video — skipping the repoint (but still completing the version) if
- * the anchor frame vanished mid-flight.
+ * `frameVariants.select`). The e2e suite can't observe that async repoint
+ * hermetically, so the outcome is pinned here: `persistUpscaleSelection`
+ * completes the in-flight version and repoints the frame — skipping the repoint
+ * (but still completing the version) if the anchor frame vanished mid-flight.
+ *
+ * The new still no longer drops the segment's chosen render (#1067 phase 2d):
+ * the old video keeps playing and the manifest-staleness system flags it.
  */
 
 import type { NewFrameVariant, NewShot } from '@/lib/db/schema';
@@ -29,7 +31,6 @@ type CallName =
   | 'frameVariants.update'
   | 'frames.getAnchorByShot'
   | 'frameVariants.select'
-  | 'renderSegments.clearSelectionByShot'
   | 'shots.update';
 
 function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
@@ -37,21 +38,13 @@ function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
   variantUpdates: VariantUpdateCall[];
   selects: SelectCall[];
   shotUpdates: ShotUpdateCall[];
-  clearedSelectionShotIds: string[];
   callOrder: CallName[];
 } {
   const variantUpdates: VariantUpdateCall[] = [];
   const selects: SelectCall[] = [];
   const shotUpdates: ShotUpdateCall[] = [];
-  const clearedSelectionShotIds: string[] = [];
   const callOrder: CallName[] = [];
   const scopedDb: PersistUpscaleScopedDb = {
-    renderSegments: {
-      clearSelectionByShot: async (shotId) => {
-        clearedSelectionShotIds.push(shotId);
-        callOrder.push('renderSegments.clearSelectionByShot');
-      },
-    },
     frameVariants: {
       update: async (versionId, data) => {
         variantUpdates.push({ versionId, data });
@@ -83,7 +76,6 @@ function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
     variantUpdates,
     selects,
     shotUpdates,
-    clearedSelectionShotIds,
     callOrder,
   };
 }
@@ -91,15 +83,9 @@ function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
 const NOW = new Date('2026-06-26T00:00:00Z');
 
 describe('persistUpscaleSelection', () => {
-  it('completes the version, repoints the frame at it, resets video, emits completed', async () => {
-    const {
-      scopedDb,
-      variantUpdates,
-      selects,
-      shotUpdates,
-      clearedSelectionShotIds,
-      callOrder,
-    } = buildScopedDbSpy();
+  it('completes the version, repoints the frame at it, emits completed', async () => {
+    const { scopedDb, variantUpdates, selects, shotUpdates, callOrder } =
+      buildScopedDbSpy();
     const emits: Array<{
       shotId: string;
       status: string;
@@ -126,8 +112,6 @@ describe('persistUpscaleSelection', () => {
       'frameVariants.update',
       'frames.getAnchorByShot',
       'frameVariants.select',
-      'renderSegments.clearSelectionByShot',
-      'shots.update',
     ]);
 
     const [versionUpdate] = variantUpdates;
@@ -148,14 +132,9 @@ describe('persistUpscaleSelection', () => {
     expect(select.versionId).toBe('ver-1');
     expect(select.actorId).toBe('user-1');
 
-    // New still invalidates downstream video: the segment's chosen render is
-    // dropped (#1067 phase 2d) and the shot's in-flight state resets.
-    expect(clearedSelectionShotIds).toEqual(['shot-1']);
-    const [shotUpdate] = shotUpdates;
-    if (!shotUpdate) throw new Error('expected shots.update call');
-    expect(shotUpdate.shotId).toBe('shot-1');
-    expect(shotUpdate.data.videoStatus).toBe('pending');
-    expect(shotUpdate.data.videoError).toBeNull();
+    // The existing render survives a new still (#1067 phase 2d) — no selection
+    // is dropped and nothing is written to the shot.
+    expect(shotUpdates).toEqual([]);
 
     expect(emits).toEqual([
       {
@@ -190,7 +169,7 @@ describe('persistUpscaleSelection', () => {
 
     expect(result).toEqual({ selected: false });
     // The version is finished, but with no anchor there is nothing to repoint:
-    // no select, no video reset, no completed emit (a false "ready" signal).
+    // no select, no completed emit (a false "ready" signal).
     expect(callOrder).toEqual([
       'frameVariants.update',
       'frames.getAnchorByShot',

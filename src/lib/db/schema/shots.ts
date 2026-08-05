@@ -23,7 +23,6 @@ export const SHOT_GENERATION_STATUSES = [
   'completed',
   'failed',
 ] as const;
-type ShotGenerationStatus = (typeof SHOT_GENERATION_STATUSES)[number];
 
 /**
  * Shots table
@@ -56,10 +55,11 @@ export const shots = snakeCase.table(
     sequenceId: text()
       .notNull()
       .references(() => sequences.id, { onDelete: 'cascade' }),
-    // Parent scene (#907). NULL until backfilled. Deliberately NOT cascade —
-    // CLAUDE.md rule 3: never cascade to long-lived parents; orphaned shots
-    // null out rather than vanish if a scene is deleted.
-    sceneId: text().references(() => scenes.id, { onDelete: 'set null' }),
+    // No ON DELETE: `ALTER TABLE ADD COLUMN ... REFERENCES` cannot carry one,
+    // so no database has ever had it. Deleting a scene with live shots errors;
+    // callers null `sceneId` first. Declaring `set null` here would make
+    // db:generate emit a `shots` REBUILD to add it — the #612 cascade trap.
+    sceneId: text().references(() => scenes.id),
     // 1-based shot order within the scene. Backfill sets this to 1 (every
     // sequence becomes scenes-of-one-shot until multi-shot analysis lands).
     // DB-Audit: KEEP — considered for removal as derivable from `orderIndex`, but nothing enforces that a scene's shots stay contiguous, and a scene-scoped rank is what survives a scene reorder without renumbering every shot.
@@ -71,22 +71,11 @@ export const shots = snakeCase.table(
     // DB-Audit: drop once the prompt fallbacks read the scene script — this is the scene's `originalScript.extract` copied at split time, never regenerated, and only read as the last-resort prompt fallback and as `visualSummary` for music design.
     description: text(),
     durationMs: integer().default(3000),
-    // The video MIRROR columns (`videoUrl`/`videoPath`/`videoGeneratedAt`/
-    // `videoInputHash`/`motionModel`) were dropped in #1067 phase 2d. They are
-    // now projected from the `video_variants` row the shot's render segment
-    // points at — see `projectShotWithImage`, the single place that knows it.
-    //
-    // These three are NOT a mirror and deliberately stay on the shot:
-    // `videoVariants.select` refuses any version that is not 'completed', so the
-    // selection pointer structurally cannot hold in-flight or failed state, and
-    // `persistMotionFailure` records a failure here only for a PRIMARY render
-    // (`!variantOnly`) — a distinction stored nowhere on the variant row, and
-    // `pendingPromoteVersionId` is cleared on failure so no pointer survives to
-    // carry it. Same reasoning that kept `frames.imageStatus`/`imageError`/
-    // `imageWorkflowRunId`. Do not re-flag them as droppable.
-    videoStatus: text().$type<ShotGenerationStatus>().default('pending'),
-    videoWorkflowRunId: text(),
-    videoError: text(),
+    // A shot owns no video columns (#1067 phase 2d). The whole surface —
+    // url/path/model/hash AND status/error/run id — is projected from the
+    // segment's `video_variants` rows by `projectShotWithImage`. Rendering is
+    // segment-scoped, so shot-scoped video state could never be more than a
+    // fan-out of one render's.
     // DB-Audit: drop after backfilling version rows for pre-#713 shots — mirror of the selected `shot_prompt_versions.text`, written only by `mirrorSelection` and read only as the legacy fallback when the pointer is null.
     motionPrompt: text(), // User-updated motion prompt (overrides AI-generated prompt from metadata)
     // Soft pointer (plain column, no FK — mirrors frames.selected*VersionId) to
@@ -101,9 +90,7 @@ export const shots = snakeCase.table(
     // `orderIndex`); the segment owns the video selection pointer. NULL until
     // the shot is first rendered/assigned. Deliberately `set null` (not cascade)
     // so deleting a segment orphans its shots rather than vanishing them.
-    renderSegmentId: text().references(() => renderSegments.id, {
-      onDelete: 'set null',
-    }),
+    renderSegmentId: text().references(() => renderSegments.id),
     // A shot owns no audio columns (#1067): per-shot audio was never built —
     // music is sequence-level (`sequences.music*`) and dialogue rides inside
     // the video.

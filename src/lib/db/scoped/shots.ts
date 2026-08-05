@@ -5,59 +5,9 @@
 
 import type { Database } from '@/lib/db/client';
 import { frames, shots } from '@/lib/db/schema';
-import type { NewFrame, Shot, NewShot, VideoVariant } from '@/lib/db/schema';
+import type { NewFrame, Shot, NewShot } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
-
-/**
- * A `video_variants` version that has finished generating AND has its output
- * URL/path — the ONLY kind that may become a segment's chosen video. Selecting a
- * pending/failed (or a `completed`-but-url-less) version would project a null
- * url onto every shot the segment covers, silently blanking a good video. The
- * intersection encodes BOTH halves of the precondition (`status` *and* url/path
- * non-null) so the projection is provably non-null at compile time (mirrors
- * `CompletedFrameVariant`). The narrowing site (`videoVariants.select`) asserts
- * the url/path, so this type is never forged.
- */
-export type CompletedVideoVariant = VideoVariant & {
-  status: 'completed';
-  url: string;
-  storagePath: string;
-};
-
-/**
- * Build (without executing) the shot-side write that accompanies a selection
- * repoint, so a caller can compose it into the same `db.batch()` as the segment
- * pointer move and the activity event. Returns the drizzle statement; the caller
- * owns execution.
- *
- * #1067 phase 2d removed the `video*` output mirror this used to write — the
- * url/path/model/generatedAt/inputHash now come from the selected version at
- * read time (`projectShotWithImage`). What remains is the shot-owned in-flight
- * state: a successful selection means this shot's video is no longer generating
- * or failed.
- *
- * It deliberately no longer touches `durationMs`. It used to write the
- * manifest's SUMMED duration (a multi-shot segment's video spans all its
- * shots) onto every covered shot, while `sequences.ts` and `motion-functions.ts`
- * read that column as the PER-shot duration — so a multi-shot segment inflated
- * each of its shots' duration to the whole segment's. The shot's planned
- * duration is an input to the render, not an output of it.
- */
-export function buildShotVideoSelectionWrite(
-  db: Database,
-  shotId: string,
-  version: CompletedVideoVariant
-) {
-  return db
-    .update(shots)
-    .set({
-      videoStatus: version.status,
-      videoError: version.error,
-      updatedAt: new Date(),
-    })
-    .where(eq(shots.id, shotId));
-}
 
 /**
  * Every shot owns an anchor frame (orderIndex 0, role 'first') — the i2v anchor

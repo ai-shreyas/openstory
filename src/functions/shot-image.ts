@@ -20,6 +20,7 @@ import {
   generateVariantSchema,
   regenerateShotSchema,
 } from '@/lib/schemas/shot.schemas';
+import { dbSceneId } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 import {
@@ -119,26 +120,30 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
     // updateShotFn does the same rescan, but the UI never calls it — the
     // regenerate buttons are the only persistence path for prompts today.
     const userEditedPrompt = data.prompt !== undefined;
-    let shotForInput = shot;
-    const baseContinuity = shot.metadata?.continuity;
-    if (userEditedPrompt && data.prompt && shot.metadata && baseContinuity) {
+    let sceneForInput = resolvedScene;
+    const baseContinuity = resolvedScene?.continuity;
+    if (userEditedPrompt && data.prompt && resolvedScene && baseContinuity) {
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
         sequenceId: sequence.id,
         existing: baseContinuity,
         promptText: data.prompt,
       });
-      if (rescan.changed) {
-        const metadata = { ...shot.metadata, continuity: rescan.continuity };
-        await context.scopedDb.shots.update(shot.id, { metadata });
-        shotForInput = { ...shot, metadata };
+      if (rescan.changed && shot.sceneId) {
+        sceneForInput = { ...resolvedScene, continuity: rescan.continuity };
+        await context.scopedDb.scenes.update(
+          dbSceneId(shot.sceneId),
+          { continuity: rescan.continuity },
+          { throwOnMissing: false }
+        );
       }
     }
 
     const workflowInput = await prepareShotImageWorkflowInput({
       scopedDb: context.scopedDb,
       sequence,
-      shot: shotForInput,
+      shot,
+      scene: sceneForInput,
       frame,
       scriptExtract:
         script?.extract ?? resolvedScene?.originalScript.extract ?? '',
@@ -472,16 +477,6 @@ export const setImageFromVariantFn = createServerFn({ method: 'POST' })
       actorId: context.user.id,
     });
 
-    // A new still invalidates downstream video: drop the segment's chosen
-    // render (#1067 phase 2d — the video url/path now come from that pointer)
-    // and reset the shot-owned in-flight state.
-    await context.scopedDb.renderSegments.clearSelectionByShot(shot.id);
-    await context.scopedDb.shots.update(shot.id, {
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoError: null,
-    });
-
     return { shotId: shot.id, thumbnailUrl: latest.url };
   });
 
@@ -675,14 +670,6 @@ export const selectFrameImageVersionFn = createServerFn({ method: 'POST' })
       data.versionId,
       { actorId: scopedDb.userId }
     );
-
-    // A new still invalidates downstream video (same as setImageFromVariantFn).
-    await scopedDb.renderSegments.clearSelectionByShot(shot.id);
-    await scopedDb.shots.update(shot.id, {
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoError: null,
-    });
 
     return { shotId: shot.id, thumbnailUrl: version.url };
   });

@@ -9,6 +9,7 @@ import {
   DEFAULT_ASPECT_RATIO,
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
+import { getPrimaryVideoByShotIds } from './video-variants';
 import {
   frameVariants,
   frames,
@@ -200,16 +201,24 @@ function createSequencesReadMethods(db: Database, teamId: string) {
               )
             )
             .orderBy(asc(shots.sequenceId), asc(shots.orderIndex))
-            .then((rows) =>
-              rows.map((row) =>
+            .then(async (rows) => {
+              const primaryByShot = await getPrimaryVideoByShotIds(
+                db,
+                rows.map((r) => r.shots.id)
+              );
+              return rows.map((row) =>
                 row.frames
                   ? projectShotWithImage(row.shots, row.frames, {
                       selectedImage: row.frame_variants,
                       selectedVideo: row.video_variants,
+                      primaryVideo: primaryByShot.get(row.shots.id) ?? null,
                     })
-                  : projectShotMissingFrame(row.shots, row.video_variants)
-              )
-            )
+                  : projectShotMissingFrame(row.shots, {
+                      selectedVideo: row.video_variants,
+                      primaryVideo: primaryByShot.get(row.shots.id) ?? null,
+                    })
+              );
+            })
         )
       );
       return results.flat();

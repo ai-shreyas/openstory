@@ -1,0 +1,19 @@
+-- #1067 — no-op. Corrects drizzle's snapshot only; no database changes.
+--
+-- The schema declared `onDelete: 'set null'` on shots.scene_id and
+-- shots.render_segment_id, but both columns were added by
+-- `ALTER TABLE ... ADD COLUMN ... REFERENCES x(id)`, which cannot carry an
+-- ON DELETE clause — drizzle-kit dropped it silently. No database has ever had
+-- it: not prod, not a fresh migrate, not [env.test]. Only the schema and the
+-- snapshot disagreed with reality.
+--
+-- Correcting the declaration made db:generate emit a full `shots` rebuild
+-- (create-copy-drop-rename) to reach FKs the database already has. On D1 that
+-- is #612: the implicit transaction makes SQLite ignore
+-- `PRAGMA foreign_keys=OFF`, so dropping the old table fires every inbound
+-- cascade — frames, shot_prompt_versions, shot_variants, and transitively
+-- frame_variants + frame_prompt_versions.
+--
+-- The generated SQL is therefore discarded. The snapshot beside this file now
+-- records the real FKs, so future db:generate runs diff from the truth.
+SELECT 1;

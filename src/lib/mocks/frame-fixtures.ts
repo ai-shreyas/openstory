@@ -126,10 +126,62 @@ export function videoFixtureFor(shot: FlatVideoSurface): VideoVariant | null {
     storagePath: shot.videoPath,
     previewUrl: null,
     status: 'completed',
+    isPrimary: true,
     workflowRunId: null,
     generatedAt: shot.videoGeneratedAt ?? shot.updatedAt,
     error: null,
     inputHash: shot.videoInputHash,
+    discardedAt: null,
+    createdAt: shot.createdAt,
+    updatedAt: shot.updatedAt,
+  };
+}
+
+/**
+ * The newest primary render, which is where the shot's video status/error/run
+ * id are derived from. Null when the shot has never been rendered.
+ */
+export function primaryVideoFixtureFor(
+  shot: FlatVideoSurface &
+    Pick<ShotWithImage, 'videoStatus' | 'videoError' | 'videoWorkflowRunId'>
+): VideoVariant | null {
+  if (shot.videoStatus === null) return null;
+  const completed = videoFixtureFor(shot);
+  return {
+    ...(completed ?? {
+      ...emptyVideoVariant(shot),
+    }),
+    id: `${shot.id}-primary`,
+    status: shot.videoStatus,
+    error: shot.videoError,
+    workflowRunId: shot.videoWorkflowRunId,
+    isPrimary: true,
+  };
+}
+
+function emptyVideoVariant(shot: FlatVideoSurface): VideoVariant {
+  return {
+    id: `${shot.id}-primary`,
+    renderSegmentId: shot.id,
+    sequenceId: shot.sequenceId,
+    model: shot.motionModel ?? 'kling_25_turbo_pro',
+    manifest: [
+      {
+        shotId: shot.id,
+        motionPromptVersionId: null,
+        frameVersionId: null,
+        durationMs: shot.durationMs ?? 3000,
+      },
+    ],
+    url: null,
+    storagePath: null,
+    previewUrl: null,
+    status: 'pending',
+    isPrimary: true,
+    workflowRunId: null,
+    generatedAt: null,
+    error: null,
+    inputHash: null,
     discardedAt: null,
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,

@@ -4,8 +4,8 @@
  *
  * Pins the append-only version store + selection-as-pointer contract: append
  * (with generating-retry idempotency), list-by-group ordering / discard
- * filtering, `select` (segment pointer + the shot's in-flight state +
- * `video.selected` event, all atomic), discard/undiscard, and staleness.
+ * filtering, `select` (segment pointer + `video.selected` event, atomic),
+ * discard/undiscard, and staleness.
  *
  * Since #1067 phase 2d the pointer is also the READ path — the whole video
  * surface is projected through `getSelectedByShotIds`, so its exclusions
@@ -34,7 +34,6 @@ import {
   type NewVideoVariant,
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
-import { createRenderSegmentsMethods } from './render-segments';
 import { createVideoVariantsMethods } from './video-variants';
 
 let client: Client;
@@ -317,44 +316,18 @@ describe('getSelectedByShotIds (#1067)', () => {
   });
 });
 
-describe('renderSegments.clearSelectionByShot (#1067)', () => {
-  it('drops the chosen video but keeps the version rows', async () => {
-    const v = await methods.appendVersion(versionInput());
-    await methods.select(shotId, v.id, { actorId: ACTOR });
-    expect(await methods.getSelectedByShot(shotId)).not.toBeNull();
-
-    await createRenderSegmentsMethods(db).clearSelectionByShot(shotId);
-
-    // No video resolves any more — the read path sees it as unrendered…
-    expect(await methods.getSelectedByShot(shotId)).toBeNull();
-    expect(await methods.getSelectedByShotIds([shotId])).toEqual(new Map());
-    // …but history survives, so the old render stays re-selectable.
-    expect((await methods.listBySegment(segmentId)).map((r) => r.id)).toEqual([
-      v.id,
-    ]);
-  });
-
-  it('is a no-op for a shot with no render segment', async () => {
-    await db
-      .update(shots)
-      .set({ renderSegmentId: null })
-      .where(eq(shots.id, shotId));
-    await expect(
-      createRenderSegmentsMethods(db).clearSelectionByShot(shotId)
-    ).resolves.toBeUndefined();
-  });
-});
+// `renderSegments.clearSelectionByShot` is gone — a new still leaves the render
+// selected and the manifest-staleness system flags it instead (#1067 phase 2d).
 
 describe('select', () => {
-  it('repoints the segment, clears the shot in-flight state, and logs the event', async () => {
+  it('repoints the segment and logs the event, writing nothing to the shot', async () => {
     const v = await methods.appendVersion(versionInput());
     await methods.select(shotId, v.id, { actorId: ACTOR });
 
-    // The url/path/model are NOT copied onto the shot any more (#1067 phase
-    // 2d) — the pointer below is the only record, and reads project through it.
-    const [shot] = await db.select().from(shots).where(eq(shots.id, shotId));
-    expect(shot?.videoStatus).toBe('completed');
-    expect(shot?.videoError).toBeNull();
+    // Nothing is copied onto the shot any more (#1067 phase 2d) — the pointer
+    // below is the only record, and reads project the status through it.
+    expect((await methods.getPrimaryByShot(shotId))?.status).toBe('completed');
+    expect((await methods.getPrimaryByShot(shotId))?.error).toBeNull();
 
     const [segment] = await db
       .select()

@@ -33,11 +33,12 @@ import {
   singleShotSchema,
   updateShotSchema,
 } from '@/lib/schemas/shot.schemas';
+import { dbSceneId } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { typedFromEntries } from '@/lib/utils/typed-object';
 import {
   enrichShotWithSceneScript,
-  loadSelectedScriptsBySequence,
+  loadSceneContextBySequence,
   projectShotForClient,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
@@ -78,15 +79,20 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         scopedDb.shotPromptVersions.getSelectedMotionByShots(
           shotRows.map((s) => s.id)
         ),
-        loadSelectedScriptsBySequence(scopedDb, sequence.id),
+        loadSceneContextBySequence(scopedDb, sequence.id),
       ]);
     // The still lives on the selected `frame_variants` row and the video on the
     // segment's selected `video_variants` row (#1067) — one batch read each, so
     // projecting the sequence stays O(1) queries.
-    const [selectedByFrame, selectedVideoByShot] = await Promise.all([
-      scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
-      scopedDb.videoVariants.getSelectedByShotIds(shotRows.map((s) => s.id)),
-    ]);
+    const shotIds = shotRows.map((s) => s.id);
+    const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
+      await Promise.all([
+        scopedDb.frameVariants.getSelectedByFrameIds(
+          anchorRows.map((f) => f.id)
+        ),
+        scopedDb.videoVariants.getSelectedByShotIds(shotIds),
+        scopedDb.videoVariants.getPrimaryByShotIds(shotIds),
+      ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
     return shotRows.map((rawShot) => {
       const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
@@ -103,10 +109,10 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         logger.error(
           `getShotsFn: shot ${shot.id} has no anchor frame after ensureAnchorFrames`
         );
-        return projectShotMissingFrame(
-          shot,
-          selectedVideoByShot.get(shot.id) ?? null
-        );
+        return projectShotMissingFrame(shot, {
+          selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+          primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
+        });
       }
       // Grid sheets are keyed by frame id (#989), resolved from the anchor.
       const sheet = gridSheets.get(frame.id);
@@ -116,6 +122,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
       return projectShotWithImage(shot, frame, {
         selectedImage: selectedByFrame.get(frame.id) ?? null,
         selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+        primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
         gridSheet,
         motionPromptData,
       });
@@ -152,17 +159,19 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    const [sheet, selectedMotion, selectedImage, selectedVideo] =
+    const [sheet, selectedMotion, selectedImage, selectedVideo, primaryVideo] =
       await Promise.all([
         context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
         context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
         context.scopedDb.frameVariants.getSelected(context.frame.id),
         context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
+        context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
       ]);
     const shot = projectShotForClient(context.shot, context.script);
     return projectShotWithImage(shot, context.frame, {
       selectedImage,
       selectedVideo,
+      primaryVideo,
       gridSheet: sheet ? { url: sheet.url, status: sheet.status } : null,
       motionPromptData: selectedMotion
         ? motionPromptFromVersion(selectedMotion)
@@ -393,11 +402,8 @@ export const updateShotFn = createServerFn({ method: 'POST' })
     const motionPromptChanged =
       updateData.motionPrompt !== undefined &&
       updateData.motionPrompt !== context.shot.motionPrompt;
-    const shotMetadata = context.shot.metadata;
-    if (
-      (imagePromptChanged || motionPromptChanged) &&
-      shotMetadata?.continuity
-    ) {
+    const sceneContinuity = context.scene?.continuity;
+    if ((imagePromptChanged || motionPromptChanged) && sceneContinuity) {
       const promptText = [
         imagePromptChanged ? updateData.imagePrompt : null,
         motionPromptChanged ? updateData.motionPrompt : null,
@@ -408,15 +414,18 @@ export const updateShotFn = createServerFn({ method: 'POST' })
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
         sequenceId,
-        existing: shotMetadata.continuity,
+        existing: sceneContinuity,
         promptText,
       });
 
-      if (rescan.changed) {
-        updateData.metadata = {
-          ...shotMetadata,
-          continuity: rescan.continuity,
-        };
+      // Continuity is scene-scoped: auto-linking script tokens describes the
+      // scene, not one of its shots.
+      if (rescan.changed && context.shot.sceneId) {
+        await context.scopedDb.scenes.update(
+          dbSceneId(context.shot.sceneId),
+          { continuity: rescan.continuity },
+          { throwOnMissing: false }
+        );
       }
     }
 
@@ -596,7 +605,7 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
       style,
     ] = await Promise.all([
       scopedDb.frames.listAnchorsBySequence(sequence.id),
-      loadSelectedScriptsBySequence(scopedDb, sequence.id),
+      loadSceneContextBySequence(scopedDb, sequence.id),
       scopedDb.characters.listWithSheets(sequence.id),
       scopedDb.sequenceLocations.listWithReferences(sequence.id),
       scopedDb.sequenceElements.list(sequence.id),

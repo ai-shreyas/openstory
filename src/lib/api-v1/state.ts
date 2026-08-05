@@ -179,7 +179,10 @@ export async function buildSequenceState(
     shots: Pick<ScopedDb['shots'], 'listBySequence'>;
     frames: Pick<ScopedDb['frames'], 'listAnchorsBySequence'>;
     frameVariants: Pick<ScopedDb['frameVariants'], 'getSelectedByFrameIds'>;
-    videoVariants: Pick<ScopedDb['videoVariants'], 'getSelectedByShotIds'>;
+    videoVariants: Pick<
+      ScopedDb['videoVariants'],
+      'getSelectedByShotIds' | 'getPrimaryByShotIds'
+    >;
     styles: Pick<ScopedDb['styles'], 'getById'>;
   },
   sequence: Sequence,
@@ -200,10 +203,12 @@ export async function buildSequenceState(
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
   // The still comes from the selected `frame_variants` row and the video from
   // the segment's selected `video_variants` row (#1067).
-  const [selectedByFrame, selectedVideoByShot] = await Promise.all([
-    scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
-    scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
-  ]);
+  const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
+    await Promise.all([
+      scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+      scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
+      scopedDb.videoVariants.getPrimaryByShotIds(shots.map((s) => s.id)),
+    ]);
   const shotsWithImage = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
     return frame
@@ -211,6 +216,7 @@ export async function buildSequenceState(
           projectShotWithImage(shot, frame, {
             selectedImage: selectedByFrame.get(frame.id) ?? null,
             selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+            primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
           }),
         ]
       : [];

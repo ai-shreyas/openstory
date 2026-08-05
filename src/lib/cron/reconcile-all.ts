@@ -25,7 +25,6 @@ import {
   generatedAssets,
   renderSegments,
   shotPromptVersions,
-  shots,
   shotVariants,
   sequenceElements,
   sequences,
@@ -65,7 +64,6 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
   const passes: Array<[string, () => Promise<number>]> = [
     // Image lives on frames / frame_variants now (#989).
     ['frames.image', () => reconcileFramesImagePass(db)],
-    ['shots.video', () => reconcileShotsPass(db)],
     ['frame_variants.status', () => reconcileFrameVariantsPass(db)],
     // Pending artifact claims (#1085): a dead run must not leave rows that
     // read as "a job is fixing this" forever.
@@ -136,11 +134,6 @@ export async function reconcileAllStuckJobs(): Promise<ReconcileCounts> {
 // passes all see the row as stale until each one has flipped its own
 // status column. The on-load reconciler doesn't have this issue because it
 // collects all stale entries from in-memory data before writing.
-// Narrowly typed so the compiler enforces the null/'unknown' skip in the loop.
-const setShotVideoStatus = (next: 'failed' | 'completed') => ({
-  videoStatus: next,
-});
-
 /**
  * Reconcile stuck anchor-frame image generation (#989 — the old
  * `shots.thumbnail*` pass). Frame image status with a known workflow run id.
@@ -269,7 +262,7 @@ async function reconcilePromptClaimsPass(
 
   const cascade = async (versionId: string) => {
     if (side !== 'frame') return;
-    // No updatedAt bump — see the file-wide rule above `setShotVideoStatus`.
+    // No updatedAt bump — see the file-wide rule near the top.
     await db
       .update(frameVariants)
       .set({
@@ -389,32 +382,6 @@ async function reconcileImageClaimsPass(db: Database): Promise<number> {
   return updated + orphaned.length;
 }
 
-async function reconcileShotsPass(db: Database): Promise<number> {
-  const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
-
-  const stuck = await db
-    .select({ id: shots.id, runId: shots.videoWorkflowRunId })
-    .from(shots)
-    .where(
-      and(eq(shots.videoStatus, 'generating'), lt(shots.updatedAt, staleCutoff))
-    )
-    .limit(MAX_ROWS_PER_PASS);
-
-  let updated = 0;
-  for (const row of stuck) {
-    const next = await resolveRunState(row.runId ?? '');
-    // null = still in flight, 'unknown' = lookup failed — either way, don't
-    // write a terminal status; the next sweep retries.
-    if (next === null || next === 'unknown') continue;
-    await db
-      .update(shots)
-      .set(setShotVideoStatus(next))
-      .where(eq(shots.id, row.id));
-    updated++;
-  }
-  return updated;
-}
-
 type ShotVariantsPipeline = 'primary' | 'shotVariant';
 
 async function reconcileShotVariantsPass(
@@ -482,7 +449,7 @@ async function reconcileShotVariantsPass(
  * can't distinguish slow-but-alive from dead, and 'processing' has no safe
  * blind-fail threshold now that full runs can legitimately take hours.
  */
-// Narrowly typed like `setShotVideoStatus` so the compiler
+// Narrowly typed so the compiler
 // enforces the null/'unknown' skip in the loop below: dropping either guard
 // makes this call fail typecheck instead of silently flipping a live (or
 // unverifiable) sequence to 'completed'.

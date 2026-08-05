@@ -116,31 +116,6 @@ export function createRenderSegmentsMethods(db: Database) {
     },
 
     /**
-     * Drop the segment's chosen video, by one of its shots (#1067 phase 2d).
-     *
-     * Replacing a shot's still invalidates the render that consumed it. That
-     * used to be expressed by blanking the shot's `video*` mirror columns while
-     * leaving this pointer set — so the two sources disagreed, and once reads
-     * follow the pointer the stale video would come back. Clearing the pointer
-     * is the same intent stated once. The version rows survive (append-only
-     * history), so the old render stays re-selectable.
-     *
-     * A multi-shot segment renders all its shots in one call, so one shot's new
-     * still invalidates the whole segment — which is exactly this pointer.
-     */
-    clearSelectionByShot: async (shotId: string): Promise<void> => {
-      const [shot] = await db
-        .select({ segmentId: shots.renderSegmentId })
-        .from(shots)
-        .where(eq(shots.id, shotId));
-      if (!shot?.segmentId) return;
-      await db
-        .update(renderSegments)
-        .set({ selectedVideoVersionId: null, updatedAt: new Date() })
-        .where(eq(renderSegments.id, shot.segmentId));
-    },
-
-    /**
      * Clear pending only when it still points at `versionId` — older jobs must
      * not wipe a newer kickoff's claim.
      */

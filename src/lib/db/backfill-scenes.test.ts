@@ -267,22 +267,22 @@ describe('backfill scenes migration', () => {
 
   it('leaves the shot’s other columns untouched', async () => {
     // The backfill writes only sceneId + shotNumber. This pinned the video
-    // artifact's input hash until #1067 phase 2d dropped `video_input_hash`
-    // (with `shots.isStale`, whose only artifact it was); the surviving
-    // video-owned columns carry the same guarantee.
+    // mirror until #1067 phase 2d dropped it (video state is derived from the
+    // segment's `video_variants` now); the surviving columns carry the same
+    // guarantee.
     const shot = await insertShot({
       orderIndex: 0,
       metadata: sceneFixture(),
-      videoStatus: 'completed',
-      videoWorkflowRunId: 'run-abc',
+      description: 'A shot description',
+      motionPrompt: 'A slow dolly in',
       durationMs: 4200,
     });
 
     await runBackfill();
 
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.videoStatus).toBe('completed');
-    expect(reread?.videoWorkflowRunId).toBe('run-abc');
+    expect(reread?.description).toBe('A shot description');
+    expect(reread?.motionPrompt).toBe('A slow dolly in');
     expect(reread?.durationMs).toBe(4200);
   });
 });

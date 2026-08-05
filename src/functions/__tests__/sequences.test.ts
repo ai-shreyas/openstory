@@ -40,9 +40,6 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     orderIndex: 0,
     description: 'A scene',
     durationMs: 3000,
-    videoStatus: 'pending',
-    videoWorkflowRunId: null,
-    videoError: null,
     motionPrompt: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -77,10 +74,11 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
   });
   return {
     // These fixtures exercise the IMAGE-readiness helpers only, so the shot's
-    // segment has no selected render (#1067).
+    // segment has no render at all (#1067).
     ...projectShotWithImage(shot, frame, {
       selectedImage: selectedVersion,
       selectedVideo: null,
+      primaryVideo: null,
     }),
     ...overrides,
   };

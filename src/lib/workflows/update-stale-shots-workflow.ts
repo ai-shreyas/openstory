@@ -61,7 +61,7 @@ import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import { getAnchorImageUrl, getFrameImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
 import {
-  loadSelectedScriptsBySequence,
+  loadSceneContextBySequence,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { prepareShotImageWorkflowInput } from '@/lib/shots/shot-image-input';
@@ -285,7 +285,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               return null;
             }
           }
-          const scriptBySceneId = await loadSelectedScriptsBySequence(
+          const scriptBySceneId = await loadSceneContextBySequence(
             scopedDb,
             sequenceId
           );
@@ -296,6 +296,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               sequence,
               shot,
               frame,
+              scene,
               scriptExtract:
                 script?.extract ?? scene?.originalScript.extract ?? '',
               userId,
@@ -531,7 +532,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
       step.do(`prepare-prompt-${target.shotId}`, async () => {
         const [shot, scriptBySceneId] = await Promise.all([
           scopedDb.shots.getById(target.shotId),
-          loadSelectedScriptsBySequence(scopedDb, sequenceId),
+          loadSceneContextBySequence(scopedDb, sequenceId),
         ]);
         if (!shot) {
           throw new NonRetryableError(

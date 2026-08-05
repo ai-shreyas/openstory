@@ -53,6 +53,8 @@ const LEGACY_VIDEO_MIRROR = [
   'ALTER TABLE `shots` ADD COLUMN `video_path` text',
   'ALTER TABLE `shots` ADD COLUMN `video_generated_at` integer',
   'ALTER TABLE `shots` ADD COLUMN `motion_model` text',
+  'ALTER TABLE `shots` ADD COLUMN `video_status` text',
+  'ALTER TABLE `shots` ADD COLUMN `video_workflow_run_id` text',
 ];
 
 let client: Client;
@@ -153,8 +155,6 @@ async function insertShot(data: {
       sceneId,
       orderIndex: data.orderIndex,
       durationMs: data.durationMs ?? 3000,
-      videoStatus: data.videoStatus ?? 'completed',
-      videoWorkflowRunId: data.videoUrl ? 'run-1' : null,
       renderSegmentId: data.renderSegmentId ?? null,
       selectedMotionPromptVersionId: data.selectedMotionPromptVersionId ?? null,
     })
@@ -162,12 +162,14 @@ async function insertShot(data: {
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   const videoUrl = data.videoUrl ?? null;
   await client.execute({
-    sql: 'UPDATE `shots` SET `video_url` = ?, `video_path` = ?, `video_generated_at` = ?, `motion_model` = ? WHERE `id` = ?',
+    sql: 'UPDATE `shots` SET `video_url` = ?, `video_path` = ?, `video_generated_at` = ?, `motion_model` = ?, `video_status` = ?, `video_workflow_run_id` = ? WHERE `id` = ?',
     args: [
       videoUrl,
       videoUrl ? 'team/seq/v.mp4' : null,
       videoUrl ? Math.floor(Date.now() / 1000) : null,
       data.motionModel ?? 'kling_v2_5_turbo_pro',
+      data.videoStatus ?? 'completed',
+      videoUrl ? 'run-1' : null,
       id,
     ],
   });

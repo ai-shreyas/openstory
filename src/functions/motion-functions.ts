@@ -19,6 +19,7 @@ import { requireCredits } from '@/lib/billing/preflight';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import { generateMotionSchema } from '@/lib/schemas/shot.schemas';
+import { dbSceneId } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
@@ -85,19 +86,21 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
     // edited motion prompt into shot.metadata.continuity, so downstream
     // consumers (next image regenerate, shot-image reference attachment, and
     // the motion reference attachment below) see the new references.
-    let effectiveContinuity = shot.metadata?.continuity;
-    if (userEditedPrompt && shot.metadata?.continuity) {
+    let effectiveContinuity = context.scene?.continuity;
+    if (userEditedPrompt && effectiveContinuity) {
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
         sequenceId: sequence.id,
-        existing: shot.metadata.continuity,
+        existing: effectiveContinuity,
         promptText: prompt,
       });
-      if (rescan.changed) {
+      if (rescan.changed && shot.sceneId) {
         effectiveContinuity = rescan.continuity;
-        await context.scopedDb.shots.update(shot.id, {
-          metadata: { ...shot.metadata, continuity: rescan.continuity },
-        });
+        await context.scopedDb.scenes.update(
+          dbSceneId(shot.sceneId),
+          { continuity: rescan.continuity },
+          { throwOnMissing: false }
+        );
       }
     }
 
@@ -215,14 +218,18 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         (f) => [f.shotId, f]
       )
     );
-    const [selectedByFrame, selectedVideoByShot] = await Promise.all([
-      context.scopedDb.frameVariants.getSelectedByFrameIds(
-        [...anchorsByShot.values()].map((f) => f.id)
-      ),
-      context.scopedDb.videoVariants.getSelectedByShotIds(
-        rawShots.map((s) => s.id)
-      ),
-    ]);
+    const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
+      await Promise.all([
+        context.scopedDb.frameVariants.getSelectedByFrameIds(
+          [...anchorsByShot.values()].map((f) => f.id)
+        ),
+        context.scopedDb.videoVariants.getSelectedByShotIds(
+          rawShots.map((s) => s.id)
+        ),
+        context.scopedDb.videoVariants.getPrimaryByShotIds(
+          rawShots.map((s) => s.id)
+        ),
+      ]);
     const allShots = rawShots.flatMap((s) => {
       const frame = anchorsByShot.get(s.id);
       return frame
@@ -230,6 +237,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
             projectShotWithImage(s, frame, {
               selectedImage: selectedByFrame.get(frame.id) ?? null,
               selectedVideo: selectedVideoByShot.get(s.id) ?? null,
+              primaryVideo: primaryVideoByShot.get(s.id) ?? null,
             }),
           ]
         : [];
