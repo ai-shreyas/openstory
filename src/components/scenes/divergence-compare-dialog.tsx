@@ -52,7 +52,9 @@ function liveAssetForVariant(
     case 'video':
       return { url: shot.videoUrl, kind: 'video' };
     case 'audio':
-      return { url: shot.audioUrl, kind: 'audio' };
+      // Unreachable: nothing creates an audio `shot_variants` row, and per-shot
+      // audio has no live column to compare against (#1067).
+      return { url: null, kind: 'audio' };
   }
 }
 

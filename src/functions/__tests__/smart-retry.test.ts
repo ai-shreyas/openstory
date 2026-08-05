@@ -17,8 +17,9 @@
 
 import { describe, expect, test, vi } from 'vitest';
 import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
-import type { Frame, Sequence } from '@/lib/db/schema';
+import type { Sequence } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
@@ -114,9 +115,8 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     thumbnailPath: null,
     thumbnailStatus: 'completed',
     thumbnailWorkflowRunId: null,
-    thumbnailGeneratedAt: null,
     thumbnailError: null,
-    imageModel: 'nano_banana_2',
+    imageModel: null,
     imagePrompt: null,
     variantImageUrl: null,
     variantImageStatus: 'pending',
@@ -131,16 +131,8 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     motionPromptData: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    audioUrl: null,
-    audioPath: null,
-    audioStatus: 'pending',
-    audioWorkflowRunId: null,
-    audioGeneratedAt: null,
-    audioError: null,
-    audioModel: null,
     thumbnailInputHash: null,
     videoInputHash: null,
-    audioInputHash: null,
     visualPromptInputHash: null,
     motionPromptInputHash: null,
     previewThumbnailUrl: null,
@@ -149,33 +141,15 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     updatedAt: NOW,
     ...overrides,
   };
-  const frame: Frame = {
-    // Own id — distinct from the shot id (#989); only shotId links them.
-    id: `frame-${base.id}`,
-    shotId: base.id,
-    sequenceId: base.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    source: 'generated',
-    imageUrl: base.thumbnailUrl,
-    previewImageUrl: base.previewThumbnailUrl,
-    imagePath: base.thumbnailPath,
-    imageStatus: base.thumbnailStatus,
-    imageWorkflowRunId: base.thumbnailWorkflowRunId,
-    imageGeneratedAt: base.thumbnailGeneratedAt,
-    imageError: base.thumbnailError,
-    imageModel: base.imageModel,
-    imagePrompt: base.imagePrompt,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    imageInputHash: base.thumbnailInputHash,
-    visualPromptInputHash: base.visualPromptInputHash,
-    createdAt: base.createdAt,
-    updatedAt: base.updatedAt,
-  };
-  return { ...base, frame };
+  return { ...base, frame: anchorFixture(base).frame };
 }
+
+/**
+ * The two rows the projection consumes. The frame keeps its own id — distinct
+ * from the shot id (#989); only shotId links them.
+ */
+const anchorFixture = (shot: Omit<ShotWithImage, 'frame'>) =>
+  frameFixtureFor(shot, `frame-${shot.id}`);
 
 /**
  * The model each shot's selected image / video version was rendered with
@@ -201,7 +175,17 @@ function makeContext(
   // The image surface lives on each shot's anchor frame now (#989); the source
   // projects `ShotWithImage` from `shots` + anchor `frames`, so expose the
   // anchors here (keyed by shotId, never id-reuse).
-  const listAnchorsBySequence = vi.fn(async () => shots.map((s) => s.frame));
+  const anchors = shots.map((s) => anchorFixture(s));
+  const listAnchorsBySequence = vi.fn(async () => anchors.map((a) => a.frame));
+  // The still itself is the selected `frame_variants` row (#1067).
+  const getSelectedByFrameIds = vi.fn(
+    async () =>
+      new Map(
+        anchors.flatMap((a) =>
+          a.selectedVersion ? [[a.frame.id, a.selectedVersion]] : []
+        )
+      )
+  );
   const listWithSheets = vi.fn(async () => []);
   // Model identity lives on the version that produced each asset (#1066); an
   // empty map means nothing has been rendered yet → shots inherit the sequence
@@ -230,6 +214,7 @@ function makeContext(
     frameVariants: {
       listSelectedModelsBySequence: listSelectedImageModels,
       listLastFailedModelsBySequence: listFailedImageModels,
+      getSelectedByFrameIds,
     },
     videoVariants: {
       listSelectedModelsBySequence: listSelectedVideoModels,

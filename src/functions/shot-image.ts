@@ -11,6 +11,7 @@ import {
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { requireCredits } from '@/lib/billing/preflight';
 import { getVariantGridConfig } from '@/lib/constants/aspect-ratios';
 import { cropTileFromGrid } from '@/lib/image/image-crop';
@@ -231,7 +232,8 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
   .handler(async ({ context, data }) => {
     const { shot, frame, sequence, user } = context;
 
-    if (!frame.imageUrl) {
+    const thumbnailUrl = await getFrameImageUrl(context.scopedDb, frame.id);
+    if (!thumbnailUrl) {
       throw new Error('Shot must have a still image to generate variants');
     }
 
@@ -277,7 +279,7 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
-      thumbnailUrl: frame.imageUrl,
+      thumbnailUrl,
       scenePrompt: frame.imagePrompt ?? undefined,
       model: data.model,
       aspectRatio: sequence.aspectRatio,

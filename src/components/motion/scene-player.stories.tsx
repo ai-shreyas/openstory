@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-type-assertion -- Storybook mock data uses intentional type assertions */
 import type { Shot } from '@/types/database';
-import type { Frame } from '@/lib/db/schema';
+import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -24,31 +24,8 @@ type Story = StoryObj<typeof ScenePlayer>;
 // (the `ShotWithImage` projection); mirror them back onto a concrete anchor
 // `Frame` (id == shot.id) so each row matches what `getShotsFn` returns.
 const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
-  const frame: Frame = {
-    id: shot.id,
-    shotId: shot.id,
-    sequenceId: shot.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    source: 'generated',
-    imageUrl: shot.thumbnailUrl,
-    previewImageUrl: shot.previewThumbnailUrl,
-    imagePath: shot.thumbnailPath,
-    imageStatus: shot.thumbnailStatus,
-    imageWorkflowRunId: shot.thumbnailWorkflowRunId,
-    imageGeneratedAt: shot.thumbnailGeneratedAt,
-    imageError: shot.thumbnailError,
-    imageModel: shot.imageModel,
-    imagePrompt: shot.imagePrompt,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    imageInputHash: shot.thumbnailInputHash,
-    visualPromptInputHash: shot.visualPromptInputHash,
-    createdAt: shot.createdAt,
-    updatedAt: shot.updatedAt,
-  };
-  return projectShotWithImage(shot, frame, {
+  const { frame, selectedVersion } = frameFixtureFor(shot);
+  return projectShotWithImage(shot, frame, selectedVersion, {
     url: shot.variantImageUrl,
     status: shot.variantImageStatus,
   });
@@ -68,9 +45,8 @@ const mockShotBase = {
   description: 'A scene from the storyboard',
   durationMs: 5000,
   thumbnailWorkflowRunId: null,
-  thumbnailGeneratedAt: null,
+  imageModel: null,
   thumbnailError: null,
-  imageModel: 'nano_banana',
   imagePrompt: null,
   videoWorkflowRunId: null,
   videoGeneratedAt: null,
@@ -80,16 +56,8 @@ const mockShotBase = {
   motionPromptData: null,
   selectedMotionPromptVersionId: null,
   renderSegmentId: null,
-  audioUrl: null,
-  audioPath: null,
-  audioStatus: 'pending' as const,
-  audioWorkflowRunId: null,
-  audioGeneratedAt: null,
-  audioError: null,
-  audioModel: null,
   thumbnailInputHash: null,
   videoInputHash: null,
-  audioInputHash: null,
   visualPromptInputHash: null,
   motionPromptInputHash: null,
   variantImageUrl: null,

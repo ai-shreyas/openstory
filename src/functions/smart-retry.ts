@@ -105,9 +105,21 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       (fr) => [fr.shotId, fr]
     )
   );
+  const selectedByFrame =
+    await context.scopedDb.frameVariants.getSelectedByFrameIds(
+      [...anchorsByShot.values()].map((fr) => fr.id)
+    );
   const shotsWithImage = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
-    return frame ? [projectShotWithImage(shot, frame)] : [];
+    return frame
+      ? [
+          projectShotWithImage(
+            shot,
+            frame,
+            selectedByFrame.get(frame.id) ?? null
+          ),
+        ]
+      : [];
   });
   const summary = analyzeFailures(shotsWithImage, sequence);
 

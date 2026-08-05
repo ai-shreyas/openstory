@@ -7,11 +7,9 @@
  *   - role 'last'  → optional last-frame conditioning (first+last i2v)
  *   - role 'key'   → optional interpolation keyframe
  *
- * A frame's primary still may be produced by a cheap turbo PREVIEW model and
- * later upgraded in place to a proper GENERATED still (`source` flips
- * 'preview' → 'generated', `imageUrl` replaced). The frame identity is stable
- * so the shot's anchor never changes underneath motion generation. Per-model
- * alternates live in `frame_variants`; visual prompt history in
+ * The frame identity is stable so the shot's anchor never changes underneath
+ * motion generation. The primary still lives on the selected `frame_variants`
+ * row; per-model alternates live alongside it, visual prompt history in
  * `frame_prompt_versions`.
  *
  * This is the image surface that previously lived as columns on `shots`
@@ -40,16 +38,6 @@ export const FRAME_ROLES = ['first', 'last', 'key'] as const;
 export type FrameRole = (typeof FRAME_ROLES)[number];
 
 /**
- * How the primary still was produced. 'preview' is a cheap turbo stand-in shown
- * while a proper still is pending or when a reference-driven (e.g. Seedance
- * multi-shot) shot never generates a dedicated first frame; 'generated' is a
- * full-quality render. The upgrade happens in place on the same frame row.
- */
-/** @public consumed from #988+ */
-export const FRAME_SOURCES = ['preview', 'generated'] as const;
-export type FrameSource = (typeof FRAME_SOURCES)[number];
-
-/**
  * Frames table — still keyframes within a shot.
  */
 export const frames = snakeCase.table(
@@ -73,22 +61,17 @@ export const frames = snakeCase.table(
     // 0-based order within the shot. 0 = the first frame / i2v anchor.
     orderIndex: integer().notNull().default(0),
     role: text().$type<FrameRole>().notNull().default('first'),
-    source: text().$type<FrameSource>().notNull().default('generated'),
 
-    // Primary still (was shots.thumbnail*).
-    imageUrl: text(),
-    previewImageUrl: text(), // Fast preview CDN URL (URL may expire; column persists)
-    imagePath: text(), // R2 storage path (not signed URL)
+    // The still lives on the SELECTED `frame_variants` row, never here. What
+    // remains is frame-owned: the turbo stand-in shown before any variant
+    // exists, and the primary render's in-flight lifecycle.
+    // DB-Audit: drop with #1101 — a preview is a property of the image, not of the frame, so it belongs in `frame_variants` under a 'preview' kind.
+    previewImageUrl: text(), // URL may expire; column persists
+    // DB-Audit: KEEP (re-confirmed) — these three look derivable from the pointers, but a failed primary CLEARS `pendingPromoteVersionId`, so no pointer survives to carry 'failed' or its error message.
     imageStatus: text().$type<FrameGenerationStatus>().default('pending'),
     imageWorkflowRunId: text(),
-    imageGeneratedAt: integer({ mode: 'timestamp' }),
     imageError: text(),
-    // SQL default is a frozen literal, NOT the DEFAULT_IMAGE_MODEL constant — a
-    // mutable imported default drifts from the deployed column default on the
-    // next model bump and forces a full-table rebuild (CASCADE trap; see
-    // schema/sequences.ts). The frame-create path resolves the real default in
-    // app code; this literal is just a never-relied-on fallback.
-    imageModel: text({ length: 100 }).default('nano_banana_2').notNull(),
+    // DB-Audit: drop after backfilling version rows — mirror of the selected `frame_prompt_versions.text`, exactly as `shots.motionPrompt` mirrors the motion version.
     imagePrompt: text(), // Mirror of the selected prompt version's text (read-path convenience)
 
     // Selection pointers (soft references — plain columns, no FK — to avoid a
@@ -104,8 +87,7 @@ export const frames = snakeCase.table(
     // still points at the finishing version.
     pendingPromoteVersionId: text(), // → frame_variants.id
 
-    // SHA-256 staleness mirrors of the selected image / prompt version.
-    imageInputHash: text(),
+    // DB-Audit: drop with `imagePrompt` — mirror of `frame_prompt_versions.inputHash`, the image-side twin of `shots.motionPromptInputHash`.
     visualPromptInputHash: text(),
 
     createdAt: integer({ mode: 'timestamp' })

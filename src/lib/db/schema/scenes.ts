@@ -27,19 +27,6 @@ import { generateId } from '../id';
 import { sequences } from './sequences';
 
 /**
- * Generation status values for the scene-level video render. Mirrors the
- * shot-level statuses (kept as a local list per the existing per-schema
- * convention rather than a shared import).
- */
-const SCENE_GENERATION_STATUSES = [
-  'pending',
-  'generating',
-  'completed',
-  'failed',
-] as const;
-type SceneGenerationStatus = (typeof SCENE_GENERATION_STATUSES)[number];
-
-/**
  * Branded id for `scenes.id` (a ULID). Distinct from the LLM-assigned
  * `Scene.sceneId` string carried in analysis output (see `analysisSceneId` in
  * the ShotMapping type) — both are plain strings, so this brand exists for call
@@ -91,28 +78,21 @@ export const scenes = snakeCase.table(
     title: text(),
     // Typed JSON slices of the analysis Scene object.
     continuity: text({ mode: 'json' }).$type<SceneContinuity>(),
+    // TB-20260805: DB-Audit: musicDesign is dead by construction. It should be removed.
     musicDesign: text({ mode: 'json' }).$type<SceneMusicDesign>(),
+
+    // TB-20260805: DB-Audit: We should be using the script from the selected script version - not storing it here
     originalScript: text({ mode: 'json' }).$type<SceneOriginalScript>(),
     // Pointer to the selected row in `scene_script_versions` (#1030). The
     // column is a plain text id (no FK) to avoid a circular schema dependency.
     selectedScriptVersionId: text(),
+
     // NOTE: a scene deliberately has NO model columns (#1066). Model identity
     // belongs to the row that recorded the generation — `frame_variants.model`
     // for a still, `video_variants.model` for a clip — not to a narrative unit.
     // Resolution reads the selected version; see @/lib/ai/resolve-asset-models.
-    // Scene-render video columns — unused until #910, included now to avoid a
-    // later ALTER. All nullable.
-    videoUrl: text(),
-    videoPath: text(), // R2 storage path (not signed URL)
-    videoStatus: text().$type<SceneGenerationStatus>().default('pending'),
-    videoWorkflowRunId: text(),
-    videoGeneratedAt: integer({ mode: 'timestamp' }),
-    videoError: text(),
-    videoInputHash: text(),
-    // How the scene render is assembled (e.g. multi-shot vs per-shot). Free
-    // text until #910 defines the strategy enum. The scene's render tiling is
-    // the `render_segments` table (#990), not a column here.
-    renderStrategy: text(),
+    // It also owns no video columns (#1067): a scene's render is tiled into
+    // `render_segments` (#990), and each segment points at its `video_variants`.
     createdAt: integer({ mode: 'timestamp' })
       .$defaultFn(() => new Date())
       .notNull(),

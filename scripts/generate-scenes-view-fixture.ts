@@ -97,13 +97,7 @@ function swapShotMedia(shot: Row, i: number): Row {
   if (shot.variantImageUrl)
     shot.variantImageUrl = `https://picsum.photos/seed/${seed}-v/720/1280`;
   if (shot.videoUrl) shot.videoUrl = VIDEOS[i % VIDEOS.length];
-  if (shot.audioUrl) shot.audioUrl = null;
   return shot;
-}
-
-function swapSceneMedia(scene: Row, i: number): Row {
-  if (scene.videoUrl) scene.videoUrl = VIDEOS[i % VIDEOS.length];
-  return scene;
 }
 
 function requireRow(rows: Row[], what: string): Row {
@@ -136,7 +130,7 @@ if (sequence.musicUrl) sequence.musicUrl = null;
 const style = mapRow(styleRow);
 if (style.previewUrl) style.previewUrl = null;
 
-const scenes = sceneRows.map(mapRow).map(swapSceneMedia);
+const scenes = sceneRows.map(mapRow);
 // SceneRow.id carries the DbSceneId brand — emit via the brand constructor.
 for (const s of scenes) s.id = brandMark(s.id);
 const shots = shotRows.map(mapRow).map(swapShotMedia);

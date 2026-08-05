@@ -234,13 +234,15 @@ describe('frameVariants.select', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
+    // #1067: selecting moves the POINTER (plus the primary-render status);
+    // the url/path/model/hash are read off the version, never copied down.
     expect(frame.selectedImageVersionId).toBe(v2.id);
-    expect(frame.imageUrl).toBe('https://cdn/v2.png');
-    expect(frame.imagePath).toBe('r2/v2.png');
-    expect(frame.previewImageUrl).toBe('https://cdn/v2-preview.png');
     expect(frame.imageStatus).toBe('completed');
-    expect(frame.imageModel).toBe('m2');
-    expect(frame.imageInputHash).toBe('hash-2');
+    const selected = await m.getSelected(frameId);
+    expect(selected?.url).toBe('https://cdn/v2.png');
+    expect(selected?.storagePath).toBe('r2/v2.png');
+    expect(selected?.model).toBe('m2');
+    expect(selected?.inputHash).toBe('hash-2');
 
     const events = await db
       .select()
@@ -321,7 +323,7 @@ describe('frameVariants.select', () => {
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
     expect(frame.selectedImageVersionId).toBe(olderStill.id);
-    expect(frame.imageUrl).toBe('https://cdn/old.png');
+    expect((await m.getSelected(frameId))?.url).toBe('https://cdn/old.png');
     expect(frame.selectedImagePromptVersionId).toBe(oldPrompt.id);
     expect(frame.imagePrompt).toBe('Wide shot of the moon base');
     expect(frame.visualPromptInputHash).toBe('prompt-hash-old');

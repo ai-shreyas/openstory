@@ -14,6 +14,7 @@ import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { sceneKeys } from '@/hooks/use-scenes';
 import { shotKeys } from '@/hooks/use-shots';
 import type { Frame, Shot } from '@/lib/db/schema';
+import { selectedVersionFixture } from '@/lib/mocks/frame-fixtures';
 import {
   projectShotWithImage,
   type ShotWithImage,
@@ -48,15 +49,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     motionModel: 'veo3',
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    audioUrl: null,
-    audioPath: null,
-    audioStatus: 'pending',
-    audioWorkflowRunId: null,
-    audioGeneratedAt: null,
-    audioError: null,
-    audioModel: null,
     videoInputHash: null,
-    audioInputHash: null,
     motionPromptInputHash: null,
     metadata: null,
     createdAt: new Date(),
@@ -68,25 +61,28 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     sequenceId: SEQ,
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
-    imageUrl: OLD_THUMB,
     previewImageUrl: null,
-    imagePath: null,
     imageStatus: 'completed',
     imageWorkflowRunId: null,
-    imageGeneratedAt: null,
     imageError: null,
-    imageModel: 'nano_banana_2',
     imagePrompt: null,
-    selectedImageVersionId: null,
+    selectedImageVersionId: 'fv-1',
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    imageInputHash: null,
     visualPromptInputHash: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  return { ...projectShotWithImage(shot, frame), ...overrides };
+  // The still is the selected version, not a frame column (#1067).
+  const selectedVersion = selectedVersionFixture({
+    frameId: frame.id,
+    sequenceId: SEQ,
+    url: OLD_THUMB,
+  });
+  return {
+    ...projectShotWithImage(shot, frame, selectedVersion),
+    ...overrides,
+  };
 }
 
 function getCachedShot(qc: QueryClient): ShotWithImage | undefined {

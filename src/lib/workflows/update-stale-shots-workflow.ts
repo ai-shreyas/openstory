@@ -58,6 +58,7 @@ import { isInsufficientCreditsError } from '@/lib/errors';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
+import { getAnchorImageUrl, getFrameImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
 import {
   loadSelectedScriptsBySequence,
@@ -382,7 +383,9 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
               'WorkflowValidationError'
             );
           }
-          if (!frame.imageUrl) {
+          // The still lives on the anchor's selected version (#1067).
+          const stillUrl = await getFrameImageUrl(scopedDb, frame.id);
+          if (!stillUrl) {
             throw new NonRetryableError(
               `Shot ${target.shotId} has no rendered still to animate`,
               'WorkflowValidationError'
@@ -485,7 +488,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
             teamId,
             sequenceId,
             shotId: shot.id,
-            imageUrl: frame.imageUrl,
+            imageUrl: stillUrl,
             prompt,
             model,
             duration,
@@ -691,11 +694,10 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
                 startingFrameImageUrl = await step.do(
                   `refresh-still-${target.shotId}`,
                   async () => {
-                    const frameNow = await scopedDb.frames.getAnchorByShot(
-                      target.shotId
-                    );
                     return (
-                      frameNow?.imageUrl ?? target.startingFrameImageUrl ?? null
+                      (await getAnchorImageUrl(scopedDb, target.shotId)) ??
+                      target.startingFrameImageUrl ??
+                      null
                     );
                   }
                 );

@@ -18,7 +18,6 @@ const createShotSchema = createInsertSchema(shots, {
   durationMs: (schema) => schema.min(1),
   metadata: () => sceneSchema.nullable().optional(),
   videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
-  audioStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 }).omit({
   id: true,
   createdAt: true,
@@ -30,7 +29,6 @@ export const updateShotSchema = createUpdateSchema(shots, {
   durationMs: (schema) => schema.min(1),
   metadata: () => sceneSchema.nullable().optional(),
   videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
-  audioStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 })
   .omit({
     id: true,

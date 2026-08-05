@@ -315,8 +315,13 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     );
     // The still image surface lives on each shot's anchor frame now (#989) —
     // keyed by shotId (NOT id-reuse).
+    // Stills live on each anchor's SELECTED version (#1067) — resolved once
+    // here, keyed by frame id, for both the mark-generating and spawn loops.
     const liveFramesByShot = await scopedDb.frames.getAnchorsByShots(
       liveShots.map((s) => s.id)
+    );
+    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+      [...liveFramesByShot.values()].map((f) => f.id)
     );
 
     // Flip every affected shot to `generating` and emit progress events
@@ -329,7 +334,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     await step.do('mark-shots-generating', async () => {
       for (const shot of liveShots) {
         const frame = liveFramesByShot.get(shot.id);
-        if (frame?.imageUrl) {
+        if (frame && selectedByFrame.get(frame.id)?.url) {
           await scopedDb.frames.setImageGenerationStatus(
             frame.id,
             { imageStatus: 'generating', imageError: null },
@@ -377,7 +382,8 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     const imageSpawnPromises = liveShots.map(
       async (shot, index): Promise<ShotResult> => {
         const frame = liveFramesByShot.get(shot.id);
-        const sourceImageUrl = frame?.imageUrl;
+        const selected = frame ? selectedByFrame.get(frame.id) : undefined;
+        const sourceImageUrl = selected?.url;
         if (!sourceImageUrl) {
           // Replacement is only meaningful when a primary still exists;
           // text-to-image regeneration would silently invent a shot from
@@ -393,7 +399,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
         // reads as a continuation of the original render. Fall back to the
         // workflow's edit-capable default otherwise.
         const shotModel = safeTextToImageModel(
-          frame.imageModel,
+          selected?.model,
           DEFAULT_IMAGE_MODEL
         );
         const model = supportsReferenceImages(shotModel)

@@ -45,6 +45,7 @@ import { gateEstimate } from '@/lib/billing/cost-estimation';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
+import { getAnchorImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
 import { endSpanSuccess, startGenAISpan } from '@/lib/observability/tracer';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -265,11 +266,13 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
                     analysisModel: sequence.analysisModel,
                   },
                   scene: shot.metadata,
-                  // i2v anchor still lives on the anchor frame now (#989) —
-                  // resolved by shotId, never by id-reuse.
-                  startingFrameImageUrl:
-                    (await scopedDb.frames.getAnchorByShot(shot.id))
-                      ?.imageUrl ?? null,
+                  // i2v anchor still lives on the anchor frame's selected
+                  // version now (#989/#1067) — resolved by shotId, never by
+                  // id-reuse.
+                  startingFrameImageUrl: await getAnchorImageUrl(
+                    scopedDb,
+                    shot.id
+                  ),
                 });
                 userEditInputHash = await computeMotionPromptInputHash(ctx);
                 userEditAnalysisModel = ctx.analysisModel;

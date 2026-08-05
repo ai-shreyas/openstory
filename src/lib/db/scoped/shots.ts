@@ -109,10 +109,9 @@ export type ShotWithAnchorFrame = Shot & { anchorFrameId: string };
 
 // Image artifacts (thumbnail/variantImage) moved to `frames` in #989 — their
 // staleness is checked via `frameVariants.isStale` / `frames.isStale`. Only the
-// shot-owned video/audio artifacts remain here.
+// shot-owned video artifact remains here.
 const SHOT_ARTIFACT_HASH_COLUMNS = {
   video: 'videoInputHash',
-  audio: 'audioInputHash',
 } as const satisfies Record<string, keyof Shot>;
 
 // Anchor-frame inserts bind ~10 params per row; 9 rows/chunk keeps each INSERT
@@ -139,8 +138,8 @@ export function createShotsMethods(db: Database) {
   // instead of reading it back (#991: no DB reads in workflows).
   //
   // Chunked to stay under D1's 100-bound-parameter ceiling: each anchor row binds
-  // ~10 params (id, shotId, sequenceId, orderIndex, role, source, imageStatus,
-  // imageModel, createdAt, updatedAt — the schema defaults are inlined as binds),
+  // ~10 params (id, shotId, sequenceId, orderIndex, role, imageStatus,
+  // createdAt, updatedAt — the schema defaults are inlined as binds),
   // so a single INSERT of a whole sequence's shots overflowed the limit and threw
   // (#1019: getShotsFn calls this with every shot on each read, so sequences with
   // more than ~10 shots stopped listing their scenes entirely).

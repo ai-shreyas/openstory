@@ -113,13 +113,13 @@ describe('frames.update', () => {
       orderIndex: 0,
       role: 'first',
     });
-    // Seed a pointer + mirror as the select path would.
+    // Seed the pointer + the frame-owned lifecycle as the select path would.
     await db
       .update(frames)
       .set({
         selectedImageVersionId: 'ver-1',
-        imageUrl: 'https://cdn/keep.png',
-        imageInputHash: 'keep-hash',
+        previewImageUrl: 'https://cdn/keep-preview.png',
+        imageStatus: 'completed',
       })
       .where(eq(frames.id, frame.id));
 
@@ -132,10 +132,10 @@ describe('frames.update', () => {
     if (!refreshed) throw new Error('test setup: refresh failed');
     expect(refreshed.orderIndex).toBe(2);
     expect(refreshed.role).toBe('key');
-    // Mirror columns untouched.
+    // Selection-owned columns untouched.
     expect(refreshed.selectedImageVersionId).toBe('ver-1');
-    expect(refreshed.imageUrl).toBe('https://cdn/keep.png');
-    expect(refreshed.imageInputHash).toBe('keep-hash');
+    expect(refreshed.previewImageUrl).toBe('https://cdn/keep-preview.png');
+    expect(refreshed.imageStatus).toBe('completed');
   });
 
   it('throws on a missing frame by default, returns undefined when opted out', async () => {
@@ -207,11 +207,23 @@ describe('frames.isStale', () => {
   it('null stored hash → not stale; match → not stale; differ → stale', async () => {
     const m = createFramesMethods(db);
     const a = await m.create({ shotId, sequenceId, orderIndex: 0 });
+    // No selected version at all → no opinion, so not stale.
     expect(await m.isStale(a.id, 'anything')).toBe(false);
 
+    // The hash lives on the SELECTED version now (#1067), not the frame.
+    const versionId = generateId();
+    await db.insert(frameVariants).values({
+      id: versionId,
+      frameId: a.id,
+      sequenceId,
+      kind: 'model',
+      model: 'm1',
+      status: 'completed',
+      inputHash: 'h-match',
+    });
     await db
       .update(frames)
-      .set({ imageInputHash: 'h-match' })
+      .set({ selectedImageVersionId: versionId })
       .where(eq(frames.id, a.id));
     expect(await m.isStale(a.id, 'h-match')).toBe(false);
     expect(await m.isStale(a.id, 'h-new')).toBe(true);

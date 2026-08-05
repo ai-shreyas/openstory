@@ -75,27 +75,13 @@ describe('buildPromoteUpdate', () => {
     expect(update.videoError).toBeNull();
     expect(update.videoInputHash).toBe(variant.inputHash);
 
-    expect(update.audioUrl).toBeUndefined();
-
     expect(progressEvent).toBe('video:progress');
     expect(progressUrlField).toBe('videoUrl');
   });
 
-  it('audio variant: copies audio fields only', () => {
+  it('audio variant: throws — per-shot audio was never built (#1067)', () => {
     const variant = baseVariant({ variantType: 'audio' });
-    const { update, progressEvent, progressUrlField } =
-      buildPromoteUpdate(variant);
-
-    expect(update.audioUrl).toBe(variant.url);
-    expect(update.audioPath).toBe(variant.storagePath);
-    expect(update.audioStatus).toBe('completed');
-    expect(update.audioError).toBeNull();
-    expect(update.audioInputHash).toBe(variant.inputHash);
-
-    expect(update.videoUrl).toBeUndefined();
-
-    expect(progressEvent).toBe('audio:progress');
-    expect(progressUrlField).toBe('audioUrl');
+    expect(() => buildPromoteUpdate(variant)).toThrow(/not promoted/);
   });
 });
 
@@ -170,20 +156,16 @@ beforeEach(async () => {
 });
 
 describe('shotVariants.promoteAtomically', () => {
-  // Image variants no longer live on `shot_variants` (#989), so the
-  // promote-atomically path now only serves video/audio. Exercise it with a
-  // divergent VIDEO alternate.
-  async function insertDivergent(opts: {
-    inputHash: string;
-    url: string;
-    variantType?: 'video' | 'audio';
-  }) {
+  // Image variants no longer live on `shot_variants` (#989) and per-shot audio
+  // was never built (#1067), so the promote-atomically path now only serves
+  // video. Exercise it with a divergent VIDEO alternate.
+  async function insertDivergent(opts: { inputHash: string; url: string }) {
     const [variant] = await db
       .insert(shotVariants)
       .values({
         shotId,
         sequenceId,
-        variantType: opts.variantType ?? 'video',
+        variantType: 'video',
         model: 'm1',
         url: opts.url,
         status: 'completed',

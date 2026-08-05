@@ -9,7 +9,7 @@ import {
   DEFAULT_ASPECT_RATIO,
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
-import { frames, sequences, shots } from '@/lib/db/schema';
+import { frameVariants, frames, sequences, shots } from '@/lib/db/schema';
 import type { NewSequence, Sequence, Shot, Style } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import {
@@ -159,6 +159,17 @@ function createSequencesReadMethods(db: Database, teamId: string) {
               frames,
               and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
             )
+            // The still itself lives on the SELECTED version (#1067). Joined
+            // here rather than fetched per row so the batch stays one query;
+            // `discardedAt` is in the JOIN condition (not the WHERE) so a frame
+            // whose selection was discarded still yields its shot, imageless.
+            .leftJoin(
+              frameVariants,
+              and(
+                eq(frameVariants.id, frames.selectedImageVersionId),
+                isNull(frameVariants.discardedAt)
+              )
+            )
             .where(
               and(
                 inArray(shots.sequenceId, batch),
@@ -169,7 +180,11 @@ function createSequencesReadMethods(db: Database, teamId: string) {
             .then((rows) =>
               rows.map((row) =>
                 row.frames
-                  ? projectShotWithImage(row.shots, row.frames)
+                  ? projectShotWithImage(
+                      row.shots,
+                      row.frames,
+                      row.frame_variants
+                    )
                   : projectShotMissingFrame(row.shots)
               )
             )
