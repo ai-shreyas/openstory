@@ -723,11 +723,13 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         fr,
       ])
     );
-    const [characters, locations, elements] = await Promise.all([
-      scopedDb.characters.listWithSheets(sequence.id),
-      scopedDb.sequenceLocations.listWithReferences(sequence.id),
-      scopedDb.sequenceElements.list(sequence.id),
-    ]);
+    const [characters, locations, elements, imageSceneContext] =
+      await Promise.all([
+        scopedDb.characters.listWithSheets(sequence.id),
+        scopedDb.sequenceLocations.listWithReferences(sequence.id),
+        scopedDb.sequenceElements.list(sequence.id),
+        loadSceneContextBySequence(scopedDb, sequence.id),
+      ]);
 
     const inputs: NonNullable<
       Awaited<ReturnType<typeof buildShotImageWorkflowInput>>
@@ -735,6 +737,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     for (const f of allShots) {
       const input = await buildShotImageWorkflowInput({
         shot: f,
+        scene: resolveSceneForShot(f, imageSceneContext).scene,
         model,
         userId: user.id,
         teamId: sequence.teamId,
