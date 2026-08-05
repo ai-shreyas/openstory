@@ -82,15 +82,9 @@
       "Bash(bun db:migrate)",
       "Bash(bun db:push:*)",
       "Bash(bun db:push)",
-      "Bash(bun db:generate:*)",
-      "Bash(bun db:generate)",
       "Bash(drizzle-kit migrate:*)",
       "Bash(drizzle-kit push:*)",
-      "Bash(drizzle-kit generate:*)",
-      "Bash(bun --bun drizzle-kit:*)",
-      "Bash(bunx drizzle-kit:*)",
-      "Bash(wrangler d1 execute:*)",
-      "Bash(bunx wrangler d1 execute:*)"
+      "Bash(drizzle-kit generate:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
