@@ -61,7 +61,7 @@ function ensureSeededOnce(db: D1Database): Promise<void> {
 
 // Re-export Cloudflare Workflow entrypoint classes so the Worker bundle
 // includes them. Each must have a matching entry in `wrangler.jsonc` under
-// `workflows[]`. See docs/investigations/cloudflare-workflows-poc.md.
+// `workflows[]`.
 export { ImageWorkflow } from '@/lib/workflows/image-workflow';
 export { ElementVisionWorkflow } from '@/lib/workflows/element-vision-workflow';
 export { ElementSheetWorkflow } from '@/lib/workflows/element-sheet-workflow';
