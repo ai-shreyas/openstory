@@ -37,16 +37,8 @@ const baseShot: ShotWithImage = {
   motionPromptData: null,
   selectedMotionPromptVersionId: null,
   renderSegmentId: null,
-  audioUrl: null,
-  audioPath: null,
-  audioStatus: 'pending',
-  audioWorkflowRunId: null,
-  audioGeneratedAt: null,
-  audioError: null,
-  audioModel: null,
   thumbnailInputHash: 'live-hash',
   videoInputHash: null,
-  audioInputHash: null,
   visualPromptInputHash: null,
   motionPromptInputHash: null,
   metadata: null,
@@ -58,7 +50,6 @@ const baseShot: ShotWithImage = {
     sequenceId: 'seq-1',
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
     previewImageUrl: null,
     imageStatus: 'completed',
     imageWorkflowRunId: null,
@@ -140,20 +131,6 @@ export const VideoVariant: Story = {
     variant: makeVariant({
       variantType: 'video',
       url: 'https://www.w3schools.com/html/movie.mp4',
-    }),
-    onPromote: () => {},
-    onDiscard: () => {},
-  },
-};
-
-export const AudioVariant: Story = {
-  args: {
-    open: true,
-    onOpenChange: () => {},
-    shot: baseShot,
-    variant: makeVariant({
-      variantType: 'audio',
-      url: 'https://www.w3schools.com/html/horse.ogg',
     }),
     onPromote: () => {},
     onDiscard: () => {},

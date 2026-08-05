@@ -197,8 +197,8 @@ export const getDivergentVariantsFn = createServerFn({ method: 'GET' })
     );
   });
 
-type PromoteProgressEvent = 'video:progress' | 'audio:progress';
-type PromoteProgressUrlField = 'videoUrl' | 'audioUrl';
+type PromoteProgressEvent = 'video:progress';
+type PromoteProgressUrlField = 'videoUrl';
 
 /**
  * Build the per-variantType `shots` update payload and matching realtime
@@ -208,8 +208,9 @@ type PromoteProgressUrlField = 'videoUrl' | 'audioUrl';
  *
  * Image promotion is retired (#989): image variants live in `frame_variants`
  * and selection is a pointer repoint via `setImageFromVariantFn` /
- * `frameVariants.select`, not a divergent-alternate promote. This only handles
- * the video/audio variants that still live on `shot_variants`.
+ * `frameVariants.select`, not a divergent-alternate promote. Per-shot audio
+ * was never built (#1067) — music is sequence-level on `sequences.music*` — so
+ * video is the only promotable variant type.
  */
 export function buildPromoteUpdate(variant: ShotVariant): {
   update: Partial<NewShot>;
@@ -217,13 +218,15 @@ export function buildPromoteUpdate(variant: ShotVariant): {
   progressUrlField: PromoteProgressUrlField;
 } {
   const update: Partial<NewShot> = {};
-  let progressEvent: PromoteProgressEvent;
-  let progressUrlField: PromoteProgressUrlField;
 
   switch (variant.variantType) {
     case 'image':
       throw new Error(
         'Image variants are not promoted — select via frameVariants.select (#989)'
+      );
+    case 'audio':
+      throw new Error(
+        'Audio variants are not promoted — per-shot audio does not exist (#1067)'
       );
     case 'video':
       update.videoUrl = variant.url;
@@ -231,21 +234,14 @@ export function buildPromoteUpdate(variant: ShotVariant): {
       update.videoStatus = 'completed';
       update.videoError = null;
       update.videoInputHash = variant.inputHash;
-      progressEvent = 'video:progress';
-      progressUrlField = 'videoUrl';
-      break;
-    case 'audio':
-      update.audioUrl = variant.url;
-      update.audioPath = variant.storagePath;
-      update.audioStatus = 'completed';
-      update.audioError = null;
-      update.audioInputHash = variant.inputHash;
-      progressEvent = 'audio:progress';
-      progressUrlField = 'audioUrl';
       break;
   }
 
-  return { update, progressEvent, progressUrlField };
+  return {
+    update,
+    progressEvent: 'video:progress',
+    progressUrlField: 'videoUrl',
+  };
 }
 
 /**
@@ -296,21 +292,12 @@ export const promoteVariantFn = createServerFn({ method: 'POST' })
     const channel = getGenerationChannel(data.sequenceId);
     try {
       const url = updatedShot[progressUrlField] ?? variant.url;
-      await channel.emit(
-        `generation.${progressEvent}`,
-        progressEvent === 'audio:progress'
-          ? {
-              shotId: shot.id,
-              status: 'completed',
-              audioUrl: url,
-            }
-          : {
-              shotId: shot.id,
-              status: 'completed',
-              videoUrl: url,
-              model: variant.model,
-            }
-      );
+      await channel.emit(`generation.${progressEvent}`, {
+        shotId: shot.id,
+        status: 'completed',
+        videoUrl: url,
+        model: variant.model,
+      });
     } catch (error) {
       logger.error('realtime emit failed', { err: error });
     }

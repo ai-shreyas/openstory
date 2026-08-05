@@ -186,11 +186,11 @@ describe('reconcileAllStuckJobs — run-id-verified passes', () => {
   test('caps stuck-row selection at MAX_ROWS_PER_PASS (100) per verified pass', async () => {
     const { reconcileAllStuckJobs } = await import('./reconcile-all');
     await reconcileAllStuckJobs();
-    // 12 verified (run-id) passes: frames.image + shots.video/audio +
+    // 11 verified (run-id) passes: frames.image + shots.video +
     // frame_variants.status + video_variants.status (#1076) + 2 shot_variants +
     // sequences.status (#989) + generated_assets.status (#458) + the three
     // pending-claim passes (#1085: frame/shot prompt claims + image claims).
-    expect(limitArgs.filter((n) => n === 100)).toHaveLength(12);
+    expect(limitArgs.filter((n) => n === 100)).toHaveLength(11);
   });
 
   test('in-flight instance (resolveRunState null) → no per-row update on verified tables', async () => {

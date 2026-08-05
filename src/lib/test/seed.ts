@@ -262,7 +262,6 @@ export async function createTestShot(
     sequenceId,
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
     imageStatus: 'completed',
     selectedImageVersionId: primaryVersionId,
     createdAt: now,
@@ -692,8 +691,6 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
     thumbnailStatus: string | null;
     videoUrl: string | null;
     videoStatus: string | null;
-    audioUrl: string | null;
-    audioStatus: string | null;
   }>
 > {
   const db = getDb();
@@ -704,8 +701,6 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
       orderIndex: true,
       videoUrl: true,
       videoStatus: true,
-      audioUrl: true,
-      audioStatus: true,
     },
   });
   // The still-image surface lives on each shot's anchor frame now (#989);
@@ -734,8 +729,6 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
         thumbnailStatus: frame?.imageStatus ?? null,
         videoUrl: row.videoUrl,
         videoStatus: row.videoStatus,
-        audioUrl: row.audioUrl,
-        audioStatus: row.audioStatus,
       };
     })
     .sort((a, b) => a.orderIndex - b.orderIndex);

@@ -155,8 +155,6 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
     thumbnailStatus: string | null;
     videoUrl: string | null;
     videoStatus: string | null;
-    audioUrl: string | null;
-    audioStatus: string | null;
   }>
 > {
   const res = await fetch(
@@ -176,8 +174,6 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
         thumbnailStatus: z.string().nullable(),
         videoUrl: z.string().nullable(),
         videoStatus: z.string().nullable(),
-        audioUrl: z.string().nullable(),
-        audioStatus: z.string().nullable(),
       })
     )
     .parse(await res.json());

@@ -71,7 +71,6 @@ export function projectShotMissingFrame(shot: Shot): ShotWithImage {
     sequenceId: shot.sequenceId,
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
     previewImageUrl: null,
     imageStatus: null,
     imageWorkflowRunId: null,

@@ -31,7 +31,6 @@ function makeFrame(shot: Shot, overrides: Partial<Frame> = {}): Frame {
     sequenceId: shot.sequenceId,
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
     previewImageUrl: 'https://cdn/preview.png',
     imageStatus: 'completed',
     imageWorkflowRunId: 'run-123',

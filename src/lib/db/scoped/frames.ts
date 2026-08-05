@@ -172,8 +172,8 @@ export function createFramesMethods(db: Database) {
     /**
      * Idempotent insert keyed on the `(shot_id, order_index)` unique index —
      * a replay re-deriving the same frame slot updates in place rather than
-     * colliding. Identity columns (role/source) and the image mirror are left
-     * to dedicated paths.
+     * colliding. The `role` identity column and the image mirror are left to
+     * dedicated paths.
      */
     upsert: async (data: NewFrame): Promise<Frame> => {
       const [frame] = await db

@@ -157,10 +157,10 @@ export type {
 export { frames, frameVariants, framePromptVersions, sequenceEvents };
 
 /** @public used by #988+ (frames = the IMAGE unit; still keyframes per shot) */
-export { FRAME_ROLES, FRAME_SOURCES } from './frames';
+export { FRAME_ROLES } from './frames';
 
 /** @public used by #988+ */
-export type { Frame, NewFrame, FrameRole, FrameSource } from './frames';
+export type { Frame, NewFrame, FrameRole } from './frames';
 
 /** @public used by #988+ (flat still-image versions; variant = model|framing) */
 export { FRAME_VARIANT_KINDS } from './frame-variants';

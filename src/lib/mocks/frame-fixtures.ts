@@ -53,7 +53,6 @@ export function frameFixtureFor(
     sequenceId: shot.sequenceId,
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
     previewImageUrl: shot.previewThumbnailUrl,
     imageStatus: shot.thumbnailStatus,
     imageWorkflowRunId: shot.thumbnailWorkflowRunId,
