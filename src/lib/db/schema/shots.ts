@@ -61,11 +61,9 @@ export const shots = snakeCase.table(
     // fan-out of one render's.
     // DB-Audit: drop after backfilling version rows for pre-#713 shots — mirror of the selected `shot_prompt_versions.text`, written only by `mirrorSelection` and read only as the legacy fallback when the pointer is null.
     motionPrompt: text(), // User-updated motion prompt (overrides AI-generated prompt from metadata)
-    // Soft pointer (plain column, no FK — mirrors frames.selected*VersionId) to
-    // the selected `shot_prompt_versions` row for the MOTION prompt. Selection
-    // is a pointer, not a per-row flag: reverting / re-rolling the motion prompt
-    // will repoint this. Additive groundwork in #988 — no write path populates
-    // it yet (it stays null), so the repoint is wired in a later phase.
+    // Soft pointer (no FK) to the selected `shot_prompt_versions` row. Written
+    // by `mirrorSelection` on every prompt write; the render manifest snapshots
+    // it, so a null here means the manifest records no prompt.
     selectedMotionPromptVersionId: text(),
     // The render segment this shot belongs to (#990) — a scene's video is tiled
     // into ≤cap segments (`render_segments`); per-shot rendering is the
