@@ -220,9 +220,8 @@ export function NewSequencePage({
     );
   }
 
-  // Signed-in: the script box fills the screen. Logged-out: lead with the logo
-  // and tagline, then show a scrollable showcase of canonical style samples
-  // below the script box (#956).
+  // Signed-in: the script box fills the screen (no marketing chrome).
+  // Logged-out: logo + tagline + composer + style-sample gallery below (#956).
   if (user) {
     return (
       <div className="h-full">
@@ -244,8 +243,11 @@ export function NewSequencePage({
     );
   }
 
+  // Do NOT use `h-full` here — that traps height to the AppLayout viewport and
+  // hides the gallery below the fold (parent already scrolls). Let content
+  // grow so SampleVideoShowcase is reachable by scrolling the shell.
   return (
-    <div className="h-full overflow-y-auto">
+    <div>
       {billingGate}
       <PageContainer maxWidth="narrow" padding="spacious">
         <div className="flex flex-col items-center gap-4">

@@ -65,7 +65,7 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <Link
-          to="/sequences"
+          to="/"
           className="flex h-10 items-center px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
         >
           <OpenStoryLogo
