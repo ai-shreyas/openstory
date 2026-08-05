@@ -223,6 +223,11 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
         imageUrl: newImageUrl,
         filename: input.newFilename,
         llmKey: llmKeyInfo,
+        observability: {
+          userId: input.userId,
+          sessionId: input.sequenceId,
+          metadata: { elementId },
+        },
       });
       await scopedDb.sequenceElements.updateVisionResult(
         elementId,
