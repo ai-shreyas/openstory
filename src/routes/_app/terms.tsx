@@ -7,7 +7,7 @@ import {
 
 const title = `Terms of Service — ${SITE_CONFIG.name}`;
 
-export const Route = createFileRoute('/_marketing/terms')({
+export const Route = createFileRoute('/_app/terms')({
   component: TermsPage,
   head: () => ({
     meta: [
@@ -21,7 +21,7 @@ export const Route = createFileRoute('/_marketing/terms')({
 
 function TermsPage() {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-32">
+    <main className="mx-auto max-w-3xl px-6 py-10">
       <h1 className="font-heading text-4xl font-bold tracking-tight">
         Terms of Service
       </h1>

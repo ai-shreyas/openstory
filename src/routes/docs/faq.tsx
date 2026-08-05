@@ -5,8 +5,8 @@ const title = 'Frequently Asked Questions';
 const description =
   'Common questions about OpenStory: what it is, pricing, AI model support, API keys, open source licensing, and getting started.';
 
-// The FAQ lived on the old marketing homepage; `/` now redirects straight to
-// the composer, so this docs page is the crawlable home for the answers
+// The FAQ lived on the old marketing homepage; `/` is now the product composer
+// in the app shell, so this docs page is the crawlable home for the answers
 // (#814). FAQ_ITEMS stays the single source of truth — llms.txt renders the
 // same items, so the two surfaces can't drift.
 export const Route = createFileRoute('/docs/faq')({

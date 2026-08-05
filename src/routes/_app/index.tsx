@@ -1,6 +1,5 @@
 import { NewSequencePage } from '@/components/script/new-sequence-page';
-import { sessionQueryOptions } from '@/lib/auth/session-query';
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
 
 // `style` carries a sample style's slug from the showcase/gallery "Try this
@@ -17,18 +16,11 @@ const searchSchema = z.object({
 
 /**
  * App home at `/`. Same composer as `/sequences/new`, open to anonymous
- * visitors (actions still gate behind login). Rendered in the app shell via
- * `_marketing` layout for the root path only (#1104).
+ * visitors (actions still gate behind login). Lives under `_app` so it shares
+ * AppLayout, session prefetch, and the app error boundary (#1104).
  */
-export const Route = createFileRoute('/_marketing/')({
+export const Route = createFileRoute('/_app/')({
   validateSearch: searchSchema,
-  beforeLoad: async ({ context: { queryClient } }) => {
-    // Prefetch session so useUser is settled on first paint (mirrors _app).
-    const session = await queryClient.ensureQueryData(sessionQueryOptions);
-    if (session?.user.status === 'suspended') {
-      throw redirect({ to: '/login' });
-    }
-  },
   component: HomePage,
 });
 
