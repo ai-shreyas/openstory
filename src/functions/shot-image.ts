@@ -285,7 +285,9 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
       sequenceId: sequence.id,
       shotId: shot.id,
       thumbnailUrl,
-      scenePrompt: frame.imagePrompt ?? undefined,
+      scenePrompt:
+        (await context.scopedDb.framePromptVersions.getSelected(frame.id))
+          ?.text ?? undefined,
       model: data.model,
       aspectRatio: sequence.aspectRatio,
       imageSize: data.imageSize || gridConfig.imageSize,

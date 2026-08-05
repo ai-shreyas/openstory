@@ -115,11 +115,10 @@ export async function computeShotStaleness(args: {
     motionPrompt: null,
   };
   let thumbnail: ArtifactStaleness = 'untracked';
-  // The visual prompt lives solely on the anchor frame's `imagePrompt` mirror
-  // now (#989/#713): the visual-prompt workflow writes a `frame_prompt_versions`
-  // row that mirrors onto `frame.imagePrompt`, so AI-generated and regenerated
-  // shots both populate it — the old `metadata.prompts.visual` fallback is gone.
-  const effectivePrompt = frame.imagePrompt;
+  const selectedPrompt = await scopedDb.framePromptVersions.getSelected(
+    frame.id
+  );
+  const effectivePrompt = selectedPrompt?.text ?? null;
   if (effectivePrompt) {
     // Distinguish "stored hash absent" from "stored hash matches". No selected
     // version, or a version with a null hash (the image predates hash tracking,
@@ -142,7 +141,7 @@ export async function computeShotStaleness(args: {
         const snapshot = await buildRegenerateShotSnapshot({
           shot,
           scene,
-          imagePrompt: frame.imagePrompt,
+          imagePrompt: effectivePrompt,
           characters,
           locations,
           elements,
@@ -184,9 +183,7 @@ export async function computeShotStaleness(args: {
     // the catch exists for, and outside it one bad read rejects the caller's
     // whole batch.
     try {
-      // Visual prompt history moved to `frame_prompt_versions` (#989); the
-      // cached hash mirror lives on the anchor frame.
-      let referenceHash = frame.visualPromptInputHash;
+      let referenceHash = selectedPrompt?.inputHash ?? null;
       if (!referenceHash) {
         const fallback =
           await scopedDb.framePromptVersions.getLatestWithInputHash(frame.id);

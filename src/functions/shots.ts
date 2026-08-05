@@ -396,9 +396,15 @@ export const updateShotFn = createServerFn({ method: 'POST' })
     // so the next generation pulls those references in (#683). Skip when the
     // prompt value hasn't actually changed, so plain saves stay a single
     // UPDATE with no extra reads.
+    const selectedImagePrompt =
+      updateData.imagePrompt === undefined
+        ? null
+        : await context.scopedDb.framePromptVersions.getSelected(
+            context.frame.id
+          );
     const imagePromptChanged =
       updateData.imagePrompt !== undefined &&
-      updateData.imagePrompt !== context.frame.imagePrompt;
+      updateData.imagePrompt !== (selectedImagePrompt?.text ?? null);
     const selectedMotion =
       updateData.motionPrompt === undefined
         ? null

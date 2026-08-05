@@ -143,11 +143,14 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           return null;
         }
 
+        const selectedPrompt = await scopedDb.framePromptVersions.getSelected(
+          frame.id
+        );
         if (
           shouldRecordUserEdit({
             userEditedPrompt: input.userEditedPrompt,
             prompt: input.prompt,
-            currentPrompt: frame.imagePrompt,
+            currentPrompt: selectedPrompt?.text ?? null,
           })
         ) {
           let userEditInputHash: string | null = null;

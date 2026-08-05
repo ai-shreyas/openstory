@@ -41,6 +41,8 @@ function makeScopedDb(overrides: {
   motionFallbackHash?: string | null;
   /** `inputHash` of the shot's SELECTED motion version — the reference hash. */
   motionSelectedHash?: string | null;
+  /** Text + `inputHash` of the frame's SELECTED visual version. */
+  visualSelected?: { text?: string | null; inputHash?: string | null } | null;
   /** Live visual claim for the 'updating' overlay (#1085). */
   visualLiveClaim?: { id: string } | null;
   /** Live motion claim for the 'updating' overlay (#1085). */
@@ -57,6 +59,17 @@ function makeScopedDb(overrides: {
     sequenceElements: { list: vi.fn().mockResolvedValue([]) },
     styles: { getById: vi.fn().mockResolvedValue({ config: {} }) },
     framePromptVersions: {
+      getSelected: vi.fn().mockResolvedValue(
+        overrides.visualSelected === null
+          ? null
+          : {
+              text: overrides.visualSelected?.text ?? 'a prompt',
+              inputHash:
+                overrides.visualSelected?.inputHash === undefined
+                  ? 'visual-stored'
+                  : overrides.visualSelected.inputHash,
+            }
+      ),
       getLatest: vi.fn().mockResolvedValue(null),
       getLatestWithInputHash: vi
         .fn()
@@ -148,10 +161,11 @@ describe('computeShotStaleness', () => {
       scopedDb: makeScopedDb({
         visualFallbackHash: 'visual-stored',
         motionFallbackHash: 'motion-stored',
+        visualSelected: { inputHash: null },
       }),
       sequence,
       shot,
-      frame: { ...frame, visualPromptInputHash: null },
+      frame,
       selectedImage: selectedImage('image-stored'),
       scene,
     });
@@ -176,6 +190,7 @@ describe('computeShotStaleness', () => {
     const result = await computeShotStaleness({
       scopedDb: makeScopedDb({
         motionSelectedHash: 'motion-old',
+        visualSelected: { inputHash: 'visual-old' },
         visualLiveClaim: { id: 'fpv-claim' },
         motionLiveClaim: { id: 'spv-claim' },
         imageLiveClaims: [
@@ -186,7 +201,7 @@ describe('computeShotStaleness', () => {
       // Force thumbnail stale by storing a hash the snapshot won't match, so
       // the direct image-claim path is what promotes it to 'updating'.
       shot,
-      frame: { ...frame, visualPromptInputHash: 'visual-old' },
+      frame,
       selectedImage: selectedImage('image-old'),
       scene,
     });

@@ -296,7 +296,8 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
         : null;
     const currentPrompt =
       data.promptType === 'visual'
-        ? frame.imagePrompt
+        ? ((await scopedDb.framePromptVersions.getSelected(frame.id))?.text ??
+          null)
         : (selectedMotion?.text ?? null);
     if (currentPrompt !== null && currentPrompt === text) {
       return { unchanged: true } as const;
@@ -518,7 +519,8 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
         : await computeMotionPromptInputHash(narrowed);
     const storedHash =
       data.promptType === 'visual'
-        ? frame.visualPromptInputHash
+        ? ((await scopedDb.framePromptVersions.getSelected(frame.id))
+            ?.inputHash ?? null)
         : ((await scopedDb.shotPromptVersions.getSelectedMotion(shot.id))
             ?.inputHash ?? null);
     if (!data.force && isPromptUpToDate(storedHash, liveHash)) {

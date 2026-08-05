@@ -259,17 +259,21 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
           }
           let promptOverride: string | undefined;
           if (target.regenVisual && claims.visualVersionId) {
+            const selectedFramePrompt =
+              await scopedDb.framePromptVersions.getSelected(frame.id);
             const dep = await scopedDb.framePromptVersions.getByIdForFrame(
               claims.visualVersionId,
               frame.id
             );
             if (dep?.status === 'completed') {
               promptOverride = dep.text;
-            } else if (frame.visualPromptInputHash === target.visualLiveHash) {
+            } else if (
+              selectedFramePrompt?.inputHash === target.visualLiveHash
+            ) {
               // The claim retired in favour of an identical existing row
-              // (unique-index collision path) — the intended prompt is the
-              // frame's current mirror.
-              promptOverride = frame.imagePrompt ?? undefined;
+              // (unique-index collision path) — the selected version is the
+              // intended prompt.
+              promptOverride = selectedFramePrompt?.text ?? undefined;
             } else {
               // The upstream prompt didn't land for this run: the user
               // cancelled it, or a post-click edit superseded the mirror.
