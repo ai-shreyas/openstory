@@ -13,6 +13,10 @@ import type {
   SheetStatus,
 } from '@/lib/db/schema';
 import { characters, shots, talent } from '@/lib/db/schema';
+import {
+  loadSceneContextBySequenceFromDb,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { matchCharacterToShotTags } from '@/lib/workflows/scene-matching';
 
 export function createCharactersMethods(db: Database) {
@@ -261,15 +265,18 @@ export function createCharactersMethods(db: Database) {
         return [];
       }
 
-      // Get all shots for the sequence
-      const allShots = await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId));
+      const [allShots, sceneContext] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSceneContextBySequenceFromDb(db, sequenceId),
+      ]);
 
       // Filter shots that contain this character
-      return (allShots as Shot[]).filter((shot) => {
-        const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+      return allShots.filter((shot) => {
+        const scene = resolveSceneForShot(shot, sceneContext).scene;
+        const characterTags = scene?.continuity?.characterTags ?? [];
         return matchCharacterToShotTags(character, characterTags);
       });
     },
@@ -288,16 +295,19 @@ export function createCharactersMethods(db: Database) {
         return [];
       }
 
-      // Get all shots for the sequence
-      const allShots = await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId));
+      const [allShots, sceneContext] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSceneContextBySequenceFromDb(db, sequenceId),
+      ]);
 
       // Filter shots that contain this character and return IDs
-      return (allShots as Shot[])
+      return allShots
         .filter((shot) => {
-          const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+          const scene = resolveSceneForShot(shot, sceneContext).scene;
+          const characterTags = scene?.continuity?.characterTags ?? [];
           return matchCharacterToShotTags(character, characterTags);
         })
         .map((f) => f.id);

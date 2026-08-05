@@ -3,9 +3,13 @@
  * Analyzes shots + sequence to determine what failed and whether smart retry is possible.
  */
 
+import type { SceneRow } from '@/lib/db/schema/scenes';
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+
+/** Scene titles keyed by scene id — the label source for each failed shot. */
+type ScenesById = ReadonlyMap<string, Pick<SceneRow, 'title'>>;
 
 type FailureCategory =
   | 'image'
@@ -37,8 +41,9 @@ export type FailureSummary = {
   error?: string | null;
 };
 
-function getSceneTitle(shot: Shot): string {
-  return shot.metadata?.metadata?.title || `Scene ${shot.orderIndex + 1}`;
+function getSceneTitle(shot: Shot, scenesById: ScenesById): string {
+  const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
+  return scene?.title || `Scene ${shot.orderIndex + 1}`;
 }
 
 function buildHeadline(
@@ -87,7 +92,8 @@ export function analyzeFailures(
   // the anchor frame in #989; callers project it back via `projectShotWithImage`
   // so the failure heuristics here read the same legacy field names.
   shots: ShotWithImage[],
-  sequence: Sequence
+  sequence: Sequence,
+  scenesById: ScenesById
 ): FailureSummary {
   const groups: FailureGroup[] = [];
   let requiresFullRetry = false;
@@ -113,7 +119,7 @@ export function analyzeFailures(
       shots: failedImageShots.map((f) => ({
         shotId: f.id,
         orderIndex: f.orderIndex,
-        sceneTitle: getSceneTitle(f),
+        sceneTitle: getSceneTitle(f, scenesById),
         error: f.thumbnailError,
       })),
     });
@@ -130,7 +136,7 @@ export function analyzeFailures(
       shots: failedMotionShots.map((f) => ({
         shotId: f.id,
         orderIndex: f.orderIndex,
-        sceneTitle: getSceneTitle(f),
+        sceneTitle: getSceneTitle(f, scenesById),
         error: f.videoError,
       })),
     });
@@ -151,7 +157,7 @@ export function analyzeFailures(
       shots: shotsWithImageButNoMotionPrompt.map((f) => ({
         shotId: f.id,
         orderIndex: f.orderIndex,
-        sceneTitle: getSceneTitle(f),
+        sceneTitle: getSceneTitle(f, scenesById),
         error: null,
       })),
     });

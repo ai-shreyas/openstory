@@ -61,12 +61,6 @@ export function overlaySceneScript(
   return { ...scene, originalScript: script };
 }
 
-export function scriptExtract(
-  script: Scene['originalScript'] | null | undefined
-): string {
-  return script?.extract ?? '';
-}
-
 export function composeSequenceScript(
   rows: ReadonlyArray<{
     orderIndex: number;

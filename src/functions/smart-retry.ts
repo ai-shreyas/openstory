@@ -29,7 +29,7 @@ import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { type Character, type Sequence } from '@/lib/db/schema';
+import { type Character, type Sequence, type Shot } from '@/lib/db/schema';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { projectShotWithImage } from '@/lib/shots/shot-with-image';
@@ -51,7 +51,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { sequenceAccessMiddleware } from './middleware';
-import { buildSceneSummaries } from './sequences';
+import { buildSceneSummaries, sumShotDurationsSeconds } from './sequences';
 
 function getSceneCharacterReferenceImages(
   allCharacters: Character[],
@@ -133,7 +133,16 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         ]
       : [];
   });
-  const summary = analyzeFailures(shotsWithImage, sequence);
+  const sceneContext = await loadSceneContextBySequence(
+    context.scopedDb,
+    sequence.id
+  );
+  const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
+    resolveSceneForShot(s, sceneContext).scene;
+  const scenesById = new Map(
+    [...sceneContext].map(([sceneId, ctx]) => [sceneId, ctx.scene])
+  );
+  const summary = analyzeFailures(shotsWithImage, sequence, scenesById);
 
   if (!summary.hasFailed) {
     throw new Error('No failures found to retry');
@@ -277,7 +286,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
 
       if (!prompt) continue;
 
-      const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+      const characterTags = sceneOf(shot)?.continuity?.characterTags ?? [];
       const referenceImages = getSceneCharacterReferenceImages(
         allCharacters,
         characterTags
@@ -323,7 +332,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
           selectedMotion,
           {
             motionPromptMirror: shot.motionPrompt,
-            characterTags: shot.metadata?.continuity?.characterTags,
+            characterTags: sceneOf(shot)?.continuity?.characterTags,
             description: shot.description,
           },
           shotVideoModel
@@ -347,12 +356,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   // 3. Retry failed music
   if (hasMusicFailure && sequence.musicPrompt) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    const totalDuration = allShots.reduce((sum, shot) => {
-      const seconds = shot.durationMs
-        ? shot.durationMs / 1000
-        : (shot.metadata?.metadata?.durationSeconds ?? 10);
-      return sum + seconds;
-    }, 0);
+    const totalDuration = sumShotDurationsSeconds(allShots);
 
     const musicInput: MusicWorkflowInput = {
       userId: user.id,
@@ -382,22 +386,10 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     sequence.status === 'failed'
   ) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    const musicSceneContext = await loadSceneContextBySequence(
-      context.scopedDb,
-      sequence.id
-    );
     const scenes = buildSceneSummaries(
-      allShots.map((shot) => ({
-        shot,
-        scene: resolveSceneForShot(shot, musicSceneContext).scene,
-      }))
+      allShots.map((shot) => ({ shot, scene: sceneOf(shot) }))
     );
-    const totalDuration = allShots.reduce((sum, shot) => {
-      const seconds = shot.durationMs
-        ? shot.durationMs / 1000
-        : (shot.metadata?.metadata?.durationSeconds ?? 10);
-      return sum + seconds;
-    }, 0);
+    const totalDuration = sumShotDurationsSeconds(allShots);
 
     // Generate music prompt
     await triggerWorkflow(

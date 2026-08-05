@@ -49,6 +49,7 @@ import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
 import { getAnchorImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
 import { getGenerationChannel } from '@/lib/realtime';
+import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { MotionWorkflowInput } from '@/lib/workflow/types';
@@ -698,9 +699,10 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       const shotData = await step.do('fetch-shot-data', async () => {
         const shot = await scopedDb.shots.getWithSequence(shotId);
         if (!shot) throw new Error('Shot not found');
+        const { scene } = await resolveSceneForShotFromDb(shot, scopedDb);
         return {
           sequenceTitle: shot.sequence.title,
-          sceneTitle: shot.metadata?.metadata?.title,
+          sceneTitle: scene?.metadata?.title,
         };
       });
 

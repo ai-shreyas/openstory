@@ -95,8 +95,6 @@ describe('deriveShots — single source of truth', () => {
       expect(visual).toContain('single overhead bulb');
       expect(visual).toContain('cold blues');
       expect(visual).toContain('neo-noir cinematic');
-      // Continuity is the same object across shots.
-      expect(d.metadata.continuity).toEqual(makeScene().continuity);
     }
   });
 
@@ -123,15 +121,14 @@ describe('deriveShots — single source of truth', () => {
     expect(motion?.audio?.ambientSound).toBe('handle click, hinge creak');
   });
 
-  it('carries per-shot duration onto both the column and the metadata', () => {
+  it('carries per-shot duration as durationMs', () => {
     const derived = deriveShots(makeScene(), styleConfig);
     expect(derived[0]?.durationMs).toBe(6000);
-    expect(derived[0]?.metadata.metadata?.durationSeconds).toBe(6);
   });
 
-  it('keeps shotNumber OUT of the persisted Scene metadata (it is a shots column)', () => {
+  it('copies no scene context onto the shot — it resolves through sceneId', () => {
     const [first] = deriveShots(makeScene(), styleConfig);
-    expect(first?.metadata).not.toHaveProperty('shotNumber');
+    expect(first).not.toHaveProperty('metadata');
   });
 });
 

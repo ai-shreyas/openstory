@@ -214,6 +214,12 @@ function makeContext(
   const stub = {
     shots: { listBySequence, ensureAnchorFrames },
     frames: { listAnchorsBySequence },
+    // Continuity/location context resolves through `sceneId` → `scenes` now;
+    // these fixtures carry no scenes, so every shot resolves to a null scene.
+    scenes: { listBySequence: vi.fn(async () => []) },
+    sceneScriptVersions: {
+      listSelectedBySequence: vi.fn(async () => []),
+    },
     frameVariants: {
       listSelectedModelsBySequence: listSelectedImageModels,
       listLastFailedModelsBySequence: listFailedImageModels,

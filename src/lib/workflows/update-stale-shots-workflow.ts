@@ -393,13 +393,20 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
             );
           }
 
-          const [selectedMotion, selectedVideo, characters, elements] =
-            await Promise.all([
-              scopedDb.shotPromptVersions.getSelectedMotion(shot.id),
-              scopedDb.videoVariants.getSelectedByShot(shot.id),
-              scopedDb.characters.listWithSheets(sequenceId),
-              scopedDb.sequenceElements.list(sequenceId),
-            ]);
+          const [
+            selectedMotion,
+            selectedVideo,
+            characters,
+            elements,
+            sceneContext,
+          ] = await Promise.all([
+            scopedDb.shotPromptVersions.getSelectedMotion(shot.id),
+            scopedDb.videoVariants.getSelectedByShot(shot.id),
+            scopedDb.characters.listWithSheets(sequenceId),
+            scopedDb.sequenceElements.list(sequenceId),
+            loadSceneContextBySequence(scopedDb, sequenceId),
+          ]);
+          const { scene } = resolveSceneForShot(shot, sceneContext);
 
           // Spawn-time re-check (billing safety): the plan's video gating ran
           // at run START, possibly many minutes ago, and video has no claim
@@ -439,7 +446,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
             selectedMotion,
             {
               motionPromptMirror: shot.motionPrompt,
-              characterTags: shot.metadata?.continuity?.characterTags,
+              characterTags: scene?.continuity?.characterTags,
               description: shot.description,
             },
             model
@@ -451,9 +458,7 @@ export class UpdateStaleShotsWorkflow extends OpenStoryWorkflowEntrypoint<Update
             );
           }
           const referenceImages = buildMotionReferenceImages({
-            scene: shot.metadata
-              ? { ...shot.metadata, continuity: shot.metadata.continuity }
-              : null,
+            scene,
             characters,
             elements,
           });

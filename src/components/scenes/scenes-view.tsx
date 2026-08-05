@@ -1088,8 +1088,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const [isRetrying, setIsRetrying] = useState(false);
 
   const failureSummary = useMemo(
-    () => (sequence ? analyzeFailures(shots ?? [], sequence) : null),
-    [shots, sequence]
+    () =>
+      sequence ? analyzeFailures(shots ?? [], sequence, scenesById) : null,
+    [shots, sequence, scenesById]
   );
 
   const handleFullRetry = useCallback(() => {

@@ -1,4 +1,4 @@
-import type { VideoVariant } from '@/lib/db/schema';
+import { dbSceneId, type SceneRow, type VideoVariant } from '@/lib/db/schema';
 import type { Style } from '@/lib/db/schema/libraries';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
@@ -191,9 +191,29 @@ function makeStyle(overrides: Partial<Style> = {}): Style {
   };
 }
 
+function makeScene(overrides: Partial<SceneRow> = {}): SceneRow {
+  return {
+    id: dbSceneId('scene-1'),
+    sequenceId: 'seq-1',
+    orderIndex: 0,
+    location: null,
+    timeOfDay: null,
+    storyBeat: null,
+    title: null,
+    continuity: null,
+    musicDesign: null,
+    originalScript: null,
+    selectedScriptVersionId: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
 function depsWithShots(
   shots: ShotWithImage[],
-  style: Style | null = makeStyle()
+  style: Style | null = makeStyle(),
+  scenes: SceneRow[] = []
 ) {
   // The image surface lives on each shot's anchor frame now (#989), the still
   // itself on that frame's SELECTED version and the video on the SELECTED
@@ -228,6 +248,7 @@ function depsWithShots(
         ),
     },
     styles: { getById: async () => style },
+    scenes: { listBySequence: async () => scenes },
   };
 }
 
@@ -320,7 +341,7 @@ describe('buildSequenceState', () => {
       image: { status: 'pending', url: null },
       video: { status: 'completed', url: 'https://cdn/v2.mp4' },
     });
-    // No scene metadata set → title falls back to null.
+    // No scene → title falls back to null.
     expect(first?.title).toBeNull();
 
     expect(state.counts).toEqual({
@@ -329,6 +350,22 @@ describe('buildSequenceState', () => {
       videosReady: 1,
       videosFailed: 0,
     });
+  });
+
+  it('titles a shot from the scene it belongs to', async () => {
+    const scene = makeScene({ title: 'The Reveal' });
+    const state = await build(
+      depsWithShots(
+        [
+          makeShot({ sceneId: scene.id }),
+          makeShot({ id: 'f2', orderIndex: 1 }),
+        ],
+        makeStyle(),
+        [scene]
+      ),
+      makeSequence()
+    );
+    expect(state.shots.map((s) => s.title)).toEqual(['The Reveal', null]);
   });
 
   it('treats a preview thumbnail as an available image', async () => {

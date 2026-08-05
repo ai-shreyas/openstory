@@ -664,7 +664,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
             ),
             model,
             motionPrompt,
-            characterTags: f.metadata?.continuity?.characterTags,
+            characterTags: sceneOf(f)?.continuity?.characterTags,
             duration: f.durationMs ? f.durationMs / 1000 : 3,
             aspectRatio: sequence.aspectRatio,
           };

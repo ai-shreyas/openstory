@@ -9,6 +9,10 @@ import { estimateLLMCost } from '@/lib/billing/cost-estimation';
 import { InsufficientCreditsError } from '@/lib/errors';
 import { DEFAULT_VIDEO_MODEL, safeImageToVideoModel } from '@/lib/ai/models';
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { generateId } from '@/lib/db/id';
 import { getGenerationChannel } from '@/lib/realtime';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -420,17 +424,20 @@ export const replaceSequenceElementFn = createServerFn({ method: 'POST' })
       context.sequence.videoModel,
       DEFAULT_VIDEO_MODEL
     );
-    const selectedMotionByShot =
-      await context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
+    const [selectedMotionByShot, sceneContext] = await Promise.all([
+      context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
         affectedShotIds
-      );
+      ),
+      loadSceneContextBySequence(context.scopedDb, context.sequence.id),
+    ]);
     const motionPromptByShotId: Record<string, string> = {};
     for (const shot of affectedShots) {
       motionPromptByShotId[shot.id] = resolveMotionPromptFromVersion(
         selectedMotionByShot.get(shot.id),
         {
           motionPromptMirror: shot.motionPrompt,
-          characterTags: shot.metadata?.continuity?.characterTags,
+          characterTags: resolveSceneForShot(shot, sceneContext).scene
+            ?.continuity?.characterTags,
           description: shot.description,
         },
         videoModel

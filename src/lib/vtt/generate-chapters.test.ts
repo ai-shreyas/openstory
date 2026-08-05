@@ -1,15 +1,7 @@
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import type { SceneRow } from '@/lib/db/schema';
 import type { Shot } from '@/types/database';
 import { describe, expect, test } from 'vitest';
-import { generateChaptersVTT } from './generate-chapters';
-
-// Helper to create minimal test scene metadata
-const createTestScene = (overrides: Partial<Scene>): Scene => ({
-  sceneId: 'test-scene',
-  sceneNumber: 1,
-  originalScript: { extract: '', dialogue: [] },
-  ...overrides,
-});
+import { generateChaptersVTT, type ShotChapter } from './generate-chapters';
 
 // Helper to create test shots with minimal required fields
 const createTestShot = (overrides: Partial<Shot>): Shot => ({
@@ -30,41 +22,27 @@ const createTestShot = (overrides: Partial<Shot>): Shot => ({
   ...overrides,
 });
 
+const scene = (
+  orderIndex: number,
+  title: string
+): Pick<SceneRow, 'title' | 'orderIndex'> => ({ orderIndex, title });
+
+const chapter = (
+  shot: Partial<Shot>,
+  sceneRow: Pick<SceneRow, 'title' | 'orderIndex'> | null = null
+): ShotChapter => ({ shot: createTestShot(shot), scene: sceneRow });
+
 describe('generateChaptersVTT', () => {
   test('generates valid WebVTT chapters with metadata', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        id: '1',
-        durationMs: 5000,
-        metadata: createTestScene({
-          sceneNumber: 1,
-          metadata: {
-            title: 'Opening Scene',
-            durationSeconds: 5,
-            location: 'Beach',
-            timeOfDay: 'morning',
-            storyBeat: 'Introduction',
-          },
-        }),
-      }),
-      createTestShot({
-        id: '2',
-        orderIndex: 1,
-        durationMs: 3000,
-        metadata: createTestScene({
-          sceneNumber: 2,
-          metadata: {
-            title: 'Conflict Arises',
-            durationSeconds: 3,
-            location: 'Office',
-            timeOfDay: 'afternoon',
-            storyBeat: 'Rising action',
-          },
-        }),
-      }),
+    const chapters: ShotChapter[] = [
+      chapter({ id: '1', durationMs: 5000 }, scene(0, 'Opening Scene')),
+      chapter(
+        { id: '2', orderIndex: 1, durationMs: 3000 },
+        scene(1, 'Conflict Arises')
+      ),
     ];
 
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT(chapters);
 
     expect(vtt).toContain('WEBVTT');
     expect(vtt).toContain('Scene 1: Opening Scene');
@@ -73,20 +51,13 @@ describe('generateChaptersVTT', () => {
     expect(vtt).toContain('00:00:05.000 --> 00:00:08.000');
   });
 
-  test('handles shots without metadata', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        id: '1',
-        durationMs: 3000,
-      }),
-      createTestShot({
-        id: '2',
-        orderIndex: 1,
-        durationMs: 2000,
-      }),
+  test('handles shots without a scene', () => {
+    const chapters: ShotChapter[] = [
+      chapter({ id: '1', durationMs: 3000 }),
+      chapter({ id: '2', orderIndex: 1, durationMs: 2000 }),
     ];
 
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT(chapters);
 
     expect(vtt).toContain('WEBVTT');
     expect(vtt).toContain('Scene 1');
@@ -94,36 +65,19 @@ describe('generateChaptersVTT', () => {
   });
 
   test('defaults to 3 seconds when durationMs is null', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        durationMs: null,
-      }),
-    ];
-
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT([chapter({ durationMs: null })]);
 
     expect(vtt).toContain('00:00:00.000 --> 00:00:03.000');
   });
 
   test('calculates cumulative time correctly', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        id: '1',
-        durationMs: 5000,
-      }),
-      createTestShot({
-        id: '2',
-        orderIndex: 1,
-        durationMs: 7000,
-      }),
-      createTestShot({
-        id: '3',
-        orderIndex: 2,
-        durationMs: 4000,
-      }),
+    const chapters: ShotChapter[] = [
+      chapter({ id: '1', durationMs: 5000 }),
+      chapter({ id: '2', orderIndex: 1, durationMs: 7000 }),
+      chapter({ id: '3', orderIndex: 2, durationMs: 4000 }),
     ];
 
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT(chapters);
 
     // First chapter: 0-5 seconds
     expect(vtt).toContain('00:00:00.000 --> 00:00:05.000');
@@ -134,28 +88,19 @@ describe('generateChaptersVTT', () => {
   });
 
   test('formats timestamps correctly for hours', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        id: '1',
-        durationMs: 3600000,
-      }),
-      createTestShot({
-        id: '2',
-        orderIndex: 1,
-        durationMs: 125000,
-      }),
+    const chapters: ShotChapter[] = [
+      chapter({ id: '1', durationMs: 3600000 }),
+      chapter({ id: '2', orderIndex: 1, durationMs: 125000 }),
     ];
 
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT(chapters);
 
     expect(vtt).toContain('00:00:00.000 --> 01:00:00.000');
     expect(vtt).toContain('01:00:00.000 --> 01:02:05.000');
   });
 
   test('handles empty shots array', () => {
-    const shots: Shot[] = [];
-
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT([]);
 
     expect(vtt).toContain('WEBVTT');
     expect(vtt).toContain('NOTE Generated chapters from shots');
@@ -164,24 +109,10 @@ describe('generateChaptersVTT', () => {
     expect(lines).toHaveLength(0);
   });
 
-  test('uses scene metadata for chapter titles', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        durationMs: 3000,
-        metadata: createTestScene({
-          sceneNumber: 5,
-          metadata: {
-            title: 'The Great Revelation',
-            durationSeconds: 3,
-            location: 'Castle',
-            timeOfDay: 'night',
-            storyBeat: 'Climax',
-          },
-        }),
-      }),
-    ];
-
-    const vtt = generateChaptersVTT(shots);
+  test('numbers chapters from the scene order index', () => {
+    const vtt = generateChaptersVTT([
+      chapter({ durationMs: 3000 }, scene(4, 'The Great Revelation')),
+    ]);
 
     expect(vtt).toContain('Scene 5: The Great Revelation');
   });
@@ -211,36 +142,16 @@ describe('generateChaptersVTT', () => {
     ];
 
     for (const { input, expected } of xssVectors) {
-      const shots: Shot[] = [
-        createTestShot({
-          durationMs: 3000,
-          metadata: createTestScene({
-            sceneNumber: 1,
-            metadata: {
-              title: input,
-              durationSeconds: 3,
-              location: 'Test',
-              timeOfDay: 'day',
-              storyBeat: 'Test',
-            },
-          }),
-        }),
-      ];
-
-      const vtt = generateChaptersVTT(shots);
+      const vtt = generateChaptersVTT([
+        chapter({ durationMs: 3000 }, scene(0, input)),
+      ]);
       expect(vtt).toContain(`Scene 1: ${expected}`);
       expect(vtt).not.toContain(input !== expected ? input : '<<impossible>>');
     }
   });
 
   test('handles fractional seconds in timestamps', () => {
-    const shots: Shot[] = [
-      createTestShot({
-        durationMs: 1234, // 1.234 seconds
-      }),
-    ];
-
-    const vtt = generateChaptersVTT(shots);
+    const vtt = generateChaptersVTT([chapter({ durationMs: 1234 })]);
 
     expect(vtt).toContain('00:00:00.000 --> 00:00:01.234');
   });

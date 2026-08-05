@@ -28,7 +28,7 @@ import {
 import {
   enrichShotWithSceneScript,
   loadSceneContextBySequenceFromDb,
-  scriptExtract,
+  resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { matchElementsToScene } from '@/lib/workflows/scene-matching';
 import { and, eq, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
@@ -418,7 +418,7 @@ export function createSequenceElementsMethods(db: Database) {
         return [];
       }
 
-      const [allShotsRaw, scriptBySceneId] = await Promise.all([
+      const [allShots, sceneContext] = await Promise.all([
         db
           .select()
           .from(shots)
@@ -426,11 +426,11 @@ export function createSequenceElementsMethods(db: Database) {
         loadSceneContextBySequenceFromDb(db, sequenceId),
       ]);
 
-      return allShotsRaw
-        .map((shot) => enrichShotWithSceneScript(shot, scriptBySceneId))
+      return allShots
         .filter((shot) => {
-          const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-          const sceneScript = scriptExtract(shot.metadata?.originalScript);
+          const scene = resolveSceneForShot(shot, sceneContext).scene;
+          const elementTags = scene?.continuity?.elementTags ?? [];
+          const sceneScript = scene?.originalScript.extract ?? '';
           return (
             matchElementsToScene([element], elementTags, sceneScript).length > 0
           );
@@ -460,37 +460,36 @@ export function createSequenceElementsMethods(db: Database) {
       }
       if (allElements.length === 0) return counts;
 
-      const [allShotsRaw, scriptBySceneId, shotIdsWithVideo] =
-        await Promise.all([
-          db
-            .select()
-            .from(shots)
-            .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-          loadSceneContextBySequenceFromDb(db, sequenceId),
-          // A shot "has video" when its render segment points at a live version
-          // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
-          db
-            .select({ shotId: shots.id })
-            .from(shots)
-            .innerJoin(
-              renderSegments,
-              eq(renderSegments.id, shots.renderSegmentId)
+      const [allShots, sceneContext, shotIdsWithVideo] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSceneContextBySequenceFromDb(db, sequenceId),
+        // A shot "has video" when its render segment points at a live version
+        // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
+        db
+          .select({ shotId: shots.id })
+          .from(shots)
+          .innerJoin(
+            renderSegments,
+            eq(renderSegments.id, shots.renderSegmentId)
+          )
+          .innerJoin(
+            videoVariants,
+            and(
+              eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+              isNull(videoVariants.discardedAt)
             )
-            .innerJoin(
-              videoVariants,
-              and(
-                eq(videoVariants.id, renderSegments.selectedVideoVersionId),
-                isNull(videoVariants.discardedAt)
-              )
-            )
-            .where(eq(shots.sequenceId, sequenceId))
-            .then((rows) => new Set(rows.map((r) => r.shotId))),
-        ]);
+          )
+          .where(eq(shots.sequenceId, sequenceId))
+          .then((rows) => new Set(rows.map((r) => r.shotId))),
+      ]);
 
-      for (const rawShot of allShotsRaw) {
-        const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
-        const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-        const sceneScript = scriptExtract(shot.metadata?.originalScript);
+      for (const shot of allShots) {
+        const scene = resolveSceneForShot(shot, sceneContext).scene;
+        const elementTags = scene?.continuity?.elementTags ?? [];
+        const sceneScript = scene?.originalScript.extract ?? '';
         const matched = matchElementsToScene(
           allElements,
           elementTags,

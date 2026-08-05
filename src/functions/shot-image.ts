@@ -235,7 +235,7 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(generateVariantsInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, frame, sequence, user } = context;
+    const { shot, frame, sequence, user, scene } = context;
 
     const thumbnailUrl = await getFrameImageUrl(context.scopedDb, frame.id);
     if (!thumbnailUrl) {
@@ -245,7 +245,7 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
     const allCharacters = await context.scopedDb.characters.listWithSheets(
       sequence.id
     );
-    const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+    const characterTags = scene?.continuity?.characterTags ?? [];
     const characterReferences = buildCharacterReferenceImages(
       matchCharactersToScene(allCharacters, characterTags)
     );
@@ -254,8 +254,8 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
       await context.scopedDb.sequenceLocations.listWithReferences(sequence.id);
     const locationReferences = getSceneLocationReferenceImages(
       allLocations,
-      shot.metadata?.continuity?.environmentTag ?? '',
-      shot.metadata?.metadata?.location ?? ''
+      scene?.continuity?.environmentTag ?? '',
+      scene?.metadata?.location ?? ''
     );
 
     const numImages = data.numImages ?? 1;
@@ -332,7 +332,7 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(selectVariantInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, frame, sequence, user } = context;
+    const { shot, frame, sequence, user, scene } = context;
 
     // The 3×3 grid sheet is the latest `kind:'framing'` `frame_variants` version
     // (#989). Selecting a tile spawns a new framing version (the upscaled tile)
@@ -370,7 +370,7 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
     const allCharacters = await context.scopedDb.characters.listWithSheets(
       sequence.id
     );
-    const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+    const characterTags = scene?.continuity?.characterTags ?? [];
     const characterReferences = buildCharacterReferenceImages(
       matchCharactersToScene(allCharacters, characterTags)
     );
@@ -379,8 +379,8 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       await context.scopedDb.sequenceLocations.listWithReferences(sequence.id);
     const locationReferences = getSceneLocationReferenceImages(
       allLocations,
-      shot.metadata?.continuity?.environmentTag ?? '',
-      shot.metadata?.metadata?.location ?? ''
+      scene?.continuity?.environmentTag ?? '',
+      scene?.metadata?.location ?? ''
     );
 
     // Price the model that will actually render the upscale (#1066) — the same

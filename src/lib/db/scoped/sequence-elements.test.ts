@@ -22,6 +22,8 @@ import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
 import type { Shot } from '@/lib/db/schema';
 import {
+  dbSceneId,
+  scenes,
   shots,
   sequenceElements,
   sequences,
@@ -38,6 +40,7 @@ let sequenceId = '';
 
 async function seed() {
   await db.delete(shots);
+  await db.delete(scenes);
   await db.delete(sequenceElements);
   await db.delete(sequences);
   await db.delete(styles);
@@ -105,6 +108,38 @@ function shotMetadata(args: {
   };
 }
 
+/** Continuity + script live on `scenes` (#1067); shots point at them. */
+async function insertSceneWithShot(args: {
+  orderIndex: number;
+  elementTags: string[];
+  extract: string;
+}) {
+  const [scene] = await db
+    .insert(scenes)
+    .values({
+      id: dbSceneId(generateId()),
+      sequenceId,
+      orderIndex: args.orderIndex,
+      originalScript: { extract: args.extract, dialogue: [] },
+      continuity: {
+        environmentTag: '',
+        characterTags: [],
+        elementTags: args.elementTags,
+        colorPalette: '',
+        lightingSetup: '',
+        styleTag: '',
+      },
+    })
+    .returning();
+  if (!scene) throw new Error('test setup: scene insert returned nothing');
+  await db.insert(shots).values({
+    sequenceId,
+    sceneId: scene.id,
+    orderIndex: args.orderIndex,
+  });
+  return scene;
+}
+
 describe('getShotCountsByElement', () => {
   it('returns an empty object when no elements exist', async () => {
     const methods = createSequenceElementsMethods(db);
@@ -170,25 +205,17 @@ describe('getShotCountsByElement', () => {
     }
 
     // Shot referencing both LOGO and BOTTLE via continuity.elementTags.
-    await db.insert(shots).values({
-      sequenceId,
+    await insertSceneWithShot({
       orderIndex: 0,
-      metadata: shotMetadata({
-        sceneId: 's1',
-        elementTags: ['LOGO', 'BOTTLE'],
-        extract: 'scene script',
-      }),
+      elementTags: ['LOGO', 'BOTTLE'],
+      extract: 'scene script',
     });
 
     // Shot referencing only LOGO via script-text fallback (no elementTags).
-    await db.insert(shots).values({
-      sequenceId,
+    await insertSceneWithShot({
       orderIndex: 1,
-      metadata: shotMetadata({
-        sceneId: 's2',
-        elementTags: [],
-        extract: 'The LOGO appears on screen.',
-      }),
+      elementTags: [],
+      extract: 'The LOGO appears on screen.',
     });
 
     const result = await methods.getShotCountsByElement(sequenceId);

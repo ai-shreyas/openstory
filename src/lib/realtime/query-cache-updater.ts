@@ -554,31 +554,8 @@ export function updateQueryCacheFromEvent(
       break;
 
     case 'generation.scene:updated': {
-      // Update shot metadata title in cache by matching analysis sceneId
-      const sceneId = getString(data, 'sceneId');
-      const title = getString(data, 'title');
-      if (sceneId && title) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) => {
-              if (f.metadata?.sceneId !== sceneId || !f.metadata.metadata)
-                return f;
-              return {
-                ...f,
-                metadata: {
-                  ...f.metadata,
-                  metadata: {
-                    ...f.metadata.metadata,
-                    title,
-                  },
-                },
-              };
-            })
-        );
-      }
-      // Stream also upserts the scenes row (title/location/…) — refetch the
-      // spine grouping source so scene headers stay in sync (#1072).
+      // Scene titles render off the scenes query now, so refetching it is the
+      // whole update (#1072).
       debouncedInvalidate(
         queryClient,
         sceneKeys.list(sequenceId),

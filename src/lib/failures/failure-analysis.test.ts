@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { analyzeFailures } from './failure-analysis';
-import type { Frame } from '@/lib/db/schema';
+import type { Frame, SceneRow } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
@@ -107,12 +107,51 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   };
 }
 
+// Shot labels come from the `scenes` row a shot points at (#1067); shots in the
+// fixtures above have no `sceneId`, so they fall back to "Scene <n>".
+const SCENES = new Map<string, Pick<SceneRow, 'title'>>([
+  ['scene-1', { title: 'The Reveal' }],
+  ['scene-2', { title: null }],
+]);
+
 describe('analyzeFailures', () => {
+  test('labels a failed shot with its scene title, else its order index', () => {
+    const shots = [
+      makeShot({
+        sceneId: 'scene-1',
+        thumbnailStatus: 'failed',
+        thumbnailUrl: null,
+      }),
+      makeShot({
+        id: 'shot-2',
+        orderIndex: 1,
+        sceneId: 'scene-2',
+        thumbnailStatus: 'failed',
+        thumbnailUrl: null,
+      }),
+      makeShot({
+        id: 'shot-3',
+        orderIndex: 2,
+        thumbnailStatus: 'failed',
+        thumbnailUrl: null,
+      }),
+    ];
+
+    const result = analyzeFailures(shots, makeSequence(), SCENES);
+
+    const imageGroup = result.groups.find((g) => g.category === 'image');
+    expect(imageGroup?.shots.map((s) => s.sceneTitle)).toEqual([
+      'The Reveal',
+      'Scene 2',
+      'Scene 3',
+    ]);
+  });
+
   test('no failures returns empty summary', () => {
     const shots = [makeShot(), makeShot({ id: 'shot-2', orderIndex: 1 })];
     const sequence = makeSequence();
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(false);
     expect(result.requiresFullRetry).toBe(false);
@@ -123,7 +162,7 @@ describe('analyzeFailures', () => {
   test('script analysis failure (no shots) requires full retry', () => {
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures([], sequence);
+    const result = analyzeFailures([], sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.requiresFullRetry).toBe(true);
@@ -141,7 +180,7 @@ describe('analyzeFailures', () => {
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.requiresFullRetry).toBe(false);
@@ -167,7 +206,7 @@ describe('analyzeFailures', () => {
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.requiresFullRetry).toBe(false);
@@ -186,7 +225,7 @@ describe('analyzeFailures', () => {
       musicPrompt: 'Epic music',
     });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     const musicGroup = result.groups.find((g) => g.category === 'music');
@@ -211,7 +250,7 @@ describe('analyzeFailures', () => {
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.groups.length).toBeGreaterThanOrEqual(2);
@@ -230,7 +269,7 @@ describe('analyzeFailures', () => {
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     const motionGroup = result.groups.find((g) => g.category === 'motion');
     expect(motionGroup).toBeUndefined();
@@ -248,7 +287,7 @@ describe('analyzeFailures', () => {
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.requiresFullRetry).toBe(true);
     const promptGroup = result.groups.find(
@@ -267,7 +306,7 @@ describe('analyzeFailures', () => {
       musicStatus: 'pending',
     });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.requiresFullRetry).toBe(false);
     const promptGroup = result.groups.find(
@@ -290,7 +329,7 @@ describe('analyzeFailures', () => {
         'Child workflow scene-split failed: Failed query: delete from "scenes"',
     });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.requiresFullRetry).toBe(true);
     expect(result.groups).toHaveLength(0);
@@ -302,7 +341,7 @@ describe('analyzeFailures', () => {
     const shots = [makeShot()];
     const sequence = makeSequence({ status: 'completed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(false);
     expect(result.requiresFullRetry).toBe(false);

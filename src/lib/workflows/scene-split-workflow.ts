@@ -512,8 +512,9 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
 
         const reconciledShots = await scopedDb.shots.bulkUpsert(shotInserts);
         const reconciledMapping = reconciledShots.map((f) => ({
-          // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard: metadata is JSONB, can be null despite Drizzle types
-          analysisSceneId: f.metadata?.sceneId || '',
+          // `orderIndex` is the shot's index into `scenes` (set above), so the
+          // analysis id comes from the source rather than the persisted copy.
+          analysisSceneId: scenes[f.orderIndex]?.sceneId ?? '',
           shotId: f.id,
           // Anchor frame id captured from the same bulkUpsert write — the batch
           // prompt workflow reads it from here instead of querying the DB (#991).

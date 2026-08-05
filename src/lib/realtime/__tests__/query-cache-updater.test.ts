@@ -395,31 +395,15 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(keys).toContainEqual(shotKeys.list(SEQ));
     });
 
-    it('generation.scene:updated patches title and refetches scenes/shots', () => {
+    it('generation.scene:updated refetches scenes and shots', () => {
       const invalidate = vi.spyOn(qc, 'invalidateQueries');
-      qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({
-          metadata: {
-            sceneId: 'sc-1',
-            sceneNumber: 1,
-            metadata: {
-              title: 'Old',
-              durationSeconds: 3,
-              location: 'INT',
-              timeOfDay: 'day',
-              storyBeat: 'open',
-            },
-            originalScript: { extract: 'x', dialogue: [] },
-          },
-        }),
-      ]);
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.scene:updated', {
         sceneId: 'sc-1',
         title: 'New title',
       });
 
-      expect(getCachedShot(qc)?.metadata?.metadata?.title).toBe('New title');
+      // Titles render off the scenes query, so refetching it IS the update.
       vi.advanceTimersByTime(200);
       const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
       expect(keys).toContainEqual(sceneKeys.list(SEQ));

@@ -184,6 +184,7 @@ export async function buildSequenceState(
       'getSelectedByShotIds' | 'getPrimaryByShotIds'
     >;
     styles: Pick<ScopedDb['styles'], 'getById'>;
+    scenes: Pick<ScopedDb['scenes'], 'listBySequence'>;
   },
   sequence: Sequence,
   // Scheme+host the request arrived on. Stored media URLs are origin-relative
@@ -192,11 +193,16 @@ export async function buildSequenceState(
   // toShareableUrl.
   origin: string
 ): Promise<SequenceState> {
-  const [shots, anchorRows, style] = await Promise.all([
+  const [shots, anchorRows, style, sceneRows] = await Promise.all([
     scopedDb.shots.listBySequence(sequence.id),
     scopedDb.frames.listAnchorsBySequence(sequence.id),
     scopedDb.styles.getById(sequence.styleId),
+    scopedDb.scenes.listBySequence(sequence.id),
   ]);
+  // A shot's title is its scene's title (#1067).
+  const scenesById = new Map<string, (typeof sceneRows)[number]>(
+    sceneRows.map((scene) => [scene.id, scene])
+  );
   // The still IMAGE surface lives on each shot's anchor frame now (#989).
   // Project it back under the legacy thumbnail* names — keyed by shotId, never
   // by id-reuse — so the image-readiness reads below are unchanged.
@@ -232,7 +238,8 @@ export async function buildSequenceState(
     return {
       id: shot.id,
       orderIndex: shot.orderIndex,
-      title: shot.metadata?.metadata?.title ?? null,
+      title:
+        (shot.sceneId ? scenesById.get(shot.sceneId)?.title : null) ?? null,
       image: {
         status: imageUrl ? 'completed' : 'pending',
         url: share(imageUrl),
