@@ -97,7 +97,7 @@ export async function prepareShotImageWorkflowInput(args: {
   // Priority: provided > stored anchor-frame mirror (#989/#713) > description.
   // The visual prompt lives solely on `frame.imagePrompt` now (the old
   // `metadata.prompts.visual` fallback is gone).
-  const prompt = promptOverride || frame.imagePrompt || shot.description;
+  const prompt = promptOverride || frame.imagePrompt || scriptExtract;
   if (!prompt) {
     throw new Error('Shot has no prompt or description to regenerate from');
   }

@@ -19,6 +19,11 @@ import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { buildShotImageWorkflowInput } from '@/lib/image/build-shot-image-input';
 import {
   projectShotWithImage,
@@ -308,12 +313,17 @@ export const archiveSequenceFn = createServerFn({ method: 'POST' })
     return { success: true };
   });
 
-/** Build compact scene summaries from shots for music prompt generation */
-export function buildSceneSummaries(shots: Shot[]): MusicSceneSummary[] {
-  return shots.map((shot) => {
-    const md = shot.metadata?.musicDesign;
-    const legacyMusic = shot.metadata?.audioDesign?.music;
-    const meta = shot.metadata?.metadata;
+/** Build compact scene summaries for music prompt generation. */
+export function buildSceneSummaries(
+  entries: ReadonlyArray<{
+    shot: Pick<Shot, 'id' | 'durationMs'>;
+    scene: Scene | null;
+  }>
+): MusicSceneSummary[] {
+  return entries.map(({ shot, scene }) => {
+    const md = scene?.musicDesign;
+    const legacyMusic = scene?.audioDesign?.music;
+    const meta = scene?.metadata;
     const durationSeconds = shot.durationMs
       ? shot.durationMs / 1000
       : (meta?.durationSeconds ?? 10);
@@ -325,7 +335,7 @@ export function buildSceneSummaries(shots: Shot[]): MusicSceneSummary[] {
       // Visual context for the music prompt: the scene description. The
       // structured visual prompt components moved to `frame_prompt_versions`
       // (#713), so the shot's own description is the summary source here.
-      visualSummary: shot.description || '',
+      visualSummary: scene?.originalScript.extract || '',
       title: meta?.title || 'Untitled Scene',
       storyBeat: meta?.storyBeat || '',
       durationSeconds,
@@ -604,6 +614,13 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         { errorMessage: 'Insufficient credits to add this video model' }
       );
 
+      const sceneContext = await loadSceneContextBySequence(
+        scopedDb,
+        sequence.id
+      );
+      const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
+        resolveSceneForShot(s, sceneContext).scene;
+
       // No pre-seeded `video_variants` version here (mirrors the image branch
       // below, #990): each shot's motion child opens its own in-flight
       // `video_variants` version in `set-generating-status` (keyed by
@@ -642,8 +659,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
             prompt: resolveMotionPrompt(
               {
                 motionPrompt: motionPrompt ?? null,
-                characterTags: f.metadata?.continuity?.characterTags,
-                description: f.description,
+                characterTags: sceneOf(f)?.continuity?.characterTags,
+                description: sceneOf(f)?.originalScript.extract ?? null,
               },
               model
             ),

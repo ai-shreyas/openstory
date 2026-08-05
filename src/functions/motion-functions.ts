@@ -4,6 +4,11 @@
  */
 
 import { createServerFn } from '@tanstack/react-start';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
+import type { Shot } from '@/lib/db/schema';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 
@@ -76,8 +81,8 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
         selectedMotion,
         {
           motionPromptMirror: shot.motionPrompt,
-          characterTags: shot.metadata?.continuity?.characterTags,
-          description: shot.description,
+          characterTags: context.scene?.continuity?.characterTags,
+          description: context.scene?.originalScript.extract ?? null,
         },
         model
       );
@@ -218,6 +223,12 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         (f) => [f.shotId, f]
       )
     );
+    const sceneContext = await loadSceneContextBySequence(
+      context.scopedDb,
+      sequence.id
+    );
+    const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
+      resolveSceneForShot(s, sceneContext).scene;
     const [selectedByFrame, selectedVideoByShot, primaryVideoByShot] =
       await Promise.all([
         context.scopedDb.frameVariants.getSelectedByFrameIds(
@@ -351,8 +362,8 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
             selectedMotionByShot.get(shot.id),
             {
               motionPromptMirror: shot.motionPrompt,
-              characterTags: shot.metadata?.continuity?.characterTags,
-              description: shot.description,
+              characterTags: sceneOf(shot)?.continuity?.characterTags,
+              description: sceneOf(shot)?.originalScript.extract ?? null,
             },
             shotModel
           ),

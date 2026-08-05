@@ -5,6 +5,10 @@
  */
 
 import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
+import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_VIDEO_MODEL,
   safeImageToVideoModel,
@@ -378,7 +382,16 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     sequence.status === 'failed'
   ) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    const scenes = buildSceneSummaries(allShots);
+    const musicSceneContext = await loadSceneContextBySequence(
+      context.scopedDb,
+      sequence.id
+    );
+    const scenes = buildSceneSummaries(
+      allShots.map((shot) => ({
+        shot,
+        scene: resolveSceneForShot(shot, musicSceneContext).scene,
+      }))
+    );
     const totalDuration = allShots.reduce((sum, shot) => {
       const seconds = shot.durationMs
         ? shot.durationMs / 1000
