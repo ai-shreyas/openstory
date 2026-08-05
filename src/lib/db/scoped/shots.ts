@@ -282,21 +282,6 @@ export function createShotsMethods(db: Database) {
       return results;
     },
 
-    reorder: async (
-      _sequenceId: string,
-      shotOrders: Array<{ id: string; order_index: number }>
-    ): Promise<void> => {
-      if (shotOrders.length === 0) return;
-      const [first, ...rest] = shotOrders.map((shotOrder) =>
-        db
-          .update(shots)
-          .set({ orderIndex: shotOrder.order_index, updatedAt: new Date() })
-          .where(eq(shots.id, shotOrder.id))
-      );
-      if (!first) return;
-      await db.batch([first, ...rest]);
-    },
-
     getByIds: async (shotIds: string[]): Promise<Shot[]> => {
       if (shotIds.length === 0) return [];
       return await db.select().from(shots).where(inArray(shots.id, shotIds));

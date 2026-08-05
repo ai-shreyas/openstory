@@ -482,27 +482,6 @@ export const deleteShotsBySequenceFn = createServerFn({ method: 'POST' })
     return { success: true };
   });
 
-export const reorderShotsFn = createServerFn({ method: 'POST' })
-  .middleware([sequenceAccessMiddleware])
-  .inputValidator(
-    zodValidator(
-      z.object({
-        sequenceId: ulidSchema,
-        shotOrders: z
-          .array(z.object({ id: ulidSchema, orderIndex: z.number().int() }))
-          .min(1),
-      })
-    )
-  )
-  .handler(async ({ data, context }) => {
-    const shotOrders = data.shotOrders.map((f) => ({
-      id: f.id,
-      order_index: f.orderIndex,
-    }));
-    await context.scopedDb.shots.reorder(data.sequenceId, shotOrders);
-    return { success: true };
-  });
-
 /**
  * Returns staleness state for a shot's artifacts. Covers the rendered
  * thumbnail plus the visual / motion prompts (stage 4). See
