@@ -20,8 +20,7 @@
  *     instead of an unhandled rejection.
  *
  * Every child workflow is CF-ported and spawned via `spawnAndAwaitChild`,
- * including `scene-split` (Gap C — LLM streaming wrapped in a single
- * `step.do` per `docs/investigations/cloudflare-workflows.md`) and
+ * including `scene-split` (LLM streaming wrapped in a single `step.do`) and
  * `motion-batch` (Phase 5 motion + music + merge tree). */
 
 import { sanitizeScriptContent } from '@/lib/ai/prompt-validation';

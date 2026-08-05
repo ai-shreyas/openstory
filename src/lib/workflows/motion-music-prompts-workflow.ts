@@ -14,8 +14,7 @@
  *   - Uses `step.do` instead of `context.run`.
  *   - Reads payload from `event.payload` instead of `context.requestPayload`.
  *   - Replaces `Promise.all([context.invoke(...), context.invoke(...)])` with
- *     two parallel `spawnAndAwaitChild` calls (Pattern 3 from
- *     docs/investigations/cloudflare-workflows.md §4 Gap A).
+ *     two parallel `spawnAndAwaitChild` calls (Pattern 3).
  * */
 
 import { DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';

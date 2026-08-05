@@ -9,8 +9,6 @@ order: 2
 
 **Status:** Phase A landed. QStash is still the default engine for every workflow; `image` can be canaried to Cloudflare Workflows via env var.
 
-**Companion doc:** [`cloudflare-workflows.md`](./cloudflare-workflows.md) — feasibility investigation (issue #728). Read that first.
-
 **Issue:** #728 ("cloudflare workflows" — investigate + PoC).
 
 ---

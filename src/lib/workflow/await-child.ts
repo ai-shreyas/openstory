@@ -24,8 +24,6 @@
  *
  * The child's `_parent` slot carries the parent's binding name, instance id,
  * and event type so the leaf workflow doesn't need to know who its caller is.
- *
- * See docs/investigations/cloudflare-workflows.md §4 Gap A.
  */
 
 import { simpleHash } from '@/lib/utils/hash';

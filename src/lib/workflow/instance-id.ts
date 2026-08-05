@@ -6,8 +6,6 @@
  * used the same ID. We namespace every ID with an environment slug derived
  * from `VITE_APP_URL` so PR-preview deployments cannot see each other's
  * instances or production's.
- *
- * See docs/investigations/cloudflare-workflows.md §4 Gap F.
  */
 
 const MAX_INSTANCE_ID_LENGTH = 100;

@@ -10,12 +10,11 @@
  *     (see `base-workflow.ts`).
  *   - Uses `step.do` instead of `context.run`.
  *   - Reads payload from `event.payload`.
- *   - Gap C: the streaming LLM call + per-chunk DB writes + per-chunk
+ *   - The streaming LLM call + per-chunk DB writes + per-chunk
  *     `generation.scene:*` event emissions + per-chunk preview-image
  *     fire-and-forget trigger all run inline inside a single top-level
  *     `step.do('scene-splitting-stream', …)`. If that step fails partway,
- *     the engine replays the entire LLM call — acceptable per the
- *     investigation (`docs/investigations/cloudflare-workflows.md` §Gap C).
+ *     the engine replays the entire LLM call — an accepted trade-off.
  *   - The final value returned from `scene-splitting-stream` is Zod-inferred
  *     and structurally rejected by CF's `Rpc.Serializable<T>` check, so we
  *     JSON-stringify around the step boundary (same pattern as

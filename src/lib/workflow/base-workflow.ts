@@ -14,8 +14,6 @@
  *     and `onFailure`.
  *   - Sanitizes the error message and emits it in a `step.do('emit-failure')`
  *     so the failure write itself benefits from retries + step durability.
- *
- * See docs/investigations/cloudflare-workflows.md §4 Gap D.
  */
 
 import { configureFalProxyFromEnv } from '@/lib/ai/fal-config';
