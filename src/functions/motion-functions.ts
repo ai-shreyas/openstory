@@ -34,6 +34,8 @@ import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prom
 import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { toShotView } from '@/lib/shots/shot-view';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
+import { buildUserEditProvenance } from '@/lib/prompts/user-edit-provenance';
+import { shouldRecordUserEdit } from '@/lib/workflows/user-edit-predicate';
 
 import { shotAccessMiddleware, sequenceAccessMiddleware } from './middleware';
 
@@ -146,6 +148,26 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       { errorMessage: 'Insufficient credits for motion generation' }
     );
 
+    // Both of these are snapshotted HERE rather than re-read in the workflow:
+    // that read would be racy against concurrent append-only version writes and
+    // replay-unsafe, since this very run repoints the selection pointer
+    // (#713/#991).
+    const userEditProvenance = shouldRecordUserEdit({
+      userEditedPrompt,
+      prompt,
+      currentPrompt: selectedMotion?.text ?? null,
+    })
+      ? await buildUserEditProvenance({
+          kind: 'motion',
+          scopedDb: context.scopedDb,
+          sequence,
+          scene: context.scene
+            ? { ...context.scene, continuity: effectiveContinuity }
+            : null,
+          startingFrameImageUrl: imageUrl,
+        })
+      : undefined;
+
     const workflowInput: BatchMotionMusicWorkflowInput = {
       userId: context.user.id,
       teamId,
@@ -162,11 +184,9 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
           motionBucket: data.motionBucket,
           aspectRatio: sequence.aspectRatio,
           generateAudio: data.generateAudio,
-          userEditedPrompt,
-          // Capture the edited version's dialogue/audio now so the workflow can
-          // carry it onto the recorded user-edit version without a racy /
-          // replay-unsafe in-workflow DB re-read (#713/#991).
-          priorMotion: userEditedPrompt
+          sceneTitle: context.scene?.metadata?.title,
+          userEditProvenance,
+          priorMotion: userEditProvenance
             ? {
                 dialogue: selectedMotion?.dialogue ?? null,
                 audio: selectedMotion?.audio ?? null,
@@ -372,6 +392,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
             shotModel
           ),
           model: shotModel,
+          sceneTitle: scene?.metadata?.title,
           duration:
             data.duration ?? (shot.durationMs ? shot.durationMs / 1000 : 3),
           fps: data.fps,

@@ -105,7 +105,8 @@ export class MotionBatchWorkflow extends OpenStoryWorkflowEntrypoint<BatchMotion
         motionBucket: shot.motionBucket,
         aspectRatio: shot.aspectRatio,
         generateAudio: shot.generateAudio,
-        userEditedPrompt: shot.userEditedPrompt,
+        userEditProvenance: shot.userEditProvenance,
+        sceneTitle: shot.sceneTitle,
         priorMotion: shot.priorMotion,
         // Cast/element reference images (#873) — only Kling v3 Pro emits them.
         referenceImages: shot.referenceImages,

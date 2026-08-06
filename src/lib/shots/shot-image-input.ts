@@ -22,10 +22,12 @@ import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { buildElementReferenceImages } from '@/lib/prompts/element-prompt';
 import { buildLocationReferenceImages } from '@/lib/prompts/location-prompt';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
+import { buildUserEditProvenance } from '@/lib/prompts/user-edit-provenance';
 import type {
   ImageWorkflowInput,
   ShotImageSceneSnapshot,
 } from '@/lib/workflow/types';
+import { shouldRecordUserEdit } from '@/lib/workflows/user-edit-predicate';
 import {
   matchCharactersToScene,
   matchElementsToScene,
@@ -68,6 +70,8 @@ export async function prepareShotImageWorkflowInput(args: {
     teamId: string;
     aspectRatio: AspectRatio;
     imageModel: string | null;
+    styleId: string | null;
+    analysisModel: string;
   };
   shot: Shot;
   frame: Frame;
@@ -102,6 +106,22 @@ export async function prepareShotImageWorkflowInput(args: {
   if (!prompt) {
     throw new Error('Shot has no prompt or description to regenerate from');
   }
+
+  // Decided HERE, not in the workflow: whether this is a real edit depends on
+  // the prompt the user was looking at, and the provenance hash must describe
+  // the inputs as they were at that moment.
+  const userEditProvenance = shouldRecordUserEdit({
+    userEditedPrompt,
+    prompt,
+    currentPrompt: selectedPrompt?.text ?? null,
+  })
+    ? await buildUserEditProvenance({
+        kind: 'visual',
+        scopedDb,
+        sequence,
+        scene,
+      })
+    : undefined;
 
   const continuity = scene?.continuity;
 
@@ -207,6 +227,6 @@ export async function prepareShotImageWorkflowInput(args: {
       ...locationReferences,
       ...elementReferences,
     ],
-    userEditedPrompt,
+    userEditProvenance,
   };
 }

@@ -80,7 +80,6 @@ export async function buildShotImageWorkflowInput(opts: {
    * `frame.imagePrompt`.
    */
   imagePrompt?: string | null;
-  userEditedPrompt?: boolean;
   /**
    * Variant-only (#547): the resulting `/image` run writes only this model's
    * `shot_variants` row, never the primary columns. Set by the add-model path.
@@ -170,7 +169,8 @@ export async function buildShotImageWorkflowInput(opts: {
       ...locationReferences,
       ...elementReferences,
     ],
-    userEditedPrompt: opts.userEditedPrompt ?? false,
+    // No `userEditProvenance`: this builder serves the add-model path, which is
+    // never a user edit.
     variantOnly: opts.variantOnly ?? false,
   };
 }

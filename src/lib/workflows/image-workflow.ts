@@ -16,9 +16,7 @@
  *      retains a stale-flagged version without repointing the primary.
  */
 
-import { computeVisualPromptInputHash } from '@/lib/ai/input-hash';
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from '@/lib/ai/models';
-import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
 import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
@@ -37,14 +35,12 @@ import {
 import { uploadImageToStorage } from '@/lib/image/image-storage';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
-import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { simpleHash } from '@/lib/utils/hash';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { ImageWorkflowInput } from '@/lib/workflow/types';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { computeImageWorkflowHashFromDto } from '@/lib/workflows/image-workflow-snapshot';
-import { shouldRecordUserEdit } from '@/lib/workflows/user-edit-predicate';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'image']);
@@ -143,55 +139,15 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           return null;
         }
 
-        const selectedPrompt = await scopedDb.framePromptVersions.getSelected(
-          frame.id
-        );
-        if (
-          shouldRecordUserEdit({
-            userEditedPrompt: input.userEditedPrompt,
-            prompt: input.prompt,
-            currentPrompt: selectedPrompt?.text ?? null,
-          })
-        ) {
-          let userEditInputHash: string | null = null;
-          let userEditAnalysisModel: string | null = null;
-          try {
-            const shot = await scopedDb.shots.getById(input.shotId);
-            const scene = shot
-              ? (await resolveSceneForShotFromDb(shot, scopedDb)).scene
-              : null;
-            if (scene) {
-              const sequence = await scopedDb.sequences.getById(
-                input.sequenceId
-              );
-              if (sequence) {
-                const ctx = await loadNarrowShotPromptContext({
-                  scopedDb,
-                  sequence: {
-                    id: sequence.id,
-                    styleId: sequence.styleId,
-                    aspectRatio: sequence.aspectRatio,
-                    analysisModel: sequence.analysisModel,
-                  },
-                  scene,
-                });
-                userEditInputHash = await computeVisualPromptInputHash(ctx);
-                userEditAnalysisModel = ctx.analysisModel;
-              }
-            }
-          } catch (err) {
-            logger.warn(
-              `[ImageWorkflow] Could not compute upstream hash for user-edit on frame ${input.shotId}; recording with null hash`,
-              { err }
-            );
-          }
-
+        // The trigger decided this is a real edit and snapshotted what it was
+        // authored against — see UserEditProvenance.
+        if (input.userEditProvenance) {
           await scopedDb.framePromptVersions.write({
             frameId: frame.id,
             text: input.prompt,
             source: 'user-edit',
-            inputHash: userEditInputHash,
-            analysisModel: userEditAnalysisModel,
+            inputHash: input.userEditProvenance.inputHash,
+            analysisModel: input.userEditProvenance.analysisModel,
             createdBy: input.userId,
           });
         }

@@ -159,7 +159,7 @@ describe('buildShotImageWorkflowInput — sceneId + core shape', () => {
     expect(input?.sceneSnapshot?.sceneId).toBe('shot-99');
   });
 
-  it('sets the workflow fields (shotId, sequenceId, numImages, userEditedPrompt default, hash)', async () => {
+  it('sets the workflow fields (shotId, sequenceId, numImages, hash)', async () => {
     const shot = makeShot({ id: 'shot-7' });
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
@@ -170,20 +170,17 @@ describe('buildShotImageWorkflowInput — sceneId + core shape', () => {
     expect(input?.sequenceId).toBe('seq-1');
     expect(input?.numImages).toBe(1);
     expect(input?.model).toBe(DEFAULT_IMAGE_MODEL);
-    expect(input?.userEditedPrompt).toBe(false);
     expect(typeof input?.snapshotInputHash).toBe('string');
     expect(input?.snapshotInputHash?.length).toBeGreaterThan(0);
   });
 
-  it('forwards userEditedPrompt when set', async () => {
-    const shot = makeShot();
+  it('never records a user edit — this builder serves the add-model path', async () => {
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
-      shot,
+      shot: makeShot(),
       imagePrompt: 'P',
-      userEditedPrompt: true,
     });
-    expect(input?.userEditedPrompt).toBe(true);
+    expect(input?.userEditProvenance).toBeUndefined();
   });
 });
 

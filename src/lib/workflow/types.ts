@@ -34,6 +34,21 @@ type PriorMotionDirection = {
   dialogue?: MotionDialogue | null;
   audio?: MotionAudio | null;
 };
+
+/**
+ * The upstream state a user-edited prompt was authored against, captured at
+ * trigger time. Same discipline as {@link PriorMotionDirection}, and for the
+ * same reason: derived in-workflow it would hash whatever the DB says at
+ * execution (or at retry), stamping the edit with inputs the user never saw and
+ * leaving staleness permanently reading fresh.
+ *
+ * `inputHash` is null when the hash could not be computed (no scene, or the
+ * context load failed) — the edit is still recorded, just without provenance.
+ */
+export type UserEditProvenance = {
+  inputHash: string | null;
+  analysisModel: string | null;
+};
 import type { AspectRatio, ImageSize } from '@/lib/constants/aspect-ratios';
 import type {
   CharacterMinimal,
@@ -94,12 +109,13 @@ export interface ImageWorkflowInput extends SequenceWorkflowContext {
   /** Hash over `(prompt, model, aspectRatio, sceneSnapshot)`; validated at start. */
   snapshotInputHash?: string;
   /**
-   * `true` when `prompt` came from a user edit (typed in the UI). `false` for
-   * auto paths (storyboard generation, smart-retry, preview, scene split)
-   * where `prompt` came from `frame.imagePrompt` and would not match a bare
-   * edit. Drives whether the workflow appends a `user-edit` variant row.
+   * Present when `prompt` is a real user edit (typed in the UI, and different
+   * from the prompt version currently selected) — absent on auto paths
+   * (storyboard generation, smart-retry, preview, scene split). Presence IS the
+   * instruction to append a `user-edit` prompt version; the payload carries the
+   * provenance so the workflow never re-derives it. @see UserEditProvenance
    */
-  userEditedPrompt?: boolean;
+  userEditProvenance?: UserEditProvenance;
   /**
    * Variant-only mode (#547). When true, the run NEVER touches the live primary
    * `shots.*` image/video columns — it writes only this model's
@@ -263,13 +279,13 @@ export interface MotionWorkflowInput extends SequenceWorkflowContext {
    */
   generateAudio?: boolean;
   /**
-   * `true` when `prompt` came from a user edit (typed in the UI). `false` for
-   * auto paths (batch generation, smart-retry) where `prompt` was produced by
-   * `resolveMotionPrompt` and may include model-specific dialogue/audio
-   * assembly that does not match the bare `shot.motionPrompt`. Drives whether
-   * the workflow appends a `user-edit` variant row.
+   * Present when `prompt` is a real user edit (typed in the UI, and different
+   * from the prompt version currently selected) — absent on auto paths (batch
+   * generation, smart-retry) where `prompt` came from `resolveMotionPrompt` and
+   * may include model-specific dialogue/audio assembly. Presence IS the
+   * instruction to append a `user-edit` prompt version. @see UserEditProvenance
    */
-  userEditedPrompt?: boolean;
+  userEditProvenance?: UserEditProvenance;
   /**
    * Only meaningful when `userEditedPrompt`: the dialogue/audio direction of the
    * version being edited, captured at trigger time so the recorded user-edit
@@ -278,6 +294,13 @@ export interface MotionWorkflowInput extends SequenceWorkflowContext {
    * {@link PriorMotionDirection}.
    */
   priorMotion?: PriorMotionDirection;
+  /**
+   * The scene's title, for the stored video's human-readable filename. Passed
+   * in rather than read at upload time — a workflow has no reason to reach for
+   * scene data, and the name should reflect the scene as it was when the render
+   * was requested.
+   */
+  sceneTitle?: string;
   /**
    * Character + element reference images for identity consistency across the
    * clip (#873). Resolved at trigger time from the scene's continuity tags +
@@ -913,8 +936,10 @@ export interface BatchMotionMusicWorkflowInput extends SequenceWorkflowContext {
     aspectRatio?: AspectRatio;
     /** See `MotionWorkflowInput.generateAudio`. */
     generateAudio?: boolean;
-    /** See `MotionWorkflowInput.userEditedPrompt`. */
-    userEditedPrompt?: boolean;
+    /** See `MotionWorkflowInput.userEditProvenance`. */
+    userEditProvenance?: UserEditProvenance;
+    /** See `MotionWorkflowInput.sceneTitle`. */
+    sceneTitle?: string;
     /** See `MotionWorkflowInput.priorMotion`. */
     priorMotion?: PriorMotionDirection;
     /** See `MotionWorkflowInput.referenceImages` (#873). */

@@ -22,12 +22,8 @@ import {
 } from '@/lib/ai/content-rejection';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
-import {
-  computeMotionPromptInputHash,
-  computeVideoManifestInputHash,
-} from '@/lib/ai/input-hash';
+import { computeVideoManifestInputHash } from '@/lib/ai/input-hash';
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
-import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
 import { microsToUsd } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
@@ -46,10 +42,8 @@ import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
 import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
-import { getAnchorImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
 import { getGenerationChannel } from '@/lib/realtime';
-import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { MotionWorkflowInput } from '@/lib/workflow/types';
@@ -57,7 +51,6 @@ import {
   persistMotionCompletion,
   persistMotionFailure,
 } from '@/lib/workflows/motion-workflow-persist';
-import { shouldRecordUserEdit } from '@/lib/workflows/user-edit-predicate';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 
@@ -207,63 +200,14 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           return { shotDeleted: true, videoVersionId: null, sceneId: null };
         }
 
-        const selectedMotion = input.userEditedPrompt
-          ? await scopedDb.shotPromptVersions.getSelectedMotion(shot.id)
-          : null;
-        if (
-          shouldRecordUserEdit({
-            userEditedPrompt: input.userEditedPrompt,
-            prompt: input.prompt,
-            currentPrompt: selectedMotion?.text ?? null,
-          })
-        ) {
-          let userEditInputHash: string | null = null;
-          let userEditAnalysisModel: string | null = null;
-          try {
-            const { scene } = await resolveSceneForShotFromDb(shot, scopedDb);
-            if (scene && input.sequenceId) {
-              const sequence = await scopedDb.sequences.getById(
-                input.sequenceId
-              );
-              if (sequence) {
-                const ctx = await loadNarrowShotPromptContext({
-                  scopedDb,
-                  sequence: {
-                    id: sequence.id,
-                    styleId: sequence.styleId,
-                    aspectRatio: sequence.aspectRatio,
-                    analysisModel: sequence.analysisModel,
-                  },
-                  scene,
-                  // i2v anchor still lives on the anchor frame's selected
-                  // version now (#989/#1067) — resolved by shotId, never by
-                  // id-reuse.
-                  startingFrameImageUrl: await getAnchorImageUrl(
-                    scopedDb,
-                    shot.id
-                  ),
-                });
-                userEditInputHash = await computeMotionPromptInputHash(ctx);
-                userEditAnalysisModel = ctx.analysisModel;
-              }
-            }
-          } catch (err) {
-            logger.warn(
-              `[MotionWorkflow:cf] Could not compute upstream hash for user-edit on shot ${input.shotId}; recording with null hash`,
-              {
-                err,
-              }
-            );
-          }
-
-          // Carry the dialogue/audio direction forward onto the user-edit
-          // version so audio-capable models still get enrichment after a
-          // raw-text edit (pre-#713 this came from `metadata.prompts.motion`,
-          // now gone). The direction is captured at trigger time
-          // (`input.priorMotion`) — NOT re-read here, which would be racy
-          // against concurrent append-only version writes and replay-unsafe
-          // (this very write repoints the selection pointer). `components` /
-          // `parameters` stay null on a free-text edit, as they did pre-#713.
+        // Everything this write needs was resolved at trigger time and threaded
+        // in: whether the edit is real, what it was authored against
+        // (`userEditProvenance`), and the dialogue/audio direction to carry
+        // forward (`priorMotion`). Re-reading any of it here would be racy
+        // against concurrent append-only version writes and replay-unsafe —
+        // this very write repoints the selection pointer. `components` /
+        // `parameters` stay null on a free-text edit, as they did pre-#713.
+        if (input.userEditProvenance) {
           await scopedDb.shotPromptVersions.write({
             shotId: input.shotId,
             promptType: 'motion',
@@ -271,8 +215,8 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             dialogue: input.priorMotion?.dialogue ?? null,
             audio: input.priorMotion?.audio ?? null,
             source: 'user-edit',
-            inputHash: userEditInputHash,
-            analysisModel: userEditAnalysisModel,
+            inputHash: input.userEditProvenance.inputHash,
+            analysisModel: input.userEditProvenance.analysisModel,
             createdBy: input.userId,
           });
         }
@@ -699,14 +643,14 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     if (input.shotId) {
       const { shotId } = input;
 
-      // Step 3: Fetch shot and sequence data for human-readable filename
+      // Step 3: Fetch the sequence title for the human-readable filename. The
+      // scene's title rides the payload (`input.sceneTitle`).
       const shotData = await step.do('fetch-shot-data', async () => {
         const shot = await scopedDb.shots.getWithSequence(shotId);
         if (!shot) throw new Error('Shot not found');
-        const { scene } = await resolveSceneForShotFromDb(shot, scopedDb);
         return {
           sequenceTitle: shot.sequence.title,
-          sceneTitle: scene?.metadata?.title,
+          sceneTitle: input.sceneTitle,
         };
       });
 
