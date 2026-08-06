@@ -9,7 +9,7 @@ import {
 import { getEnv } from '#env';
 import type { ScopedDb } from '@/lib/db/scoped';
 import {
-  aiObservabilityMiddleware,
+  recordMediaGenerationSpan,
   type AIObservabilityMeta,
 } from '@/lib/observability/ai-otel';
 import { ensureExternallyFetchableUrls } from '@/lib/storage/external-url';
@@ -72,10 +72,48 @@ export async function generateImageWithProvider(
   params: ImageGenerationParams,
   options?: ImageGenerationOptions
 ): Promise<ImageGenerationResult> {
+  // Observability wraps the OUTER call, not the `generateImage()` inside:
+  // the span carries our own cost, which only resolves from D1 pricing after
+  // the adapter returns. See recordMediaGenerationSpan.
+  const startedAt = Date.now();
+  const attribution = {
+    ...options?.observability,
+    // `??` after the spread: an explicit `userId: undefined` in
+    // `observability` would otherwise overwrite the derived id and land the
+    // generation unattributed. Attribution is DERIVED from `scopedDb` — it is
+    // already built from (teamId, userId) and already passed by every call
+    // site that has a user, so a new call site is attributed correctly
+    // without remembering to opt in. Explicit `observability` still wins for
+    // the semantic bits (observationName, tags, sessionId) only the caller
+    // knows.
+    userId: options?.observability?.userId ?? options?.scopedDb?.userId,
+  };
+
   try {
-    return await generateImageInternal(params, options);
+    const result = await generateImageInternal(params, options);
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: params.model,
+      provider: 'fal',
+      activity: 'image',
+      durationMs: result.processingTimeMs,
+      costMicros: result.metadata.cost,
+      unitsBilled: result.metadata.unitsBilled,
+      prompt: params.prompt,
+      outputUrl: result.imageUrls,
+    });
+    return result;
   } catch (error) {
     const errorMessage = extractFalErrorMessage(error);
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: params.model,
+      provider: 'fal',
+      activity: 'image',
+      durationMs: Date.now() - startedAt,
+      prompt: params.prompt,
+      errorType: errorMessage,
+    });
 
     // Re-throw with the full detail so workflow failure handlers get the real message
     if (errorMessage !== (error instanceof Error ? error.message : '')) {
@@ -137,17 +175,6 @@ async function generateImageInternal(
     adapter,
     prompt,
     modelOptions,
-    middleware: aiObservabilityMiddleware({
-      // Attribution is DERIVED, not threaded. `scopedDb` is already built
-      // from (teamId, userId) and already passed by every call site that has
-      // a user, so defaulting from it means a new call site is attributed
-      // correctly without remembering to opt in — and there is no per-site
-      // boilerplate to drift. Explicit `observability` still wins, for the
-      // semantic bits (observationName, tags, sessionId) that only the
-      // caller knows.
-      userId: options?.scopedDb?.userId,
-      ...options?.observability,
-    }),
     debug: false,
   });
 

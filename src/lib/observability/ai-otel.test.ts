@@ -11,6 +11,9 @@ import type {
   OtelMiddlewareOptions,
   OtelSpanInfo,
 } from '@tanstack/ai/middlewares/otel';
+import type { Attributes, SpanOptions, SpanStatus } from '@opentelemetry/api';
+import { SpanStatusCode } from '@opentelemetry/api';
+import { micros } from '@/lib/billing/money';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const otelMiddlewareReturn: ChatMiddleware = { name: 'mock-otel' };
@@ -24,6 +27,46 @@ vi.doMock('@tanstack/ai/middlewares/otel', () => ({
 // createServerOnlyFn needs the Start server runtime — unwrap it in tests.
 vi.doMock('@tanstack/react-start', () => ({
   createServerOnlyFn: <T>(fn: T) => fn,
+}));
+
+// Stub the tracer provider so `recordMediaGenerationSpan` — which builds its
+// span directly rather than through `otelMiddleware` — can be inspected.
+const mockSpan = {
+  setAttributes: vi.fn((_attributes: Attributes) => {}),
+  setStatus: vi.fn((_status: SpanStatus) => {}),
+  end: vi.fn((_endTime?: number) => {}),
+};
+const mockStartSpan = vi.fn(
+  (_name: string, _options?: SpanOptions) => mockSpan
+);
+vi.doMock('@opentelemetry/sdk-trace-base', () => ({
+  BasicTracerProvider: class {
+    getTracer() {
+      return { startSpan: mockStartSpan };
+    }
+    forceFlush() {
+      return Promise.resolve();
+    }
+  },
+  BatchSpanProcessor: class {},
+}));
+
+// Same for the meter, so the media duration histogram can be inspected.
+const mockRecordHistogram = vi.fn(
+  (_value: number, _attributes: Attributes) => {}
+);
+vi.doMock('@opentelemetry/sdk-metrics', () => ({
+  MeterProvider: class {
+    getMeter() {
+      return {
+        createHistogram: () => ({ record: mockRecordHistogram }),
+      };
+    }
+    forceFlush() {
+      return Promise.resolve();
+    }
+  },
+  PeriodicExportingMetricReader: class {},
 }));
 
 // The enricher/formatter ignore ctx, so an inert stub is sufficient. The
@@ -189,6 +232,30 @@ describe('aiObservabilityMiddleware', () => {
       });
     });
 
+    it('does not let metadata overwrite the reserved attribution keys', async () => {
+      // Metadata is caller-supplied; if it were written last, a stray
+      // `posthog.distinct_id` key would re-attribute the generation.
+      const { aiObservabilityMiddleware } = await importAiOtel({
+        token: 'phc_test',
+      });
+
+      aiObservabilityMiddleware({
+        userId: 'user-1',
+        sessionId: 'seq-1',
+        metadata: {
+          'posthog.distinct_id': 'attacker',
+          $ai_session_id: 'other-session',
+        },
+      });
+
+      const { attributeEnricher } = capturedOptions();
+      if (!attributeEnricher) throw new Error('expected attributeEnricher');
+      expect(attributeEnricher(chatSpanInfo())).toEqual({
+        'posthog.distinct_id': 'user-1',
+        $ai_session_id: 'seq-1',
+      });
+    });
+
     it('omits attributes for absent meta and empty tags', async () => {
       const { aiObservabilityMiddleware } = await importAiOtel({
         token: 'phc_test',
@@ -224,6 +291,137 @@ describe('aiObservabilityMiddleware', () => {
       aiObservabilityMiddleware({ userId: 'user-1' });
 
       expect(capturedOptions().spanNameFormatter).toBeUndefined();
+    });
+  });
+});
+
+/**
+ * Every fal media generation reports through this rather than middleware:
+ * cost is OURS (priced from D1 after the adapter returns, since fal reports
+ * units not dollars), and video additionally completes by polling long after
+ * `generateVideo()` returned.
+ */
+describe('recordMediaGenerationSpan', () => {
+  const record = {
+    model: 'kling-v2.5',
+    provider: 'fal',
+    activity: 'video' as const,
+    durationMs: 42_000,
+    costMicros: micros(350_000),
+    unitsBilled: 5,
+    prompt: 'a cat on a skateboard',
+    outputUrl: 'https://cdn.test/video.mp4',
+    observationName: 'motion',
+    tags: ['motion'],
+    userId: 'user-1',
+    sessionId: 'seq-1',
+    metadata: { shotId: 'shot-1' },
+  };
+
+  beforeEach(() => {
+    mockStartSpan.mockClear();
+    mockSpan.setAttributes.mockClear();
+    mockSpan.setStatus.mockClear();
+    mockSpan.end.mockClear();
+    mockRecordHistogram.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is a no-op when PostHog is not configured', async () => {
+    const { recordMediaGenerationSpan } = await importAiOtel();
+
+    recordMediaGenerationSpan(record);
+
+    expect(mockStartSpan).not.toHaveBeenCalled();
+  });
+
+  it('emits a gen_ai span carrying cost, units and output', async () => {
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    recordMediaGenerationSpan(record);
+
+    const [name, options] = mockStartSpan.mock.calls[0] ?? [];
+    expect(name).toBe('motion');
+    expect(options?.attributes).toEqual({
+      'gen_ai.system': 'fal',
+      'gen_ai.operation.name': 'video_generation',
+      'gen_ai.request.model': 'kling-v2.5',
+      // 350_000 microdollars → $0.35, priced from OUR model_pricing table.
+      // Without this the generation lands in PostHog with no cost at all:
+      // fal's adapter reports billable units and never dollars.
+      'gen_ai.usage.cost': 0.35,
+      'tanstack.ai.usage.units_billed': 5,
+      'gen_ai.input.messages': 'a cat on a skateboard',
+      'gen_ai.output.messages': 'https://cdn.test/video.mp4',
+    });
+    expect(mockSpan.setAttributes).toHaveBeenCalledWith({
+      'posthog.distinct_id': 'user-1',
+      $ai_session_id: 'seq-1',
+      $ai_span_name: 'motion',
+      $ai_tags: ['motion'],
+      shotId: 'shot-1',
+    });
+    expect(mockSpan.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('backdates the span so its duration is the generation, not the bookkeeping call', async () => {
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    recordMediaGenerationSpan(record);
+
+    const [, options] = mockStartSpan.mock.calls[0] ?? [];
+    const endTime = mockSpan.end.mock.calls[0]?.[0];
+    if (typeof options?.startTime !== 'number' || typeof endTime !== 'number') {
+      throw new Error('expected numeric startTime/endTime');
+    }
+    expect(endTime - options.startTime).toBe(42_000);
+  });
+
+  it('marks a failed generation ERROR and keeps cost off it', async () => {
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    recordMediaGenerationSpan({
+      model: 'kling-v2.5',
+      provider: 'fal',
+      activity: 'video',
+      durationMs: 1_000,
+      errorType: 'content flagged',
+      userId: 'user-1',
+    });
+
+    const [, options] = mockStartSpan.mock.calls[0] ?? [];
+    expect(options?.attributes).toMatchObject({
+      'error.type': 'content flagged',
+    });
+    expect(options?.attributes).not.toHaveProperty('gen_ai.usage.cost');
+    expect(mockSpan.setStatus).toHaveBeenCalledWith({
+      code: SpanStatusCode.ERROR,
+      message: 'content flagged',
+    });
+  });
+
+  it('records the duration histogram without per-user attributes', async () => {
+    // PostHog bills and guards metrics per series, so `posthog.distinct_id`
+    // must never reach one — that would be a series per user.
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    recordMediaGenerationSpan(record);
+
+    expect(mockRecordHistogram).toHaveBeenCalledWith(42, {
+      'gen_ai.system': 'fal',
+      'gen_ai.operation.name': 'video_generation',
+      'gen_ai.request.model': 'kling-v2.5',
     });
   });
 });

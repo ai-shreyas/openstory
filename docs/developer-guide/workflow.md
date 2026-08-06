@@ -161,15 +161,14 @@ Uses streaming LLM output to create frames progressively as scenes arrive, plus 
 
 **Steps:**
 
-1. **`prepare-scene-splitting`** — Resolves the prompt template from the local prompt registry
-2. **`scene-splitting-stream`** — Streams the LLM response through `createStreamingSceneParser()`:
+1. **`scene-splitting-stream`** — Resolves the prompt template from the local registry, then streams the LLM response through `createStreamingSceneParser()`:
    - Parses incremental JSON chunks via `partial-json`
    - On each complete scene: calls `upsertFrame()` to create/update the frame in DB, emits `generation.scene:new` and `generation.frame:created`
    - On title detection: updates the sequence title, emits `generation.updated`
    - **Preview images:** After each scene completes, triggers an image workflow (fire-and-forget via `triggerWorkflow`) using `PREVIEW_IMAGE_MODEL` for instant visual feedback
    - On `scene:updated` events: upserts frame with partial metadata as scenes stream in
-3. **`reconcile-frames`** — Bulk upserts all frames via `bulkInsertFrames()` for workflow replay safety — a Cloudflare Workflows body re-executes from the top on every step callback, so this is idempotent on `sequenceId + orderIndex` conflict. Also emits `frame:created` for any frames missed during streaming.
-4. **`deduct-llm-credits-scene-splitting`** — Credit deduction
+2. **`reconcile-frames`** — Bulk upserts all frames via `bulkInsertFrames()` for workflow replay safety — a Cloudflare Workflows body re-executes from the top on every step callback, so this is idempotent on `sequenceId + orderIndex` conflict. Also emits `frame:created` for any frames missed during streaming.
+3. **`deduct-llm-credits-scene-splitting`** — Credit deduction
 
 - **Prompt:** `phase/scene-splitting-chat`
 - **Variables:** `{ aspectRatio, script }` (script is sanitized)

@@ -45,6 +45,7 @@ import { gateEstimate } from '@/lib/billing/cost-estimation';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
+import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -441,13 +442,6 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             // Cast/element reference images (#873) — only Kling v3 Pro emits them.
             referenceImages: input.referenceImages,
             scopedDb,
-            observability: {
-              observationName: 'motion',
-              tags: ['motion'],
-              userId: input.userId,
-              sessionId: input.sequenceId,
-              metadata: { model, shotId: input.shotId },
-            },
           });
           return { ok: true as const, job };
         } catch (error) {
@@ -649,6 +643,28 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     const actualCost = await step.do('price-motion-generation', async () =>
       falCostFromUnits(billedEndpointId, billedUnits)
     );
+
+    // Motion is submitted to fal's queue and collected by polling, so the
+    // `generateVideo()` call returns before the video exists — a middleware
+    // span there would time the submit and carry no cost, duration, or
+    // output. Record it here instead, where all three are known.
+    await step.do('record-motion-observation', async () => {
+      recordMediaGenerationSpan({
+        model,
+        provider: 'fal',
+        activity: 'video',
+        durationMs: Date.now() - job.submittedAt,
+        costMicros: actualCost,
+        unitsBilled: billedUnits,
+        prompt: input.prompt,
+        outputUrl: videoUrl,
+        observationName: 'motion',
+        tags: ['motion'],
+        userId: input.userId,
+        sessionId: input.sequenceId,
+        metadata: { model, shotId: input.shotId },
+      });
+    });
 
     // Before the deduction guard — see recordFalUsageStep (#1069).
     const falUsage = await recordFalUsageStep(step, scopedDb, {

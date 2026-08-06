@@ -226,11 +226,11 @@ export abstract class OpenStoryWorkflowEntrypoint<
       throw error;
     } finally {
       // Push buffered PostHog events + AI OTel spans before this invocation's
-      // isolate is torn down. Nothing else covers workflows: the only other
-      // caller of the flush scheduler is the server-fn middleware, and almost
-      // every instrumented LLM/media call in the app runs in here, not in a
-      // server fn — so without this the spans sit in the BatchSpanProcessor
-      // buffer and die with the isolate.
+      // isolate is torn down. Nothing else covers workflows: the other flush
+      // callers are the server-fn middleware, the request middleware, and the
+      // auth route — and almost every instrumented LLM/media call in the app
+      // runs in here, not in any of those. Without this the spans sit in the
+      // BatchSpanProcessor buffer and die with the isolate.
       //
       // Awaited directly rather than routed through `#flush-scheduler`: that
       // indirection exists to keep the flush off a request's critical path

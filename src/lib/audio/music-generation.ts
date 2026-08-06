@@ -8,8 +8,9 @@ import {
 } from '@/lib/ai/models';
 import { type Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
-  aiObservabilityMiddleware,
+  recordMediaGenerationSpan,
   type AIObservabilityMeta,
 } from '@/lib/observability/ai-otel';
 import { generateAudio } from '@tanstack/ai';
@@ -141,7 +142,42 @@ export async function generateMusic(
   const modelKey = options.model || DEFAULT_MUSIC_MODEL;
   const modelConfig = AUDIO_MODELS[modelKey];
 
-  return callFalAudio(options, modelConfig);
+  // Recorded out here rather than as middleware on `generateAudio`: the span
+  // carries our own cost, which only resolves from D1 pricing after the
+  // adapter returns. See recordMediaGenerationSpan.
+  const startedAt = Date.now();
+  const attribution = {
+    ...options.observability,
+    // `??` after the spread — see the note in image-generation.ts.
+    userId: options.observability?.userId ?? options.scopedDb?.userId,
+  };
+
+  try {
+    const result = await callFalAudio(options, modelConfig);
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: modelKey,
+      provider: 'fal',
+      activity: 'audio',
+      durationMs: Date.now() - startedAt,
+      costMicros: result.metadata.cost,
+      unitsBilled: result.metadata.unitsBilled,
+      prompt: options.prompt,
+      outputUrl: result.audioUrl,
+    });
+    return result;
+  } catch (error) {
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: modelKey,
+      provider: 'fal',
+      activity: 'audio',
+      durationMs: Date.now() - startedAt,
+      prompt: options.prompt,
+      errorType: extractFalErrorMessage(error),
+    });
+    throw error;
+  }
 }
 
 async function callFalAudio(
@@ -176,11 +212,6 @@ async function callFalAudio(
     prompt: shape.prompt,
     duration: shape.duration,
     modelOptions: shape.modelOptions,
-    middleware: aiObservabilityMiddleware({
-      // Derived from scopedDb — see the note in image-generation.ts.
-      userId: options.scopedDb?.userId,
-      ...options.observability,
-    }),
     debug: false,
   });
 

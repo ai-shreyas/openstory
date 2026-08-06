@@ -16,7 +16,12 @@ const logger = getLogger(['openstory', 'observability', 'flush-scheduler']);
 
 export async function flushAnalytics(): Promise<void> {
   const [events, spans] = await Promise.allSettled([
-    getPostHogClient()?.flush(),
+    // Wrapped in an async thunk so `allSettled` also covers a SYNCHRONOUS
+    // throw out of `getPostHogClient()` — it constructs `new PostHog(...)` on
+    // first call, and a throw there would escape the array literal, rejecting
+    // this function. `base-workflow` awaits it in a `finally` on the throw
+    // path, so that rejection would replace the workflow's real error.
+    (async () => getPostHogClient()?.flush())(),
     flushAIObservability(),
   ]);
   if (events.status === 'rejected') {

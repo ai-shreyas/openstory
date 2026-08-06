@@ -234,10 +234,9 @@ describe('OpenStoryWorkflowEntrypoint.run', () => {
     expect(notifyParent).not.toHaveBeenCalled();
   });
 
-  // Workflows are where nearly every instrumented LLM/media call runs, and the
-  // only other flush caller is the server-fn middleware. If this regresses,
-  // buffered PostHog events and AI OTel spans die with the isolate — silently,
-  // since nothing fails.
+  // Workflows are where nearly every instrumented LLM/media call runs, and no
+  // other flush caller covers them. If this regresses, buffered PostHog events
+  // and AI OTel spans die with the isolate — silently, since nothing fails.
   describe('analytics flush', () => {
     test('flushes on the success path', async () => {
       notifyParent.mockReset();
