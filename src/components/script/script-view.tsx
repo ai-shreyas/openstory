@@ -126,7 +126,7 @@ export const ScriptView: FC<{
    * Normally that text is read-only here: it's the composed scene-script
    * document, whose canonical home is `scene_script_versions` and whose editor
    * is the Scenes script view — typing into it would edit nothing. On the
-   * copy-a-sequence path (`/sequences/new?from=`) it's just the seed for a new
+   * copy-a-sequence path (`/sequences/new?from=`, logged-in) it's just the seed for a new
    * analysis, so it must be editable.
    */
   allowScriptEdit?: boolean;
@@ -173,7 +173,7 @@ export const ScriptView: FC<{
     setContentState((s) => ({ ...s, styleId: v }));
   // A user-initiated style pick: update local state and mirror it to the URL.
   // The auto-selected default calls `setStyleId` directly, so a bare
-  // /sequences/new stays a bare URL until the user actually chooses.
+  // bare composer URL stays bare until the user actually chooses.
   const selectStyle = (styleId: string) => {
     setStyleId(styleId);
     onStyleChange?.(styleId);

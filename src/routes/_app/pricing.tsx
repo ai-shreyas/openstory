@@ -158,7 +158,7 @@ function PricingPage() {
         </p>
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Button asChild size="lg">
-            <Link to="/sequences/new">
+            <Link to="/">
               Get started
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>

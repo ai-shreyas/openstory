@@ -80,7 +80,7 @@ export function buildLlmsTxt(): string {
   lines.push('## Links');
   lines.push('');
   lines.push(`- Website: ${SITE_CONFIG.url}`);
-  lines.push(`- App: ${SITE_CONFIG.url}/sequences/new`);
+  lines.push(`- App: ${SITE_CONFIG.url}/`);
   lines.push(`- GitHub: ${SITE_CONFIG.githubHref}`);
   lines.push(`- License: ${SITE_CONFIG.githubHref}/blob/main/LICENSE`);
   lines.push('');

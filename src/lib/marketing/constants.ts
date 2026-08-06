@@ -30,7 +30,7 @@ export const SITE_CONFIG = {
   // hand-uploaded R2 file.
   ogImage: `${APP_URL}/og.jpg`,
   ctaText: 'Get Started',
-  ctaHref: '/sequences/new',
+  ctaHref: '/',
   githubHref: 'https://github.com/openstory-so/openstory',
   xHref: 'https://x.com/openstory_so',
   youtubeHref:
@@ -165,21 +165,4 @@ export const OPEN_FAIR_BENEFITS = [
     description:
       'Shots, sequences, prompts, and music. Your work isn\u2019t trapped\u2009\u2014\u2009take it anywhere.',
   },
-] as const;
-
-export const FILMSTRIP_IMAGES = [
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/01-product-cosmetics.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/02-product-sneaker.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/03-real-estate-exterior.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/04-real-estate-interior.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/05-corporate-team.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/06-corporate-aerial.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/07-food-restaurant.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/08-fashion-editorial.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/09-music-video.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/10-youtube-creator.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/11-startup-pitch.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/12-travel-adventure.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/13-scifi-chase.webp`,
-  `https://${VITE_R2_PUBLIC_ASSETS_DOMAIN}/images/marketing/14-fantasy-dragon.webp`,
 ] as const;

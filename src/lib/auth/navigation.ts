@@ -7,7 +7,7 @@
  * Get the redirect URL from query params
  * For use in auth pages to read the intended destination
  * @param searchParams - URLSearchParams or query params object
- * @returns Redirect path or default (/sequences/new)
+ * @returns Redirect path or default (`/`, the app home)
  */
 export function getRedirectFromParams(
   searchParams: URLSearchParams | Record<string, string | string[] | undefined>
@@ -32,5 +32,5 @@ export function getRedirectFromParams(
     }
   }
 
-  return '/sequences/new';
+  return '/';
 }

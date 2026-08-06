@@ -2,13 +2,13 @@ import { createFileRoute } from '@tanstack/react-router';
 import { allDocs } from 'content-collections';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
 
-// Static pages that serve a 200 to anonymous visitors. `/` and `/docs` are
-// deliberately absent — both redirect (to /sequences/new and the first doc
-// respectively), and sitemap URLs must not 30x (#814).
+// Static pages that serve a 200 to anonymous visitors. `/docs` is deliberately
+// absent — it redirects to the first doc, and sitemap URLs must not 30x (#814).
+// `/sequences/new` requires login (#1104), so it is not listed.
 const SITEMAP_PAGES = [
+  '/',
   '/login',
   '/sequences',
-  '/sequences/new',
   '/talent',
   '/locations',
   '/docs/faq',
