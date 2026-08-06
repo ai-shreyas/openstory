@@ -172,6 +172,12 @@ const shotRestoreInput = z.object({
   sequenceId: ulidSchema,
   shotId: ulidSchema,
   variantId: ulidSchema,
+  // Which store `variantId` lives in. Explicit rather than probed: the #1067
+  // backfills give a version row its parent's ULID, and #989 already made an
+  // anchor frame's id equal its shot's — so one id can name a row in BOTH
+  // `frame_prompt_versions` and `shot_prompt_versions`. Probing would restore
+  // whichever table was checked first.
+  promptType: promptTypeSchema,
 });
 
 export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
@@ -179,15 +185,17 @@ export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
   .inputValidator(zodValidator(shotRestoreInput))
   .handler(async ({ context, data }) => {
     // Visual prompt history lives in frame_prompt_versions (#989); motion stays
-    // on shot_prompt_versions. ULIDs are globally unique, so a frame-store hit
-    // unambiguously identifies a visual restore. Use the resolved anchor frame
-    // id (never the shot id).
-    const frameChosen =
-      await context.scopedDb.framePromptVersions.getByIdForFrame(
-        data.variantId,
-        context.frame.id
-      );
-    if (frameChosen) {
+    // on shot_prompt_versions. The caller says which — see `promptType` above.
+    // Use the resolved anchor frame id (never the shot id).
+    if (data.promptType === 'visual') {
+      const frameChosen =
+        await context.scopedDb.framePromptVersions.getByIdForFrame(
+          data.variantId,
+          context.frame.id
+        );
+      if (!frameChosen) {
+        throw new Error('Prompt variant not found for this shot');
+      }
       if (frameChosen.status !== 'completed') {
         // In-flight/failed placeholders have no content to restore (#1085).
         throw new Error('Cannot restore a prompt version that never completed');

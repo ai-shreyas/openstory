@@ -85,6 +85,7 @@ export function useRestoreShotPromptVariant(args: {
           sequenceId: args.sequenceId,
           shotId: args.shotId,
           variantId,
+          promptType: args.promptType,
         },
       }),
     onSuccess: async () => {

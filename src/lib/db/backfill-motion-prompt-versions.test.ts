@@ -18,7 +18,7 @@
  */
 
 import type { Database } from '@/lib/db/client';
-import { generateId } from '@/lib/db/id';
+import { generateId, isValidId } from '@/lib/db/id';
 import {
   sequences,
   shotPromptVersions,
@@ -52,10 +52,14 @@ function backfillStatements(): string[] {
 }
 
 const STATEMENTS = backfillStatements();
+// `runBackfill` applies all three, so every test below also asserts the
+// tripwire stays silent. Held separately so one test can evaluate it against a
+// deliberately unfinished backfill.
+const TRIPWIRE = STATEMENTS[2] ?? '';
 
-if (STATEMENTS.length !== 2) {
+if (STATEMENTS.length !== 3) {
   throw new Error(
-    `expected 2 backfill statements (INSERT versions + UPDATE pointer), got ${STATEMENTS.length}`
+    `expected 3 backfill statements (INSERT versions + UPDATE pointer + tripwire), got ${STATEMENTS.length}`
   );
 }
 
@@ -176,6 +180,37 @@ describe('backfill motion prompt versions', () => {
     // SQLite does not enforce the enum — a bad literal here would reach prod.
     expect(version?.source).toBe('ai-generated');
     expect(refreshed?.selectedMotionPromptVersionId).toBe(version?.id);
+  });
+
+  it('mints a ULID-shaped id — `ulidSchema` guards every restore path', async () => {
+    const shot = await insertShot({
+      orderIndex: 0,
+      motionPrompt: 'slow push-in on the door',
+    });
+
+    await runBackfill();
+
+    const [version] = await db
+      .select()
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.shotId, shot.id));
+    // A prefixed id (the original `bfmp_<ulid>`) fails ulidSchema's 26-char +
+    // Crockford-base32 check, so restoreShotPromptVariantFn would reject the
+    // very rows this backfill creates.
+    expect(isValidId(version?.id ?? '')).toBe(true);
+    expect(version?.id).toBe(shot.id);
+  });
+
+  it('tripwire aborts when a prompted shot is left without a pointer', async () => {
+    await insertShot({ orderIndex: 0, motionPrompt: 'never pointed at' });
+
+    // INSERT + UPDATE skipped: simulates the backfill failing to reach a shot.
+    // The next migration removes `motion_prompt`, so this must fail the deploy.
+    await expect(client.execute(TRIPWIRE)).rejects.toThrow(/integer overflow/);
+
+    await runBackfill();
+    // Clean run: the tripwire selects no rows and never evaluates abs().
+    await expect(client.execute(TRIPWIRE)).resolves.toBeDefined();
   });
 
   it('leaves a shot that already has a pointer untouched', async () => {

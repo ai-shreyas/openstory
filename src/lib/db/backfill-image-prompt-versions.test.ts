@@ -8,7 +8,7 @@
  */
 
 import type { Database } from '@/lib/db/client';
-import { generateId } from '@/lib/db/id';
+import { generateId, isValidId } from '@/lib/db/id';
 import {
   framePromptVersions,
   frames,
@@ -40,11 +40,16 @@ const STATEMENTS = readFileSync(MIGRATION_SQL, 'utf8')
   )
   .filter((chunk) => chunk.length > 0);
 
-if (STATEMENTS.length !== 2) {
+if (STATEMENTS.length !== 3) {
   throw new Error(
-    `expected 2 statements (INSERT versions + UPDATE pointer), got ${STATEMENTS.length}`
+    `expected 3 statements (INSERT versions + UPDATE pointer + tripwire), got ${STATEMENTS.length}`
   );
 }
+
+// `runBackfill` applies all three, so every test below also asserts the
+// tripwire stays silent. Held separately so one test can evaluate it against a
+// deliberately unfinished backfill.
+const TRIPWIRE = STATEMENTS[2] ?? '';
 
 let client: Client;
 let db: Database;
@@ -169,6 +174,37 @@ describe('backfill image prompt versions', () => {
     // SQLite does not enforce the enum — a bad literal would reach prod.
     expect(version?.source).toBe('ai-generated');
     expect(refreshed?.selectedImagePromptVersionId).toBe(version?.id);
+  });
+
+  it('mints a ULID-shaped id — `ulidSchema` guards every restore path', async () => {
+    const frame = await insertFrame({
+      orderIndex: 0,
+      imagePrompt: 'a lantern in the fog',
+    });
+
+    await runBackfill();
+
+    const [version] = await db
+      .select()
+      .from(framePromptVersions)
+      .where(eq(framePromptVersions.frameId, frame.id));
+    // A prefixed id (the original `bfip_<ulid>`) fails ulidSchema's 26-char +
+    // Crockford-base32 check, so restoreShotPromptVariantFn would reject the
+    // very rows this backfill creates.
+    expect(isValidId(version?.id ?? '')).toBe(true);
+    expect(version?.id).toBe(frame.id);
+  });
+
+  it('tripwire aborts when a prompted frame is left without a pointer', async () => {
+    await insertFrame({ orderIndex: 0, imagePrompt: 'never pointed at' });
+
+    // INSERT + UPDATE skipped: simulates the backfill failing to reach a frame.
+    // The mirror column goes away next, so this must fail the deploy.
+    await expect(client.execute(TRIPWIRE)).rejects.toThrow(/integer overflow/);
+
+    await runBackfill();
+    // Clean run: the tripwire selects no rows and never evaluates abs().
+    await expect(client.execute(TRIPWIRE)).resolves.toBeDefined();
   });
 
   it('leaves a frame that already has a pointer untouched', async () => {
