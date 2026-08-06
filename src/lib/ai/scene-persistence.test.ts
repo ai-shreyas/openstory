@@ -44,7 +44,8 @@ describe('buildSceneInsert', () => {
       title: 'Entrance',
     });
     expect(row.continuity?.environmentTag).toBe('office');
-    expect(row.originalScript?.extract).toBe('A man walks in.');
+    // The script is NOT mapped onto the row — it lives in scene_script_versions.
+    expect(row).not.toHaveProperty('originalScript');
   });
 });
 
@@ -67,10 +68,10 @@ describe('buildSceneInserts', () => {
     expect(rows[1]?.orderIndex).toBe(1);
   });
 
-  it('carries continuity and original script onto the scene row', () => {
+  it('carries continuity onto the scene row but never the script', () => {
     const [row] = buildSceneInserts('seq-1', [makeScene()]);
     expect(row?.continuity?.environmentTag).toBe('office');
-    expect(row?.originalScript?.extract).toBe('A man walks in.');
+    expect(row).not.toHaveProperty('originalScript');
   });
 
   it('defaults missing scene metadata to null (no analysis metadata yet)', () => {
@@ -102,7 +103,6 @@ function makeSceneRow(id: string, orderIndex: number): SceneRow {
     title: null,
     continuity: null,
     musicDesign: null,
-    originalScript: null,
     selectedScriptVersionId: null,
     createdAt: now,
     updatedAt: now,

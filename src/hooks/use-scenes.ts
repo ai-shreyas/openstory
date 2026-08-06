@@ -30,10 +30,7 @@ export function useComposedScript(sequenceId?: string) {
   });
 }
 
-/**
- * A scene row plus its SELECTED script (#1030) — `originalScript` on the row is
- * the split-time snapshot and goes stale on edit, so read `script`.
- */
+/** A scene row plus its SELECTED script (#1030) — the row holds no script. */
 export type SceneWithScript = SceneRow & {
   script: Scene['originalScript'] | null;
 };

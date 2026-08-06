@@ -14,8 +14,7 @@ import { sequenceAccessMiddleware } from './middleware';
 export const getScenesFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    // Each scene carries its SELECTED script, not the `originalScript` column
-    // snapshot — that column is the split-time copy and goes stale on edit.
+    // Each scene carries its SELECTED script — the only place a script lives.
     const ctx = await loadSceneContextBySequence(
       context.scopedDb,
       context.sequence.id
@@ -76,7 +75,7 @@ export const updateSceneScriptFn = createServerFn({ method: 'POST' })
     }
 
     const selected = await scopedDb.sceneScriptVersions.getSelected(sceneId);
-    const currentScript = selected?.content ?? sceneRow.originalScript;
+    const currentScript = selected?.content;
     if (!currentScript) {
       throw new Error('Scene has no script to edit');
     }

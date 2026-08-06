@@ -116,8 +116,12 @@ const styleRow = requireRow(
   ),
   'style'
 );
+// A scene's script is its SELECTED `scene_script_versions` row — the scene
+// table holds no copy (#1067), so the fixture joins it in as `script`.
 const sceneRows = await q(
-  `SELECT * FROM scenes WHERE sequence_id='${SEQ}' ORDER BY order_index`
+  `SELECT s.*, v.content AS script FROM scenes s
+   LEFT JOIN scene_script_versions v ON v.id = s.selected_script_version_id
+   WHERE s.sequence_id='${SEQ}' ORDER BY s.order_index`
 );
 const shotRows = await q(
   `SELECT * FROM shots WHERE sequence_id='${SEQ}' ORDER BY order_index`
@@ -151,14 +155,15 @@ function emit(value: unknown): string {
 const file = `// AUTO-GENERATED Storybook fixture — real rows from local D1 (sequence ${SEQ}),
 // media URLs swapped for public placeholders. Do NOT hand-edit.
 // Regenerate via: bun scripts/generate-scenes-view-fixture.ts
-import { dbSceneId, type SceneRow, type Shot } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import { dbSceneId, type Shot } from '@/lib/db/schema';
 import type { Sequence, Style } from '@/types/database';
 
 export const fixtureSequence: Sequence = ${emit(sequence)};
 
 export const fixtureStyle: Style = ${emit(style)};
 
-export const fixtureScenes: SceneRow[] = ${emit(scenes)};
+export const fixtureScenes: SceneWithScript[] = ${emit(scenes)};
 
 export const fixtureShots: Shot[] = ${emit(shots)};
 `;

@@ -84,7 +84,6 @@ const mockScene: SceneWithScript = {
     mood: '',
     atmosphere: '',
   },
-  originalScript: null,
   script: {
     extract:
       'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',

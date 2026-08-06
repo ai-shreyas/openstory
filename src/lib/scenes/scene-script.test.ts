@@ -28,7 +28,6 @@ const sceneRowFixture = (overrides: Partial<SceneRow> = {}): SceneRow => ({
   title: 'Office',
   continuity: null,
   musicDesign: null,
-  originalScript: { extract: 'Scene row copy.', dialogue: [] },
   selectedScriptVersionId: null,
   createdAt: new Date(),
   updatedAt: new Date(),

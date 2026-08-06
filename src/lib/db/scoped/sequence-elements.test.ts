@@ -22,6 +22,7 @@ import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
 import {
   dbSceneId,
+  sceneScriptVersions,
   scenes,
   shotPromptVersions,
   shots,
@@ -88,7 +89,10 @@ beforeEach(async () => {
   await seed();
 });
 
-/** Continuity + script live on `scenes` (#1067); shots point at them. */
+/**
+ * Continuity lives on `scenes` (#1067) and the script in the scene's SELECTED
+ * `scene_script_versions` row (#1030); shots point at the scene.
+ */
 async function insertSceneWithShot(args: {
   orderIndex: number;
   elementTags: string[];
@@ -101,7 +105,6 @@ async function insertSceneWithShot(args: {
       id: dbSceneId(generateId()),
       sequenceId,
       orderIndex: args.orderIndex,
-      originalScript: { extract: args.extract, dialogue: [] },
       continuity: {
         environmentTag: '',
         characterTags: [],
@@ -113,6 +116,20 @@ async function insertSceneWithShot(args: {
     })
     .returning();
   if (!scene) throw new Error('test setup: scene insert returned nothing');
+  const [scriptVersion] = await db
+    .insert(sceneScriptVersions)
+    .values({
+      sceneId: scene.id,
+      content: { extract: args.extract, dialogue: [] },
+      source: 'split',
+    })
+    .returning();
+  if (!scriptVersion)
+    throw new Error('test setup: script version insert returned nothing');
+  await db
+    .update(scenes)
+    .set({ selectedScriptVersionId: scriptVersion.id })
+    .where(eq(scenes.id, scene.id));
   const [shot] = await db
     .insert(shots)
     .values({

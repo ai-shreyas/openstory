@@ -150,12 +150,7 @@ export const RealSequence: Story = {
   },
   parameters: {
     sequence: fixtureSequence,
-    // The fixture rows are `SceneRow`s; the editor reads the SELECTED script,
-    // which for this snapshot is the split-time one.
-    scenes: fixtureScenes.map((scene) => ({
-      ...scene,
-      script: scene.originalScript,
-    })),
+    scenes: fixtureScenes,
     shots: fixtureShots,
     style: fixtureStyle,
     docs: {
@@ -181,7 +176,6 @@ const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
   title,
   continuity: null,
   musicDesign: null,
-  originalScript: null,
   script: { extract: 'Sample scene text', dialogue: [] },
   selectedScriptVersionId: null,
   createdAt: new Date(),

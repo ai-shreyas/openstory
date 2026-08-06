@@ -19,7 +19,6 @@ import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import {
   loadSceneContextBySequence,
   resolveSceneForShot,
@@ -45,7 +44,6 @@ import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type {
   BatchMotionMusicWorkflowInput,
-  MusicSceneSummary,
   MusicWorkflowInput,
   StoryboardWorkflowInput,
 } from '@/lib/workflow/types';
@@ -312,39 +310,6 @@ export const archiveSequenceFn = createServerFn({ method: 'POST' })
       .updateStatus('archived');
     return { success: true };
   });
-
-/** Build compact scene summaries for music prompt generation. */
-export function buildSceneSummaries(
-  entries: ReadonlyArray<{
-    shot: Pick<Shot, 'id' | 'durationMs'>;
-    scene: Scene | null;
-  }>
-): MusicSceneSummary[] {
-  return entries.map(({ shot, scene }) => {
-    const md = scene?.musicDesign;
-    const legacyMusic = scene?.audioDesign?.music;
-    const meta = scene?.metadata;
-    const durationSeconds = shot.durationMs
-      ? shot.durationMs / 1000
-      : (meta?.durationSeconds ?? 10);
-
-    return {
-      sceneId: shot.id,
-      location: meta?.location || '',
-      timeOfDay: meta?.timeOfDay || '',
-      // Visual context for the music prompt: the scene description. The
-      // structured visual prompt components moved to `frame_prompt_versions`
-      // (#713), so the shot's own description is the summary source here.
-      visualSummary: scene?.originalScript.extract || '',
-      title: meta?.title || 'Untitled Scene',
-      storyBeat: meta?.storyBeat || '',
-      durationSeconds,
-      musicStyle: md?.style || legacyMusic?.style || '',
-      musicMood: md?.mood || legacyMusic?.mood || '',
-      musicPresence: md?.presence || legacyMusic?.presence || 'none',
-    };
-  });
-}
 
 /**
  * Distinct audio models that have generated a track for this sequence (#546).

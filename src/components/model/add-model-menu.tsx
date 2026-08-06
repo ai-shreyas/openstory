@@ -67,10 +67,7 @@ export const AddModelMenuSection = ({
     const used = new Set(usedModels);
     const shotList = shots ?? [];
     const extractBySceneId = new Map<string, string>(
-      (sceneRows ?? []).map((scene) => [
-        scene.id,
-        scene.script?.extract ?? scene.originalScript?.extract ?? '',
-      ])
+      (sceneRows ?? []).map((scene) => [scene.id, scene.script?.extract ?? ''])
     );
 
     if (variantType === 'image') {

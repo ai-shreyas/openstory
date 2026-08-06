@@ -81,7 +81,6 @@ export function createScenesMethods(db: Database) {
             title: sql.raw(`excluded."title"`),
             continuity: sql.raw(`excluded."continuity"`),
             musicDesign: sql.raw(`excluded."music_design"`),
-            originalScript: sql.raw(`excluded."original_script"`),
             updatedAt: new Date(),
           },
         })

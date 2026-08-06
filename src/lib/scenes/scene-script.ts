@@ -39,8 +39,7 @@ function composeSceneForShot(
   return {
     sceneId: scene.id,
     sceneNumber: scene.orderIndex + 1,
-    originalScript: script ??
-      scene.originalScript ?? { extract: '', dialogue: [] },
+    originalScript: script ?? { extract: '', dialogue: [] },
     metadata: {
       title: scene.title ?? '',
       durationSeconds: (shot.durationMs ?? 3000) / 1000,
@@ -106,7 +105,7 @@ export async function resolveSceneForShotFromDb(
   if (!scene) return { scene: null, script: null };
   return resolveSceneForShot(shot, {
     scene,
-    script: selected?.content ?? scene.originalScript,
+    script: selected?.content ?? null,
   });
 }
 
@@ -118,7 +117,7 @@ function buildSceneContext(
   for (const scene of sceneRows) {
     map.set(scene.id, {
       scene,
-      script: versions.get(scene.id)?.content ?? scene.originalScript,
+      script: versions.get(scene.id)?.content ?? null,
     });
   }
   return map;

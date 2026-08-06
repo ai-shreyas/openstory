@@ -12,13 +12,16 @@
  * sceneId + shotNumber and perturb nothing else on the shot. It asserted that
  * through `shots.isStale`/`video_input_hash` until #1067 phase 2d dropped both.
  *
- * #1067 also dropped `shots.metadata`, the backfill's own input. The migrated
- * DB therefore no longer has the column the shipped SQL reads, so the harness
- * re-adds it and seeds it with raw SQL — the migration file itself is history
- * and stays verbatim.
+ * #1067 also dropped `shots.metadata`, the backfill's own input, and
+ * `scenes.original_script`, one of its outputs. The migrated DB therefore no
+ * longer has columns the shipped SQL names, so the harness re-adds whichever
+ * are missing — the migration file itself is history and stays verbatim.
  */
 
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import {
+  originalScriptSchema,
+  type Scene,
+} from '@/lib/ai/scene-analysis.schema';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
 import type { NewShot } from '@/lib/db/schema';
@@ -90,6 +93,18 @@ if (BACKFILL_STATEMENTS.length !== 2) {
   throw new Error(
     `test setup: expected 2 backfill statements (INSERT scenes + UPDATE shots), got ${BACKFILL_STATEMENTS.length} — migration SQL format likely changed`
   );
+}
+
+/** Raw read of the dropped `scenes.original_script` — drizzle no longer maps it. */
+async function readSceneOriginalScript(sceneId: string) {
+  const { rows } = await client.execute({
+    sql: 'SELECT `original_script` AS script FROM `scenes` WHERE `id` = ?',
+    args: [sceneId],
+  });
+  const value = rows[0]?.script;
+  return typeof value === 'string'
+    ? originalScriptSchema.parse(JSON.parse(value))
+    : null;
 }
 
 async function runBackfill(): Promise<void> {
@@ -173,12 +188,26 @@ async function insertShot(
   return { ...shot, orderIndex };
 }
 
+/** Re-add a column the shipped SQL names but the current schema dropped. */
+async function restoreDroppedColumn(
+  table: string,
+  column: string,
+  type: string
+): Promise<void> {
+  const info = await client.execute(`PRAGMA table_info(\`${table}\`)`);
+  if (info.rows.some((row) => row.name === column)) return;
+  await client.execute(
+    `ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${type}`
+  );
+}
+
 beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
-  await client.execute('ALTER TABLE `shots` ADD COLUMN `metadata` text');
-  await client.execute('ALTER TABLE `shots` ADD COLUMN `order_index` integer');
+  await restoreDroppedColumn('shots', 'metadata', 'text');
+  await restoreDroppedColumn('shots', 'order_index', 'integer');
+  await restoreDroppedColumn('scenes', 'original_script', 'text');
 });
 
 afterAll(() => {
@@ -241,7 +270,9 @@ describe('backfill scenes migration', () => {
     expect(scene?.continuity?.environmentTag).toBe('office');
     expect(scene?.continuity?.characterTags).toEqual(['sarah']);
     expect(scene?.musicDesign?.presence).toBe('minimal');
-    expect(scene?.originalScript?.extract).toBe('INT. OFFICE - DAY');
+    expect((await readSceneOriginalScript(shot.id))?.extract).toBe(
+      'INT. OFFICE - DAY'
+    );
     // Dropped: the "shot metadata survives the backfill" assertion — #1067
     // removed the column entirely.
   });
@@ -256,7 +287,7 @@ describe('backfill scenes migration', () => {
     expect(scene?.title).toBeNull();
     expect(scene?.continuity).toBeNull();
     expect(scene?.musicDesign).toBeNull();
-    expect(scene?.originalScript).toBeNull();
+    expect(await readSceneOriginalScript(shot.id)).toBeNull();
 
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
     expect(reread?.sceneId).toBe(shot.id);

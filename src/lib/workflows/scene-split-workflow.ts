@@ -91,7 +91,13 @@ async function persistStreamedSceneAndShot(
   // Seed the split script version as soon as the scene lands so composed
   // script / the Scenes script view have text mid-stream. Idempotent: the
   // final persist-scenes step re-seeds without duplicating.
-  await scopedDb.sceneScriptVersions.seedSplitFromSceneRows([sceneRow]);
+  await scopedDb.sceneScriptVersions.seedSplitVersions([
+    {
+      sceneId: sceneRow.id,
+      content: scene.originalScript,
+      createdAt: sceneRow.createdAt,
+    },
+  ]);
   return scopedDb.shots.upsert({
     sequenceId,
     durationMs: Math.round(
@@ -590,14 +596,19 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     if (sequenceId && reconciled.scenes.length > 0) {
       await step.do('persist-scenes', async () => {
         const sceneRows = [];
+        const scriptSeeds = [];
         for (let index = 0; index < reconciled.scenes.length; index++) {
           const scene = reconciled.scenes[index];
           if (!scene) continue;
-          sceneRows.push(
-            await scopedDb.scenes.upsert(
-              buildSceneInsert(sequenceId, scene, index)
-            )
+          const sceneRow = await scopedDb.scenes.upsert(
+            buildSceneInsert(sequenceId, scene, index)
           );
+          sceneRows.push(sceneRow);
+          scriptSeeds.push({
+            sceneId: sceneRow.id,
+            content: scene.originalScript,
+            createdAt: sceneRow.createdAt,
+          });
         }
 
         // Link each shot to its scene row by analysisSceneId → orderIndex →
@@ -649,7 +660,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           reconciled.scenes.length
         );
 
-        await scopedDb.sceneScriptVersions.seedSplitFromSceneRows(sceneRows);
+        await scopedDb.sceneScriptVersions.seedSplitVersions(scriptSeeds);
       });
     }
 

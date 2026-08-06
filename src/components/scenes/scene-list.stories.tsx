@@ -192,7 +192,6 @@ const psScene = (
   title,
   continuity: null,
   musicDesign: null,
-  originalScript: null,
   script: { extract, dialogue: [] },
   selectedScriptVersionId: null,
   createdAt: PS_FIXED_DATE,

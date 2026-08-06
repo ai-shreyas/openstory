@@ -54,7 +54,8 @@ import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { sequenceAccessMiddleware } from './middleware';
-import { buildSceneSummaries, sumShotDurationsSeconds } from './sequences';
+import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
+import { sumShotDurationsSeconds } from './sequences';
 
 function getSceneCharacterReferenceImages(
   allCharacters: Character[],
@@ -403,8 +404,11 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     sequence.status === 'failed'
   ) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    const scenes = buildSceneSummaries(
-      allShots.map((shot) => ({ shot, scene: sceneOf(shot) }))
+    const scenes = buildMusicSceneSummaries(
+      allShots.flatMap((shot) => {
+        const scene = sceneOf(shot);
+        return scene ? [scene] : [];
+      })
     );
     const totalDuration = sumShotDurationsSeconds(allShots);
 

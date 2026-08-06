@@ -78,7 +78,6 @@ const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
   title,
   continuity: null,
   musicDesign: null,
-  originalScript: null,
   script: { extract: 'Sample scene text', dialogue: [] },
   selectedScriptVersionId: null,
   createdAt: new Date(),

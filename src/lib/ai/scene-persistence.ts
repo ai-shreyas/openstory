@@ -4,9 +4,9 @@
  *
  * Maps an analysis `Scene` onto the scene-level columns of the `scenes` table
  * (#907). Scene-level shared truth — location, time of day, story beat, title,
- * continuity, music design, original script — lives on the scene row; the
- * shot's own `metadata` JSON keeps the full `Scene` object so existing read
- * paths are untouched.
+ * continuity, music design — lives on the scene row. The script is not mapped
+ * here: it is appended to `scene_script_versions` by the caller (see
+ * `sceneScriptVersions.seedSplitVersions`).
  *
  * Pulled out of the workflow so the column mapping is unit-testable without a
  * full Cloudflare-Workflow harness.
@@ -39,7 +39,6 @@ export function buildSceneInsert(
     title: scene.metadata?.title ?? null,
     continuity: scene.continuity ?? null,
     musicDesign: scene.musicDesign ?? null,
-    originalScript: scene.originalScript,
   };
 }
 
