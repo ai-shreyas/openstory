@@ -77,7 +77,9 @@ export function groupShotsBySegment(
   shots: readonly ShotWithImage[],
   segmentsById: ReadonlyMap<string, SequenceSegment>
 ): SegmentGroup[] {
-  const ordered = [...shots].sort((a, b) => a.orderIndex - b.orderIndex);
+  // Callers pass shots already in hierarchical order (scene, then shot
+  // number) — the read paths sort them that way.
+  const ordered = shots;
   const groups: SegmentGroup[] = [];
 
   for (const shot of ordered) {
@@ -118,7 +120,6 @@ export type SegmentVersionInput = SegmentVideoVersion & {
 };
 export type SegmentShotInput = {
   id: string;
-  orderIndex: number;
   renderSegmentId: string | null;
   selectedMotionPromptVersionId: string | null;
 };
@@ -176,10 +177,9 @@ export function assembleSequenceSegments(input: {
   shots: readonly SegmentShotInput[];
   frames: readonly SegmentFrameInput[];
 }): SequenceSegment[] {
-  // Ordered shot ids per segment (membership lives on the shot).
-  const orderedShots = [...input.shots].sort(
-    (a, b) => a.orderIndex - b.orderIndex
-  );
+  // Membership lives on the shot; callers pass shots already in hierarchical
+  // order (scene, then shot number).
+  const orderedShots = input.shots;
   const shotIdsBySegment = new Map<string, string[]>();
   const currentMotionByShot = new Map<string, string | null>();
   for (const shot of orderedShots) {

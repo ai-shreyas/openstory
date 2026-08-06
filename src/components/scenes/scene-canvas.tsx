@@ -185,7 +185,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
       .filter((f): f is ShotWithImage & { videoUrl: string } =>
         Boolean(f.videoUrl)
       )
-      .map((f) => ({ orderIndex: f.orderIndex, videoUrl: f.videoUrl }));
+      .map((f, i) => ({ orderIndex: i, videoUrl: f.videoUrl }));
   }, [scopedShots]);
 
   const setMusicEnabled = useSetSequenceMusic(sequence?.id ?? '');

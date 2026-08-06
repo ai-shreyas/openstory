@@ -29,8 +29,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     id: 'shot-1',
     sequenceId: 'seq-1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
+    shotNumber: 1,
     durationMs: 3000,
     thumbnailUrl: 'https://example.com/thumb.jpg',
     thumbnailPath: null,
@@ -105,15 +104,16 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   };
 }
 
-// Shot labels come from the `scenes` row a shot points at (#1067); shots in the
-// fixtures above have no `sceneId`, so they fall back to "Scene <n>".
-const SCENES = new Map<string, Pick<SceneRow, 'title'>>([
-  ['scene-1', { title: 'The Reveal' }],
-  ['scene-2', { title: null }],
+// Shot labels come from the `scenes` row a shot points at (#1067); an untitled
+// scene falls back to "Scene <sceneOrderIndex + 1>".
+const SCENES = new Map<string, Pick<SceneRow, 'title' | 'orderIndex'>>([
+  ['scene-1', { title: 'The Reveal', orderIndex: 0 }],
+  ['scene-2', { title: null, orderIndex: 1 }],
+  ['scene-3', { title: null, orderIndex: 2 }],
 ]);
 
 describe('analyzeFailures', () => {
-  test('labels a failed shot with its scene title, else its order index', () => {
+  test('labels a failed shot with its scene title, else its scene number', () => {
     const shots = [
       makeShot({
         sceneId: 'scene-1',
@@ -122,14 +122,13 @@ describe('analyzeFailures', () => {
       }),
       makeShot({
         id: 'shot-2',
-        orderIndex: 1,
         sceneId: 'scene-2',
         thumbnailStatus: 'failed',
         thumbnailUrl: null,
       }),
       makeShot({
         id: 'shot-3',
-        orderIndex: 2,
+        sceneId: 'scene-3',
         thumbnailStatus: 'failed',
         thumbnailUrl: null,
       }),
@@ -146,7 +145,7 @@ describe('analyzeFailures', () => {
   });
 
   test('no failures returns empty summary', () => {
-    const shots = [makeShot(), makeShot({ id: 'shot-2', orderIndex: 1 })];
+    const shots = [makeShot(), makeShot({ id: 'shot-2' })];
     const sequence = makeSequence();
 
     const result = analyzeFailures(shots, sequence, SCENES);
@@ -174,7 +173,7 @@ describe('analyzeFailures', () => {
         thumbnailUrl: null,
         thumbnailError: 'Model timeout',
       }),
-      makeShot({ id: 'shot-2', orderIndex: 1 }),
+      makeShot({ id: 'shot-2' }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
@@ -200,7 +199,7 @@ describe('analyzeFailures', () => {
         videoUrl: null,
         videoError: 'Generation timeout',
       }),
-      makeShot({ id: 'shot-2', orderIndex: 1 }),
+      makeShot({ id: 'shot-2' }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
@@ -241,7 +240,6 @@ describe('analyzeFailures', () => {
       }),
       makeShot({
         id: 'shot-2',
-        orderIndex: 1,
         videoStatus: 'failed',
         videoError: 'Motion error',
       }),

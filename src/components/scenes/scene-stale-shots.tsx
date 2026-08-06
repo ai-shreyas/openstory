@@ -103,7 +103,7 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
       </span>
       <span aria-hidden="true">·</span>
       {[...staleShots, ...updatingShots].map((shot) => {
-        const number = numberByShotId.get(shot.id) ?? shot.orderIndex + 1;
+        const number = numberByShotId.get(shot.id) ?? shot.shotNumber ?? 0;
         const updating = updatingShots.includes(shot);
         return (
           <Button

@@ -8,8 +8,7 @@ const createTestShot = (overrides: Partial<Shot>): Shot => ({
   id: '1',
   sequenceId: 'seq-1',
   sceneId: null,
-  shotNumber: null,
-  orderIndex: 0,
+  shotNumber: 1,
   durationMs: 3000,
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -32,10 +31,7 @@ describe('generateChaptersVTT', () => {
   test('generates valid WebVTT chapters with metadata', () => {
     const chapters: ShotChapter[] = [
       chapter({ id: '1', durationMs: 5000 }, scene(0, 'Opening Scene')),
-      chapter(
-        { id: '2', orderIndex: 1, durationMs: 3000 },
-        scene(1, 'Conflict Arises')
-      ),
+      chapter({ id: '2', durationMs: 3000 }, scene(1, 'Conflict Arises')),
     ];
 
     const vtt = generateChaptersVTT(chapters);
@@ -50,7 +46,7 @@ describe('generateChaptersVTT', () => {
   test('handles shots without a scene', () => {
     const chapters: ShotChapter[] = [
       chapter({ id: '1', durationMs: 3000 }),
-      chapter({ id: '2', orderIndex: 1, durationMs: 2000 }),
+      chapter({ id: '2', durationMs: 2000 }),
     ];
 
     const vtt = generateChaptersVTT(chapters);
@@ -69,8 +65,8 @@ describe('generateChaptersVTT', () => {
   test('calculates cumulative time correctly', () => {
     const chapters: ShotChapter[] = [
       chapter({ id: '1', durationMs: 5000 }),
-      chapter({ id: '2', orderIndex: 1, durationMs: 7000 }),
-      chapter({ id: '3', orderIndex: 2, durationMs: 4000 }),
+      chapter({ id: '2', durationMs: 7000 }),
+      chapter({ id: '3', durationMs: 4000 }),
     ];
 
     const vtt = generateChaptersVTT(chapters);
@@ -86,7 +82,7 @@ describe('generateChaptersVTT', () => {
   test('formats timestamps correctly for hours', () => {
     const chapters: ShotChapter[] = [
       chapter({ id: '1', durationMs: 3600000 }),
-      chapter({ id: '2', orderIndex: 1, durationMs: 125000 }),
+      chapter({ id: '2', durationMs: 125000 }),
     ];
 
     const vtt = generateChaptersVTT(chapters);

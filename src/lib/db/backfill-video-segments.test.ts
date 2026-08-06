@@ -153,7 +153,7 @@ async function insertShot(data: {
       id,
       sequenceId,
       sceneId,
-      orderIndex: data.orderIndex,
+      shotNumber: 1,
       durationMs: data.durationMs ?? 3000,
       renderSegmentId: data.renderSegmentId ?? null,
       selectedMotionPromptVersionId: data.selectedMotionPromptVersionId ?? null,

@@ -158,7 +158,7 @@ async function seedSequence(): Promise<void> {
 }
 
 async function insertShot(
-  data: Partial<NewShot> & { orderIndex: number },
+  { orderIndex, ...data }: Partial<NewShot> & { orderIndex: number },
   metadata: Scene | null = null
 ) {
   const [shot] = await db
@@ -167,10 +167,10 @@ async function insertShot(
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   await client.execute({
-    sql: 'UPDATE `shots` SET `metadata` = ? WHERE `id` = ?',
-    args: [metadata ? JSON.stringify(metadata) : null, shot.id],
+    sql: 'UPDATE `shots` SET `metadata` = ?, `order_index` = ? WHERE `id` = ?',
+    args: [metadata ? JSON.stringify(metadata) : null, orderIndex, shot.id],
   });
-  return shot;
+  return { ...shot, orderIndex };
 }
 
 beforeAll(async () => {
@@ -178,6 +178,7 @@ beforeAll(async () => {
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
   await client.execute('ALTER TABLE `shots` ADD COLUMN `metadata` text');
+  await client.execute('ALTER TABLE `shots` ADD COLUMN `order_index` integer');
 });
 
 afterAll(() => {
@@ -206,11 +207,15 @@ describe('backfill scenes migration', () => {
     const allScenes = await db.select().from(scenes);
     expect(allScenes).toHaveLength(2);
 
-    for (const shot of await db.select().from(shots)) {
+    const rereadById = new Map(
+      (await db.select().from(shots)).map((s) => [s.id, s])
+    );
+    for (const shot of [a, b]) {
+      const reread = rereadById.get(shot.id);
       // The scene REUSES the shot's ULID — the 1:1 expand rule.
-      expect(shot.sceneId).toBe(shot.id);
-      expect(shot.shotNumber).toBe(1);
-      const scene = allScenes.find((s) => s.id === shot.sceneId);
+      expect(reread?.sceneId).toBe(shot.id);
+      expect(reread?.shotNumber).toBe(1);
+      const scene = allScenes.find((s) => s.id === shot.id);
       expect(scene?.orderIndex).toBe(shot.orderIndex);
     }
     // Explicit id-reuse assertion against the known shots.

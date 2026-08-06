@@ -74,7 +74,7 @@ async function seed() {
     .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0 })
+    .values({ sequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
@@ -104,7 +104,7 @@ async function seedSecondSequence() {
   });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId: otherSequenceId, orderIndex: 0 })
+    .values({ sequenceId: otherSequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   const [frame] = await db

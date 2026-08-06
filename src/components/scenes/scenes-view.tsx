@@ -580,9 +580,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   );
   const selectedSegmentSpanLabel = useMemo(() => {
     if (!selectedSegment || !shots) return undefined;
-    const numberById = new Map(
-      shots.map((f) => [f.id, f.shotNumber ?? f.orderIndex + 1])
-    );
+    const numberById = new Map(shots.map((f) => [f.id, f.shotNumber]));
     const numbers = selectedSegment.shotIds
       .map((id) => numberById.get(id))
       .filter((n): n is number => n != null);

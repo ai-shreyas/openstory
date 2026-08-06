@@ -121,9 +121,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   const selectedScene = selectedShot?.sceneId
     ? scenesById.get(selectedShot.sceneId)
     : undefined;
-  const sceneNumber = selectedScene
-    ? selectedScene.orderIndex + 1
-    : (selectedShot?.orderIndex ?? 0) + 1;
+  const sceneNumber = (selectedScene?.orderIndex ?? 0) + 1;
   const sceneTitle = selectedScene?.title?.trim() || `Scene ${sceneNumber}`;
 
   const hasEligibleShots = eligibleShots.length > 0;

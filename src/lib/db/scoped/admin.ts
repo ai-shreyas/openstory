@@ -10,6 +10,7 @@ import { generateId } from '@/lib/db/id';
 import { user } from '@/lib/db/schema/auth';
 import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
+import { scenes } from '@/lib/db/schema/scenes';
 import { framePromptVersions } from '@/lib/db/schema/frame-prompt-versions';
 import { frameVariants } from '@/lib/db/schema/frame-variants';
 import { frames } from '@/lib/db/schema/frames';
@@ -256,8 +257,11 @@ export function createAdminMethods(db: Database) {
           isNull(videoVariants.discardedAt)
         )
       )
+      .leftJoin(scenes, eq(scenes.id, shots.sceneId))
       .where(eq(shots.sequenceId, sequenceId))
-      .orderBy(asc(shots.orderIndex));
+      // Hierarchical order. Left join + NULLS LAST so a shot that somehow lost
+      // its scene sorts to the end instead of vanishing from the list.
+      .orderBy(sql`${scenes.orderIndex} ASC NULLS LAST`, asc(shots.shotNumber));
     const shotIds = rows.map((r) => r.shots.id);
     const [primaryByShot, selectedMotionByShot] = await Promise.all([
       getPrimaryVideoByShotIds(db, shotIds),

@@ -12,14 +12,13 @@ import {
 
 const shot = (
   id: string,
-  orderIndex: number,
+  shotNumber: number,
   renderSegmentId: string | null
 ): ShotWithImage =>
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- minimal fixture: grouping reads only id/orderIndex/renderSegmentId/shotNumber
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- minimal fixture: grouping reads only id/renderSegmentId/shotNumber
   ({
     id,
-    orderIndex,
-    shotNumber: orderIndex + 1,
+    shotNumber,
     renderSegmentId,
   }) as ShotWithImage;
 
@@ -35,13 +34,13 @@ const segment = (id: string, shotIds: string[]): SequenceSegment => ({
 });
 
 describe('groupShotsBySegment', () => {
-  it('groups contiguous shots sharing a segment and sorts by orderIndex', () => {
+  it('groups contiguous shots sharing a segment, in hierarchical order', () => {
     const shots = [
-      shot('c', 2, 'seg-a'),
-      shot('a', 0, 'seg-a'),
-      shot('b', 1, 'seg-a'),
-      shot('d', 3, 'seg-b'),
-      shot('e', 4, 'seg-b'),
+      shot('a', 1, 'seg-a'),
+      shot('b', 2, 'seg-a'),
+      shot('c', 3, 'seg-a'),
+      shot('d', 4, 'seg-b'),
+      shot('e', 5, 'seg-b'),
     ];
     const groups = groupShotsBySegment(
       shots,
@@ -58,7 +57,7 @@ describe('groupShotsBySegment', () => {
 
   it('never coalesces null-segment shots — each is its own singleton', () => {
     const groups = groupShotsBySegment(
-      [shot('a', 0, null), shot('b', 1, null)],
+      [shot('a', 1, null), shot('b', 2, null)],
       new Map()
     );
     expect(groups).toHaveLength(2);
@@ -68,7 +67,7 @@ describe('groupShotsBySegment', () => {
   });
 
   it('leaves segment null when the id is missing from the map', () => {
-    const groups = groupShotsBySegment([shot('a', 0, 'seg-x')], new Map());
+    const groups = groupShotsBySegment([shot('a', 1, 'seg-x')], new Map());
     expect(groups[0]?.segmentId).toBe('seg-x');
     expect(groups[0]?.segment).toBeNull();
   });
@@ -100,12 +99,10 @@ const version = (
 
 const segShot = (
   id: string,
-  orderIndex: number,
   renderSegmentId: string | null,
   selectedMotionPromptVersionId: string | null = null
 ): SegmentShotInput => ({
   id,
-  orderIndex,
   renderSegmentId,
   selectedMotionPromptVersionId,
 });
@@ -164,10 +161,11 @@ describe('assembleSequenceSegments', () => {
         ]),
         version('v2', 'seg-a', 'seedance', []),
       ],
+      // Callers pass shots already in hierarchical order.
       shots: [
-        segShot('shot-2', 1, 'seg-a', 'mp-1'),
-        segShot('shot-1', 0, 'seg-a', null),
-        segShot('shot-3', 2, null),
+        segShot('shot-1', 'seg-a', null),
+        segShot('shot-2', 'seg-a', 'mp-1'),
+        segShot('shot-3', null),
       ],
       frames: [
         { shotId: 'shot-2', role: 'first', selectedImageVersionId: 'fv-1' },
@@ -233,7 +231,7 @@ describe('assembleSequenceSegments', () => {
           },
         ]),
       ],
-      shots: [segShot('shot-1', 0, 'seg-a', 'mp-new')],
+      shots: [segShot('shot-1', 'seg-a', 'mp-new')],
       frames: [],
     });
     expect(result[0]?.stale).toBe(true);

@@ -118,7 +118,7 @@ async function insertSceneWithShot(args: {
     .values({
       sequenceId,
       sceneId: scene.id,
-      orderIndex: args.orderIndex,
+      shotNumber: 1,
     })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');

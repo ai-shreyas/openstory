@@ -87,7 +87,7 @@ async function seed() {
   await db
     .insert(sequences)
     .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
-  await db.insert(shots).values({ id: shotId, sequenceId, orderIndex: 0 });
+  await db.insert(shots).values({ id: shotId, sequenceId, shotNumber: 1 });
 }
 
 // #1067 drops the mirror columns this backfill reads, so drizzle can no longer

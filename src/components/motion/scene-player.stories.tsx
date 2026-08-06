@@ -88,8 +88,7 @@ const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
 const mockShotBase = {
   sequenceId: 'seq-1',
   sceneId: null,
-  shotNumber: null,
-  orderIndex: 0,
+  shotNumber: 1,
   durationMs: 5000,
   thumbnailWorkflowRunId: null,
   imageModel: null,
@@ -120,7 +119,6 @@ const mockShots: ShotWithImage[] = (
     {
       ...mockShotBase,
       id: '1',
-      orderIndex: 0,
       thumbnailUrl: 'https://picsum.photos/seed/scene1/1280/720',
       thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
       variantImageUrl: 'https://picsum.photos/seed/scene1/1280/720',
@@ -135,7 +133,6 @@ const mockShots: ShotWithImage[] = (
     {
       ...mockShotBase,
       id: '2',
-      orderIndex: 1,
       thumbnailUrl: 'https://picsum.photos/seed/scene2/1280/720',
       thumbnailPath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
       variantImageUrl: 'https://picsum.photos/seed/scene2/1280/720',
@@ -150,7 +147,6 @@ const mockShots: ShotWithImage[] = (
     {
       ...mockShotBase,
       id: '3',
-      orderIndex: 2,
       thumbnailUrl: 'https://picsum.photos/seed/scene3/1280/720',
       thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
       variantImageUrl: 'https://picsum.photos/seed/scene3/1280/720',
@@ -201,7 +197,6 @@ export const AllVideoStates: Story = {
         {
           ...mockShotBase,
           id: '1',
-          orderIndex: 0,
           thumbnailUrl: 'https://picsum.photos/seed/state1/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/state1/thumbnail.jpg',
@@ -217,7 +212,6 @@ export const AllVideoStates: Story = {
         {
           ...mockShotBase,
           id: '2',
-          orderIndex: 1,
           thumbnailUrl: 'https://picsum.photos/seed/state2/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/state2/thumbnail.jpg',
@@ -232,7 +226,6 @@ export const AllVideoStates: Story = {
         {
           ...mockShotBase,
           id: '3',
-          orderIndex: 2,
           thumbnailUrl: 'https://picsum.photos/seed/state3/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/state3/thumbnail.jpg',
@@ -247,7 +240,6 @@ export const AllVideoStates: Story = {
         {
           ...mockShotBase,
           id: '4',
-          orderIndex: 3,
           thumbnailUrl: 'https://picsum.photos/seed/state4/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/state4/thumbnail.jpg',
@@ -288,7 +280,6 @@ export const OnlyPendingVideos: Story = {
         {
           ...mockShotBase,
           id: '1',
-          orderIndex: 0,
           thumbnailUrl: 'https://picsum.photos/seed/pending1/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/pending1/thumbnail.jpg',
@@ -303,7 +294,6 @@ export const OnlyPendingVideos: Story = {
         {
           ...mockShotBase,
           id: '2',
-          orderIndex: 1,
           thumbnailUrl: 'https://picsum.photos/seed/pending2/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/pending2/thumbnail.jpg',
@@ -339,7 +329,6 @@ export const FailedVideoWithThumbnail: Story = {
         {
           ...mockShotBase,
           id: '1',
-          orderIndex: 0,
           thumbnailUrl: 'https://picsum.photos/seed/failed-thumb/1280/720',
           thumbnailPath:
             'teams/mock/sequences/mock/frames/failed/thumbnail.jpg',
@@ -376,7 +365,6 @@ export const PreviewMode: Story = {
         {
           ...mockShotBase,
           id: '1',
-          orderIndex: 0,
           thumbnailUrl: null,
           thumbnailPath: null,
           previewThumbnailUrl: 'https://picsum.photos/seed/preview1/1280/720',
@@ -390,7 +378,6 @@ export const PreviewMode: Story = {
         {
           ...mockShotBase,
           id: '2',
-          orderIndex: 1,
           thumbnailUrl: null,
           thumbnailPath: null,
           previewThumbnailUrl: 'https://picsum.photos/seed/preview2/1280/720',
@@ -404,7 +391,6 @@ export const PreviewMode: Story = {
         {
           ...mockShotBase,
           id: '3',
-          orderIndex: 2,
           thumbnailUrl: 'https://picsum.photos/seed/final3/1280/720',
           thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
           previewThumbnailUrl: 'https://picsum.photos/seed/preview3/1280/720',
@@ -443,7 +429,6 @@ export const FailedVideoWithoutThumbnail: Story = {
         {
           ...mockShotBase,
           id: '1',
-          orderIndex: 0,
           thumbnailUrl: null,
           thumbnailPath: null,
           videoUrl: null,

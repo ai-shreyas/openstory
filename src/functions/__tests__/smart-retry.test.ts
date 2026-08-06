@@ -110,8 +110,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     id: 'shot-1',
     sequenceId: 'seq_1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
+    shotNumber: 1,
     durationMs: 3000,
     thumbnailUrl: 'https://cdn/thumb.jpg',
     thumbnailPath: null,
@@ -431,7 +430,7 @@ describe('executeSmartRetry — partial retry status reset', () => {
     });
     const skipped = makeShot({
       id: 'shot-2',
-      orderIndex: 1,
+      shotNumber: 2,
       thumbnailStatus: 'failed',
       imagePrompt: null,
     });
@@ -536,7 +535,6 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     });
     const shotB = makeShot({
       id: 'shot-b',
-      orderIndex: 1,
       sceneId: 'scene-b',
       thumbnailStatus: 'failed',
       imagePrompt: 'Look B',
@@ -600,7 +598,6 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     });
     const shotB = makeShot({
       id: 'shot-b',
-      orderIndex: 1,
       sceneId: 'scene-b',
       videoStatus: 'failed',
       thumbnailStatus: 'completed',

@@ -76,7 +76,7 @@ async function seed() {
       id: shotId,
       sequenceId,
       sceneId,
-      orderIndex: 0,
+      shotNumber: 1,
       renderSegmentId: null,
     },
   ]);

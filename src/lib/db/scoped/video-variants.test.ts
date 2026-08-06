@@ -96,7 +96,7 @@ async function seed() {
       id: shotId,
       sequenceId,
       sceneId,
-      orderIndex: 0,
+      shotNumber: 1,
       renderSegmentId: segmentId,
     },
   ]);
@@ -143,7 +143,7 @@ async function seedSecondSequence() {
       id: otherShotId,
       sequenceId: otherSequenceId,
       sceneId: otherSceneId,
-      orderIndex: 0,
+      shotNumber: 1,
       renderSegmentId: otherSegmentId,
     },
   ]);
@@ -373,7 +373,7 @@ describe('select', () => {
         id: otherShotId,
         sequenceId,
         sceneId,
-        orderIndex: 1,
+        shotNumber: 2,
         renderSegmentId: null,
       },
     ]);
@@ -413,7 +413,7 @@ describe('listSelectedModelsBySequence (#1066)', () => {
         id: generateId(),
         sequenceId,
         sceneId,
-        orderIndex: 1,
+        shotNumber: 2,
         renderSegmentId: null,
       },
     ]);

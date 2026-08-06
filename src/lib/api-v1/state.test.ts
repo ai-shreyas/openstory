@@ -58,8 +58,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     id: 'shot-1',
     sequenceId: 'seq-1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
+    shotNumber: 1,
     durationMs: 3000,
     thumbnailUrl: null,
     thumbnailPath: null,
@@ -311,23 +310,22 @@ describe('buildSequenceState', () => {
     expect(state.music.status).toBe('pending');
   });
 
-  it('derives per-shot image/video status and counts, ordered by index', async () => {
+  it('derives per-shot image/video status and counts, in read-path order', async () => {
+    // The read path hands shots over already in hierarchical order.
     const shots = [
       makeShot({
-        id: 'f2',
-        orderIndex: 1,
-        videoUrl: 'https://cdn/v2.mp4',
-        videoStatus: 'completed',
+        id: 'f1',
+        thumbnailUrl: 'https://cdn/t1.png',
       }),
       makeShot({
-        id: 'f1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://cdn/t1.png',
+        id: 'f2',
+        shotNumber: 2,
+        videoUrl: 'https://cdn/v2.mp4',
+        videoStatus: 'completed',
       }),
     ];
     const state = await build(depsWithShots(shots), makeSequence());
 
-    // ordered by orderIndex
     expect(state.shots.map((f) => f.id)).toEqual(['f1', 'f2']);
 
     const [first, second] = state.shots;
@@ -358,7 +356,7 @@ describe('buildSequenceState', () => {
       depsWithShots(
         [
           makeShot({ sceneId: scene.id }),
-          makeShot({ id: 'f2', orderIndex: 1 }),
+          makeShot({ id: 'f2', shotNumber: 2 }),
         ],
         makeStyle(),
         [scene]
@@ -390,7 +388,7 @@ describe('buildSequenceState', () => {
         makeShot({ id: 'f1', videoStatus: 'failed' }),
         makeShot({
           id: 'f2',
-          orderIndex: 1,
+          shotNumber: 2,
           videoStatus: 'completed',
           videoUrl: 'https://cdn/v.mp4',
         }),

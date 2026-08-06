@@ -3,7 +3,7 @@
  * Individual shots within a sequence
  */
 
-import { type InferInsertModel, type InferSelectModel } from 'drizzle-orm';
+import { type InferInsertModel, type InferSelectModel, sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -45,14 +45,11 @@ export const shots = snakeCase.table(
     // callers null `sceneId` first. Declaring `set null` here would make
     // db:generate emit a `shots` REBUILD to add it — the #612 cascade trap.
     sceneId: text().references(() => scenes.id),
-    // 1-based shot order within the scene. Backfill sets this to 1 (every
-    // sequence becomes scenes-of-one-shot until multi-shot analysis lands).
-    // DB-Audit: KEEP — considered for removal as derivable from `orderIndex`, but nothing enforces that a scene's shots stay contiguous, and a scene-scoped rank is what survives a scene reorder without renumbering every shot.
+    // 1-based shot order within the scene. Order is hierarchical: a shot's
+    // position in the sequence is `(scenes.orderIndex, shotNumber)`, so moving
+    // a scene renumbers nothing. With `sceneId` it is the upsert conflict
+    // target, which is what makes a workflow replay hit the same shot row.
     shotNumber: integer(),
-    // 0-based shot position within the SEQUENCE (not the scene) — the unique key `(sequence_id, order_index)` and the sort for every list query.
-    // DB-Audit: drop once order is hierarchical — it re-encodes scene order, so it is derivable by ranking on `(scenes.orderIndex, shotNumber)`, and it forces a renumber of every later shot whenever a scene moves.
-    // DB-Audit: blockers for that drop — re-key the upsert conflict target off `(sequence_id, order_index)`, re-sort every list query, and decide where orphaned shots sit (`sceneId` is nullable via ON DELETE set null).
-    orderIndex: integer().notNull(),
     durationMs: integer().default(3000),
     // A shot owns no video columns (#1067 phase 2d). The whole surface —
     // url/path/model/hash AND status/error/run id — is projected from the
@@ -81,14 +78,15 @@ export const shots = snakeCase.table(
       .notNull(),
   },
   (table) => [
-    // Compound index for efficient ordering queries
-    index('idx_shots_order').on(table.sequenceId, table.orderIndex),
     index('idx_shots_sequence_id').on(table.sequenceId),
-    // Unique constraint: one shot per sequence/order combination
-    uniqueIndex('shots_sequence_id_order_index_key').on(
-      table.sequenceId,
-      table.orderIndex
-    ),
+    index('idx_shots_scene_id').on(table.sceneId),
+    // One shot per (scene, shot number) — the upsert conflict target. Partial
+    // so it needs no NOT NULL on either column: `NOT NULL`-ing them would force
+    // a `shots` table rebuild, and `frames` / `shot_prompt_versions` /
+    // `shot_variants` all cascade off it (#612).
+    uniqueIndex('uq_shots_scene_shot_number')
+      .on(table.sceneId, table.shotNumber)
+      .where(sql`${table.sceneId} IS NOT NULL`),
   ]
 );
 

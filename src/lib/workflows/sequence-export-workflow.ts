@@ -67,7 +67,7 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
         if (!sequence) throw new Error(`Sequence ${sequenceId} not found`);
 
         const shots = await scopedDb.shots.listBySequence(sequenceId, {
-          orderBy: 'orderIndex',
+          orderBy: 'sceneOrder',
           ascending: true,
         });
         if (shots.length === 0) throw new Error('Sequence has no shots yet');
@@ -85,10 +85,10 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
         const scenes = shots
           .flatMap((s) => {
             const url = selectedVideoByShot.get(s.id)?.url;
-            return url ? [{ orderIndex: s.orderIndex, url }] : [];
+            return url ? [{ url }] : [];
           })
-          .map((s) => ({
-            orderIndex: s.orderIndex,
+          .map((s, orderIndex) => ({
+            orderIndex,
             videoUrl: toShareableUrl(s.url, origin),
           }));
         if (scenes.length === 0) {

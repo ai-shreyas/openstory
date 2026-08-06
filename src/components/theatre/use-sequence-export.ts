@@ -67,7 +67,7 @@ export function useSequenceExport(sequence: Sequence): SequenceExportState {
         .filter((f): f is typeof f & { videoUrl: string } =>
           Boolean(f.videoUrl)
         )
-        .map((f) => ({ orderIndex: f.orderIndex, videoUrl: f.videoUrl }));
+        .map((f, i) => ({ orderIndex: i, videoUrl: f.videoUrl }));
       if (scenes.length === 0) {
         throw new Error('No scene videos are ready yet.');
       }

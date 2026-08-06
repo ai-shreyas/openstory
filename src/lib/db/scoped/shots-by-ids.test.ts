@@ -67,9 +67,9 @@ async function seedSequences(
       styleId,
     });
     await db.insert(shots).values([
-      { sequenceId: seqId, orderIndex: 0 },
-      { sequenceId: seqId, orderIndex: 1 },
-      { sequenceId: seqId, orderIndex: 2 },
+      { sequenceId: seqId, shotNumber: 1 },
+      { sequenceId: seqId, shotNumber: 2 },
+      { sequenceId: seqId, shotNumber: 3 },
     ]);
   }
   return seqIds;
@@ -110,12 +110,12 @@ describe('listShotsByIds', () => {
     const bySeq = new Map<string, number[]>();
     for (const shot of result) {
       const existing = bySeq.get(shot.sequenceId) ?? [];
-      existing.push(shot.orderIndex);
+      existing.push(shot.shotNumber ?? 0);
       bySeq.set(shot.sequenceId, existing);
     }
     expect(bySeq.size).toBe(250);
     for (const seqId of seqIds) {
-      expect(bySeq.get(seqId)).toEqual([0, 1, 2]);
+      expect(bySeq.get(seqId)).toEqual([1, 2, 3]);
     }
   });
 
@@ -151,7 +151,7 @@ describe('listShotsByIds', () => {
       title: 'X',
       styleId: otherStyle.id,
     });
-    await db.insert(shots).values({ sequenceId: otherSeqId, orderIndex: 0 });
+    await db.insert(shots).values({ sequenceId: otherSeqId, shotNumber: 1 });
 
     const methods = createSequencesMethods(db, teamId, generateId());
     const result = await methods.listShotsByIds([...mySeqIds, otherSeqId]);

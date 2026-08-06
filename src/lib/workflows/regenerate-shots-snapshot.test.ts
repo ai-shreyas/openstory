@@ -67,8 +67,7 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     id: 'f1',
     sequenceId: 'seq1',
     sceneId: 's1',
-    shotNumber: null,
-    orderIndex: 0,
+    shotNumber: 1,
     durationMs: 3000,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
@@ -319,7 +318,7 @@ describe('buildRegenerateShotSnapshot', () => {
 describe('computeRegenerateShotsBatchHash', () => {
   it('matches when shots are identical (regardless of order)', async () => {
     const shot1 = makeShot({ id: 'f1' });
-    const shot2 = makeShot({ id: 'f2', orderIndex: 1 });
+    const shot2 = makeShot({ id: 'f2', shotNumber: 2 });
     const characters = [makeCharacter()];
     const opts = {
       scene: makeScene(),

@@ -17,11 +17,12 @@ import {
   frameVariants,
   frames,
   renderSegments,
+  scenes,
   sequences,
   shots,
   videoVariants,
 } from '@/lib/db/schema';
-import type { NewSequence, Sequence, Shot, Style } from '@/lib/db/schema';
+import type { NewSequence, Sequence } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import {
   projectShotMissingFrame,
@@ -29,7 +30,18 @@ import {
   type ShotWithImage,
 } from '@/lib/shots/shot-with-image';
 import { ValidationError } from '@/lib/errors';
-import { and, asc, desc, eq, inArray, isNull, lt, not, or } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  not,
+  or,
+  sql,
+} from 'drizzle-orm';
 
 export type MusicFieldsUpdate = {
   musicStatus?: MusicStatus;
@@ -38,11 +50,6 @@ export type MusicFieldsUpdate = {
   musicUrl?: string;
   musicPath?: string;
   musicGeneratedAt?: Date;
-};
-
-type SequenceWithShots = Sequence & {
-  shots: Shot[];
-  style: Style | null;
 };
 
 // D1 caps a single query at 100 bound parameters. `listShotsByIds` binds one
@@ -109,25 +116,6 @@ function createSequencesReadMethods(db: Database, teamId: string) {
         .from(sequences)
         .where(and(eq(sequences.id, sequenceId), eq(sequences.teamId, teamId)));
       return result[0] ?? null;
-    },
-
-    getWithShots: async (
-      sequenceId: string
-    ): Promise<SequenceWithShots | null> => {
-      const result = await db.query.sequences.findFirst({
-        where: { id: sequenceId, teamId },
-        with: {
-          shots: {
-            orderBy: { orderIndex: 'asc' },
-          },
-          style: true,
-        },
-      });
-      if (!result) return null;
-      return {
-        ...result,
-        style: result.style ?? null,
-      };
     },
 
     getForUser: async (params: { sequenceId: string }): Promise<Sequence> => {
@@ -201,13 +189,20 @@ function createSequencesReadMethods(db: Database, teamId: string) {
                 isNull(videoVariants.discardedAt)
               )
             )
+            .leftJoin(scenes, eq(scenes.id, shots.sceneId))
             .where(
               and(
                 inArray(shots.sequenceId, batch),
                 eq(sequences.teamId, teamId)
               )
             )
-            .orderBy(asc(shots.sequenceId), asc(shots.orderIndex))
+            .orderBy(
+              asc(shots.sequenceId),
+              // Hierarchical order; NULLS LAST so a scene-less shot sorts to
+              // the end rather than jumping to the front.
+              sql`${scenes.orderIndex} ASC NULLS LAST`,
+              asc(shots.shotNumber)
+            )
             .then(async (rows) => {
               const shotIds = rows.map((r) => r.shots.id);
               const [primaryByShot, selectedMotionByShot] = await Promise.all([

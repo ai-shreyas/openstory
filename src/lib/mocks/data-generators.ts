@@ -16,8 +16,7 @@ const generateMockShot = (
     id: faker.string.ulid(),
     sequenceId: faker.string.ulid(),
     sceneId: null,
-    shotNumber: null,
-    orderIndex: faker.number.int({ min: 1, max: 10 }),
+    shotNumber: 1,
     thumbnailUrl: `https://picsum.photos/seed/${faker.helpers.arrayElement([
       '1478720568477-152d9b164e26', // Cinema scene
       '1485846234645-a62644f84728', // Film production
@@ -250,7 +249,7 @@ export const generateMockShots = (
 ): ShotWithImage[] => {
   return Array.from({ length: count }, (_, index) =>
     generateMockShot({
-      orderIndex: index + 1,
+      shotNumber: index + 1,
       ...(sequenceId && { sequenceId: sequenceId }),
     })
   );

@@ -239,17 +239,16 @@ export async function buildSequenceState(
         ]
       : [];
   });
-  const ordered = [...shotsWithImage].sort(
-    (a, b) => a.orderIndex - b.orderIndex
-  );
+  // Already in hierarchical order from the read path.
+  const ordered = shotsWithImage;
   const share = (url: string | null): string | null =>
     url === null ? null : toShareableUrl(url, origin);
 
-  const stateShots: SequenceStateShot[] = ordered.map((shot) => {
+  const stateShots: SequenceStateShot[] = ordered.map((shot, index) => {
     const imageUrl = shotImageUrl(shot);
     return {
       id: shot.id,
-      orderIndex: shot.orderIndex,
+      orderIndex: index,
       title:
         (shot.sceneId ? scenesById.get(shot.sceneId)?.title : null) ?? null,
       image: {

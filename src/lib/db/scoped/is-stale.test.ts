@@ -109,7 +109,7 @@ describe('shot_variants input-hash + diverged_at columns', () => {
   it('default to null and persist when set', async () => {
     const [shot] = await db
       .insert(shots)
-      .values({ sequenceId, orderIndex: 0 })
+      .values({ sequenceId, shotNumber: 1 })
       .returning();
     if (!shot) throw new Error('test setup: shot insert returned nothing');
     const [variant] = await db
@@ -312,7 +312,7 @@ describe('shotVariants.isStale', () => {
   async function insertVariant(inputHash: string | null) {
     const [shot] = await db
       .insert(shots)
-      .values({ sequenceId, orderIndex: 0 })
+      .values({ sequenceId, shotNumber: 1 })
       .returning();
     if (!shot) throw new Error('test setup: shot insert returned nothing');
     const [variant] = await db

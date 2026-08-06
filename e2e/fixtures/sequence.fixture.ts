@@ -143,7 +143,8 @@ export async function createTestCharacter(
 }
 
 /**
- * Get all shots for a sequence ordered by orderIndex.
+ * Get all shots for a sequence, hierarchically ordered by
+ * (scene orderIndex, shotNumber) — #1067.
  * Used by the full-sequence spec to poll until every shot has its
  * thumbnail/video/music URLs set during the e2e workflow run.
  */
@@ -151,6 +152,7 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
   Array<{
     id: string;
     orderIndex: number;
+    shotNumber: number;
     thumbnailUrl: string | null;
     thumbnailStatus: string | null;
     videoUrl: string | null;
@@ -170,6 +172,7 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
       z.object({
         id: z.string(),
         orderIndex: z.number(),
+        shotNumber: z.number(),
         thumbnailUrl: z.string().nullable(),
         thumbnailStatus: z.string().nullable(),
         videoUrl: z.string().nullable(),

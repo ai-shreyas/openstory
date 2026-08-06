@@ -9,7 +9,7 @@ import type { Sequence } from '@/lib/db/schema/sequences';
 import type { ShotWithImage } from '@/lib/shots/shot-with-image';
 
 /** Scene titles keyed by scene id — the label source for each failed shot. */
-type ScenesById = ReadonlyMap<string, Pick<SceneRow, 'title'>>;
+type ScenesById = ReadonlyMap<string, Pick<SceneRow, 'title' | 'orderIndex'>>;
 
 type FailureCategory =
   | 'image'
@@ -20,7 +20,7 @@ type FailureCategory =
 
 type ShotFailure = {
   shotId: string;
-  orderIndex: number;
+  sceneNumber: number;
   sceneTitle: string;
   error: string | null;
 };
@@ -41,9 +41,14 @@ export type FailureSummary = {
   error?: string | null;
 };
 
+function sceneNumberOf(shot: Shot, scenesById: ScenesById): number {
+  const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
+  return (scene?.orderIndex ?? 0) + 1;
+}
+
 function getSceneTitle(shot: Shot, scenesById: ScenesById): string {
   const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
-  return scene?.title || `Scene ${shot.orderIndex + 1}`;
+  return scene?.title || `Scene ${sceneNumberOf(shot, scenesById)}`;
 }
 
 function buildHeadline(
@@ -118,7 +123,7 @@ export function analyzeFailures(
       label: `${failedImageShots.length} of ${shots.length} images failed`,
       shots: failedImageShots.map((f) => ({
         shotId: f.id,
-        orderIndex: f.orderIndex,
+        sceneNumber: sceneNumberOf(f, scenesById),
         sceneTitle: getSceneTitle(f, scenesById),
         error: f.thumbnailError,
       })),
@@ -138,7 +143,7 @@ export function analyzeFailures(
       label: `${failedMotionShots.length} of ${shots.length} motion videos failed`,
       shots: failedMotionShots.map((f) => ({
         shotId: f.id,
-        orderIndex: f.orderIndex,
+        sceneNumber: sceneNumberOf(f, scenesById),
         sceneTitle: getSceneTitle(f, scenesById),
         error: f.videoError,
       })),
@@ -159,7 +164,7 @@ export function analyzeFailures(
       label: 'Motion prompts were not generated',
       shots: shotsWithImageButNoMotionPrompt.map((f) => ({
         shotId: f.id,
-        orderIndex: f.orderIndex,
+        sceneNumber: sceneNumberOf(f, scenesById),
         sceneTitle: getSceneTitle(f, scenesById),
         error: null,
       })),

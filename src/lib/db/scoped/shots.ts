@@ -4,7 +4,7 @@
  */
 
 import type { Database } from '@/lib/db/client';
-import { frames, shots } from '@/lib/db/schema';
+import { frames, scenes, shots } from '@/lib/db/schema';
 import type { NewFrame, Shot, NewShot } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
@@ -45,7 +45,7 @@ type ShotWithSequence = Shot & {
   >;
 };
 
-type ShotOrderBy = 'orderIndex' | 'createdAt' | 'updatedAt';
+type ShotOrderBy = 'sceneOrder' | 'createdAt' | 'updatedAt';
 
 /**
  * A persisted shot plus the id of its anchor frame (orderIndex 0), captured at
@@ -123,28 +123,34 @@ export function createShotsMethods(db: Database) {
       options?: ShotFilters
     ): Promise<Shot[]> => {
       const {
-        orderBy = 'orderIndex',
+        orderBy = 'sceneOrder',
         ascending = true,
         limit,
         offset,
       } = options ?? {};
 
       const conditions = [eq(shots.sequenceId, sequenceId)];
-
-      const orderColumn =
-        orderBy === 'orderIndex'
-          ? shots.orderIndex
-          : orderBy === 'createdAt'
-            ? shots.createdAt
-            : shots.updatedAt;
-
       const orderFn = ascending ? asc : desc;
+      const direction = ascending ? sql`ASC` : sql`DESC`;
 
       let query = db
-        .select()
+        .select({ shot: shots })
         .from(shots)
+        .leftJoin(scenes, eq(scenes.id, shots.sceneId))
         .where(and(...conditions))
-        .orderBy(orderFn(orderColumn))
+        .orderBy(
+          ...(orderBy === 'sceneOrder'
+            ? [
+                // NULLS LAST so a scene-less shot sorts to the end.
+                sql`${scenes.orderIndex} ${direction} NULLS LAST`,
+                orderFn(shots.shotNumber),
+              ]
+            : [
+                orderFn(
+                  orderBy === 'createdAt' ? shots.createdAt : shots.updatedAt
+                ),
+              ])
+        )
         .$dynamic();
 
       if (limit) {
@@ -155,7 +161,7 @@ export function createShotsMethods(db: Database) {
         query = query.offset(offset);
       }
 
-      return await query;
+      return (await query).map((row) => row.shot);
     },
 
     create: async (data: NewShot): Promise<Shot> => {
@@ -191,21 +197,17 @@ export function createShotsMethods(db: Database) {
         .insert(shots)
         .values(data)
         .onConflictDoUpdate({
-          target: [shots.sequenceId, shots.orderIndex],
+          target: [shots.sceneId, shots.shotNumber],
+          targetWhere: sql`${shots.sceneId} IS NOT NULL`,
           set: {
             durationMs: sql.raw(`excluded."duration_ms"`),
-            // #908: a replay re-derives the same shot at the same orderIndex —
-            // carry the scene link + intra-scene number through the conflict so
-            // a re-run is idempotent rather than leaving stale values.
-            sceneId: sql.raw(`excluded."scene_id"`),
-            shotNumber: sql.raw(`excluded."shot_number"`),
             updatedAt: new Date(),
           },
         })
         .returning();
       if (!shot) {
         throw new Error(
-          `Failed to upsert shot for sequence ${data.sequenceId} at orderIndex ${data.orderIndex}`
+          `Failed to upsert shot for sequence ${data.sequenceId} scene ${data.sceneId} #${data.shotNumber}`
         );
       }
       const anchorFrameId = (await ensureAnchorFrames([shot])).get(shot.id);
@@ -256,13 +258,10 @@ export function createShotsMethods(db: Database) {
           .insert(shots)
           .values(batch)
           .onConflictDoUpdate({
-            target: [shots.sequenceId, shots.orderIndex],
+            target: [shots.sceneId, shots.shotNumber],
+            targetWhere: sql`${shots.sceneId} IS NOT NULL`,
             set: {
               durationMs: sql.raw(`excluded."duration_ms"`),
-              // #908: keep the scene link + intra-scene number idempotent on
-              // replay (see the matching note in `upsert`).
-              sceneId: sql.raw(`excluded."scene_id"`),
-              shotNumber: sql.raw(`excluded."shot_number"`),
               updatedAt: new Date(),
             },
           })

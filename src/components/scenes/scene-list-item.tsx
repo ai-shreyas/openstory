@@ -68,9 +68,7 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   const hasVideo = shot?.videoStatus === 'completed' && !!shot.videoUrl;
   const isGeneratingVideo =
     !!shot && (shot.videoStatus === 'generating' || isRegeneratingMotion);
-  const sceneNumber = scene
-    ? scene.orderIndex + 1
-    : (shot?.orderIndex ?? 0) + 1;
+  const sceneNumber = (scene?.orderIndex ?? 0) + 1;
   const title = !shot
     ? undefined
     : scene?.title?.trim() || `Scene ${sceneNumber}`;
@@ -288,8 +286,7 @@ const areEqual = (
     return false;
   }
 
-  // Fallback scene number when the shot has no scene row
-  if (prevShot.orderIndex !== nextShot.orderIndex) {
+  if (prevShot.shotNumber !== nextShot.shotNumber) {
     return false;
   }
 

@@ -40,7 +40,7 @@ export const TheatreView: React.FC<TheatreViewProps> = ({ sequence }) => {
     if (!shots) return [];
     return shots
       .filter((f): f is typeof f & { videoUrl: string } => Boolean(f.videoUrl))
-      .map((f) => ({ orderIndex: f.orderIndex, videoUrl: f.videoUrl }));
+      .map((f, i) => ({ orderIndex: i, videoUrl: f.videoUrl }));
   }, [shots]);
 
   const shareUrl = sequenceExport.latestExportUrl;

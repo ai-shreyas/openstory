@@ -18,6 +18,7 @@ import {
   locationLibrary,
   locationSheets,
   renderSegments,
+  scenes,
   sequences,
   session,
   styles,
@@ -242,10 +243,13 @@ export async function createTestShot(
     variantImageStatus = 'pending',
   } = options;
 
+  // Shot order is hierarchical now (#1067): (scenes.orderIndex,
+  // shots.shotNumber). This helper makes a scene-less shot, so the caller's
+  // 0-based index lands on the 1-based shotNumber.
   await db.insert(shots).values({
     id: shotId,
     sequenceId,
-    orderIndex,
+    shotNumber: orderIndex + 1,
     createdAt: now,
     updatedAt: now,
   });
@@ -689,6 +693,7 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
   Array<{
     id: string;
     orderIndex: number;
+    shotNumber: number;
     thumbnailUrl: string | null;
     thumbnailStatus: string | null;
     videoUrl: string | null;
@@ -696,14 +701,17 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
   }>
 > {
   const db = getDb();
-  const rows = await db.query.shots.findMany({
-    where: { sequenceId },
-    columns: {
-      id: true,
-      orderIndex: true,
-      videoStatus: true,
-    },
-  });
+  // Shot order is hierarchical now (#1067): (scenes.orderIndex,
+  // shots.shotNumber). The reported orderIndex is the owning scene's.
+  const rows = await db
+    .select({
+      id: shots.id,
+      sceneOrderIndex: scenes.orderIndex,
+      shotNumber: shots.shotNumber,
+    })
+    .from(shots)
+    .leftJoin(scenes, eq(scenes.id, shots.sceneId))
+    .where(eq(shots.sequenceId, sequenceId));
   // The video lives on the version the shot's render segment points at (#1067
   // phase 2d); project it back under the legacy videoUrl name.
   const videoRows = await db
@@ -749,14 +757,15 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
       const frame = framesByShot.get(row.id);
       return {
         id: row.id,
-        orderIndex: row.orderIndex,
+        orderIndex: row.sceneOrderIndex ?? 0,
+        shotNumber: row.shotNumber ?? 0,
         thumbnailUrl: frame?.imageUrl ?? null,
         thumbnailStatus: frame?.imageStatus ?? null,
         videoUrl: videoByShot.get(row.id) ?? null,
         videoStatus: statusByShot.get(row.id) ?? null,
       };
     })
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    .sort((a, b) => a.orderIndex - b.orderIndex || a.shotNumber - b.shotNumber);
 }
 
 /**

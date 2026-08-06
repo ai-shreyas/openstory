@@ -85,7 +85,7 @@ async function seed() {
   });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0 })
+    .values({ sequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
@@ -417,7 +417,7 @@ describe('shot_prompt_variants helper', () => {
 
     const [siblingShot] = await db
       .insert(shots)
-      .values({ sequenceId, orderIndex: 1 })
+      .values({ sequenceId, shotNumber: 2 })
       .returning();
     if (!siblingShot)
       throw new Error('test setup: sibling shot insert returned nothing');
@@ -658,7 +658,7 @@ describe('shot_prompt_variants helper', () => {
     const methods = createShotPromptVersionsMethods(db);
     const [otherShot] = await db
       .insert(shots)
-      .values({ sequenceId, orderIndex: 1 })
+      .values({ sequenceId, shotNumber: 2 })
       .returning();
     if (!otherShot) throw new Error('test setup: other shot insert failed');
     const foreign = await methods.write({

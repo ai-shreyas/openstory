@@ -322,7 +322,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQ072YB92D8NWRQC5W9C6',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 0,
     durationMs: 4000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6/720/1280',
@@ -366,7 +365,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 1,
     durationMs: 6000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC/720/1280',
@@ -410,7 +408,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQ4BPDYFBAG7AHWAAY43C',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 2,
     durationMs: 7000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C/720/1280',
@@ -454,7 +451,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQ6B0MH3VDAXH16G54X33',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 3,
     durationMs: 6000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33/720/1280',
@@ -498,7 +494,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQ8E692CA985WMB9SNXMX',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 4,
     durationMs: 6000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX/720/1280',
@@ -542,7 +537,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQA9A3SYCK47G14S0YB8Y',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 5,
     durationMs: 4000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y/720/1280',
@@ -586,7 +580,6 @@ const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
   {
     id: '01KT2TQAY2YNXFX1GVKP7HK43K',
     sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    orderIndex: 6,
     durationMs: 3000,
     thumbnailUrl:
       'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K/720/1280',

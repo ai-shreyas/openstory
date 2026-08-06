@@ -94,8 +94,6 @@ async function persistStreamedSceneAndShot(
   await scopedDb.sceneScriptVersions.seedSplitFromSceneRows([sceneRow]);
   return scopedDb.shots.upsert({
     sequenceId,
-    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-    orderIndex,
     durationMs: Math.round(
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
       (scene.metadata?.durationSeconds || 3) * 1000
@@ -495,8 +493,6 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           (scene, index) =>
             ({
               sequenceId,
-              // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-              orderIndex: index,
               durationMs: Math.round(
                 // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
                 (scene.metadata?.durationSeconds || 3) * 1000
@@ -507,10 +503,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         );
 
         const reconciledShots = await scopedDb.shots.bulkUpsert(shotInserts);
-        const reconciledMapping = reconciledShots.map((f) => ({
-          // `orderIndex` is the shot's index into `scenes` (set above), so the
-          // analysis id comes from the source rather than the persisted copy.
-          analysisSceneId: scenes[f.orderIndex]?.sceneId ?? '',
+        // bulkUpsert preserves input order, and `shotInserts` was built by
+        // mapping `scenes` — so index i is scene i.
+        const reconciledMapping = reconciledShots.map((f, index) => ({
+          analysisSceneId: scenes[index]?.sceneId ?? '',
           shotId: f.id,
           // Anchor frame id captured from the same bulkUpsert write — the batch
           // prompt workflow reads it from here instead of querying the DB (#991).
@@ -637,17 +633,15 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           );
         }
 
-        // Before trimming orphan tail scenes, clear any shot links that still
-        // point at them (re-analyze edge: fewer scenes than last run). The
-        // migration FK is RESTRICT-by-default without ON DELETE SET NULL.
+        // Re-analyze edge: fewer scenes than last run. A shot whose scene is
+        // about to go has nothing left to belong to — order, script and prompt
+        // context all resolve through the scene — so it goes too. Detaching it
+        // instead used to leave a row that every read fetched and no view
+        // rendered. The FK is RESTRICT, so shots must go first.
         const allShots = await scopedDb.shots.listBySequence(sequenceId);
         for (const shot of allShots) {
           if (shot.sceneId && !keptSceneIds.has(dbSceneId(shot.sceneId))) {
-            await scopedDb.shots.update(
-              shot.id,
-              { sceneId: null, shotNumber: null },
-              { throwOnMissing: false }
-            );
+            await scopedDb.shots.delete(shot.id);
           }
         }
         await scopedDb.scenes.deleteFromOrderIndex(
