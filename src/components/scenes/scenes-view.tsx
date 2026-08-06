@@ -71,7 +71,7 @@ import {
 } from '@/lib/ai/resolve-asset-models';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
@@ -142,7 +142,7 @@ function facetToTab(facet?: SceneFacet): TabValue {
 
 const CompareWithPromptDiff: React.FC<{
   sequenceId: string;
-  shot: ShotWithImage;
+  shot: ShotView;
   variant: ShotVariant;
   onClose: () => void;
   onPromote: () => void;
@@ -261,7 +261,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     refetchInterval: (query) => {
       const seq = query.state.data;
       if (!seq) return false;
-      const cachedShots = queryClient.getQueryData<ShotWithImage[]>(
+      const cachedShots = queryClient.getQueryData<ShotView[]>(
         shotKeys.list(sequenceId)
       );
       return cachedShots?.some((f) => f.videoStatus === 'generating')
@@ -323,7 +323,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // first images as they arrive. No effect, no state: pure derivation.
   const canvasReady =
     !isProcessing ||
-    (shots?.some((s) => s.thumbnailUrl || s.previewThumbnailUrl) ?? false);
+    (shots?.some((s) => s.image?.url || s.frame.previewImageUrl) ?? false);
   const effectiveView = canvasReady ? view : 'script';
 
   // Escape progressive zoom-out (#986):
@@ -887,7 +887,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
 
       if (effectiveTab === 'image-prompt') {
         const currentImageModel = safeTextToImageModel(
-          selectedShot.imageModel,
+          selectedShot.image?.model,
           DEFAULT_IMAGE_MODEL
         );
         // Same rule as the inspector Set Image button: only when the dropdown
@@ -916,7 +916,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
 
       if (effectiveTab === 'motion-prompt') {
         const currentVideoModel = safeImageToVideoModel(
-          selectedShot.motionModel,
+          selectedShot.video?.model,
           DEFAULT_VIDEO_MODEL
         );
         if (
@@ -980,7 +980,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               v.status === 'completed' &&
               v.url
           );
-        if (iv?.url) next = { ...next, thumbnailUrl: iv.url };
+        if (iv?.url) next = { ...next, image: iv };
       }
       if (pinVideo) {
         // Video: show only the pinned model's output (no fallback — a missing
@@ -996,10 +996,16 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         next = vv
           ? {
               ...next,
-              videoUrl: vv.status === 'completed' ? vv.url : null,
+              // The pinned model's clip rides on the shot's own version row —
+              // `shot_variants` is a different table, so there is no
+              // `video_variants` row to point at.
+              video:
+                vv.status === 'completed' && next.video
+                  ? { ...next.video, url: vv.url, model: vv.model }
+                  : null,
               videoStatus: vv.status,
             }
-          : { ...next, videoUrl: null, videoStatus: 'pending' as const };
+          : { ...next, video: null, videoStatus: 'pending' as const };
       }
       return next;
     });
@@ -1046,14 +1052,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     for (const shot of shots) {
       if (
         regeneratingImages.has(shot.id) &&
-        isTerminalStatus(shot.thumbnailStatus)
+        isTerminalStatus(shot.frame.imageStatus)
       )
         handleRegenerateEnd(shot.id, 'image');
       if (regeneratingMotion.has(shot.id) && isTerminalStatus(shot.videoStatus))
         handleRegenerateEnd(shot.id, 'motion');
       if (
         regeneratingSceneVariants.has(shot.id) &&
-        isTerminalStatus(shot.variantImageStatus)
+        isTerminalStatus(shot.gridSheet?.status ?? null)
       )
         handleRegenerateEnd(shot.id, 'scene-variants');
     }
@@ -1131,7 +1137,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       const eligibleShotIds = (shots ?? [])
         .filter(
           (f) =>
-            f.thumbnailStatus === 'completed' &&
+            f.frame.imageStatus === 'completed' &&
             (f.videoStatus === 'pending' || f.videoStatus === 'failed')
         )
         .map((f) => f.id);
@@ -1142,14 +1148,12 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       // derived banner state shows the banner immediately — no separate state.
       const eligibleSet = new Set(eligibleShotIds);
       const now = new Date();
-      queryClient.setQueryData<ShotWithImage[]>(
-        shotKeys.list(sequenceId),
-        (old) =>
-          old?.map((f) =>
-            eligibleSet.has(f.id)
-              ? { ...f, videoStatus: 'generating', updatedAt: now }
-              : f
-          )
+      queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+        old?.map((f) =>
+          eligibleSet.has(f.id)
+            ? { ...f, videoStatus: 'generating', updatedAt: now }
+            : f
+        )
       );
       if (includeMusic) {
         queryClient.setQueryData<Sequence>(
@@ -1188,12 +1192,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           removeAllFromSet(prev, eligibleShotIds)
         );
         // Roll back optimistic cache updates
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) =>
-              eligibleSet.has(f.id) ? { ...f, videoStatus: 'pending' } : f
-            )
+        queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+          old?.map((f) =>
+            eligibleSet.has(f.id) ? { ...f, videoStatus: 'pending' } : f
+          )
         );
         if (includeMusic) {
           void queryClient.invalidateQueries({

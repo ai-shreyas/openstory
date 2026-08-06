@@ -5,14 +5,14 @@ import {
   shotIsStale,
   shotIsUpdating,
 } from '@/hooks/use-shot-staleness';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
 import { Loader2 } from 'lucide-react';
 import { useState } from 'react';
 
 type SceneStaleShotsProps = {
   /** The in-scope shots (a scene's, or the whole sequence's), in order. */
-  shots: ShotWithImage[];
+  shots: ShotView[];
   /** Batched staleness for those shots, keyed by shot id (#1077). */
   staleness: Record<string, ShotStaleness> | undefined;
   /**

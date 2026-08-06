@@ -1,4 +1,4 @@
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { z } from 'zod';
 
 /** URL-synced editor selection — empty means whole sequence. */
@@ -87,8 +87,8 @@ export function selectionScope(selection: SceneSelection): SelectionScope {
 
 export function selectionShots(
   selection: SceneSelection,
-  shots: ShotWithImage[]
-): ShotWithImage[] {
+  shots: ShotView[]
+): ShotView[] {
   if (selection.shotId) {
     const shot = shots.find((s) => s.id === selection.shotId);
     return shot ? [shot] : [];

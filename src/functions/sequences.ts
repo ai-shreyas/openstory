@@ -24,10 +24,7 @@ import {
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { buildShotImageWorkflowInput } from '@/lib/image/build-shot-image-input';
-import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import {
   motionPromptFromVersion,
   resolveMotionPrompt,
@@ -355,12 +352,10 @@ export function assertModelNotAlreadyAdded(
  * nothing to feed image-to-video.
  */
 export function selectEligibleVideoShots(
-  // The still-image surface moved onto the anchor frame (#989); callers project
-  // it back via `projectShotWithImage` so the thumbnail* reads here are stable.
-  shots: readonly ShotWithImage[]
-): ShotWithImage[] {
+  shots: readonly ShotView[]
+): ShotView[] {
   return shots.filter(
-    (f) => f.thumbnailStatus === 'completed' && Boolean(f.thumbnailUrl)
+    (f) => f.frame.imageStatus === 'completed' && Boolean(f.image?.url)
   );
 }
 
@@ -527,8 +522,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       const existing = await scopedDb.videoVariants.listBySequence(sequence.id);
       assertModelNotAlreadyAdded(existing, model, 'video');
       const allShots = await scopedDb.shots.listBySequence(sequence.id);
-      // Project each shot's anchor-frame image surface (#989) so eligibility and
-      // the per-shot `imageUrl` read below keep using the legacy field names.
+      // Eligibility and the per-shot `imageUrl` below read the anchor frame's
+      // selected still, so every shot needs its anchor first (#989).
       await scopedDb.shots.ensureAnchorFrames(allShots);
       const anchorsByShot = new Map(
         (await scopedDb.frames.listAnchorsBySequence(sequence.id)).map((fr) => [
@@ -551,21 +546,20 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         scopedDb.videoVariants.getSelectedByShotIds(allShots.map((s) => s.id)),
         scopedDb.videoVariants.getPrimaryByShotIds(allShots.map((s) => s.id)),
       ]);
-      const shotsWithImage = allShots.flatMap((shot) => {
+      const shotViews = allShots.flatMap((shot) => {
         const frame = anchorsByShot.get(shot.id);
         return frame
           ? [
-              projectShotWithImage(shot, frame, {
-                selectedImage: selectedByFrame.get(frame.id) ?? null,
-                selectedImagePrompt:
-                  selectedPromptByFrame.get(frame.id) ?? null,
-                selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+              toShotView(shot, frame, {
+                image: selectedByFrame.get(frame.id) ?? null,
+                imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+                video: selectedVideoByShot.get(shot.id) ?? null,
                 primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
               }),
             ]
           : [];
       });
-      const eligible = selectEligibleVideoShots(shotsWithImage);
+      const eligible = selectEligibleVideoShots(shotViews);
       if (eligible.length === 0) {
         throw new Error('No shots have a completed image to animate yet');
       }
@@ -620,7 +614,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
             : undefined;
           return {
             shotId: f.id,
-            imageUrl: f.thumbnailUrl ?? '',
+            imageUrl: f.image?.url ?? '',
             prompt: resolveMotionPrompt(
               {
                 motionPrompt: motionPrompt ?? null,

@@ -12,10 +12,7 @@ import { SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
 import type { Style } from '@/lib/db/schema/libraries';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import { getLogger } from '@/lib/observability/logger';
-import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+import { type ShotView, toShotView } from '@/lib/shots/shot-view';
 import { toShareableUrl } from '@/lib/storage/buckets';
 import type { Sequence } from '@/types/database';
 import { API_V1_BASE, type HalResource, waitLink, withLinks } from './hal';
@@ -97,19 +94,17 @@ export type SequenceState = SequenceSummary & {
 };
 
 /** The image URL a shot exposes once its still is ready (else null). */
-function shotImageUrl(shot: ShotWithImage): string | null {
-  // The still IMAGE surface moved onto the anchor frame (#989); callers project
-  // it back via `projectShotWithImage`. Image readiness is signalled by the
-  // presence of a thumbnail URL (the stored R2 url, else the fast preview CDN
-  // url).
-  return shot.thumbnailUrl ?? shot.previewThumbnailUrl ?? null;
+function shotImageUrl(shot: ShotView): string | null {
+  // Readiness is signalled by the presence of a still URL: the selected
+  // variant's stored R2 url, else the frame's fast preview CDN url.
+  return shot.image?.url ?? shot.frame.previewImageUrl ?? null;
 }
 
 /**
  * Readiness tallies over a sequence's shots — the single source of truth for
  * the `counts` block shared by the status document and the list summary.
  */
-export function summarizeShotCounts(shots: ShotWithImage[]): SequenceCounts {
+export function summarizeShotCounts(shots: ShotView[]): SequenceCounts {
   let imagesReady = 0;
   let videosReady = 0;
   let videosFailed = 0;
@@ -207,9 +202,8 @@ export async function buildSequenceState(
   const scenesById = new Map<string, (typeof sceneRows)[number]>(
     sceneRows.map((scene) => [scene.id, scene])
   );
-  // The still IMAGE surface lives on each shot's anchor frame now (#989).
-  // Project it back under the legacy thumbnail* names — keyed by shotId, never
-  // by id-reuse — so the image-readiness reads below are unchanged.
+  // The still lives on each shot's anchor frame (#989) — keyed by shotId, never
+  // by id-reuse.
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
   // The still comes from the selected `frame_variants` row and the video from
   // the segment's selected `video_variants` row (#1067).
@@ -226,21 +220,21 @@ export async function buildSequenceState(
     scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
     scopedDb.videoVariants.getPrimaryByShotIds(shots.map((s) => s.id)),
   ]);
-  const shotsWithImage = shots.flatMap((shot) => {
+  const shotViews = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
     return frame
       ? [
-          projectShotWithImage(shot, frame, {
-            selectedImage: selectedByFrame.get(frame.id) ?? null,
-            selectedImagePrompt: selectedPromptByFrame.get(frame.id) ?? null,
-            selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+          toShotView(shot, frame, {
+            image: selectedByFrame.get(frame.id) ?? null,
+            imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+            video: selectedVideoByShot.get(shot.id) ?? null,
             primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
           }),
         ]
       : [];
   });
   // Already in hierarchical order from the read path.
-  const ordered = shotsWithImage;
+  const ordered = shotViews;
   const share = (url: string | null): string | null =>
     url === null ? null : toShareableUrl(url, origin);
 
@@ -257,7 +251,7 @@ export async function buildSequenceState(
       },
       video: {
         status: shot.videoStatus ?? 'pending',
-        url: share(shot.videoUrl ?? null),
+        url: share(shot.video?.url ?? null),
       },
     };
   });

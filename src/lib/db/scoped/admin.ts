@@ -24,10 +24,10 @@ import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
 import type { Sequence } from '@/lib/db/schema';
 import {
-  projectShotMissingFrame,
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+  shotViewMissingFrame,
+  toShotView,
+  type ShotView,
+} from '@/lib/shots/shot-view';
 import { teamMembers, teams } from '@/lib/db/schema/teams';
 import { ValidationError } from '@/lib/errors';
 import {
@@ -223,9 +223,7 @@ export function createAdminMethods(db: Database) {
     }));
   }
 
-  async function getShotsForSequence(
-    sequenceId: string
-  ): Promise<ShotWithImage[]> {
+  async function getShotsForSequence(sequenceId: string): Promise<ShotView[]> {
     // Project the anchor-frame image surface (#989) — the shot's first frame
     // (orderIndex 0), joined by shotId (NOT id-reuse).
     const rows = await db
@@ -270,19 +268,19 @@ export function createAdminMethods(db: Database) {
     return rows.map((row) => {
       const selectedMotion = selectedMotionByShot.get(row.shots.id);
       const video = {
-        selectedVideo: row.video_variants,
+        video: row.video_variants,
         primaryVideo: primaryByShot.get(row.shots.id) ?? null,
-        motionPromptData: selectedMotion
+        motionPrompt: selectedMotion
           ? motionPromptFromVersion(selectedMotion)
           : null,
       };
       return row.frames
-        ? projectShotWithImage(row.shots, row.frames, {
-            selectedImage: row.frame_variants,
-            selectedImagePrompt: row.frame_prompt_versions,
+        ? toShotView(row.shots, row.frames, {
+            image: row.frame_variants,
+            imagePromptVersion: row.frame_prompt_versions,
             ...video,
           })
-        : projectShotMissingFrame(row.shots, video);
+        : shotViewMissingFrame(row.shots, video);
     });
   }
 

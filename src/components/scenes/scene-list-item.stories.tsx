@@ -1,84 +1,41 @@
-import { dbSceneId, type VideoVariant } from '@/lib/db/schema';
+import { dbSceneId } from '@/lib/db/schema';
 import type { SceneWithScript } from '@/hooks/use-scenes';
-import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
-import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+import { frameFixture, frameVariantFixture } from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import type { Meta, StoryObj } from '@storybook/react';
 import { SceneListItem } from './scene-list-item';
 
-/**
- * The segment's newest primary render — the row a shot's video lifecycle is
- * derived from (#1067). `videoFixtureFor` is url-gated, so a render that never
- * produced one borrows an empty url and puts the real (null) one back.
- */
-const primaryVideoFixture = (
-  shot: Omit<ShotWithImage, 'frame'>
-): VideoVariant | null => {
-  const status = shot.videoStatus;
-  if (status === null) return null;
-  const row = videoFixtureFor({ ...shot, videoUrl: shot.videoUrl ?? '' });
-  if (!row) return null;
-  return {
-    ...row,
-    url: shot.videoUrl,
-    status,
-    error: shot.videoError,
-    workflowRunId: shot.videoWorkflowRunId,
-  };
-};
-
-// The still IMAGE surface moved off `shots` onto the anchor frame in #989. The
-// mock carries the legacy `thumbnail*`/`image*` names the card still reads (the
-// `ShotWithImage` projection); mirror them back onto a concrete anchor `Frame`
-// (id == shot.id) so the row matches what `getShotsFn` returns.
-const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
-  const { frame, selectedVersion } = frameFixtureFor(shot);
-  return projectShotWithImage(shot, frame, {
-    selectedImage: selectedVersion,
-    selectedImagePrompt: null,
-    selectedVideo: videoFixtureFor(shot),
-    primaryVideo: primaryVideoFixture(shot),
-    gridSheet: {
-      url: shot.variantImageUrl,
-      status: shot.variantImageStatus,
-    },
-  });
-};
-
-const mockShot: ShotWithImage = toShotWithImage({
-  id: 'shot-1',
+const anchorFrame = frameFixture({
+  shotId: 'shot-1',
   sequenceId: 'seq-1',
-  sceneId: null,
-  shotNumber: 1,
-  durationMs: 3000,
-  thumbnailUrl: 'https://picsum.photos/seed/coffee/320/180',
-  thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
-  variantImageUrl: null,
-  variantImageStatus: 'pending',
-  videoUrl: null,
-  videoPath: null,
-  thumbnailStatus: 'completed',
-  videoStatus: 'pending',
-  thumbnailWorkflowRunId: null,
-  imageModel: null,
-  thumbnailError: null,
-  imagePrompt: null,
-  videoWorkflowRunId: null,
-  videoGeneratedAt: null,
-  videoError: null,
-  motionModel: 'veo3',
-  motionPromptData: null,
-  selectedMotionPromptVersionId: null,
-  renderSegmentId: null,
-  thumbnailInputHash: null,
-  videoInputHash: null,
-  visualPromptInputHash: null,
-  previewThumbnailUrl: null,
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  imageStatus: 'completed',
 });
+
+const mockShot: ShotView = toShotView(
+  {
+    id: 'shot-1',
+    sequenceId: 'seq-1',
+    sceneId: null,
+    shotNumber: 1,
+    durationMs: 3000,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  anchorFrame,
+  {
+    image: frameVariantFixture({
+      frameId: anchorFrame.id,
+      sequenceId: 'seq-1',
+      url: 'https://picsum.photos/seed/coffee/320/180',
+      storagePath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
+    }),
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+  }
+);
 
 const mockScene: SceneWithScript = {
   id: dbSceneId('scene-1'),
@@ -160,8 +117,8 @@ export const Generating: Story = {
   args: {
     shot: {
       ...mockShot,
-      thumbnailUrl: null,
-      thumbnailStatus: 'generating',
+      image: null,
+      frame: { ...mockShot.frame, imageStatus: 'generating' },
     },
     isActive: false,
   },
@@ -171,8 +128,8 @@ export const GeneratingActive: Story = {
   args: {
     shot: {
       ...mockShot,
-      thumbnailUrl: null,
-      thumbnailStatus: 'generating',
+      image: null,
+      frame: { ...mockShot.frame, imageStatus: 'generating' },
     },
     isActive: true,
   },
@@ -182,9 +139,12 @@ export const Failed: Story = {
   args: {
     shot: {
       ...mockShot,
-      thumbnailUrl: null,
-      thumbnailStatus: 'failed',
-      thumbnailError: 'Generation timeout',
+      image: null,
+      frame: {
+        ...mockShot.frame,
+        imageStatus: 'failed',
+        imageError: 'Generation timeout',
+      },
     },
     isActive: false,
   },

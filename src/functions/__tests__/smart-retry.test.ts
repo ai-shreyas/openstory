@@ -17,13 +17,23 @@
 
 import { describe, expect, test, vi } from 'vitest';
 import { TEST_FAL_PRICING as FAL_PRICING } from '@/lib/ai/__tests__/fal-pricing-fixture';
-import type { Sequence, VideoVariant } from '@/lib/db/schema';
+import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
+import type {
+  Frame,
+  FramePromptVersion,
+  FrameVariant,
+  Sequence,
+  Shot,
+  ShotPromptVersion,
+  VideoVariant,
+} from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import {
-  frameFixtureFor,
-  primaryVideoFixtureFor,
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
 } from '@/lib/mocks/frame-fixtures';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 
@@ -100,54 +110,138 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   };
 }
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// `executeSmartRetry` projects `ShotWithImage` from each shot + its frame, so the
-// fixture keeps the legacy projected names (`thumbnail*`/`image*`) AND mirrors
-// them onto a concrete anchor `frame` (id == shot.id) so the projection the
-// source builds reflects the per-test overrides.
-function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
-  const base: Omit<ShotWithImage, 'frame'> = {
+/**
+ * A shot's rows, authored as themselves: the still's lifecycle on the anchor
+ * frame (#989), the still on its selected `frame_variants` row and the video
+ * status on the segment's primary render (#1067). `makeContext` serves these
+ * back through the scoped-DB stub, so `executeSmartRetry` assembles the same
+ * `ShotView` the real read path would.
+ */
+type ShotFixtureOptions = Partial<Shot> & {
+  imageStatus?: Frame['imageStatus'];
+  imageUrl?: FrameVariant['url'];
+  imagePrompt?: string | null;
+  videoStatus?: VideoVariant['status'] | null;
+  motionPrompt?: AssemblableMotionPrompt | null;
+};
+
+function makeShot({
+  imageStatus = 'completed',
+  imageUrl = 'https://cdn/thumb.jpg',
+  imagePrompt = null,
+  videoStatus = 'pending',
+  motionPrompt = { fullPrompt: 'slow pan', dialogue: null, audio: null },
+  ...overrides
+}: ShotFixtureOptions = {}): ShotView {
+  const shot: Shot = {
     id: 'shot-1',
     sequenceId: 'seq_1',
     sceneId: null,
     shotNumber: 1,
     durationMs: 3000,
-    thumbnailUrl: 'https://cdn/thumb.jpg',
-    thumbnailPath: null,
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId: null,
-    thumbnailError: null,
-    imageModel: null,
-    imagePrompt: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    videoUrl: null,
-    videoPath: null,
-    videoStatus: 'pending',
-    videoWorkflowRunId: null,
-    videoGeneratedAt: null,
-    videoError: null,
-    motionModel: null,
-    motionPromptData: { fullPrompt: 'slow pan', dialogue: null, audio: null },
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    thumbnailInputHash: null,
-    videoInputHash: null,
-    visualPromptInputHash: null,
-    previewThumbnailUrl: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
   };
-  return { ...base, frame: anchorFixture(base).frame };
+  // The frame keeps its own id — distinct from the shot id (#989); only
+  // `shotId` links them.
+  const frameId = `frame-${shot.id}`;
+  const frame: Frame = frameFixture({
+    id: frameId,
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+    imageStatus,
+    selectedImageVersionId: imageUrl === null ? null : `${frameId}-v1`,
+    selectedImagePromptVersionId: imagePrompt === null ? null : `${frameId}-ip`,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  return toShotView(shot, frame, {
+    image:
+      imageUrl === null
+        ? null
+        : frameVariantFixture({
+            id: `${frameId}-v1`,
+            frameId,
+            sequenceId: shot.sequenceId,
+            url: imageUrl,
+          }),
+    imagePromptVersion:
+      imagePrompt === null ? null : promptVersionFixture(frameId, imagePrompt),
+    // Selection only ever points at a completed render; these fixtures drive
+    // the lifecycle through the primary render instead.
+    video: null,
+    primaryVideo:
+      videoStatus === null
+        ? null
+        : videoVariantFixture({
+            id: `${shot.id}-primary`,
+            // The degenerate one-shot segment reuses the shot's id, the same
+            // idempotency key `renderSegments.ensureForShot` uses.
+            renderSegmentId: shot.id,
+            sequenceId: shot.sequenceId,
+            status: videoStatus,
+            generatedAt: null,
+            manifest: [
+              {
+                shotId: shot.id,
+                motionPromptVersionId: null,
+                frameVersionId: null,
+                durationMs: shot.durationMs ?? 3000,
+              },
+            ],
+            createdAt: NOW,
+            updatedAt: NOW,
+          }),
+    motionPrompt,
+  });
 }
 
-/**
- * The two rows the projection consumes. The frame keeps its own id — distinct
- * from the shot id (#989); only shotId links them.
- */
-const anchorFixture = (shot: Omit<ShotWithImage, 'frame'>) =>
-  frameFixtureFor(shot, `frame-${shot.id}`);
+function promptVersionFixture(
+  frameId: string,
+  text: string
+): FramePromptVersion {
+  return {
+    id: `${frameId}-ip`,
+    frameId,
+    text,
+    components: null,
+    source: 'ai-generated',
+    inputHash: null,
+    analysisModel: null,
+    status: 'completed',
+    pendingInputHash: null,
+    workflowRunId: null,
+    createdAt: NOW,
+    createdBy: null,
+  };
+}
+
+function motionVersionFixture(
+  shot: ShotView,
+  motionPrompt: AssemblableMotionPrompt
+): ShotPromptVersion {
+  return {
+    id: `${shot.id}-mv`,
+    shotId: shot.id,
+    promptType: 'motion',
+    text: motionPrompt.fullPrompt,
+    components: null,
+    parameters: null,
+    dialogue: null,
+    audio: null,
+    source: 'ai-generated',
+    inputHash: null,
+    analysisModel: null,
+    status: 'completed',
+    pendingInputHash: null,
+    workflowRunId: null,
+    createdAt: NOW,
+    createdBy: null,
+  };
+}
 
 /**
  * The model each shot's selected image / video version was rendered with
@@ -163,56 +257,29 @@ type SelectedModels = {
 
 function makeContext(
   sequence: Sequence,
-  shots: ShotWithImage[],
+  shots: ShotView[],
   selectedModels: SelectedModels = {}
 ) {
   const updateStatus = vi.fn();
   const updateMusicFields = vi.fn();
   const listBySequence = vi.fn(async () => shots);
   const ensureAnchorFrames = vi.fn(async () => {});
-  // The image surface lives on each shot's anchor frame now (#989); the source
-  // projects `ShotWithImage` from `shots` + anchor `frames`, so expose the
-  // anchors here (keyed by shotId, never id-reuse).
-  const anchors = shots.map((s) => anchorFixture(s));
-  const listAnchorsBySequence = vi.fn(async () => anchors.map((a) => a.frame));
+  // The source re-assembles each `ShotView` from these reads, so serve back the
+  // rows the fixtures built (anchors keyed by shotId, never id-reuse).
+  const listAnchorsBySequence = vi.fn(async () => shots.map((s) => s.frame));
   // The still itself is the selected `frame_variants` row (#1067).
   const getSelectedByFrameIds = vi.fn(
     async () =>
-      new Map(
-        anchors.flatMap((a) =>
-          a.selectedVersion ? [[a.frame.id, a.selectedVersion]] : []
-        )
-      )
+      new Map(shots.flatMap((s) => (s.image ? [[s.frame.id, s.image]] : [])))
   );
   // The image prompt resolves from the frame's selected version (#1067); the
   // backfill guarantees one exists wherever a prompt does.
   const getSelectedPromptByFrameIds = vi.fn(
     async () =>
       new Map(
-        shots.flatMap((shot, i) => {
-          const frame = anchors[i]?.frame;
-          return frame && shot.imagePrompt
-            ? [
-                [
-                  frame.id,
-                  {
-                    id: `${frame.id}-ip`,
-                    frameId: frame.id,
-                    text: shot.imagePrompt,
-                    components: null,
-                    source: 'ai-generated' as const,
-                    inputHash: null,
-                    analysisModel: null,
-                    status: 'completed' as const,
-                    pendingInputHash: null,
-                    workflowRunId: null,
-                    createdAt: NOW,
-                    createdBy: null,
-                  },
-                ],
-              ]
-            : [];
-        })
+        shots.flatMap((s) =>
+          s.imagePromptVersion ? [[s.frame.id, s.imagePromptVersion]] : []
+        )
       )
   );
   const listWithSheets = vi.fn(async () => []);
@@ -237,31 +304,7 @@ function makeContext(
   // backfill guarantees one exists wherever a prompt does.
   const motionVersionByShot = new Map(
     shots.flatMap((s) =>
-      s.motionPromptData
-        ? [
-            [
-              s.id,
-              {
-                id: `${s.id}-mv`,
-                shotId: s.id,
-                promptType: 'motion' as const,
-                text: s.motionPromptData.fullPrompt,
-                components: null,
-                parameters: null,
-                dialogue: null,
-                audio: null,
-                source: 'ai-generated' as const,
-                inputHash: null,
-                analysisModel: null,
-                status: 'completed' as const,
-                pendingInputHash: null,
-                workflowRunId: null,
-                createdAt: NOW,
-                createdBy: null,
-              },
-            ],
-          ]
-        : []
+      s.motionPrompt ? [[s.id, motionVersionFixture(s, s.motionPrompt)]] : []
     )
   );
   const getSelectedMotionByShots = vi.fn(
@@ -291,16 +334,14 @@ function makeContext(
     videoVariants: {
       listSelectedModelsBySequence: listSelectedVideoModels,
       listLastFailedModelsBySequence: listFailedVideoModels,
-      // Video status derives from the segment's newest primary render (#1067),
-      // so each fixture shot's videoStatus becomes a variant row.
+      // Video status derives from the segment's newest primary render (#1067).
       getSelectedByShotIds: vi.fn(async () => new Map<string, VideoVariant>()),
       getPrimaryByShotIds: vi.fn(
         async () =>
           new Map(
-            shots.flatMap((s) => {
-              const primary = primaryVideoFixtureFor(s);
-              return primary ? [[s.id, primary]] : [];
-            })
+            shots.flatMap((s) =>
+              s.primaryVideo ? [[s.id, s.primaryVideo]] : []
+            )
           )
       ),
     },
@@ -379,7 +420,7 @@ describe('executeSmartRetry — partial retry status reset', () => {
     // A failed image with no prompt anywhere (no imagePrompt, and no scene to
     // fall back to) is detected as a failure but can't be retried.
     const shot = makeShot({
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: null,
     });
     const { context, updateStatus } = makeContext(makeSequence(), [shot]);
@@ -394,7 +435,7 @@ describe('executeSmartRetry — partial retry status reset', () => {
   test('retried images → triggers /image per shot and clears the failed flag', async () => {
     resetMocks();
     const shot = makeShot({
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'A cinematic shot of the lab',
     });
     const { context, updateStatus } = makeContext(makeSequence(), [shot]);
@@ -425,13 +466,13 @@ describe('executeSmartRetry — partial retry status reset', () => {
     // only one shot is actually retriable.
     const retriable = makeShot({
       id: 'shot-1',
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'A cinematic shot of the lab',
     });
     const skipped = makeShot({
       id: 'shot-2',
       shotNumber: 2,
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: null,
     });
     const { context, updateStatus } = makeContext(makeSequence(), [
@@ -458,9 +499,9 @@ describe('executeSmartRetry — partial retry status reset', () => {
     resetMocks();
     const shot = makeShot({
       videoStatus: 'failed',
-      thumbnailStatus: 'completed',
-      thumbnailUrl: 'https://cdn/thumb.jpg',
-      motionPromptData: {
+      imageStatus: 'completed',
+      imageUrl: 'https://cdn/thumb.jpg',
+      motionPrompt: {
         fullPrompt: 'slow pan across the lab',
         dialogue: null,
         audio: null,
@@ -495,7 +536,7 @@ describe('executeSmartRetry — partial retry status reset', () => {
   test('sequence not marked failed → no status write after retrying', async () => {
     resetMocks();
     const shot = makeShot({
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'A cinematic shot of the lab',
     });
     const { context, updateStatus } = makeContext(
@@ -530,13 +571,13 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     const shotA = makeShot({
       id: 'shot-a',
       sceneId: 'scene-a',
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'Look A',
     });
     const shotB = makeShot({
       id: 'shot-b',
       sceneId: 'scene-b',
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'Look B',
     });
     const { context } = makeContext(makeSequence(), [shotA, shotB], {
@@ -593,15 +634,15 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
       id: 'shot-a',
       sceneId: 'scene-a',
       videoStatus: 'failed',
-      thumbnailStatus: 'completed',
-      thumbnailUrl: 'https://cdn/a.jpg',
+      imageStatus: 'completed',
+      imageUrl: 'https://cdn/a.jpg',
     });
     const shotB = makeShot({
       id: 'shot-b',
       sceneId: 'scene-b',
       videoStatus: 'failed',
-      thumbnailStatus: 'completed',
-      thumbnailUrl: 'https://cdn/b.jpg',
+      imageStatus: 'completed',
+      imageUrl: 'https://cdn/b.jpg',
     });
     const { context } = makeContext(makeSequence(), [shotA, shotB], {
       video: new Map([
@@ -633,7 +674,7 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     const shotA = makeShot({
       id: 'shot-a',
       sceneId: 'scene-a',
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'Look A',
     });
     const { context } = makeContext(makeSequence(), [shotA], {
@@ -669,8 +710,8 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
       id: 'shot-a',
       sceneId: 'scene-a',
       videoStatus: 'failed',
-      thumbnailStatus: 'completed',
-      thumbnailUrl: 'https://cdn/a.jpg',
+      imageStatus: 'completed',
+      imageUrl: 'https://cdn/a.jpg',
     });
     const { context } = makeContext(makeSequence(), [shotA], {
       video: new Map([['shot-a', 'seedance_v2']]),
@@ -691,7 +732,7 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     const shotA = makeShot({
       id: 'shot-a',
       sceneId: 'scene-a',
-      thumbnailStatus: 'failed',
+      imageStatus: 'failed',
       imagePrompt: 'Look A',
     });
     const { context } = makeContext(makeSequence(), [shotA]);

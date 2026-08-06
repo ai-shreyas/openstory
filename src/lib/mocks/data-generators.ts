@@ -1,23 +1,54 @@
-import type { Frame } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { Shot } from '@/lib/db/schema';
+import { type ShotView, toShotView } from '@/lib/shots/shot-view';
 import type { Style } from '@/types/database';
 import { faker } from '@faker-js/faker';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from './frame-fixtures';
 
 // Set consistent seed for reproducible mock data
 faker.seed(123);
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// the mock keeps the legacy projected names (`thumbnail*`/`image*`) the UI
-// reads and derives the raw anchor `frame` from them.
-const generateMockShot = (
-  overrides?: Partial<ShotWithImage>
-): ShotWithImage => {
-  const shotBase: Omit<ShotWithImage, 'frame'> = {
+const generateMockShot = (overrides?: Partial<ShotView>): ShotView => {
+  const createdAt = faker.date.past();
+  const updatedAt = faker.date.recent();
+  const shot: Shot = {
     id: faker.string.ulid(),
     sequenceId: faker.string.ulid(),
     sceneId: null,
     shotNumber: 1,
-    thumbnailUrl: `https://picsum.photos/seed/${faker.helpers.arrayElement([
+    durationMs: faker.number.int({ min: 3000, max: 10000 }),
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
+    createdAt,
+    updatedAt,
+  };
+  const frame = frameFixture({
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+    imageStatus: faker.helpers.arrayElement([
+      'pending',
+      'generating',
+      'completed',
+      'failed',
+    ]),
+    imageWorkflowRunId: faker.string.ulid(),
+    selectedImageVersionId: faker.string.ulid(),
+    createdAt,
+    updatedAt,
+  });
+  const image = frameVariantFixture({
+    id: frame.selectedImageVersionId ?? faker.string.ulid(),
+    frameId: frame.id,
+    sequenceId: shot.sequenceId,
+    model: faker.helpers.arrayElement([
+      'nano_banana_2',
+      'nano_banana_pro',
+      'flux_2_dev',
+    ]),
+    url: `https://picsum.photos/seed/${faker.helpers.arrayElement([
       '1478720568477-152d9b164e26', // Cinema scene
       '1485846234645-a62644f84728', // Film production
       '1524712245354-2c4e5e7121c0', // Cinematic landscape
@@ -27,75 +58,52 @@ const generateMockShot = (
       '1506905925346-21bda4d32df4', // Mountain landscape
       '1507003211169-0a1dd7228f2d', // Portrait
     ])}/1920/1080`,
-    thumbnailPath: `teams/${faker.string.ulid()}/sequences/${faker.string.ulid()}/frames/${faker.string.ulid()}/thumbnail.jpg`,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    videoUrl: faker.datatype.boolean()
-      ? `${faker.internet.url()}/video.mp4`
-      : null,
-    videoPath: faker.datatype.boolean()
-      ? `teams/${faker.string.ulid()}/sequences/${faker.string.ulid()}/frames/${faker.string.ulid()}/motion.mp4`
-      : null,
-    durationMs: faker.number.int({ min: 3000, max: 10000 }),
-    thumbnailStatus: faker.helpers.arrayElement([
-      'pending',
-      'generating',
-      'completed',
-      'failed',
-    ]),
-    thumbnailWorkflowRunId: faker.string.ulid(),
-    thumbnailError: null,
-    imageModel: faker.helpers.arrayElement([
-      'nano_banana_2',
-      'nano_banana_pro',
-      'flux_2_dev',
-    ]),
-    imagePrompt: null,
-    motionPromptData: null,
-    videoStatus: faker.helpers.arrayElement([
-      'pending',
-      'generating',
-      'completed',
-      'failed',
-    ]),
-    motionModel: faker.helpers.arrayElement([
+    storagePath: `teams/${faker.string.ulid()}/sequences/${faker.string.ulid()}/frames/${faker.string.ulid()}/thumbnail.jpg`,
+    workflowRunId: frame.imageWorkflowRunId,
+    createdAt,
+    updatedAt,
+  });
+  const primaryVideo = videoVariantFixture({
+    renderSegmentId: faker.string.ulid(),
+    sequenceId: shot.sequenceId,
+    model: faker.helpers.arrayElement([
       'veo3_1',
       'kling_v3_pro',
       'seedance_v2',
     ]),
-    videoWorkflowRunId: faker.string.ulid(),
-    videoGeneratedAt: faker.date.recent(),
-    videoError: null,
-    thumbnailInputHash: null,
-    videoInputHash: null,
-    visualPromptInputHash: null,
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    previewThumbnailUrl: null,
-    createdAt: faker.date.past(),
-    updatedAt: faker.date.recent(),
+    manifest: [
+      {
+        shotId: shot.id,
+        motionPromptVersionId: null,
+        frameVersionId: null,
+        durationMs: shot.durationMs ?? 3000,
+      },
+    ],
+    url: faker.datatype.boolean() ? `${faker.internet.url()}/video.mp4` : null,
+    storagePath: faker.datatype.boolean()
+      ? `teams/${faker.string.ulid()}/sequences/${faker.string.ulid()}/frames/${faker.string.ulid()}/motion.mp4`
+      : null,
+    status: faker.helpers.arrayElement([
+      'pending',
+      'generating',
+      'completed',
+      'failed',
+    ]),
+    workflowRunId: faker.string.ulid(),
+    generatedAt: faker.date.recent(),
+    createdAt,
+    updatedAt,
+  });
+  return {
+    ...toShotView(shot, frame, {
+      image,
+      imagePromptVersion: null,
+      // Only a completed render is ever selectable.
+      video: primaryVideo.status === 'completed' ? primaryVideo : null,
+      primaryVideo,
+    }),
+    ...overrides,
   };
-  const frame: Frame = {
-    // Own id — the anchor frame is NOT the shot (#989); only shotId links them.
-    id: faker.string.ulid(),
-    shotId: shotBase.id,
-    sequenceId: shotBase.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: shotBase.previewThumbnailUrl,
-    imageStatus: shotBase.thumbnailStatus,
-    imageWorkflowRunId: shotBase.thumbnailWorkflowRunId,
-    imageError: shotBase.thumbnailError,
-    // The still is a `frame_variants` row now (#1067). Mocks build the shot
-    // fields directly, so the pointer stays null and the version is synthesized
-    // below only to carry the url/model/hash the projection would have read.
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    createdAt: shotBase.createdAt,
-    updatedAt: shotBase.updatedAt,
-  };
-  return { ...shotBase, frame, ...overrides };
 };
 
 const generateMockStyle = (overrides?: Partial<Style>): Style => {
@@ -246,7 +254,7 @@ const generateMockStyle = (overrides?: Partial<Style>): Style => {
 export const generateMockShots = (
   count: number = 6,
   sequenceId?: string
-): ShotWithImage[] => {
+): ShotView[] => {
   return Array.from({ length: count }, (_, index) =>
     generateMockShot({
       shotNumber: index + 1,

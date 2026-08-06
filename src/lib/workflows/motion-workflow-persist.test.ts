@@ -25,7 +25,7 @@ import {
 } from './motion-workflow-persist';
 
 // `buildMotionGeneratingShotWrite` is gone: the in-flight state is the appended
-// `video_variants` row, covered by `persistMotionFailure` + shot-with-image.
+// `video_variants` row, covered by `persistMotionFailure` + shot-view.
 
 const upload = {
   url: 'https://r2/seq/shot-veo.mp4',

@@ -9,12 +9,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Frame, Shot } from '@/lib/db/schema';
-import { selectedVersionFixture } from '@/lib/mocks/frame-fixtures';
-import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
+import { frameVariantFixture } from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import {
   assertModelNotAlreadyAdded,
   buildAddAudioMusicInput,
@@ -25,11 +22,17 @@ import {
 
 const NOW = new Date('2026-06-03T00:00:00.000Z');
 
-// The shot read path returns `ShotWithImage` (#989): a Shot (no image columns)
-// plus the anchor frame's still surface projected back under the legacy
-// `thumbnail*`/`image*` names. The image-readiness helpers below read those
-// projected names, so the fixtures carry them.
-function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
+// The shot read path returns `ShotView` (#1067): a Shot plus the rows its
+// still/video resolve from. Image readiness is the frame's `imageStatus` and
+// the selected version's `url`, so those are what the fixtures vary.
+function makeShot({
+  imageStatus = 'completed',
+  imageUrl = 'https://cdn/thumb.jpg',
+  ...overrides
+}: Partial<Shot> & {
+  imageStatus?: Frame['imageStatus'];
+  imageUrl?: FrameVariant['url'];
+} = {}): ShotView {
   const id = overrides.id ?? 'shot-1';
   const sequenceId = overrides.sequenceId ?? 'seq-1';
   const shot: Shot = {
@@ -42,6 +45,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     renderSegmentId: null,
     createdAt: NOW,
     updatedAt: NOW,
+    ...overrides,
   };
   const frame: Frame = {
     id,
@@ -50,7 +54,7 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     orderIndex: 0,
     role: 'first',
     previewImageUrl: null,
-    imageStatus: 'completed',
+    imageStatus,
     imageWorkflowRunId: null,
     imageError: null,
     selectedImageVersionId: 'fv-1',
@@ -59,23 +63,18 @@ function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
     createdAt: NOW,
     updatedAt: NOW,
   };
-  // The still is the selected version, not a frame column (#1067).
-  const selectedVersion = selectedVersionFixture({
-    frameId: frame.id,
-    sequenceId,
-    url: 'https://cdn/thumb.jpg',
-  });
-  return {
-    // These fixtures exercise the IMAGE-readiness helpers only, so the shot's
-    // segment has no render at all (#1067).
-    ...projectShotWithImage(shot, frame, {
-      selectedImage: selectedVersion,
-      selectedImagePrompt: null,
-      selectedVideo: null,
-      primaryVideo: null,
+  // These fixtures exercise the IMAGE-readiness helpers only, so the shot's
+  // segment has no render at all (#1067).
+  return toShotView(shot, frame, {
+    image: frameVariantFixture({
+      frameId: frame.id,
+      sequenceId,
+      url: imageUrl,
     }),
-    ...overrides,
-  };
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+  });
 }
 
 describe('assertModelNotAlreadyAdded (#547)', () => {
@@ -130,17 +129,17 @@ describe('selectEligibleVideoShots (#547)', () => {
 
   it('excludes shots whose image is not completed', () => {
     const shots = [
-      makeShot({ id: 'pending', thumbnailStatus: 'pending' }),
-      makeShot({ id: 'generating', thumbnailStatus: 'generating' }),
-      makeShot({ id: 'failed', thumbnailStatus: 'failed' }),
+      makeShot({ id: 'pending', imageStatus: 'pending' }),
+      makeShot({ id: 'generating', imageStatus: 'generating' }),
+      makeShot({ id: 'failed', imageStatus: 'failed' }),
     ];
     expect(selectEligibleVideoShots(shots)).toEqual([]);
   });
 
-  it('excludes shots completed but missing a thumbnail url', () => {
+  it('excludes shots completed but missing a still url', () => {
     const shots = [
-      makeShot({ id: 'null-url', thumbnailUrl: null }),
-      makeShot({ id: 'empty-url', thumbnailUrl: '' }),
+      makeShot({ id: 'null-url', imageUrl: null }),
+      makeShot({ id: 'empty-url', imageUrl: '' }),
     ];
     expect(selectEligibleVideoShots(shots)).toEqual([]);
   });
@@ -148,7 +147,7 @@ describe('selectEligibleVideoShots (#547)', () => {
   it('returns only the eligible shots from a mixed set', () => {
     const shots = [
       makeShot({ id: 'ok-1' }),
-      makeShot({ id: 'no-image', thumbnailStatus: 'pending' }),
+      makeShot({ id: 'no-image', imageStatus: 'pending' }),
       makeShot({ id: 'ok-2' }),
     ];
     expect(selectEligibleVideoShots(shots).map((f) => f.id)).toEqual([

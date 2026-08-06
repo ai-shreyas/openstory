@@ -29,7 +29,6 @@ export const SHOT_GENERATION_STATUSES = [
  * frame, the video through `renderSegmentId`, the motion prompt through
  * `selectedMotionPromptVersionId`.
  */
-// DB-Audit: `orderIndex` is sequence-global, so it re-encodes scene order and forces a renumber whenever a scene moves — derivable from (scenes.orderIndex, shotNumber).
 export const shots = snakeCase.table(
   'shots',
   {
@@ -53,7 +52,7 @@ export const shots = snakeCase.table(
     durationMs: integer().default(3000),
     // A shot owns no video columns (#1067 phase 2d). The whole surface —
     // url/path/model/hash AND status/error/run id — is projected from the
-    // segment's `video_variants` rows by `projectShotWithImage`. Rendering is
+    // segment's `video_variants` rows by `toShotView`. Rendering is
     // segment-scoped, so shot-scoped video state could never be more than a
     // fan-out of one render's.
     // Soft pointer (no FK) to the selected `shot_prompt_versions` row — the
@@ -63,7 +62,7 @@ export const shots = snakeCase.table(
     // The render segment this shot belongs to (#990) — a scene's video is tiled
     // into ≤cap segments (`render_segments`); per-shot rendering is the
     // degenerate one-shot segment. Membership lives here (order from
-    // `orderIndex`); the segment owns the video selection pointer. NULL until
+    // `shotNumber`); the segment owns the video selection pointer. NULL until
     // the shot is first rendered/assigned. Deliberately `set null` (not cascade)
     // so deleting a segment orphans its shots rather than vanishing them.
     renderSegmentId: text().references(() => renderSegments.id),

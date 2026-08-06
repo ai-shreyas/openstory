@@ -7,12 +7,12 @@ import {
   IMAGE_TO_VIDEO_MODELS,
   safeImageToVideoModel,
 } from '@/lib/ai/models';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 type MotionProgressBannerProps = {
-  shots: ShotWithImage[];
+  shots: ShotView[];
   sequence: Sequence;
   includeMusic: boolean;
   startedAt: number;
@@ -53,7 +53,7 @@ function isTerminal(status: string | null): boolean {
 }
 
 function derivePhases(
-  shots: ShotWithImage[],
+  shots: ShotView[],
   sequence: Sequence,
   includeMusic: boolean
 ): Phase[] {

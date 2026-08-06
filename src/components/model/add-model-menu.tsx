@@ -73,7 +73,7 @@ export const AddModelMenuSection = ({
     if (variantType === 'image') {
       const count = shotList.filter(
         (f) =>
-          f.imagePrompt ||
+          f.imagePromptVersion?.text ||
           (f.sceneId ? extractBySceneId.get(f.sceneId) : undefined)
       ).length;
       return Object.keys(IMAGE_MODELS)
@@ -91,7 +91,7 @@ export const AddModelMenuSection = ({
 
     if (variantType === 'video') {
       const count = shotList.filter(
-        (f) => f.thumbnailStatus === 'completed' && f.thumbnailUrl
+        (f) => f.frame.imageStatus === 'completed' && f.image?.url
       ).length;
       return Object.keys(IMAGE_TO_VIDEO_MODELS)
         .filter(isValidImageToVideoModel)

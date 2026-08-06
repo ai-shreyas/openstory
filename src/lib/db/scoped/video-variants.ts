@@ -11,7 +11,7 @@
  * whichever version `render_segments.selectedVideoVersionId` points at; {@link
  * createVideoVariantsMethods.select} repoints it atomically. Since #1067 phase
  * 2d that pointer is also the READ path — playback, export and the API project
- * the pointed-at version's url/path/model through `projectShotWithImage`
+ * the pointed-at version's url/path/model through `toShotView`
  * instead of reading a cached copy on `shots`. `discardedAt` soft-hides a
  * version (undoable); there is no `divergedAt` (retired in the redesign).
  *

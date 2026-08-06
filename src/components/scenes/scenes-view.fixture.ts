@@ -1,35 +1,29 @@
-// AUTO-GENERATED Storybook fixture — real rows from local D1 (sequence 01KT2TPG5WYQ15H79SAV88EH45),
-// media URLs swapped for public placeholders. Do NOT hand-edit.
-// Regenerate via: bun scripts/generate-scenes-view-fixture.ts
+// Storybook fixture — originally generated from local D1 (sequence
+// 01KT2TPG5WYQ15H79SAV88EH45), media URLs swapped for public placeholders,
+// hand-maintained since. `scripts/generate-scenes-view-fixture.ts` predates the
+// #1067 row split and cannot reproduce this file: running it would fail on the
+// dropped `shots.order_index` and emit no frame/variant rows. Fix the script
+// before trusting it again.
 import type { SceneWithScript } from '@/hooks/use-scenes';
-import { dbSceneId, type VideoVariant } from '@/lib/db/schema';
-import { frameFixtureFor, videoFixtureFor } from '@/lib/mocks/frame-fixtures';
 import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+  dbSceneId,
+  type Frame,
+  type FramePromptVersion,
+  type FrameVariant,
+  type Shot,
+  type VideoVariant,
+} from '@/lib/db/schema';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import {
+  toShotView,
+  type ShotGridSheet,
+  type ShotView,
+} from '@/lib/shots/shot-view';
 import type { Sequence, Style } from '@/types/database';
-
-/**
- * The segment's newest primary render — the row a shot's video lifecycle is
- * derived from (#1067). `videoFixtureFor` is url-gated, so a render that never
- * produced one borrows an empty url and puts the real (null) one back.
- */
-function primaryVideoFixture(
-  shot: Omit<ShotWithImage, 'frame'>
-): VideoVariant | null {
-  const status = shot.videoStatus;
-  if (status === null) return null;
-  const row = videoFixtureFor({ ...shot, videoUrl: shot.videoUrl ?? '' });
-  if (!row) return null;
-  return {
-    ...row,
-    url: shot.videoUrl,
-    status,
-    error: shot.videoError,
-    workflowRunId: shot.videoWorkflowRunId,
-  };
-}
 
 export const fixtureSequence: Sequence = {
   id: '01KT2TPG5WYQ15H79SAV88EH45',
@@ -319,327 +313,424 @@ export const fixtureScenes: SceneWithScript[] = [
   },
 ];
 
-const fixtureShotRows: Omit<ShotWithImage, 'frame'>[] = [
+/**
+ * A shot owns no assets (#1067): its still lives on the anchor frame's selected
+ * `frame_variants` row, its prompt on the selected `frame_prompt_versions` row,
+ * and its video on the segment's `video_variants` rows. Each entry carries
+ * those rows' real columns; `fixtureShotView` assembles them below exactly as a
+ * read path does.
+ */
+type FixtureShotSource = {
+  shot: Shot;
+  frame: Partial<Frame>;
+  image?: Partial<FrameVariant>;
+  imagePromptVersion?: Pick<FramePromptVersion, 'text' | 'inputHash'>;
+  /**
+   * The segment's newest primary render — its lifecycle IS the shot's video
+   * status. Only a completed one is selectable, so the selection pointer below
+   * is url-gated off the same row.
+   */
+  render?: Partial<VideoVariant>;
+  gridSheet?: ShotGridSheet;
+};
+
+const fixtureShotSources: FixtureShotSource[] = [
   {
-    id: '01KT2TQ072YB92D8NWRQC5W9C6',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 4000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ072YB92D8NWRQC5W9C6/01KT2TRRCR6RZ30YK2JWHYRN8Q.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ072YB92D8NWRQC5W9C6/makeup-ad-30-second-short-film_awakening_hm97de_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      'Macro beauty photography extreme close-up of a single luminous serum droplet clinging to the tip of a glass dropper trembling almost imperceptibly against a seamless warm gradient wash from ivory to palest blush the droplet catching discreet edge light that ignites it from within like liquid amber with gentle backlight haloing the glass shaft in translucent gold the frame locked at eye level with the droplet in a poised moment of potential release soft sensual intimate atmosphere captured with probe lens.',
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_veo3_1_r-qzer8o',
-    videoGeneratedAt: new Date('2026-06-02T00:19:03.000Z'),
-    videoError: null,
-    motionModel: 'veo3_1',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:09.000Z'),
-    updatedAt: new Date('2026-06-02T00:19:03.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6-p/720/1280',
-    thumbnailInputHash:
-      '638094256e60548cf03e763d845424d0891173245acbf1888c7723797e5a76c7',
-    videoInputHash: null,
-    visualPromptInputHash:
-      '5e35aef7cbcca388535f8280c210c9f8c4961f0f40720138df3fd8fdbf57a2db',
-    sceneId: '01KT2TQ072YB92D8NWRQC5W9C6',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQ072YB92D8NWRQC5W9C6',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQ072YB92D8NWRQC5W9C6',
+      shotNumber: 1,
+      durationMs: 4000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:09.000Z'),
+      updatedAt: new Date('2026-06-02T00:19:03.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ072YB92D8NWRQC5W9C6/01KT2TRRCR6RZ30YK2JWHYRN8Q.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        '638094256e60548cf03e763d845424d0891173245acbf1888c7723797e5a76c7',
+    },
+    imagePromptVersion: {
+      text: 'Macro beauty photography extreme close-up of a single luminous serum droplet clinging to the tip of a glass dropper trembling almost imperceptibly against a seamless warm gradient wash from ivory to palest blush the droplet catching discreet edge light that ignites it from within like liquid amber with gentle backlight haloing the glass shaft in translucent gold the frame locked at eye level with the droplet in a poised moment of potential release soft sensual intimate atmosphere captured with probe lens.',
+      inputHash:
+        '5e35aef7cbcca388535f8280c210c9f8c4961f0f40720138df3fd8fdbf57a2db',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ072YB92D8NWRQC5W9C6/makeup-ad-30-second-short-film_awakening_hm97de_openstory.mp4',
+      model: 'veo3_1',
+      generatedAt: new Date('2026-06-02T00:19:03.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_veo3_1_r-qzer8o',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6-v/720/1280',
+      status: 'completed',
+    },
   },
   {
-    id: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 6000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ2A3VNHR4NKMFZE9XAAC/01KT2TRPXC5BYE50YNPE7W737H.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ2A3VNHR4NKMFZE9XAAC/makeup-ad-30-second-short-film_the-texture_mr10j1_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      'Macro beauty photography in the style of high-end product films like Charlotte Tilbury and La Mer, a flawless bone-white porcelain surface filling the frame with a generous initial curl of dense velvety cream in warm magnolia beginning to coil slowly from below in a perfect sculptural spiral, captured at the very first moment of dispense with potential energy held in the forming ridges and peaks, abstract macro background as a simple gradient wash, intimate and luxurious atmosphere, soft glowing key light raking low across the surface to throw exquisite relief into every fold and peak of the cream texture, subtle edge light and warm backlight creating a luminous sheen on the product, slow macro push-in from directly above with a slight two-degree clockwise rotational implication, shallow depth of field emphasizing the tactile material details while softly blooming highlights, warm luminous color grading with soft pinks and peaches, 9:16 aspect ratio.',
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_kling_v3_pro_r-1crr24',
-    videoGeneratedAt: new Date('2026-06-02T00:14:57.000Z'),
-    videoError: null,
-    motionModel: 'kling_v3_pro',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:12.000Z'),
-    updatedAt: new Date('2026-06-02T00:14:57.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC-p/720/1280',
-    thumbnailInputHash:
-      '25f45d2f849554e8ea0304f957cc61ebd97658eac4e24bd098e7ef5bdeed2847',
-    videoInputHash: null,
-    visualPromptInputHash:
-      '6a0661a6909ede6efb155a60703eb80a3bd0a16f07fc3e79a5a23285bcd03be6',
-    sceneId: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQ2A3VNHR4NKMFZE9XAAC',
+      shotNumber: 1,
+      durationMs: 6000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:12.000Z'),
+      updatedAt: new Date('2026-06-02T00:14:57.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ2A3VNHR4NKMFZE9XAAC/01KT2TRPXC5BYE50YNPE7W737H.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        '25f45d2f849554e8ea0304f957cc61ebd97658eac4e24bd098e7ef5bdeed2847',
+    },
+    imagePromptVersion: {
+      text: 'Macro beauty photography in the style of high-end product films like Charlotte Tilbury and La Mer, a flawless bone-white porcelain surface filling the frame with a generous initial curl of dense velvety cream in warm magnolia beginning to coil slowly from below in a perfect sculptural spiral, captured at the very first moment of dispense with potential energy held in the forming ridges and peaks, abstract macro background as a simple gradient wash, intimate and luxurious atmosphere, soft glowing key light raking low across the surface to throw exquisite relief into every fold and peak of the cream texture, subtle edge light and warm backlight creating a luminous sheen on the product, slow macro push-in from directly above with a slight two-degree clockwise rotational implication, shallow depth of field emphasizing the tactile material details while softly blooming highlights, warm luminous color grading with soft pinks and peaches, 9:16 aspect ratio.',
+      inputHash:
+        '6a0661a6909ede6efb155a60703eb80a3bd0a16f07fc3e79a5a23285bcd03be6',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ2A3VNHR4NKMFZE9XAAC/makeup-ad-30-second-short-film_the-texture_mr10j1_openstory.mp4',
+      model: 'kling_v3_pro',
+      generatedAt: new Date('2026-06-02T00:14:57.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_kling_v3_pro_r-1crr24',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC-v/720/1280',
+      status: 'completed',
+    },
   },
   {
-    id: '01KT2TQ4BPDYFBAG7AHWAAY43C',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 7000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ4BPDYFBAG7AHWAAY43C/01KT2TRNG2YAS9KFXQNJHZC2YW.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ4BPDYFBAG7AHWAAY43C/makeup-ad-30-second-short-film_the-application_bd3z6b_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      'Macro beauty photography in a close-up low-angle view almost parallel to the skin surface showing a fingertip at the exact moment of gentle contact pressing downward into a layer of dense cream, the product surface yielding and beginning to blanch pale under the pressure while the skin beneath starts to flush with a subtle living rose tone spreading outward, set against a simple abstract gradient background wash, soft glowing key light with discreet edge light skimming the thin emerging film of product so it gleams with satin texture, warm luminous color grading with softly bloomed highlights, slight clockwise rotational framing implied in the still capture, 9:16 vertical composition.',
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_kling_v3_pro_r-1crr24',
-    videoGeneratedAt: new Date('2026-06-02T00:15:17.000Z'),
-    videoError: null,
-    motionModel: 'kling_v3_pro',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:14.000Z'),
-    updatedAt: new Date('2026-06-02T00:15:17.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C-p/720/1280',
-    thumbnailInputHash:
-      'e250b71299008aa923231b7c8cb543f8adfdd955ea7dd30f8135dd2547127818',
-    videoInputHash: null,
-    visualPromptInputHash:
-      '9a5a8fb49c2420a571ced29213472cc5bc8611ffffabec608e321fc8d0a614ef',
-    sceneId: '01KT2TQ4BPDYFBAG7AHWAAY43C',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQ4BPDYFBAG7AHWAAY43C',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQ4BPDYFBAG7AHWAAY43C',
+      shotNumber: 1,
+      durationMs: 7000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:14.000Z'),
+      updatedAt: new Date('2026-06-02T00:15:17.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ4BPDYFBAG7AHWAAY43C/01KT2TRNG2YAS9KFXQNJHZC2YW.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        'e250b71299008aa923231b7c8cb543f8adfdd955ea7dd30f8135dd2547127818',
+    },
+    imagePromptVersion: {
+      text: 'Macro beauty photography in a close-up low-angle view almost parallel to the skin surface showing a fingertip at the exact moment of gentle contact pressing downward into a layer of dense cream, the product surface yielding and beginning to blanch pale under the pressure while the skin beneath starts to flush with a subtle living rose tone spreading outward, set against a simple abstract gradient background wash, soft glowing key light with discreet edge light skimming the thin emerging film of product so it gleams with satin texture, warm luminous color grading with softly bloomed highlights, slight clockwise rotational framing implied in the still capture, 9:16 vertical composition.',
+      inputHash:
+        '9a5a8fb49c2420a571ced29213472cc5bc8611ffffabec608e321fc8d0a614ef',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ4BPDYFBAG7AHWAAY43C/makeup-ad-30-second-short-film_the-application_bd3z6b_openstory.mp4',
+      model: 'kling_v3_pro',
+      generatedAt: new Date('2026-06-02T00:15:17.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_kling_v3_pro_r-1crr24',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C-v/720/1280',
+      status: 'completed',
+    },
   },
   {
-    id: '01KT2TQ6B0MH3VDAXH16G54X33',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 6000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ6B0MH3VDAXH16G54X33/01KT2TRW091VKYGEXKT37B77QG.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ6B0MH3VDAXH16G54X33/makeup-ad-30-second-short-film_the-lip_ns0dw3_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      "Macro beauty photography capturing the starting moment of a deep burnished brown-rose lipstick bullet positioned just above the skin and beginning to glide across the inside of a luminous dewy wrist laying down an impossibly smooth saturated glossy color ribbon the fine hairs along the wrist catching a soft backlight like a delicate halo the skin rendered with realistic pore detail and subtle sheen set against a simple warm gradient abstract macro background soft glowing key light combined with discreet edge light and gentle rear illumination creating luminous depth and texture probe lens positioned low and slightly ahead of the bullet's path with shallow depth of field emphasizing the impending motion in an extreme close-up frame warm luminous color grading highlighting flushed dewy tones and softly bloomed highlights",
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_kling_v3_pro_r-1crr24',
-    videoGeneratedAt: new Date('2026-06-02T00:15:04.000Z'),
-    videoError: null,
-    motionModel: 'kling_v3_pro',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:16.000Z'),
-    updatedAt: new Date('2026-06-02T00:15:04.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33-p/720/1280',
-    thumbnailInputHash:
-      '7569cfba0a472864c2cdcd76aee3ca1f5491d35d70d5f478ecb9d83050337db8',
-    videoInputHash: null,
-    visualPromptInputHash:
-      'c24b43ff12503d783dfd1513eecf8989160d3f1b2ae13dccc964ff2db63dfb9d',
-    sceneId: '01KT2TQ6B0MH3VDAXH16G54X33',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQ6B0MH3VDAXH16G54X33',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQ6B0MH3VDAXH16G54X33',
+      shotNumber: 1,
+      durationMs: 6000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:16.000Z'),
+      updatedAt: new Date('2026-06-02T00:15:04.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ6B0MH3VDAXH16G54X33/01KT2TRW091VKYGEXKT37B77QG.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        '7569cfba0a472864c2cdcd76aee3ca1f5491d35d70d5f478ecb9d83050337db8',
+    },
+    imagePromptVersion: {
+      text: "Macro beauty photography capturing the starting moment of a deep burnished brown-rose lipstick bullet positioned just above the skin and beginning to glide across the inside of a luminous dewy wrist laying down an impossibly smooth saturated glossy color ribbon the fine hairs along the wrist catching a soft backlight like a delicate halo the skin rendered with realistic pore detail and subtle sheen set against a simple warm gradient abstract macro background soft glowing key light combined with discreet edge light and gentle rear illumination creating luminous depth and texture probe lens positioned low and slightly ahead of the bullet's path with shallow depth of field emphasizing the impending motion in an extreme close-up frame warm luminous color grading highlighting flushed dewy tones and softly bloomed highlights",
+      inputHash:
+        'c24b43ff12503d783dfd1513eecf8989160d3f1b2ae13dccc964ff2db63dfb9d',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ6B0MH3VDAXH16G54X33/makeup-ad-30-second-short-film_the-lip_ns0dw3_openstory.mp4',
+      model: 'kling_v3_pro',
+      generatedAt: new Date('2026-06-02T00:15:04.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_kling_v3_pro_r-1crr24',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33-v/720/1280',
+      status: 'completed',
+    },
   },
   {
-    id: '01KT2TQ8E692CA985WMB9SNXMX',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 6000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ8E692CA985WMB9SNXMX/01KT2TRWC2VBMH96WWTSNQ4WBJ.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ8E692CA985WMB9SNXMX/makeup-ad-30-second-short-film_the-reveal_d21e7k_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      "Cinematic macro beauty photography in vertical 9:16 frame of a woman's face centered tightly from chin to crown, eyes gently closed with lashes resting softly against luminous dewy skin, lips parted only slightly in deep rose, complete stillness and poised potential as the eyes prepare to open, rendered with realistic pore detail against an abstract soft gradient background shifting from ivory to peach, soft glowing key light from above combined with a subtle warm gold edge and rim light caressing the cheekbones, intimate luxurious mood with warm bloomed highlights and flushed skin tones, high-end editorial color grading, probe lens compression emphasizing texture and dimension, barely perceptible push-in framing suggesting imminent slow reveal.",
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_kling_v3_pro_r-1crr24',
-    videoGeneratedAt: new Date('2026-06-02T00:15:18.000Z'),
-    videoError: null,
-    motionModel: 'kling_v3_pro',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:18.000Z'),
-    updatedAt: new Date('2026-06-02T00:15:18.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX-p/720/1280',
-    thumbnailInputHash:
-      '47f18d95f63eb293ecaa35f037f1e92b0807e763081282385f6d90dfde3cd0f2',
-    videoInputHash: null,
-    visualPromptInputHash:
-      '08e0c43484383c9d78261fe4ea2983a1e08e331e40ec3d3e21aff6ed66a8c46b',
-    sceneId: '01KT2TQ8E692CA985WMB9SNXMX',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQ8E692CA985WMB9SNXMX',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQ8E692CA985WMB9SNXMX',
+      shotNumber: 1,
+      durationMs: 6000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:18.000Z'),
+      updatedAt: new Date('2026-06-02T00:15:18.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ8E692CA985WMB9SNXMX/01KT2TRWC2VBMH96WWTSNQ4WBJ.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        '47f18d95f63eb293ecaa35f037f1e92b0807e763081282385f6d90dfde3cd0f2',
+    },
+    imagePromptVersion: {
+      text: "Cinematic macro beauty photography in vertical 9:16 frame of a woman's face centered tightly from chin to crown, eyes gently closed with lashes resting softly against luminous dewy skin, lips parted only slightly in deep rose, complete stillness and poised potential as the eyes prepare to open, rendered with realistic pore detail against an abstract soft gradient background shifting from ivory to peach, soft glowing key light from above combined with a subtle warm gold edge and rim light caressing the cheekbones, intimate luxurious mood with warm bloomed highlights and flushed skin tones, high-end editorial color grading, probe lens compression emphasizing texture and dimension, barely perceptible push-in framing suggesting imminent slow reveal.",
+      inputHash:
+        '08e0c43484383c9d78261fe4ea2983a1e08e331e40ec3d3e21aff6ed66a8c46b',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQ8E692CA985WMB9SNXMX/makeup-ad-30-second-short-film_the-reveal_d21e7k_openstory.mp4',
+      model: 'kling_v3_pro',
+      generatedAt: new Date('2026-06-02T00:15:18.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_kling_v3_pro_r-1crr24',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX-v/720/1280',
+      status: 'completed',
+    },
   },
   {
-    id: '01KT2TQA9A3SYCK47G14S0YB8Y',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 4000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQA9A3SYCK47G14S0YB8Y/01KT2TRRA92AS8F5VX6WSTANX6.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQA9A3SYCK47G14S0YB8Y/makeup-ad-30-second-short-film_hero-product_wbqqe3_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      'Macro beauty photography of the hero product centered on a pure warm-white surface, the product sits still perfect and inevitable, soft glowing key light from upper left with a discreet golden edge light tracing its right silhouette, background gradient from ivory to the softest peach, highly detailed material textures with realistic depth, warm luminous color grading, highlights softly bloomed, locked frame composition with no movement, 9:16 vertical framing, intimate luxurious atmosphere',
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_kling_v3_pro_r-1crr24',
-    videoGeneratedAt: new Date('2026-06-02T00:14:32.000Z'),
-    videoError: null,
-    motionModel: 'kling_v3_pro',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:20.000Z'),
-    updatedAt: new Date('2026-06-02T00:14:32.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y-p/720/1280',
-    thumbnailInputHash:
-      '9bd2ce2b9f5bd92ffed6f03961595a0a5a653fca894de0a247c3dfd6fa30979d',
-    videoInputHash: null,
-    visualPromptInputHash:
-      'ce5025d3e93003b0aa943a6e2de0135317b332454bdf1520957d56d5a00f8272',
-    sceneId: '01KT2TQA9A3SYCK47G14S0YB8Y',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQA9A3SYCK47G14S0YB8Y',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQA9A3SYCK47G14S0YB8Y',
+      shotNumber: 1,
+      durationMs: 4000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:20.000Z'),
+      updatedAt: new Date('2026-06-02T00:14:32.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQA9A3SYCK47G14S0YB8Y/01KT2TRRA92AS8F5VX6WSTANX6.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        '9bd2ce2b9f5bd92ffed6f03961595a0a5a653fca894de0a247c3dfd6fa30979d',
+    },
+    imagePromptVersion: {
+      text: 'Macro beauty photography of the hero product centered on a pure warm-white surface, the product sits still perfect and inevitable, soft glowing key light from upper left with a discreet golden edge light tracing its right silhouette, background gradient from ivory to the softest peach, highly detailed material textures with realistic depth, warm luminous color grading, highlights softly bloomed, locked frame composition with no movement, 9:16 vertical framing, intimate luxurious atmosphere',
+      inputHash:
+        'ce5025d3e93003b0aa943a6e2de0135317b332454bdf1520957d56d5a00f8272',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQA9A3SYCK47G14S0YB8Y/makeup-ad-30-second-short-film_hero-product_wbqqe3_openstory.mp4',
+      model: 'kling_v3_pro',
+      generatedAt: new Date('2026-06-02T00:14:32.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_kling_v3_pro_r-1crr24',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y-v/720/1280',
+      status: 'completed',
+    },
   },
   {
-    id: '01KT2TQAY2YNXFX1GVKP7HK43K',
-    sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
-    durationMs: 3000,
-    thumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K/720/1280',
-    thumbnailPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQAY2YNXFX1GVKP7HK43K/01KT2TRXWX1SVJFJJX8VZWHG8F.png',
-    variantImageUrl:
-      'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K-v/720/1280',
-    variantImageStatus: 'completed',
-    videoUrl:
-      'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-    videoPath:
-      'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQAY2YNXFX1GVKP7HK43K/makeup-ad-30-second-short-film_end-card_2gwwvg_openstory.mp4',
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId:
-      'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_nano_banana_pro_rewldhr',
-    thumbnailError: null,
-    imageModel: 'nano_banana_pro',
-    imagePrompt:
-      'Macro beauty photography of a minimal abstract composition on a smooth warm ivory gradient background shifting to soft peach, crisp white brand logo centered and holding perfectly still, soft glowing key light from upper left with subtle bounce filling shadows, delicate edge highlights, luxurious luminous atmosphere, high-end beauty editorial quality, locked frame, vertical composition',
-    videoStatus: 'completed',
-    videoWorkflowRunId:
-      'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_kling_v3_pro_r-1crr24',
-    videoGeneratedAt: new Date('2026-06-02T00:14:18.000Z'),
-    videoError: null,
-    motionModel: 'kling_v3_pro',
-    selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    motionPromptData: null,
-    createdAt: new Date('2026-06-02T00:11:20.000Z'),
-    updatedAt: new Date('2026-06-02T00:14:18.000Z'),
-    previewThumbnailUrl:
-      'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K-p/720/1280',
-    thumbnailInputHash:
-      'e848cc7ba9bea3ea864228edcc0178ee25954c3c9368a835e9e8073eb5b31b6a',
-    videoInputHash: null,
-    visualPromptInputHash:
-      '02b2e4d327ff65d6106eace0deb7d9972ff93ead0d90b4014a0711fd3e7c29d5',
-    sceneId: '01KT2TQAY2YNXFX1GVKP7HK43K',
-    shotNumber: 1,
+    shot: {
+      id: '01KT2TQAY2YNXFX1GVKP7HK43K',
+      sequenceId: '01KT2TPG5WYQ15H79SAV88EH45',
+      sceneId: '01KT2TQAY2YNXFX1GVKP7HK43K',
+      shotNumber: 1,
+      durationMs: 3000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: new Date('2026-06-02T00:11:20.000Z'),
+      updatedAt: new Date('2026-06-02T00:14:18.000Z'),
+    },
+    frame: {
+      previewImageUrl:
+        'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K-p/720/1280',
+      imageStatus: 'completed',
+      imageWorkflowRunId:
+        'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_nano_banana_pro_rewldhr',
+      imageError: null,
+    },
+    image: {
+      url: 'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K/720/1280',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQAY2YNXFX1GVKP7HK43K/01KT2TRXWX1SVJFJJX8VZWHG8F.png',
+      model: 'nano_banana_pro',
+      inputHash:
+        'e848cc7ba9bea3ea864228edcc0178ee25954c3c9368a835e9e8073eb5b31b6a',
+    },
+    imagePromptVersion: {
+      text: 'Macro beauty photography of a minimal abstract composition on a smooth warm ivory gradient background shifting to soft peach, crisp white brand logo centered and holding perfectly still, soft glowing key light from upper left with subtle bounce filling shadows, delicate edge highlights, luxurious luminous atmosphere, high-end beauty editorial quality, locked frame, vertical composition',
+      inputHash:
+        '02b2e4d327ff65d6106eace0deb7d9972ff93ead0d90b4014a0711fd3e7c29d5',
+    },
+    render: {
+      url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+      storagePath:
+        'teams/01KT2QSNQVWYS0EHZX0K206Y2Y/sequences/01KT2TPG5WYQ15H79SAV88EH45/frames/01KT2TQAY2YNXFX1GVKP7HK43K/makeup-ad-30-second-short-film_end-card_2gwwvg_openstory.mp4',
+      model: 'kling_v3_pro',
+      generatedAt: new Date('2026-06-02T00:14:18.000Z'),
+      inputHash: null,
+      status: 'completed',
+      error: null,
+      workflowRunId:
+        'motion_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_kling_v3_pro_r-1crr24',
+    },
+    gridSheet: {
+      url: 'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K-v/720/1280',
+      status: 'completed',
+    },
   },
 ];
 
-/**
- * The still IMAGE surface moved off `shots` onto the anchor frame in #989. Each
- * fixture row carries the legacy `thumbnail*`/`image*` field names that the UI
- * still reads (the `ShotWithImage` projection); here we mirror them back into a
- * concrete anchor `Frame` (id == shot.id) so the row matches what `getShotsFn`
- * returns at runtime.
- */
-export const fixtureShots: ShotWithImage[] = fixtureShotRows.map((shot) => {
-  const { frame, selectedVersion } = frameFixtureFor(shot);
-  return projectShotWithImage(shot, frame, {
-    selectedImage: selectedVersion,
-    selectedImagePrompt: null,
-    selectedVideo: videoFixtureFor(shot),
-    primaryVideo: primaryVideoFixture(shot),
-    gridSheet: {
-      url: shot.variantImageUrl,
-      status: shot.variantImageStatus,
-    },
+function fixtureShotView(source: FixtureShotSource): ShotView {
+  const { shot } = source;
+  const frame = frameFixture({
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+    ...source.frame,
   });
-});
+  const image = source.image
+    ? frameVariantFixture({
+        frameId: frame.id,
+        sequenceId: shot.sequenceId,
+        ...source.image,
+      })
+    : null;
+  const render = source.render
+    ? videoVariantFixture({
+        // No fixture row is assigned to a segment; a synthetic id keeps the
+        // per-shot renders distinct.
+        renderSegmentId: `${shot.id}-segment`,
+        sequenceId: shot.sequenceId,
+        ...source.render,
+      })
+    : null;
+  return toShotView(shot, frame, {
+    image,
+    imagePromptVersion: source.imagePromptVersion
+      ? {
+          id: `${frame.id}-prompt`,
+          frameId: frame.id,
+          components: null,
+          source: 'ai-generated',
+          analysisModel: null,
+          status: 'completed',
+          pendingInputHash: null,
+          workflowRunId: null,
+          createdAt: shot.createdAt,
+          createdBy: null,
+          ...source.imagePromptVersion,
+        }
+      : null,
+    video: render?.url ? render : null,
+    primaryVideo: render,
+    gridSheet: source.gridSheet ?? null,
+  });
+}
+
+export const fixtureShots: ShotView[] = fixtureShotSources.map(fixtureShotView);

@@ -25,10 +25,10 @@ import {
 import type { NewSequence, Sequence } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import {
-  projectShotMissingFrame,
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+  shotViewMissingFrame,
+  toShotView,
+  type ShotView,
+} from '@/lib/shots/shot-view';
 import { ValidationError } from '@/lib/errors';
 import {
   and,
@@ -136,7 +136,7 @@ function createSequencesReadMethods(db: Database, teamId: string) {
      * applied via the join so caller-supplied ids from another team simply
      * return nothing rather than leak.
      */
-    listShotsByIds: async (sequenceIds: string[]): Promise<ShotWithImage[]> => {
+    listShotsByIds: async (sequenceIds: string[]): Promise<ShotView[]> => {
       if (sequenceIds.length === 0) return [];
       // Chunk the ids to stay under D1's bound-parameter ceiling. Each chunk
       // holds all of a sequence's shots (we split on sequence boundaries), so
@@ -212,19 +212,19 @@ function createSequencesReadMethods(db: Database, teamId: string) {
               return rows.map((row) => {
                 const selectedMotion = selectedMotionByShot.get(row.shots.id);
                 const video = {
-                  selectedVideo: row.video_variants,
+                  video: row.video_variants,
                   primaryVideo: primaryByShot.get(row.shots.id) ?? null,
-                  motionPromptData: selectedMotion
+                  motionPrompt: selectedMotion
                     ? motionPromptFromVersion(selectedMotion)
                     : null,
                 };
                 return row.frames
-                  ? projectShotWithImage(row.shots, row.frames, {
-                      selectedImage: row.frame_variants,
-                      selectedImagePrompt: row.frame_prompt_versions,
+                  ? toShotView(row.shots, row.frames, {
+                      image: row.frame_variants,
+                      imagePromptVersion: row.frame_prompt_versions,
                       ...video,
                     })
-                  : projectShotMissingFrame(row.shots, video);
+                  : shotViewMissingFrame(row.shots, video);
               });
             })
         )

@@ -1,61 +1,52 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import type { Frame, ShotVariant } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotVariant } from '@/lib/db/schema';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import { DivergenceCompareDialog } from './divergence-compare-dialog';
 
 const NOW = new Date('2026-04-29T00:00:00Z');
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// the dialog reads the legacy projected names (`thumbnail*`/`image*`), so the
-// fixture keeps them and adds the raw anchor `frame`.
-const baseShot: ShotWithImage = {
-  id: 'shot-1',
+const anchorFrame = frameFixture({
+  id: 'frame-1',
+  shotId: 'shot-1',
   sequenceId: 'seq-1',
-  sceneId: null,
-  shotNumber: 1,
-  durationMs: 3000,
-  thumbnailUrl: 'https://images.unsplash.com/photo-1502872364588-894d7d6ddfab',
-  previewThumbnailUrl: null,
-  thumbnailPath: null,
-  variantImageUrl: null,
-  variantImageStatus: 'pending',
-  videoUrl: null,
-  videoPath: null,
-  thumbnailStatus: 'completed',
-  thumbnailWorkflowRunId: null,
-  imageModel: null,
-  thumbnailError: null,
-  imagePrompt: null,
-  videoStatus: 'pending',
-  videoWorkflowRunId: null,
-  videoGeneratedAt: null,
-  videoError: null,
-  motionModel: null,
-  motionPromptData: null,
-  selectedMotionPromptVersionId: null,
-  renderSegmentId: null,
-  thumbnailInputHash: 'live-hash',
-  videoInputHash: null,
-  visualPromptInputHash: null,
+  imageStatus: 'completed',
   createdAt: NOW,
   updatedAt: NOW,
-  frame: {
+});
+
+const baseShot: ShotView = toShotView(
+  {
     id: 'shot-1',
-    shotId: 'shot-1',
     sequenceId: 'seq-1',
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: null,
-    imageStatus: 'completed',
-    imageWorkflowRunId: null,
-    imageError: null,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
+    sceneId: null,
+    shotNumber: 1,
+    durationMs: 3000,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     createdAt: NOW,
     updatedAt: NOW,
-  } satisfies Frame,
-};
+  },
+  anchorFrame,
+  {
+    image: frameVariantFixture({
+      frameId: anchorFrame.id,
+      sequenceId: 'seq-1',
+      url: 'https://images.unsplash.com/photo-1502872364588-894d7d6ddfab',
+      inputHash: 'live-hash',
+      generatedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }),
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+  }
+);
 
 function makeVariant(
   overrides: Partial<ShotVariant> & {
@@ -119,7 +110,11 @@ export const VideoVariant: Story = {
     onOpenChange: () => {},
     shot: {
       ...baseShot,
-      videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4',
+      video: videoVariantFixture({
+        renderSegmentId: 'segment-1',
+        sequenceId: 'seq-1',
+        url: 'https://www.w3schools.com/html/mov_bbb.mp4',
+      }),
     },
     variant: makeVariant({
       variantType: 'video',

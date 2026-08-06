@@ -21,10 +21,10 @@ import {
   UPDATE_STALE_DEPTHS,
 } from '@/lib/shots/update-stale-depth';
 import {
-  projectShotWithImage,
-  projectShotMissingFrame,
+  toShotView,
+  shotViewMissingFrame,
   type ShotGridSheet,
-} from '@/lib/shots/shot-with-image';
+} from '@/lib/shots/shot-view';
 import { getVideoDownloadUrl } from '@/lib/motion/video-storage';
 import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { projectVideoVariants } from '@/lib/motion/video-variant-projection';
@@ -67,8 +67,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const { scopedDb, sequence } = context;
     const shotRows = await scopedDb.shots.listBySequence(sequence.id);
-    // Guarantee every shot has its anchor frame, then project the image surface
-    // (#989) back under the legacy thumbnail*/image* names so the UI is unchanged.
+    // Guarantee every shot has its anchor frame before assembling its view.
     await scopedDb.shots.ensureAnchorFrames(shotRows);
     const [anchorRows, gridSheets, motionByShot] = await Promise.all([
       scopedDb.frames.listAnchorsBySequence(sequence.id),
@@ -79,7 +78,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
     ]);
     // The still lives on the selected `frame_variants` row and the video on the
     // segment's selected `video_variants` row (#1067) — one batch read each, so
-    // projecting the sequence stays O(1) queries.
+    // assembling the sequence stays O(1) queries.
     const shotIds = shotRows.map((s) => s.id);
     const [
       selectedByFrame,
@@ -98,7 +97,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
     return shotRows.map((shot) => {
       const frame = anchorsByShot.get(shot.id);
       const selectedMotion = motionByShot.get(shot.id);
-      const motionPromptData = selectedMotion
+      const motionPrompt = selectedMotion
         ? motionPromptFromVersion(selectedMotion)
         : null;
       // `ensureAnchorFrames` above guarantees an anchor for every shot, so this
@@ -109,9 +108,12 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         logger.error(
           `getShotsFn: shot ${shot.id} has no anchor frame after ensureAnchorFrames`
         );
-        return projectShotMissingFrame(shot, {
-          selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+        return shotViewMissingFrame(shot, {
+          video: selectedVideoByShot.get(shot.id) ?? null,
           primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
+          // Motion lives on the shot, not the frame — a frameless shot still
+          // has one. The sibling reads in sequences/admin already pass it.
+          motionPrompt,
         });
       }
       // Grid sheets are keyed by frame id (#989), resolved from the anchor.
@@ -119,13 +121,13 @@ export const getShotsFn = createServerFn({ method: 'GET' })
       const gridSheet: ShotGridSheet | null = sheet
         ? { url: sheet.url, status: sheet.status }
         : null;
-      return projectShotWithImage(shot, frame, {
-        selectedImage: selectedByFrame.get(frame.id) ?? null,
-        selectedImagePrompt: selectedPromptByFrame.get(frame.id) ?? null,
-        selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+      return toShotView(shot, frame, {
+        image: selectedByFrame.get(frame.id) ?? null,
+        imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+        video: selectedVideoByShot.get(shot.id) ?? null,
         primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
         gridSheet,
-        motionPromptData,
+        motionPrompt,
       });
     });
   });
@@ -163,9 +165,9 @@ export const getShotFn = createServerFn({ method: 'GET' })
     const [
       sheet,
       selectedMotion,
-      selectedImage,
-      selectedImagePrompt,
-      selectedVideo,
+      image,
+      imagePromptVersion,
+      video,
       primaryVideo,
     ] = await Promise.all([
       context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
@@ -175,13 +177,13 @@ export const getShotFn = createServerFn({ method: 'GET' })
       context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
       context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
     ]);
-    return projectShotWithImage(context.shot, context.frame, {
-      selectedImage,
-      selectedImagePrompt,
-      selectedVideo,
+    return toShotView(context.shot, context.frame, {
+      image,
+      imagePromptVersion,
+      video,
       primaryVideo,
       gridSheet: sheet ? { url: sheet.url, status: sheet.status } : null,
-      motionPromptData: selectedMotion
+      motionPrompt: selectedMotion
         ? motionPromptFromVersion(selectedMotion)
         : null,
     });

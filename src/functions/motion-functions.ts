@@ -32,7 +32,7 @@ import type { BatchMotionMusicWorkflowInput } from '@/lib/workflow/types';
 
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { getFrameImageUrl } from '@/lib/shots/frame-image';
-import { projectShotWithImage } from '@/lib/shots/shot-with-image';
+import { toShotView } from '@/lib/shots/shot-view';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 
 import { shotAccessMiddleware, sequenceAccessMiddleware } from './middleware';
@@ -213,8 +213,8 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user } = context;
 
-    // Project the anchor-frame image surface (#989) so the eligibility filter
-    // and downstream `shot.thumbnailUrl` reads keep working unchanged.
+    // The eligibility filter and the per-shot `imageUrl` below read the anchor
+    // frame's still (#989), so assemble each shot's view first.
     const rawShots = await context.scopedDb.shots.listBySequence(sequence.id);
     const anchorsByShot = new Map(
       (await context.scopedDb.frames.listAnchorsBySequence(sequence.id)).map(
@@ -250,10 +250,10 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       const frame = anchorsByShot.get(s.id);
       return frame
         ? [
-            projectShotWithImage(s, frame, {
-              selectedImage: selectedByFrame.get(frame.id) ?? null,
-              selectedImagePrompt: selectedPromptByFrame.get(frame.id) ?? null,
-              selectedVideo: selectedVideoByShot.get(s.id) ?? null,
+            toShotView(s, frame, {
+              image: selectedByFrame.get(frame.id) ?? null,
+              imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+              video: selectedVideoByShot.get(s.id) ?? null,
               primaryVideo: primaryVideoByShot.get(s.id) ?? null,
             }),
           ]
@@ -262,8 +262,8 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
     // Server determines eligible shots: still done, video pending/failed
     const eligibleShots = allShots.filter(
       (f) =>
-        f.thumbnailStatus === 'completed' &&
-        f.thumbnailUrl &&
+        f.frame.imageStatus === 'completed' &&
+        f.image?.url &&
         (f.videoStatus === 'pending' || f.videoStatus === 'failed')
     );
 
@@ -362,7 +362,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         const scene = sceneOf(shot);
         return {
           shotId: shot.id,
-          imageUrl: shot.thumbnailUrl ?? '',
+          imageUrl: shot.image?.url ?? '',
           prompt: resolveMotionPromptFromVersion(
             selectedMotionByShot.get(shot.id),
             {

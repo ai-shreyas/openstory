@@ -7,7 +7,7 @@ import {
   groupShotsBySegment,
   type SequenceSegment,
 } from '@/lib/scenes/scene-segments';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Film } from 'lucide-react';
 import { Fragment, memo, useMemo, useState } from 'react';
@@ -15,7 +15,7 @@ import { SceneListItem } from './scene-list-item';
 
 type SceneGroupProps = {
   scene: SceneWithScript;
-  shots: ShotWithImage[];
+  shots: ShotView[];
   /** Render segments by id (#986) — bracket the shots that share one video. */
   segmentsById: ReadonlyMap<string, SequenceSegment>;
   isSceneSelected: boolean;

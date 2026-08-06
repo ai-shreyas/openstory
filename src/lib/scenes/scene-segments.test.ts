@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import {
   assembleSequenceSegments,
   formatShotSpan,
@@ -14,13 +14,13 @@ const shot = (
   id: string,
   shotNumber: number,
   renderSegmentId: string | null
-): ShotWithImage =>
+): ShotView =>
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- minimal fixture: grouping reads only id/renderSegmentId/shotNumber
   ({
     id,
     shotNumber,
     renderSegmentId,
-  }) as ShotWithImage;
+  }) as ShotView;
 
 const segment = (id: string, shotIds: string[]): SequenceSegment => ({
   id,

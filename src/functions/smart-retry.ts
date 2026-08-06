@@ -35,7 +35,7 @@ import {
   motionPromptFromVersion,
   resolveMotionPromptFromVersion,
 } from '@/lib/motion/resolve-motion-prompt';
-import { projectShotWithImage } from '@/lib/shots/shot-with-image';
+import { toShotView } from '@/lib/shots/shot-view';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -103,10 +103,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   await assertNoActiveStoryboard(context.scopedDb, sequence.id);
 
   const shots = await context.scopedDb.shots.listBySequence(sequence.id);
-  // The still-image surface lives on each shot's anchor frame now (#989).
-  // Project it back under the legacy thumbnail*/image* names — keyed by shotId,
-  // never by id-reuse — so the failure analysis and per-shot retry reads below
-  // are unchanged.
+  // The still-image surface lives on each shot's anchor frame now (#989) —
+  // resolved keyed by shotId, never by id-reuse.
   await context.scopedDb.shots.ensureAnchorFrames(shots);
   const anchorsByShot = new Map(
     (await context.scopedDb.frames.listAnchorsBySequence(sequence.id)).map(
@@ -132,17 +130,17 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       shots.map((s) => s.id)
     ),
   ]);
-  const shotsWithImage = shots.flatMap((shot) => {
+  const shotViews = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
     if (!frame) return [];
     const selectedMotion = selectedMotionByShot.get(shot.id);
     return [
-      projectShotWithImage(shot, frame, {
-        selectedImage: selectedByFrame.get(frame.id) ?? null,
-        selectedImagePrompt: selectedPromptByFrame.get(frame.id) ?? null,
-        selectedVideo: selectedVideoByShot.get(shot.id) ?? null,
+      toShotView(shot, frame, {
+        image: selectedByFrame.get(frame.id) ?? null,
+        imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+        video: selectedVideoByShot.get(shot.id) ?? null,
         primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
-        motionPromptData: selectedMotion
+        motionPrompt: selectedMotion
           ? motionPromptFromVersion(selectedMotion)
           : null,
       }),
@@ -157,7 +155,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   const scenesById = new Map(
     [...sceneContext].map(([sceneId, ctx]) => [sceneId, ctx.scene])
   );
-  const summary = analyzeFailures(shotsWithImage, sequence, scenesById);
+  const summary = analyzeFailures(shotViews, sequence, scenesById);
 
   if (!summary.hasFailed) {
     throw new Error('No failures found to retry');
@@ -228,13 +226,13 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     context.scopedDb.frameVariants.listLastFailedModelsBySequence(sequence.id),
     context.scopedDb.videoVariants.listLastFailedModelsBySequence(sequence.id),
   ]);
-  const imageModelFor = (shot: (typeof shotsWithImage)[number]) =>
+  const imageModelFor = (shot: (typeof shotViews)[number]) =>
     resolveImageModel({
       lastFailedAttemptModel: failedImageModels.get(shot.id),
       selectedVersionModel: selectedImageModels.get(shot.id),
       sequenceModel: sequence.imageModel,
     });
-  const videoModelFor = (shot: (typeof shotsWithImage)[number]) =>
+  const videoModelFor = (shot: (typeof shotViews)[number]) =>
     resolveVideoModel({
       lastFailedAttemptModel: failedVideoModels.get(shot.id),
       selectedVersionModel: selectedVideoModels.get(shot.id),
@@ -242,14 +240,12 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     });
 
   // Collect failed items and estimate costs
-  const failedImageShots = shotsWithImage.filter(
-    (f) => f.thumbnailStatus === 'failed'
+  const failedImageShots = shotViews.filter(
+    (f) => f.frame.imageStatus === 'failed'
   );
-  const failedMotionShots = shotsWithImage.filter(
+  const failedMotionShots = shotViews.filter(
     (f) =>
-      f.videoStatus === 'failed' &&
-      f.thumbnailUrl &&
-      f.motionPromptData?.fullPrompt
+      f.videoStatus === 'failed' && f.image?.url && f.motionPrompt?.fullPrompt
   );
   const hasMusicFailure =
     sequence.musicStatus === 'failed' && sequence.musicPrompt;
@@ -301,7 +297,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     let triggeredImages = 0;
     for (const shot of failedImageShots) {
       const scene = sceneOf(shot);
-      const prompt = shot.imagePrompt || scene?.originalScript.extract;
+      const prompt =
+        shot.imagePromptVersion?.text || scene?.originalScript.extract;
 
       if (!prompt) continue;
 
@@ -336,7 +333,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   if (failedMotionShots.length > 0) {
     let triggeredMotion = 0;
     for (const shot of failedMotionShots) {
-      if (!shot.thumbnailUrl) continue;
+      const imageUrl = shot.image?.url;
+      if (!imageUrl) continue;
 
       const shotVideoModel = videoModelFor(shot);
       const scene = sceneOf(shot);
@@ -346,7 +344,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         teamId,
         shotId: shot.id,
         sequenceId: sequence.id,
-        imageUrl: shot.thumbnailUrl,
+        imageUrl,
         prompt: resolveMotionPromptFromVersion(
           selectedMotion,
           {

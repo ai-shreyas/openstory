@@ -11,14 +11,14 @@ import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useGenerateVariants, useSelectVariant } from '@/hooks/use-shots';
 import type { TextToImageModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { Grid2x2, Loader2 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { VariantSelector } from './variant-selector';
 
 type StartingFrameVariantsProps = {
-  shot: ShotWithImage;
+  shot: ShotView;
   sequenceId: string;
   /** Scene-level image model (#909) the variants are generated with. */
   imageModel: TextToImageModel;
@@ -50,7 +50,7 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
 
   const isGenerating =
     generating ||
-    shot.variantImageStatus === 'generating' ||
+    shot.gridSheet?.status === 'generating' ||
     generateVariants.isPending;
 
   const handleGenerate = useCallback(async () => {
@@ -116,9 +116,9 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
             </DialogDescription>
           </DialogHeader>
 
-          {shot.variantImageUrl ? (
+          {shot.gridSheet?.url ? (
             <VariantSelector
-              variantImageUrl={shot.variantImageUrl}
+              variantImageUrl={shot.gridSheet.url}
               selectedVariantIndex={null}
               onVariantSelect={(index) => void handleSelect(index)}
               loading={isGenerating || selectVariant.isPending}
@@ -149,7 +149,7 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
               )}
               {isGenerating
                 ? 'Generating…'
-                : shot.variantImageUrl
+                : shot.gridSheet?.url
                   ? 'Regenerate frame variants'
                   : 'Generate frame variants'}
             </Button>

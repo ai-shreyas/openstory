@@ -6,7 +6,7 @@ import type {
   SegmentVideoVersion,
   SequenceSegment,
 } from '@/lib/scenes/scene-segments';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { Meta, StoryObj } from '@storybook/react';
 import { SceneList } from './scene-list';
 
@@ -99,22 +99,28 @@ const PS_SHOT_CONFIGS: PsShotConfig[] = [
 
 const psBases = generateMockShots(PS_SHOT_CONFIGS.length, PS_SEQ);
 
-const perSegmentShots: ShotWithImage[] = PS_SHOT_CONFIGS.map((cfg, index) => {
+const perSegmentShots: ShotView[] = PS_SHOT_CONFIGS.map((cfg, index) => {
   const base = psBases[index];
   if (!base) throw new Error(`missing mock shot base at ${index}`);
+  const video = base.primaryVideo
+    ? { ...base.primaryVideo, url: PS_VIDEO_URL, status: 'completed' as const }
+    : null;
   return {
     ...base,
     id: `shot-${index}`,
     sequenceId: PS_SEQ,
     sceneId: cfg.sceneId,
-    orderIndex: index,
     shotNumber: cfg.shotNumber,
     renderSegmentId: cfg.segmentId,
-    thumbnailUrl: cfg.img,
-    thumbnailStatus: 'completed',
-    thumbnailError: null,
-    videoUrl: PS_VIDEO_URL,
-    videoStatus: 'completed',
+    frame: {
+      ...base.frame,
+      imageStatus: 'completed' as const,
+      imageError: null,
+    },
+    image: base.image ? { ...base.image, url: cfg.img } : null,
+    video,
+    primaryVideo: video,
+    videoStatus: 'completed' as const,
   };
 });
 
@@ -305,9 +311,11 @@ export const GeneratingThumbnails: Story = {
   args: {
     shots: mockShots.map((shot, idx) => ({
       ...shot,
-      thumbnailStatus:
-        idx < 3 ? ('generating' as const) : ('completed' as const),
-      thumbnailUrl: idx < 3 ? null : shot.thumbnailUrl,
+      frame: {
+        ...shot.frame,
+        imageStatus: idx < 3 ? ('generating' as const) : ('completed' as const),
+      },
+      image: idx < 3 ? null : shot.image,
     })),
     selection: { sceneIds: [], shotId: mockShots[0]?.id },
   },
@@ -317,9 +325,12 @@ export const WithFailures: Story = {
   args: {
     shots: mockShots.map((shot, idx) => ({
       ...shot,
-      thumbnailStatus: idx === 2 ? ('failed' as const) : ('completed' as const),
-      thumbnailUrl: idx === 2 ? null : shot.thumbnailUrl,
-      thumbnailError: idx === 2 ? 'Generation timeout' : null,
+      frame: {
+        ...shot.frame,
+        imageStatus: idx === 2 ? ('failed' as const) : ('completed' as const),
+        imageError: idx === 2 ? 'Generation timeout' : null,
+      },
+      image: idx === 2 ? null : shot.image,
     })),
     selection: { sceneIds: [] },
   },
@@ -331,28 +342,31 @@ export const MixedStates: Story = {
       if (idx === 0) {
         return {
           ...shot,
-          thumbnailStatus: 'pending' as const,
-          thumbnailUrl: null,
+          frame: { ...shot.frame, imageStatus: 'pending' as const },
+          image: null,
         };
       }
       if (idx === 1) {
         return {
           ...shot,
-          thumbnailStatus: 'generating' as const,
-          thumbnailUrl: null,
+          frame: { ...shot.frame, imageStatus: 'generating' as const },
+          image: null,
         };
       }
       if (idx === 2) {
         return {
           ...shot,
-          thumbnailStatus: 'failed' as const,
-          thumbnailUrl: null,
-          thumbnailError: 'API error',
+          frame: {
+            ...shot.frame,
+            imageStatus: 'failed' as const,
+            imageError: 'API error',
+          },
+          image: null,
         };
       }
       return {
         ...shot,
-        thumbnailStatus: 'completed' as const,
+        frame: { ...shot.frame, imageStatus: 'completed' as const },
       };
     }),
     selection: { sceneIds: [], shotId: mockShots[1]?.id },

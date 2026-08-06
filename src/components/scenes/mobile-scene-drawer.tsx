@@ -13,7 +13,7 @@ import type { SceneWithScript } from '@/hooks/use-scenes';
 import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { ChevronUp, Loader2, Video } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import type { BatchGenerateMotionArgs } from './scene-list';
@@ -21,7 +21,7 @@ import { SceneListItem } from './scene-list-item';
 import { SceneThumbnail } from './scene-thumbnail';
 
 type MobileSceneDrawerProps = {
-  shots?: ShotWithImage[];
+  shots?: ShotView[];
   /** Scenes the shots belong to — they carry the number, title and script. */
   scenes?: SceneWithScript[];
   selectedShotId?: string;
@@ -87,7 +87,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
         (f.videoStatus === 'pending' ||
           f.videoStatus === 'failed' ||
           f.videoStatus === 'generating') &&
-        f.thumbnailStatus === 'completed'
+        f.frame.imageStatus === 'completed'
     );
   }, [shots]);
 
@@ -99,7 +99,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   // Check if all eligible shots have motion prompts ready
   const motionPromptsReady = useMemo(() => {
     if (!eligibleShots.length) return true;
-    return eligibleShots.every((f) => f.motionPromptData?.fullPrompt);
+    return eligibleShots.every((f) => f.motionPrompt?.fullPrompt);
   }, [eligibleShots]);
 
   const handleGenerateMotion = async () => {
@@ -148,9 +148,9 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
         )}
       >
         <SceneThumbnail
-          thumbnailUrl={selectedShot?.thumbnailUrl}
-          previewThumbnailUrl={selectedShot?.previewThumbnailUrl}
-          thumbnailStatus={selectedShot?.thumbnailStatus || undefined}
+          thumbnailUrl={selectedShot?.image?.url}
+          previewThumbnailUrl={selectedShot?.frame.previewImageUrl}
+          thumbnailStatus={selectedShot?.frame.imageStatus || undefined}
           alt={sceneTitle}
           aspectRatio={aspectRatio}
           className="h-10 w-10 shrink-0 rounded object-cover"

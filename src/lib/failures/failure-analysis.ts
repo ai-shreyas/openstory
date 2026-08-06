@@ -6,7 +6,7 @@
 import type { SceneRow } from '@/lib/db/schema/scenes';
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 
 /** Scene titles keyed by scene id — the label source for each failed shot. */
 type ScenesById = ReadonlyMap<string, Pick<SceneRow, 'title' | 'orderIndex'>>;
@@ -93,10 +93,9 @@ function buildHeadline(
 }
 
 export function analyzeFailures(
-  // The image surface (thumbnailStatus/thumbnailUrl/thumbnailError) moved onto
-  // the anchor frame in #989; callers project it back via `projectShotWithImage`
-  // so the failure heuristics here read the same legacy field names.
-  shots: ShotWithImage[],
+  // The still's lifecycle lives on the anchor frame (#989) and the video's on
+  // the segment's primary render (#1067).
+  shots: ShotView[],
   sequence: Sequence,
   scenesById: ScenesById
 ): FailureSummary {
@@ -116,7 +115,9 @@ export function analyzeFailures(
   }
 
   // Failed images
-  const failedImageShots = shots.filter((f) => f.thumbnailStatus === 'failed');
+  const failedImageShots = shots.filter(
+    (f) => f.frame.imageStatus === 'failed'
+  );
   if (failedImageShots.length > 0) {
     groups.push({
       category: 'image',
@@ -125,7 +126,7 @@ export function analyzeFailures(
         shotId: f.id,
         sceneNumber: sceneNumberOf(f, scenesById),
         sceneTitle: getSceneTitle(f, scenesById),
-        error: f.thumbnailError,
+        error: f.frame.imageError,
       })),
     });
   }
@@ -133,9 +134,7 @@ export function analyzeFailures(
   // Failed motion (only shots with thumbnails AND a motion prompt)
   const failedMotionShots = shots.filter(
     (f) =>
-      f.videoStatus === 'failed' &&
-      f.thumbnailUrl &&
-      f.motionPromptData?.fullPrompt
+      f.videoStatus === 'failed' && f.image?.url && f.motionPrompt?.fullPrompt
   );
   if (failedMotionShots.length > 0) {
     groups.push({
@@ -145,14 +144,14 @@ export function analyzeFailures(
         shotId: f.id,
         sceneNumber: sceneNumberOf(f, scenesById),
         sceneTitle: getSceneTitle(f, scenesById),
-        error: f.videoError,
+        error: f.primaryVideo?.error ?? null,
       })),
     });
   }
 
   // Detect missing motion prompts (images completed but no motion prompt)
   const shotsWithImageButNoMotionPrompt = shots.filter(
-    (f) => f.thumbnailStatus === 'completed' && !f.motionPromptData?.fullPrompt
+    (f) => f.frame.imageStatus === 'completed' && !f.motionPrompt?.fullPrompt
   );
   if (
     shotsWithImageButNoMotionPrompt.length > 0 &&

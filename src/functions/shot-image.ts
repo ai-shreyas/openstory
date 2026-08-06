@@ -491,11 +491,10 @@ const setVideoFromVariantInputSchema = z.object({
 /**
  * Repoint a shot's primary video to a model's latest render (#545, re-routed to
  * `video_variants` in #990) — the motion analog of `setImageFromVariantFn`.
- * Selection is a pointer now: `videoVariants.select` mirrors the version onto
- * `shots.video*` (so the player and exports use it), repoints the render
- * segment's `selectedVideoVersionId` pointer, and logs a `video.selected` event
- * — atomically and non-destructively (the version is retained, so the viewer
- * can switch back).
+ * Selection is a pointer now: `videoVariants.select` repoints the render
+ * segment's `selectedVideoVersionId` and logs a `video.selected` event —
+ * atomically and non-destructively (the version is retained, so the viewer can
+ * switch back).
  */
 export const setVideoFromVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
@@ -536,8 +535,8 @@ const selectSegmentVideoVersionInputSchema = z.object({
  * Repoint a render segment's selection at a SPECIFIC version (#986) — the
  * version-switcher analog of `setVideoFromVariantFn` (which only picks the
  * latest for a model). `videoVariants.select` validates the version belongs to
- * the shot's segment and is completed, repoints `selectedVideoVersionId`,
- * mirrors the shot's `video*` columns, and logs `video.selected` — atomically.
+ * the shot's segment and is completed, repoints `selectedVideoVersionId`, and
+ * logs `video.selected` — atomically.
  */
 export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])

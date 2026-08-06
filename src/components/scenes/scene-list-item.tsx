@@ -10,13 +10,13 @@ import type { SceneWithScript } from '@/hooks/use-scenes';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { Loader2, Play } from 'lucide-react';
 import { memo } from 'react';
 import { SceneThumbnail } from './scene-thumbnail';
 
 type SceneListItemProps = {
-  shot?: ShotWithImage | undefined;
+  shot?: ShotView | undefined;
   /** The shot's scene — carries the number, title and script the card shows. */
   scene?: SceneWithScript | undefined;
   aspectRatio: AspectRatio;
@@ -65,7 +65,7 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   // corner spinner (the thumbnail itself is what's being replaced). The old
   // corner tick is gone — a green check on every finished shot was noise on a
   // list where "finished" is the normal state.
-  const hasVideo = shot?.videoStatus === 'completed' && !!shot.videoUrl;
+  const hasVideo = shot?.videoStatus === 'completed' && !!shot.video?.url;
   const isGeneratingVideo =
     !!shot && (shot.videoStatus === 'generating' || isRegeneratingMotion);
   const sceneNumber = (scene?.orderIndex ?? 0) + 1;
@@ -164,9 +164,9 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
             {/* Badges anchor to the thumbnail, not the (taller) text row. */}
             <div className="relative">
               <SceneThumbnail
-                thumbnailUrl={shot?.thumbnailUrl}
-                previewThumbnailUrl={shot?.previewThumbnailUrl}
-                thumbnailStatus={shot?.thumbnailStatus || undefined}
+                thumbnailUrl={shot?.image?.url}
+                previewThumbnailUrl={shot?.frame.previewImageUrl}
+                thumbnailStatus={shot?.frame.imageStatus || undefined}
                 alt={title ?? 'Scene thumbnail'}
                 aspectRatio={aspectRatio}
                 className="w-full rounded-md"
@@ -271,16 +271,16 @@ const areEqual = (
 
   // Check thumbnail-related fields
   if (
-    prevShot.thumbnailUrl !== nextShot.thumbnailUrl ||
-    prevShot.previewThumbnailUrl !== nextShot.previewThumbnailUrl ||
-    prevShot.thumbnailStatus !== nextShot.thumbnailStatus
+    prevShot.image?.url !== nextShot.image?.url ||
+    prevShot.frame.previewImageUrl !== nextShot.frame.previewImageUrl ||
+    prevShot.frame.imageStatus !== nextShot.frame.imageStatus
   ) {
     return false;
   }
 
   // Check video-related fields (for skeleton/completion state)
   if (
-    prevShot.videoUrl !== nextShot.videoUrl ||
+    prevShot.video?.url !== nextShot.video?.url ||
     prevShot.videoStatus !== nextShot.videoStatus
   ) {
     return false;

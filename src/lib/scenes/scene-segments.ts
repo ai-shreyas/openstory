@@ -17,7 +17,7 @@
  */
 
 import type { VideoManifestEntry, VideoVariant } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 
 /** One video render (version) of a segment, trimmed to what the editor shows. */
 export type SegmentVideoVersion = Pick<
@@ -64,7 +64,7 @@ export type SequenceSegment = {
 export type SegmentGroup = {
   segmentId: string | null;
   segment: SequenceSegment | null;
-  shots: ShotWithImage[];
+  shots: ShotView[];
 };
 
 /**
@@ -74,7 +74,7 @@ export type SegmentGroup = {
  * (unrendered shot) yields a singleton group with `segment: null`.
  */
 export function groupShotsBySegment(
-  shots: readonly ShotWithImage[],
+  shots: readonly ShotView[],
   segmentsById: ReadonlyMap<string, SequenceSegment>
 ): SegmentGroup[] {
   // Callers pass shots already in hierarchical order (scene, then shot

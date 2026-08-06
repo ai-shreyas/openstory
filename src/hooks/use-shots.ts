@@ -2,7 +2,7 @@ import type { Shot } from '@/types/database';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ShotVariant } from '@/lib/db/schema';
 import type { ImageVariantWithShot } from '@/lib/db/scoped/frame-variants';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import {
   getShotsFn,
   getDivergentVariantsFn,
@@ -228,7 +228,7 @@ export function useShotsBySequence(
     staleTime?: number;
   }
 ) {
-  return useQuery<ShotWithImage[]>({
+  return useQuery<ShotView[]>({
     queryKey: shotKeys.list(sequenceId ?? ''),
     queryFn: async () => {
       if (!sequenceId) throw new Error('sequenceId is required');
@@ -268,19 +268,19 @@ export function useGenerateVariants() {
       return { workflowRunId: result.workflowRunId };
     },
     onSuccess: async (_, { sequenceId, shotId }) => {
-      // Optimistically update shot status to 'generating'
-      queryClient.setQueryData<ShotWithImage>(
-        shotKeys.detail(shotId),
-        (oldShot) => {
-          if (!oldShot) return oldShot;
-          return {
-            ...oldShot,
-            variantImageStatus: 'generating' as const,
-          };
-        }
-      );
+      // Optimistically update the grid sheet's status to 'generating'
+      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (oldShot) => {
+        if (!oldShot) return oldShot;
+        return {
+          ...oldShot,
+          gridSheet: {
+            url: oldShot.gridSheet?.url ?? null,
+            status: 'generating' as const,
+          },
+        };
+      });
 
-      queryClient.setQueryData<ShotWithImage[]>(
+      queryClient.setQueryData<ShotView[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -288,7 +288,10 @@ export function useGenerateVariants() {
             f.id === shotId
               ? {
                   ...f,
-                  variantImageStatus: 'generating' as const,
+                  gridSheet: {
+                    url: f.gridSheet?.url ?? null,
+                    status: 'generating' as const,
+                  },
                 }
               : f
           );
@@ -333,20 +336,22 @@ export function useSelectVariant() {
       };
     },
     onSuccess: async (data, { sequenceId, shotId }) => {
-      // Update shot queries with new thumbnail
-      queryClient.setQueryData<ShotWithImage>(
-        shotKeys.detail(shotId),
-        (oldShot) => {
-          if (!oldShot) return oldShot;
-          return {
-            ...oldShot,
-            thumbnailUrl: data.thumbnailUrl,
-            thumbnailStatus: 'generating' as const, // Upscale is running
-          };
-        }
-      );
+      // Update shot queries with the new still. The url patch only applies when
+      // a selected variant row already exists — the refetch below fills in the
+      // row itself; the frame's status is what drives the visible transition.
+      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (oldShot) => {
+        if (!oldShot) return oldShot;
+        return {
+          ...oldShot,
+          image: oldShot.image
+            ? { ...oldShot.image, url: data.thumbnailUrl }
+            : null,
+          // Upscale is running
+          frame: { ...oldShot.frame, imageStatus: 'generating' as const },
+        };
+      });
 
-      queryClient.setQueryData<ShotWithImage[]>(
+      queryClient.setQueryData<ShotView[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -354,8 +359,10 @@ export function useSelectVariant() {
             f.id === shotId
               ? {
                   ...f,
-                  thumbnailUrl: data.thumbnailUrl,
-                  thumbnailStatus: 'generating' as const,
+                  image: f.image
+                    ? { ...f.image, url: data.thumbnailUrl }
+                    : null,
+                  frame: { ...f.frame, imageStatus: 'generating' as const },
                 }
               : f
           );
@@ -397,22 +404,20 @@ export function useSetImageFromVariant() {
       });
     },
     onSuccess: async (data, { sequenceId, shotId, model }) => {
-      queryClient.setQueryData<ShotWithImage>(
-        shotKeys.detail(shotId),
-        (oldShot) => {
-          if (!oldShot) return oldShot;
-          return {
-            ...oldShot,
-            thumbnailUrl: data.thumbnailUrl,
-            thumbnailStatus: 'completed' as const,
-            imageModel: model,
-            videoUrl: null,
-            videoStatus: 'pending' as const,
-          };
-        }
-      );
+      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (oldShot) => {
+        if (!oldShot) return oldShot;
+        return {
+          ...oldShot,
+          image: oldShot.image
+            ? { ...oldShot.image, url: data.thumbnailUrl, model }
+            : null,
+          frame: { ...oldShot.frame, imageStatus: 'completed' as const },
+          video: null,
+          videoStatus: 'pending' as const,
+        };
+      });
 
-      queryClient.setQueryData<ShotWithImage[]>(
+      queryClient.setQueryData<ShotView[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -420,10 +425,11 @@ export function useSetImageFromVariant() {
             f.id === shotId
               ? {
                   ...f,
-                  thumbnailUrl: data.thumbnailUrl,
-                  thumbnailStatus: 'completed' as const,
-                  imageModel: model,
-                  videoUrl: null,
+                  image: f.image
+                    ? { ...f.image, url: data.thumbnailUrl, model }
+                    : null,
+                  frame: { ...f.frame, imageStatus: 'completed' as const },
+                  video: null,
                   videoStatus: 'pending' as const,
                 }
               : f
@@ -460,8 +466,8 @@ export function useSetImageFromVariant() {
 }
 
 // Hook for setting a shot's video from an existing variant (#545) — the
-// motion analog of useSetImageFromVariant. Promotes a model's video variant to
-// the primary shots.video* columns and refreshes the video-variant cache.
+// motion analog of useSetImageFromVariant. Repoints the segment's selected
+// video version at that model and refreshes the video-variant cache.
 export function useSetVideoFromVariant() {
   const queryClient = useQueryClient();
 
@@ -482,20 +488,18 @@ export function useSetVideoFromVariant() {
       });
     },
     onSuccess: async (data, { sequenceId, shotId, model }) => {
-      queryClient.setQueryData<ShotWithImage>(
-        shotKeys.detail(shotId),
-        (oldShot) => {
-          if (!oldShot) return oldShot;
-          return {
-            ...oldShot,
-            videoUrl: data.videoUrl,
-            videoStatus: 'completed' as const,
-            motionModel: model,
-          };
-        }
-      );
+      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (oldShot) => {
+        if (!oldShot) return oldShot;
+        return {
+          ...oldShot,
+          video: oldShot.video
+            ? { ...oldShot.video, url: data.videoUrl, model }
+            : null,
+          videoStatus: 'completed' as const,
+        };
+      });
 
-      queryClient.setQueryData<ShotWithImage[]>(
+      queryClient.setQueryData<ShotView[]>(
         shotKeys.list(sequenceId),
         (oldShots) => {
           if (!oldShots) return oldShots;
@@ -503,9 +507,10 @@ export function useSetVideoFromVariant() {
             f.id === shotId
               ? {
                   ...f,
-                  videoUrl: data.videoUrl,
+                  video: f.video
+                    ? { ...f.video, url: data.videoUrl, model }
+                    : null,
                   videoStatus: 'completed' as const,
-                  motionModel: model,
                 }
               : f
           );
@@ -536,7 +541,7 @@ export function useSetVideoFromVariant() {
 
 // Hook for selecting a SPECIFIC video version for a shot's render segment (#986)
 // — the version-switcher analog of useSetVideoFromVariant. Repoints the segment
-// and mirrors the shot's video for playback; refreshes shot + segment caches.
+// at a specific version; refreshes shot + segment caches.
 export function useSelectSegmentVideoVersion() {
   const queryClient = useQueryClient();
 
@@ -550,13 +555,17 @@ export function useSelectSegmentVideoVersion() {
     },
     onSuccess: async (data, { sequenceId, shotId }) => {
       if (data.videoUrl) {
-        const videoUrl = data.videoUrl;
-        queryClient.setQueryData<ShotWithImage[]>(
+        const url = data.videoUrl;
+        queryClient.setQueryData<ShotView[]>(
           shotKeys.list(sequenceId),
           (oldShots) =>
             oldShots?.map((f) =>
               f.id === shotId
-                ? { ...f, videoUrl, videoStatus: 'completed' as const }
+                ? {
+                    ...f,
+                    video: f.video ? { ...f.video, url } : null,
+                    videoStatus: 'completed' as const,
+                  }
                 : f
             )
         );
@@ -632,17 +641,17 @@ export function useSelectFrameImageVersion() {
     mutationFn: async (input) => selectFrameImageVersionFn({ data: input }),
     onSuccess: async (data, { sequenceId, shotId }) => {
       if (data.thumbnailUrl) {
-        const thumbnailUrl = data.thumbnailUrl;
-        queryClient.setQueryData<ShotWithImage[]>(
+        const url = data.thumbnailUrl;
+        queryClient.setQueryData<ShotView[]>(
           shotKeys.list(sequenceId),
           (oldShots) =>
             oldShots?.map((f) =>
               f.id === shotId
                 ? {
                     ...f,
-                    thumbnailUrl,
-                    thumbnailStatus: 'completed' as const,
-                    videoUrl: null,
+                    image: f.image ? { ...f.image, url } : null,
+                    frame: { ...f.frame, imageStatus: 'completed' as const },
+                    video: null,
                     videoStatus: 'pending' as const,
                   }
                 : f

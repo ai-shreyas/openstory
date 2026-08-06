@@ -1,6 +1,7 @@
 import type { SceneWithScript } from '@/hooks/use-scenes';
-import { dbSceneId, type Frame } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import { dbSceneId } from '@/lib/db/schema';
+import { frameFixture, frameVariantFixture } from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
 import {
@@ -9,57 +10,38 @@ import {
   type TabValue,
 } from './scene-script-prompts';
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// the component reads the legacy projected names (`thumbnail*`/`image*`), so the
-// fixture keeps them and adds the raw anchor `frame`.
-const mockShot = {
-  id: 'shot-1',
+const anchorFrame = frameFixture({
+  id: 'frame-1',
+  shotId: 'shot-1',
   sequenceId: 'seq-1',
-  sceneId: 'scene-1',
-  shotNumber: 1,
-  durationMs: 3000,
-  thumbnailUrl: 'https://picsum.photos/seed/coffee/320/180',
-  thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
-  variantImageUrl: null,
-  variantImageStatus: 'pending',
-  videoUrl: null,
-  videoPath: null,
-  thumbnailStatus: 'completed',
-  videoStatus: 'pending',
-  thumbnailWorkflowRunId: null,
-  imageModel: null,
-  thumbnailError: null,
-  imagePrompt: null,
-  videoWorkflowRunId: null,
-  videoGeneratedAt: null,
-  videoError: null,
-  motionModel: 'veo3',
-  motionPromptData: null,
-  selectedMotionPromptVersionId: null,
-  renderSegmentId: null,
-  thumbnailInputHash: null,
-  videoInputHash: null,
-  visualPromptInputHash: null,
-  previewThumbnailUrl: null,
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  frame: {
+  imageStatus: 'completed',
+});
+
+const mockShot: ShotView = toShotView(
+  {
     id: 'shot-1',
-    shotId: 'shot-1',
     sequenceId: 'seq-1',
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: null,
-    imageStatus: 'completed',
-    imageWorkflowRunId: null,
-    imageError: null,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
+    sceneId: 'scene-1',
+    shotNumber: 1,
+    durationMs: 3000,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-  } satisfies Frame,
-} satisfies ShotWithImage;
+  },
+  anchorFrame,
+  {
+    image: frameVariantFixture({
+      frameId: anchorFrame.id,
+      sequenceId: 'seq-1',
+      url: 'https://picsum.photos/seed/coffee/320/180',
+      storagePath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
+    }),
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+  }
+);
 
 // The script, title and continuity the tabs read live on the scene (#1067).
 const mockScene: SceneWithScript = {

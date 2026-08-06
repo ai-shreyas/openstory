@@ -39,7 +39,7 @@ const SELECTED_MOTION_BY_SHOTS_BATCH = 90;
  * dialogue/audio data the assembled preview needs). Shots with no selected
  * motion version are absent from the map.
  *
- * Exported off the methods object so read paths that build a `ShotWithImage`
+ * Exported off the methods object so read paths that build a `ShotView`
  * from raw joins (sequences/admin) can resolve it without a scoped instance.
  */
 export async function getSelectedMotionByShotIds(
