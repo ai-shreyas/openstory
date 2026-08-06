@@ -142,15 +142,16 @@ export function NewSequencePage({
       lastSelfSyncRef.current = slug;
       void navigate({
         to: composerPath,
-        search: {
+        // Spread prev so future search keys are not clobbered on style pick.
+        search: (prev) => ({
+          ...prev,
           style: slug,
-          prefill: 'style',
-          ...(from ? { from } : {}),
-        },
+          prefill: 'style' as const,
+        }),
         replace: true,
       });
     },
-    [styles, navigate, composerPath, from]
+    [styles, navigate, composerPath]
   );
 
   const { needsBillingSetup, hasFalKey, stripeEnabled } = useBillingGate();

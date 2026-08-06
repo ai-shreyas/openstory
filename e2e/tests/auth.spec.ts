@@ -84,7 +84,25 @@ baseTest.describe('Route Protection', () => {
 
     await expect(page).toHaveURL(/\/login/);
     await expect(page.getByLabel('Email')).toBeVisible();
+    // Post-login must return to the alias (path + any search preserved).
+    const redirectTo = new URL(page.url()).searchParams.get('redirectTo');
+    expect(redirectTo).toBeTruthy();
+    expect(decodeURIComponent(redirectTo!)).toMatch(/\/sequences\/new/);
   });
+
+  baseTest(
+    'anonymous /sequences/new?style= preserves redirectTo search',
+    async ({ page }) => {
+      await page.goto('/sequences/new?style=product-ad');
+
+      await expect(page).toHaveURL(/\/login/);
+      const redirectTo = new URL(page.url()).searchParams.get('redirectTo');
+      expect(redirectTo).toBeTruthy();
+      const decoded = decodeURIComponent(redirectTo!);
+      expect(decoded).toMatch(/\/sequences\/new/);
+      expect(decoded).toMatch(/style=product-ad/);
+    }
+  );
 
   baseTest('login page is accessible', async ({ page }) => {
     await page.goto('/login');

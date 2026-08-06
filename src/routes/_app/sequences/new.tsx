@@ -3,9 +3,9 @@ import { requireSessionOrRedirect } from '@/lib/auth/route-guards';
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
 
-// Logged-in alias of the home composer. Search params match `/` so "New
-// sequence", "Generate Copy", and style CTAs from signed-in surfaces keep
-// working. Optional, no default — a bare /sequences/new must stay a bare URL.
+// Logged-in alias of the home composer. Style/prefill match `/`; `from` is
+// copy-a-sequence only (#1037) and must not appear on public `/`. Optional, no
+// default — a bare /sequences/new must stay a bare URL.
 const searchSchema = z.object({
   style: z.string().optional(),
   prefill: z.enum(['style']).optional(),
@@ -15,8 +15,8 @@ const searchSchema = z.object({
 export const Route = createFileRoute('/_app/sequences/new')({
   validateSearch: searchSchema,
   beforeLoad: async ({ context: { queryClient }, location }) => {
-    // Home is at `/` for everyone; this path is the signed-in entry point
-    // (sidebar "New sequence", copy-a-sequence, etc.). #1104
+    // Home is at `/` for everyone; this path is the signed-in alias
+    // (Generate Copy, breadcrumbs). Shell "New sequence" links to `/`. #1104
     await requireSessionOrRedirect(queryClient, location.href);
   },
   component: NewSequenceRoutePage,
