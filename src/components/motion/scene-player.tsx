@@ -455,9 +455,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           <VideoStateOverlay
             thumbnailUrl={displayImage}
             videoStatus={
-              isVariantVideoPreview
-                ? 'completed'
-                : (currentShot.videoStatus ?? null)
+              isVariantVideoPreview ? 'completed' : currentShot.videoStatus
             }
             progressMessage={progressMessage}
             retry={retry}

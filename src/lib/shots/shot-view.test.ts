@@ -98,6 +98,23 @@ describe('toShotView', () => {
     expect(view.motionPrompt).toBeNull();
   });
 
+  it('reads pending when nothing has been rendered', () => {
+    // The eligibility checks that drive "Generate N shots" (scene-list,
+    // scenes-view, mobile drawer, generateSequenceMotionFn) all spell "not yet
+    // rendered" as videoStatus === 'pending'. Deriving null here hid every
+    // never-rendered shot from them and the batch button never appeared.
+    const shot = makeShot();
+
+    const view = toShotView(shot, makeFrame(shot), {
+      image: null,
+      imagePromptVersion: null,
+      video: null,
+      primaryVideo: null,
+    });
+
+    expect(view.videoStatus).toBe('pending');
+  });
+
   it('falls back to the selection for a row with no primary render behind it', () => {
     // Pre-#1067 backfilled rows: a selection exists, no primary render does.
     const shot = makeShot();
@@ -155,19 +172,6 @@ describe('toShotView', () => {
     expect(view.videoStatus).toBe('failed');
     expect(view.primaryVideo?.error).toBe('fal 500');
     expect(view.video).toBeNull();
-  });
-
-  it('nulls videoStatus when nothing was ever rendered or selected', () => {
-    const shot = makeShot();
-
-    const view = toShotView(shot, makeFrame(shot), {
-      image: null,
-      imagePromptVersion: null,
-      video: null,
-      primaryVideo: null,
-    });
-
-    expect(view.videoStatus).toBeNull();
   });
 });
 

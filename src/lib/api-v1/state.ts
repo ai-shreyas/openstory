@@ -250,7 +250,7 @@ export async function buildSequenceState(
         url: share(imageUrl),
       },
       video: {
-        status: shot.videoStatus ?? 'pending',
+        status: shot.videoStatus,
         url: share(shot.video?.url ?? null),
       },
     };

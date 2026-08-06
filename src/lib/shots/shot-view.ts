@@ -58,9 +58,13 @@ export type ShotView = Shot & {
   /**
    * Derived, not stored: the newest primary render's lifecycle wins, so
    * re-rolling over a good video reads 'generating'. Falls back to the
-   * selection for pre-#1067 rows that have no primary render behind them.
+   * selection for pre-#1067 rows that have no primary render behind them, and
+   * to 'pending' when nothing has been rendered at all — a shot awaiting its
+   * first render is exactly what the dropped `shots.videoStatus` column meant
+   * by its `DEFAULT 'pending'`, and "not yet rendered" is how every eligibility
+   * check spells "generate this one".
    */
-  videoStatus: VideoVariant['status'] | null;
+  videoStatus: VideoVariant['status'];
   gridSheet: ShotGridSheet | null;
   motionPrompt: AssemblableMotionPrompt | null;
 };
@@ -118,7 +122,7 @@ export function toShotView(
     imagePromptVersion,
     video,
     primaryVideo,
-    videoStatus: primaryVideo?.status ?? (video ? 'completed' : null),
+    videoStatus: primaryVideo?.status ?? (video ? 'completed' : 'pending'),
     gridSheet: sources.gridSheet ?? null,
     motionPrompt: sources.motionPrompt ?? null,
   };

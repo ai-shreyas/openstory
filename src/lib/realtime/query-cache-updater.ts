@@ -65,9 +65,9 @@ function isValidMusicStatus(
   );
 }
 
-function isValidShotStatus(
-  status: unknown
-): status is ShotView['frame']['imageStatus'] {
+// Narrows to the non-null union it actually tests, so it can guard the
+// non-nullable `videoStatus` as well as the nullable `frame.imageStatus`.
+function isValidShotStatus(status: unknown): status is ShotView['videoStatus'] {
   return (
     status === 'pending' ||
     status === 'generating' ||
