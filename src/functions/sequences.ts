@@ -563,9 +563,21 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           fr,
         ])
       );
+      const selectedByFrame =
+        await scopedDb.frameVariants.getSelectedByFrameIds(
+          [...anchorsByShot.values()].map((fr) => fr.id)
+        );
       const shotsWithImage = allShots.flatMap((shot) => {
         const frame = anchorsByShot.get(shot.id);
-        return frame ? [projectShotWithImage(shot, frame)] : [];
+        return frame
+          ? [
+              projectShotWithImage(
+                shot,
+                frame,
+                selectedByFrame.get(frame.id) ?? null
+              ),
+            ]
+          : [];
       });
       const eligible = selectEligibleVideoShots(shotsWithImage);
       if (eligible.length === 0) {

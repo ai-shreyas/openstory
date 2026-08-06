@@ -178,6 +178,7 @@ export async function buildSequenceState(
   scopedDb: {
     shots: Pick<ScopedDb['shots'], 'listBySequence'>;
     frames: Pick<ScopedDb['frames'], 'listAnchorsBySequence'>;
+    frameVariants: Pick<ScopedDb['frameVariants'], 'getSelectedByFrameIds'>;
     styles: Pick<ScopedDb['styles'], 'getById'>;
   },
   sequence: Sequence,
@@ -196,9 +197,21 @@ export async function buildSequenceState(
   // Project it back under the legacy thumbnail* names — keyed by shotId, never
   // by id-reuse — so the image-readiness reads below are unchanged.
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+  // The still itself comes from the selected `frame_variants` row (#1067).
+  const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+    anchorRows.map((f) => f.id)
+  );
   const shotsWithImage = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
-    return frame ? [projectShotWithImage(shot, frame)] : [];
+    return frame
+      ? [
+          projectShotWithImage(
+            shot,
+            frame,
+            selectedByFrame.get(frame.id) ?? null
+          ),
+        ]
+      : [];
   });
   const ordered = [...shotsWithImage].sort(
     (a, b) => a.orderIndex - b.orderIndex

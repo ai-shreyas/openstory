@@ -33,6 +33,7 @@ import type {
   UpscaleShotVariantWorkflowResult,
 } from '@/lib/workflow/types';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+import { getAnchorImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'upscale-shot-variant']);
@@ -344,13 +345,15 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
       error
     );
     if (input.sequenceId) {
-      const frame = await scopedDb.frames.getAnchorByShot(input.shotId);
+      // The upscale just became the frame's selection; read the still back
+      // off that version rather than a frame column (#1067).
+      const thumbnailUrl = await getAnchorImageUrl(scopedDb, input.shotId);
       await getGenerationChannel(input.sequenceId).emit(
         'generation.image:progress',
         {
           shotId: input.shotId,
           status: 'completed',
-          ...(frame?.imageUrl ? { thumbnailUrl: frame.imageUrl } : {}),
+          ...(thumbnailUrl ? { thumbnailUrl } : {}),
         }
       );
     }

@@ -244,7 +244,7 @@ export const EvalView: React.FC<EvalViewProps> = ({ initialUserFilter }) => {
           action={
             !filters.search && !supportMode ? (
               <Button asChild size="lg">
-                <Link to="/sequences/new">Create Your First Sequence</Link>
+                <Link to="/">Create Your First Sequence</Link>
               </Button>
             ) : undefined
           }

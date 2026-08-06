@@ -28,7 +28,7 @@ const page = await browser.newPage({
 
 // Anonymous visitor — the front page is browsable without login, and that
 // logged-out hero (logo + tagline + composer) is exactly the OG card we want.
-await page.goto(`${BASE_URL}/sequences/new`, { waitUntil: 'domcontentloaded' });
+await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded' });
 await page.getByRole('heading', { name: 'Tell your whole story' }).waitFor();
 // Wait for the style library to load so the composer shows real style tiles
 // instead of empty skeletons.

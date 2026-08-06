@@ -25,6 +25,7 @@ import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { BatchMotionMusicWorkflowInput } from '@/lib/workflow/types';
 
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { projectShotWithImage } from '@/lib/shots/shot-with-image';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 
@@ -43,9 +44,10 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { shot, frame, sequence, teamId } = context;
 
-    // The still image lives on the anchor frame now (#989). Capture into a const
-    // so the non-null narrowing survives the awaits before the workflow input.
-    const imageUrl = frame.imageUrl;
+    // The still lives on the anchor frame's SELECTED version (#989/#1067).
+    // Capture into a const so the non-null narrowing survives the awaits
+    // before the workflow input.
+    const imageUrl = await getFrameImageUrl(context.scopedDb, frame.id);
     if (!imageUrl) {
       throw new Error('Shot has no thumbnail to generate motion from');
     }
@@ -213,9 +215,21 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         (f) => [f.shotId, f]
       )
     );
+    const selectedByFrame =
+      await context.scopedDb.frameVariants.getSelectedByFrameIds(
+        [...anchorsByShot.values()].map((f) => f.id)
+      );
     const allShots = rawShots.flatMap((s) => {
       const frame = anchorsByShot.get(s.id);
-      return frame ? [projectShotWithImage(s, frame)] : [];
+      return frame
+        ? [
+            projectShotWithImage(
+              s,
+              frame,
+              selectedByFrame.get(frame.id) ?? null
+            ),
+          ]
+        : [];
     });
     // Server determines eligible shots: still done, video pending/failed
     const eligibleShots = allShots.filter(

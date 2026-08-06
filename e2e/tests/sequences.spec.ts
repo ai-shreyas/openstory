@@ -1,6 +1,9 @@
 /**
  * Sequences E2E Tests
- * Tests sequence creation and viewing flows
+ * Tests sequence creation and viewing flows.
+ *
+ * Runs under the chromium project with storageState (signed-in). Anonymous
+ * routing for `/` and `/sequences/new` is covered in auth.spec.ts.
  */
 
 import { test, expect } from 'playwright/test';
@@ -12,18 +15,23 @@ test.describe('Sequences', () => {
     await expect(page).toHaveURL(/\/sequences/);
   });
 
-  test('can access new sequence page', async ({ page }) => {
-    await page.goto('/sequences/new');
+  test('home page has script input', async ({ page }) => {
+    await page.goto('/');
 
-    await expect(page).toHaveURL('/sequences/new');
-  });
-
-  test('new sequence page has script input', async ({ page }) => {
-    await page.goto('/sequences/new');
-
+    await expect(page).toHaveURL('/');
     // The script field is a TipTap-backed contenteditable wrapped in the
     // MarkdownEditor component. Target it by data-slot so the assertion is
     // resilient to internal ProseMirror DOM shape.
+    const editor = page.locator('[data-slot="markdown-editor"]');
+    await expect(editor).toBeVisible();
+  });
+
+  test('signed-in user can access /sequences/new', async ({ page }) => {
+    // chromium project loads e2e/.auth/user.json — this is the logged-in alias
+    // of the home composer (#1104). Anonymous redirect is in auth.spec.ts.
+    await page.goto('/sequences/new');
+
+    await expect(page).toHaveURL('/sequences/new');
     const editor = page.locator('[data-slot="markdown-editor"]');
     await expect(editor).toBeVisible();
   });

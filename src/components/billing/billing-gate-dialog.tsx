@@ -452,7 +452,7 @@ export const BillingGateDialog: React.FC<BillingGateDialogProps> = ({
 /**
  * Globally-mounted gate instance (#1099), opened via `openBillingGate()` —
  * including by the query client's global mutation error handler on
- * INSUFFICIENT_CREDITS. The onboarding flow on /sequences/new keeps its own
+ * INSUFFICIENT_CREDITS. The onboarding flow on the home composer keeps its own
  * instance for its dismissal memory.
  */
 export const GlobalBillingGateDialog: React.FC = () => {

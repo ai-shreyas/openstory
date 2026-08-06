@@ -31,10 +31,7 @@ type VerifyFormProps = {
   redirectTo?: string;
 };
 
-export function VerifyForm({
-  email,
-  redirectTo = '/sequences/new',
-}: VerifyFormProps) {
+export function VerifyForm({ email, redirectTo = '/' }: VerifyFormProps) {
   const navigate = useNavigate();
   const hydrated = useHydrated();
   const [otp, setOtp] = useState('');

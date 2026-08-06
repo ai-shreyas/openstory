@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
-import type { Frame, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 
 const buildRegenerateShotSnapshot = vi.fn();
@@ -98,11 +98,11 @@ const shot = asStub<Shot>({
 const frame = asStub<Frame>({
   id: 'frame-1',
   imagePrompt: 'a prompt',
-  imageInputHash: 'image-stored',
-  imageModel: null,
-  imageUrl: null,
   visualPromptInputHash: 'visual-stored',
 });
+/** The still's stored hash/model live on the selected version now (#1067). */
+const selectedImage = (inputHash: string | null) =>
+  asStub<FrameVariant>({ id: 'fv-1', inputHash, model: null, url: null });
 
 describe('computeShotStaleness', () => {
   it('reports a failed branch as unknown without taking the others down', async () => {
@@ -117,6 +117,7 @@ describe('computeShotStaleness', () => {
       sequence,
       shot,
       frame,
+      selectedImage: selectedImage('image-stored'),
       scene,
     });
 
@@ -149,6 +150,7 @@ describe('computeShotStaleness', () => {
       sequence,
       shot: { ...shot, motionPromptInputHash: null },
       frame: { ...frame, visualPromptInputHash: null },
+      selectedImage: selectedImage('image-stored'),
       scene,
     });
 
@@ -178,15 +180,11 @@ describe('computeShotStaleness', () => {
         ],
       }),
       sequence,
-      // Frame image hash matches snapshot → thumbnail would be fresh except we
-      // still cover the image-claim path via a direct hash match on a claim.
-      // Force thumbnail stale by storing a different hash.
+      // Force thumbnail stale by storing a hash the snapshot won't match, so
+      // the direct image-claim path is what promotes it to 'updating'.
       shot: { ...shot, motionPromptInputHash: 'motion-old' },
-      frame: {
-        ...frame,
-        visualPromptInputHash: 'visual-old',
-        imageInputHash: 'image-old',
-      },
+      frame: { ...frame, visualPromptInputHash: 'visual-old' },
+      selectedImage: selectedImage('image-old'),
       scene,
     });
 
@@ -195,8 +193,9 @@ describe('computeShotStaleness', () => {
       motionPrompt: 'updating',
       // Direct image claim hash matches liveHashes.thumbnail only when the
       // snapshot hash equals the claim's pendingInputHash — snapshot is
-      // 'image-stored', so set claim accordingly above. With imageInputHash
-      // 'image-old' the thumbnail is stale and the claim promotes it.
+      // 'image-stored', so set claim accordingly above. With the selected
+      // version's hash 'image-old' the thumbnail is stale and the claim
+      // promotes it.
       thumbnail: 'updating',
     });
   });

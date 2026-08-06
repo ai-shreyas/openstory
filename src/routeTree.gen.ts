@@ -13,11 +13,10 @@ import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as DocsRouteImport } from './routes/docs'
-import { Route as MarketingRouteImport } from './routes/_marketing'
 import { Route as AuthRouteRouteImport } from './routes/_auth/route'
 import { Route as AppRouteRouteImport } from './routes/_app/route'
 import { Route as DocsIndexRouteImport } from './routes/docs/index'
-import { Route as MarketingIndexRouteImport } from './routes/_marketing/index'
+import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as R2SplatRouteImport } from './routes/r2.$'
 import { Route as MetaOgLinkedinRouteImport } from './routes/meta/og-linkedin'
 import { Route as MetaOgGithubRouteImport } from './routes/meta/og-github'
@@ -27,10 +26,10 @@ import { Route as DocsLlmsDotmdRouteImport } from './routes/docs/llms[.]md'
 import { Route as DocsFaqRouteImport } from './routes/docs/faq'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as ApiRealtimeRouteImport } from './routes/api/realtime'
-import { Route as MarketingTermsRouteImport } from './routes/_marketing/terms'
-import { Route as MarketingPrivacyRouteImport } from './routes/_marketing/privacy'
 import { Route as AuthVerifyRouteImport } from './routes/_auth/verify'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
+import { Route as AppTermsRouteImport } from './routes/_app/terms'
+import { Route as AppPrivacyRouteImport } from './routes/_app/privacy'
 import { Route as AppPricingRouteImport } from './routes/_app/pricing'
 import { Route as AppCreditsRouteImport } from './routes/_app/credits'
 import { Route as ApiTestRouteRouteImport } from './routes/api/test/route'
@@ -105,10 +104,6 @@ const DocsRoute = DocsRouteImport.update({
   path: '/docs',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MarketingRoute = MarketingRouteImport.update({
-  id: '/_marketing',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AuthRouteRoute = AuthRouteRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
@@ -122,10 +117,10 @@ const DocsIndexRoute = DocsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => DocsRoute,
 } as any)
-const MarketingIndexRoute = MarketingIndexRouteImport.update({
+const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => MarketingRoute,
+  getParentRoute: () => AppRouteRoute,
 } as any)
 const R2SplatRoute = R2SplatRouteImport.update({
   id: '/r2/$',
@@ -172,16 +167,6 @@ const ApiRealtimeRoute = ApiRealtimeRouteImport.update({
   path: '/api/realtime',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MarketingTermsRoute = MarketingTermsRouteImport.update({
-  id: '/terms',
-  path: '/terms',
-  getParentRoute: () => MarketingRoute,
-} as any)
-const MarketingPrivacyRoute = MarketingPrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
-  getParentRoute: () => MarketingRoute,
-} as any)
 const AuthVerifyRoute = AuthVerifyRouteImport.update({
   id: '/verify',
   path: '/verify',
@@ -191,6 +176,16 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => AuthRouteRoute,
+} as any)
+const AppTermsRoute = AppTermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppPrivacyRoute = AppPrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => AppRouteRoute,
 } as any)
 const AppPricingRoute = AppPricingRouteImport.update({
   id: '/pricing',
@@ -462,7 +457,7 @@ const AppSequencesIdCastCharacterIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof MarketingIndexRoute
+  '/': typeof AppIndexRoute
   '/docs': typeof DocsRouteWithChildren
   '/llms.txt': typeof LlmsDottxtRoute
   '/robots.txt': typeof RobotsDottxtRoute
@@ -472,10 +467,10 @@ export interface FileRoutesByFullPath {
   '/api/test': typeof ApiTestRouteRouteWithChildren
   '/credits': typeof AppCreditsRoute
   '/pricing': typeof AppPricingRoute
+  '/privacy': typeof AppPrivacyRoute
+  '/terms': typeof AppTermsRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
-  '/privacy': typeof MarketingPrivacyRoute
-  '/terms': typeof MarketingTermsRoute
   '/api/realtime': typeof ApiRealtimeRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/faq': typeof DocsFaqRoute
@@ -536,7 +531,7 @@ export interface FileRoutesByFullPath {
   '/sequences/$id/locations/': typeof AppSequencesIdLocationsIndexRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof MarketingIndexRoute
+  '/': typeof AppIndexRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -544,10 +539,10 @@ export interface FileRoutesByTo {
   '/api/test': typeof ApiTestRouteRouteWithChildren
   '/credits': typeof AppCreditsRoute
   '/pricing': typeof AppPricingRoute
+  '/privacy': typeof AppPrivacyRoute
+  '/terms': typeof AppTermsRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
-  '/privacy': typeof MarketingPrivacyRoute
-  '/terms': typeof MarketingTermsRoute
   '/api/realtime': typeof ApiRealtimeRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/faq': typeof DocsFaqRoute
@@ -611,7 +606,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteRouteWithChildren
   '/_auth': typeof AuthRouteRouteWithChildren
-  '/_marketing': typeof MarketingRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
   '/llms.txt': typeof LlmsDottxtRoute
   '/robots.txt': typeof RobotsDottxtRoute
@@ -621,10 +615,10 @@ export interface FileRoutesById {
   '/api/test': typeof ApiTestRouteRouteWithChildren
   '/_app/credits': typeof AppCreditsRoute
   '/_app/pricing': typeof AppPricingRoute
+  '/_app/privacy': typeof AppPrivacyRoute
+  '/_app/terms': typeof AppTermsRoute
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/verify': typeof AuthVerifyRoute
-  '/_marketing/privacy': typeof MarketingPrivacyRoute
-  '/_marketing/terms': typeof MarketingTermsRoute
   '/api/realtime': typeof ApiRealtimeRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/faq': typeof DocsFaqRoute
@@ -634,7 +628,7 @@ export interface FileRoutesById {
   '/meta/og-github': typeof MetaOgGithubRoute
   '/meta/og-linkedin': typeof MetaOgLinkedinRoute
   '/r2/$': typeof R2SplatRoute
-  '/_marketing/': typeof MarketingIndexRoute
+  '/_app/': typeof AppIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/_app/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
   '/_app/admin/usage': typeof AppAdminUsageRoute
@@ -698,10 +692,10 @@ export interface FileRouteTypes {
     | '/api/test'
     | '/credits'
     | '/pricing'
-    | '/login'
-    | '/verify'
     | '/privacy'
     | '/terms'
+    | '/login'
+    | '/verify'
     | '/api/realtime'
     | '/docs/$'
     | '/docs/faq'
@@ -770,10 +764,10 @@ export interface FileRouteTypes {
     | '/api/test'
     | '/credits'
     | '/pricing'
-    | '/login'
-    | '/verify'
     | '/privacy'
     | '/terms'
+    | '/login'
+    | '/verify'
     | '/api/realtime'
     | '/docs/$'
     | '/docs/faq'
@@ -836,7 +830,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_auth'
-    | '/_marketing'
     | '/docs'
     | '/llms.txt'
     | '/robots.txt'
@@ -846,10 +839,10 @@ export interface FileRouteTypes {
     | '/api/test'
     | '/_app/credits'
     | '/_app/pricing'
+    | '/_app/privacy'
+    | '/_app/terms'
     | '/_auth/login'
     | '/_auth/verify'
-    | '/_marketing/privacy'
-    | '/_marketing/terms'
     | '/api/realtime'
     | '/docs/$'
     | '/docs/faq'
@@ -859,7 +852,7 @@ export interface FileRouteTypes {
     | '/meta/og-github'
     | '/meta/og-linkedin'
     | '/r2/$'
-    | '/_marketing/'
+    | '/_app/'
     | '/docs/'
     | '/_app/sequences/$id'
     | '/_app/admin/usage'
@@ -914,7 +907,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AppRouteRoute: typeof AppRouteRouteWithChildren
   AuthRouteRoute: typeof AuthRouteRouteWithChildren
-  MarketingRoute: typeof MarketingRouteWithChildren
   DocsRoute: typeof DocsRouteWithChildren
   LlmsDottxtRoute: typeof LlmsDottxtRoute
   RobotsDottxtRoute: typeof RobotsDottxtRoute
@@ -968,13 +960,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_marketing': {
-      id: '/_marketing'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof MarketingRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_auth': {
       id: '/_auth'
       path: ''
@@ -996,12 +981,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsIndexRouteImport
       parentRoute: typeof DocsRoute
     }
-    '/_marketing/': {
-      id: '/_marketing/'
+    '/_app/': {
+      id: '/_app/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof MarketingIndexRouteImport
-      parentRoute: typeof MarketingRoute
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRouteRoute
     }
     '/r2/$': {
       id: '/r2/$'
@@ -1066,20 +1051,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiRealtimeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_marketing/terms': {
-      id: '/_marketing/terms'
-      path: '/terms'
-      fullPath: '/terms'
-      preLoaderRoute: typeof MarketingTermsRouteImport
-      parentRoute: typeof MarketingRoute
-    }
-    '/_marketing/privacy': {
-      id: '/_marketing/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof MarketingPrivacyRouteImport
-      parentRoute: typeof MarketingRoute
-    }
     '/_auth/verify': {
       id: '/_auth/verify'
       path: '/verify'
@@ -1093,6 +1064,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/login'
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof AuthRouteRoute
+    }
+    '/_app/terms': {
+      id: '/_app/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof AppTermsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/privacy': {
+      id: '/_app/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof AppPrivacyRouteImport
+      parentRoute: typeof AppRouteRoute
     }
     '/_app/pricing': {
       id: '/_app/pricing'
@@ -1530,6 +1515,9 @@ interface AppRouteRouteChildren {
   AppSettingsRouteRoute: typeof AppSettingsRouteRouteWithChildren
   AppCreditsRoute: typeof AppCreditsRoute
   AppPricingRoute: typeof AppPricingRoute
+  AppPrivacyRoute: typeof AppPrivacyRoute
+  AppTermsRoute: typeof AppTermsRoute
+  AppIndexRoute: typeof AppIndexRoute
   AppSequencesIdRouteRoute: typeof AppSequencesIdRouteRouteWithChildren
   AppLocationsLocationIdRoute: typeof AppLocationsLocationIdRoute
   AppModelsSplatRoute: typeof AppModelsSplatRoute
@@ -1549,6 +1537,9 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppSettingsRouteRoute: AppSettingsRouteRouteWithChildren,
   AppCreditsRoute: AppCreditsRoute,
   AppPricingRoute: AppPricingRoute,
+  AppPrivacyRoute: AppPrivacyRoute,
+  AppTermsRoute: AppTermsRoute,
+  AppIndexRoute: AppIndexRoute,
   AppSequencesIdRouteRoute: AppSequencesIdRouteRouteWithChildren,
   AppLocationsLocationIdRoute: AppLocationsLocationIdRoute,
   AppModelsSplatRoute: AppModelsSplatRoute,
@@ -1579,22 +1570,6 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
 
 const AuthRouteRouteWithChildren = AuthRouteRoute._addFileChildren(
   AuthRouteRouteChildren,
-)
-
-interface MarketingRouteChildren {
-  MarketingPrivacyRoute: typeof MarketingPrivacyRoute
-  MarketingTermsRoute: typeof MarketingTermsRoute
-  MarketingIndexRoute: typeof MarketingIndexRoute
-}
-
-const MarketingRouteChildren: MarketingRouteChildren = {
-  MarketingPrivacyRoute: MarketingPrivacyRoute,
-  MarketingTermsRoute: MarketingTermsRoute,
-  MarketingIndexRoute: MarketingIndexRoute,
-}
-
-const MarketingRouteWithChildren = MarketingRoute._addFileChildren(
-  MarketingRouteChildren,
 )
 
 interface DocsRouteChildren {
@@ -1669,7 +1644,6 @@ const ApiV1SequencesRouteWithChildren = ApiV1SequencesRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AppRouteRoute: AppRouteRouteWithChildren,
   AuthRouteRoute: AuthRouteRouteWithChildren,
-  MarketingRoute: MarketingRouteWithChildren,
   DocsRoute: DocsRouteWithChildren,
   LlmsDottxtRoute: LlmsDottxtRoute,
   RobotsDottxtRoute: RobotsDottxtRoute,

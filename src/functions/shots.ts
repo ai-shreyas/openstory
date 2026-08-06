@@ -81,6 +81,11 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         ),
         loadSelectedScriptsBySequence(scopedDb, sequence.id),
       ]);
+    // The still lives on the selected `frame_variants` row (#1067) — one batch
+    // read keyed by frame id, so projecting the sequence stays O(1) queries.
+    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+      anchorRows.map((f) => f.id)
+    );
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
     return shotRows.map((rawShot) => {
       const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
@@ -104,7 +109,13 @@ export const getShotsFn = createServerFn({ method: 'GET' })
       const gridSheet: ShotGridSheet | null = sheet
         ? { url: sheet.url, status: sheet.status }
         : null;
-      return projectShotWithImage(shot, frame, gridSheet, motionPromptData);
+      return projectShotWithImage(
+        shot,
+        frame,
+        selectedByFrame.get(frame.id) ?? null,
+        gridSheet,
+        motionPromptData
+      );
     });
   });
 
@@ -138,14 +149,16 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    const [sheet, selectedMotion] = await Promise.all([
+    const [sheet, selectedMotion, selectedImage] = await Promise.all([
       context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
       context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
+      context.scopedDb.frameVariants.getSelected(context.frame.id),
     ]);
     const shot = projectShotForClient(context.shot, context.script);
     return projectShotWithImage(
       shot,
       context.frame,
+      selectedImage,
       sheet ? { url: sheet.url, status: sheet.status } : null,
       selectedMotion ? motionPromptFromVersion(selectedMotion) : null
     );
@@ -184,8 +197,8 @@ export const getDivergentVariantsFn = createServerFn({ method: 'GET' })
     );
   });
 
-type PromoteProgressEvent = 'video:progress' | 'audio:progress';
-type PromoteProgressUrlField = 'videoUrl' | 'audioUrl';
+type PromoteProgressEvent = 'video:progress';
+type PromoteProgressUrlField = 'videoUrl';
 
 /**
  * Build the per-variantType `shots` update payload and matching realtime
@@ -195,8 +208,9 @@ type PromoteProgressUrlField = 'videoUrl' | 'audioUrl';
  *
  * Image promotion is retired (#989): image variants live in `frame_variants`
  * and selection is a pointer repoint via `setImageFromVariantFn` /
- * `frameVariants.select`, not a divergent-alternate promote. This only handles
- * the video/audio variants that still live on `shot_variants`.
+ * `frameVariants.select`, not a divergent-alternate promote. Per-shot audio
+ * was never built (#1067) — music is sequence-level on `sequences.music*` — so
+ * video is the only promotable variant type.
  */
 export function buildPromoteUpdate(variant: ShotVariant): {
   update: Partial<NewShot>;
@@ -204,13 +218,15 @@ export function buildPromoteUpdate(variant: ShotVariant): {
   progressUrlField: PromoteProgressUrlField;
 } {
   const update: Partial<NewShot> = {};
-  let progressEvent: PromoteProgressEvent;
-  let progressUrlField: PromoteProgressUrlField;
 
   switch (variant.variantType) {
     case 'image':
       throw new Error(
         'Image variants are not promoted — select via frameVariants.select (#989)'
+      );
+    case 'audio':
+      throw new Error(
+        'Audio variants are not promoted — per-shot audio does not exist (#1067)'
       );
     case 'video':
       update.videoUrl = variant.url;
@@ -218,21 +234,14 @@ export function buildPromoteUpdate(variant: ShotVariant): {
       update.videoStatus = 'completed';
       update.videoError = null;
       update.videoInputHash = variant.inputHash;
-      progressEvent = 'video:progress';
-      progressUrlField = 'videoUrl';
-      break;
-    case 'audio':
-      update.audioUrl = variant.url;
-      update.audioPath = variant.storagePath;
-      update.audioStatus = 'completed';
-      update.audioError = null;
-      update.audioInputHash = variant.inputHash;
-      progressEvent = 'audio:progress';
-      progressUrlField = 'audioUrl';
       break;
   }
 
-  return { update, progressEvent, progressUrlField };
+  return {
+    update,
+    progressEvent: 'video:progress',
+    progressUrlField: 'videoUrl',
+  };
 }
 
 /**
@@ -283,21 +292,12 @@ export const promoteVariantFn = createServerFn({ method: 'POST' })
     const channel = getGenerationChannel(data.sequenceId);
     try {
       const url = updatedShot[progressUrlField] ?? variant.url;
-      await channel.emit(
-        `generation.${progressEvent}`,
-        progressEvent === 'audio:progress'
-          ? {
-              shotId: shot.id,
-              status: 'completed',
-              audioUrl: url,
-            }
-          : {
-              shotId: shot.id,
-              status: 'completed',
-              videoUrl: url,
-              model: variant.model,
-            }
-      );
+      await channel.emit(`generation.${progressEvent}`, {
+        shotId: shot.id,
+        status: 'completed',
+        videoUrl: url,
+        model: variant.model,
+      });
     } catch (error) {
       logger.error('realtime emit failed', { err: error });
     }
@@ -607,7 +607,14 @@ export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const { shot, frame, sequence, scopedDb, scene } = context;
     return toWireStaleness(
-      await computeShotStaleness({ scopedDb, sequence, shot, frame, scene })
+      await computeShotStaleness({
+        scopedDb,
+        sequence,
+        shot,
+        frame,
+        selectedImage: await scopedDb.frameVariants.getSelected(frame.id),
+        scene,
+      })
     );
   });
 
@@ -666,6 +673,11 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
         : Promise.resolve(null),
     ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+    // Stills live on the selected `frame_variants` rows (#1067) — batched here
+    // alongside `refs` for the same reason: one read, not one per shot.
+    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+      anchorRows.map((f) => f.id)
+    );
     const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
     const entries = await Promise.all(
@@ -691,6 +703,7 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
                   sequence,
                   shot,
                   frame,
+                  selectedImage: selectedByFrame.get(frame.id) ?? null,
                   scene,
                   refs,
                 })

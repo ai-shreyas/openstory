@@ -11,6 +11,7 @@ import {
 } from '@/lib/constants/aspect-ratios';
 import type { StyleSampleVideo } from '@/lib/db/schema/libraries';
 import { briefForStyle } from '@/lib/style/brief-for-style';
+import { styleCanonicalVideoUrl } from '@/lib/style/style-assets';
 import { styleSlug } from '@/lib/style/style-slug';
 import type { Style } from '@/types/database';
 
@@ -49,24 +50,46 @@ function styleHasBrief(style: Style): boolean {
 }
 
 /**
+ * Prefer persisted `sampleVideos` (bespoke → canonical → first by order). When
+ * the column is empty — PR-preview / fresh D1 seeds skip that column — fall
+ * back to the derived `…/canonical.mp4` next to the style thumbnail so the
+ * logged-out showcase still has clips to show (#1104).
+ */
+function pickSampleVideo(style: Style): StyleSampleVideo | null {
+  const samples = style.sampleVideos ?? [];
+  if (samples.length > 0) {
+    const ordered = [...samples].sort((a, b) => a.order - b.order);
+    return (
+      ordered.find((s) => s.kind === 'bespoke') ??
+      ordered.find((s) => s.kind === 'canonical') ??
+      ordered[0] ??
+      null
+    );
+  }
+  const derived = styleCanonicalVideoUrl(style);
+  if (!derived) return null;
+  return {
+    url: derived,
+    kind: 'canonical',
+    label: 'canonical',
+    durationSeconds: 15,
+    order: 0,
+  };
+}
+
+/**
  * Flatten styles into one displayable sample entry per style — the style's
  * bespoke showcase clip when it has one, otherwise its canonical sample (else
  * the lowest-order clip). Used by both the gallery and the logged-out showcase.
  *
  * Styles arrive already ordered by the query (`sortOrder`, then name), so the
- * gallery/showcase order is the styles' own order. Styles with no sample videos
- * are skipped.
+ * gallery/showcase order is the styles' own order. Styles with no sample video
+ * and no derivable `canonical.mp4` are skipped.
  */
 export function buildSampleEntries(styles: Style[]): SampleEntry[] {
   const entries: SampleEntry[] = [];
   for (const style of styles) {
-    const samples = style.sampleVideos ?? [];
-    if (samples.length === 0) continue;
-    const ordered = [...samples].sort((a, b) => a.order - b.order);
-    const video =
-      ordered.find((s) => s.kind === 'bespoke') ??
-      ordered.find((s) => s.kind === 'canonical') ??
-      ordered[0];
+    const video = pickSampleVideo(style);
     if (!video) continue;
 
     entries.push({

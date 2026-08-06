@@ -3,7 +3,7 @@ import { createFileRoute } from '@tanstack/react-router';
 
 const title = `Privacy Policy — ${SITE_CONFIG.name}`;
 
-export const Route = createFileRoute('/_marketing/privacy')({
+export const Route = createFileRoute('/_app/privacy')({
   component: PrivacyPage,
   head: () => ({
     meta: [
@@ -25,7 +25,7 @@ function JurisdictionTag({ children }: { children: React.ReactNode }) {
 
 function PrivacyPage() {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-32">
+    <main className="mx-auto max-w-3xl px-6 py-10">
       <p className="text-xs uppercase tracking-widest text-muted-foreground">
         Legal
       </p>

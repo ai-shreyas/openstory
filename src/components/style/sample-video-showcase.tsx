@@ -27,12 +27,12 @@ import { useCallback, useRef, useState } from 'react';
 const MAX_STYLES = 9;
 
 /**
- * Logged-out showcase for the new-sequence screen (#956): a curated grid of
+ * Logged-out showcase on the home composer (#956): a curated grid of
  * canonical style sample videos so anonymous visitors can see the sort of thing
  * they can create, each labelled with the style that produced it. Each card's
- * "Try this style" button links to `/sequences/new?style=<id>`; the composer
- * seeds itself from that param (see new.tsx), so the transport is URL-driven
- * and shareable.
+ * "Try this style" button links to `/?style=<slug>#compose`; the composer
+ * seeds itself from that param (see new-sequence-page.tsx), so the transport
+ * is URL-driven and shareable.
  */
 export const SampleVideoShowcase: React.FC = () => {
   const { data: styles, isPending } = useStyles();
@@ -156,7 +156,7 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
             className="absolute bottom-2 right-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity group-hover:opacity-100"
           >
             <Link
-              to="/sequences/new"
+              to="/"
               search={{ style: entry.slug }}
               hash="compose"
               aria-label={`Try the ${entry.styleName} style`}
@@ -191,11 +191,7 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
         )}
         {entry.hasBrief && (
           <Button asChild className="gap-1.5">
-            <Link
-              to="/sequences/new"
-              search={{ style: entry.slug }}
-              hash="compose"
-            >
+            <Link to="/" search={{ style: entry.slug }} hash="compose">
               <Wand2 className="size-4" />
               Try the {entry.styleName} style
             </Link>

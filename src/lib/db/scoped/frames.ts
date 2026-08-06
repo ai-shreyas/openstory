@@ -37,19 +37,11 @@ export type ResolvedFrame = {
 export type CompletedFrameVariant = FrameVariant & { status: 'completed' };
 
 /**
- * Build (without executing) the UPDATE that mirrors a selected version's image
- * fields onto its frame, so a caller can compose it into the same `db.batch()`
- * as the selection-pointer write and the activity event. Returns the drizzle
- * statement; the caller owns execution.
- *
- * Requires a {@link CompletedFrameVariant} — the caller must narrow to a
- * finished version first (see `frameVariants.select`), so this can never mirror
- * an unfinished image.
- *
- * Mirrors the output fields only — `role` / `source` / `orderIndex` are frame
- * identity and never change on a selection repoint.
+ * UPDATE repointing a frame's image selection, unexecuted so the caller can
+ * batch it with the activity event. {@link CompletedFrameVariant} is required
+ * so an unfinished image can never become the frame's still.
  */
-export function buildFrameImageMirror(
+export function buildFrameImageSelection(
   db: Database,
   frameId: string,
   version: CompletedFrameVariant
@@ -58,14 +50,8 @@ export function buildFrameImageMirror(
     .update(frames)
     .set({
       selectedImageVersionId: version.id,
-      imageUrl: version.url,
-      imagePath: version.storagePath,
-      previewImageUrl: version.previewUrl,
       imageStatus: version.status,
-      imageGeneratedAt: version.generatedAt,
       imageError: version.error,
-      imageModel: version.model,
-      imageInputHash: version.inputHash,
       updatedAt: new Date(),
     })
     .where(eq(frames.id, frameId));
@@ -74,23 +60,15 @@ export function buildFrameImageMirror(
 type FrameOrderBy = 'orderIndex' | 'createdAt' | 'updatedAt';
 
 /**
- * Columns owned by the selection / mirror paths ({@link buildFrameImageMirror}
- * via `frameVariants.select`, and `framePromptVersions.write`/`select`). They
- * are excluded from the generic `update` input so a partial write can never
- * leave the selection pointer and its mirrored columns diverged — the only way
- * to move a selection is through those methods, which repoint + mirror (and log
- * the event) atomically.
+ * Selection-owned columns, excluded from generic `update` so a partial write
+ * can't move a pointer on its own. Move selections via `frameVariants.select`
+ * or `framePromptVersions.write`/`select`.
  */
 type FrameMirrorColumn =
   | 'selectedImageVersionId'
-  | 'imageUrl'
-  | 'imagePath'
   | 'previewImageUrl'
   | 'imageStatus'
-  | 'imageGeneratedAt'
   | 'imageError'
-  | 'imageModel'
-  | 'imageInputHash'
   | 'selectedImagePromptVersionId'
   | 'imagePrompt'
   | 'visualPromptInputHash';
@@ -194,8 +172,8 @@ export function createFramesMethods(db: Database) {
     /**
      * Idempotent insert keyed on the `(shot_id, order_index)` unique index —
      * a replay re-deriving the same frame slot updates in place rather than
-     * colliding. Identity columns (role/source) and the image mirror are left
-     * to dedicated paths.
+     * colliding. The `role` identity column and the image mirror are left to
+     * dedicated paths.
      */
     upsert: async (data: NewFrame): Promise<Frame> => {
       const [frame] = await db
@@ -236,25 +214,12 @@ export function createFramesMethods(db: Database) {
       return frame;
     },
 
-    /**
-     * Write the frame's transient image GENERATION-TRACKING fields — the
-     * in-flight lifecycle that isn't owned by a selected version: status
-     * ('generating'/'failed'), the run id, the in-flight model, an error, the
-     * timestamp, and the cheap turbo `previewImageUrl` (#989 preview stand-in).
-     * The URL/identity mirror (`imageUrl`/`imagePath`/`imageInputHash`/the
-     * selection pointer) is still owned exclusively by `frameVariants.select`,
-     * so this can never silently repoint the selection.
-     */
+    /** The primary render's in-flight lifecycle. No `frame_variants` row records it. */
     setImageGenerationStatus: async (
       frameId: string,
       data: Pick<
         Partial<NewFrame>,
-        | 'imageStatus'
-        | 'imageWorkflowRunId'
-        | 'imageModel'
-        | 'imageError'
-        | 'imageGeneratedAt'
-        | 'previewImageUrl'
+        'imageStatus' | 'imageWorkflowRunId' | 'imageError' | 'previewImageUrl'
       >,
       options?: { throwOnMissing?: boolean }
     ): Promise<Frame | undefined> => {
@@ -323,12 +288,7 @@ export function createFramesMethods(db: Database) {
       return result.rowsAffected ?? 0;
     },
 
-    /**
-     * The frame plus its currently-selected image version. After a select the
-     * frame's mirror columns already equal the version's, so reads can use
-     * either; this exposes the underlying version row for callers that need
-     * its provenance (model, hashes). Returns null if the frame is missing.
-     */
+    /** The frame plus its selected version — the only source of the still. */
     resolveCurrent: async (frameId: string): Promise<ResolvedFrame | null> => {
       const [frame] = await db
         .select()
@@ -346,15 +306,21 @@ export function createFramesMethods(db: Database) {
     },
 
     /**
-     * Compare the stored `imageInputHash` against a fresh hash. A null stored
-     * hash (legacy / never generated) is treated as "unknown, not stale"
-     * rather than forcing regeneration. Throws when the frame is missing.
-     * Mirrors `shots.isStale`.
+     * Selected version's `inputHash` vs a fresh hash. Null stored hash (no
+     * selection, or never generated) is "unknown, not stale" — never forces
+     * regeneration. Throws when the frame is missing.
      */
     isStale: async (frameId: string, currentHash: string): Promise<boolean> => {
       const result = await db
-        .select({ hash: frames.imageInputHash })
+        .select({
+          frameId: frames.id,
+          hash: frameVariants.inputHash,
+        })
         .from(frames)
+        .leftJoin(
+          frameVariants,
+          eq(frameVariants.id, frames.selectedImageVersionId)
+        )
         .where(eq(frames.id, frameId));
       const row = result[0];
       if (!row) {

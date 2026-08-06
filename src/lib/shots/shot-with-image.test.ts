@@ -9,7 +9,7 @@
  * frame→thumbnail mapping regression on their own.
  */
 
-import type { Frame, Shot } from '@/lib/db/schema';
+import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 import { generateMockShots } from '@/lib/mocks/data-generators';
 import { describe, expect, it } from 'vitest';
 import {
@@ -31,20 +31,14 @@ function makeFrame(shot: Shot, overrides: Partial<Frame> = {}): Frame {
     sequenceId: shot.sequenceId,
     orderIndex: 0,
     role: 'first',
-    source: 'generated',
-    imageUrl: 'https://cdn/still.png',
     previewImageUrl: 'https://cdn/preview.png',
-    imagePath: 'r2/still.png',
     imageStatus: 'completed',
     imageWorkflowRunId: 'run-123',
-    imageGeneratedAt: new Date('2026-06-26T00:00:00Z'),
     imageError: null,
-    imageModel: 'flux',
     imagePrompt: 'a prompt',
     selectedImageVersionId: 'ver-1',
     selectedImagePromptVersionId: null,
     pendingPromoteVersionId: null,
-    imageInputHash: 'img-hash',
     visualPromptInputHash: 'vp-hash',
     createdAt: shot.createdAt,
     updatedAt: shot.updatedAt,
@@ -52,35 +46,85 @@ function makeFrame(shot: Shot, overrides: Partial<Frame> = {}): Frame {
   };
 }
 
+/** The version `makeFrame`'s `selectedImageVersionId` points at. */
+function makeVersion(
+  shot: Shot,
+  overrides: Partial<FrameVariant> = {}
+): FrameVariant {
+  return {
+    id: 'ver-1',
+    frameId: 'frame-id-distinct-from-shot',
+    sequenceId: shot.sequenceId,
+    kind: 'model',
+    model: 'flux',
+    sourceVariantId: null,
+    url: 'https://cdn/still.png',
+    storagePath: 'r2/still.png',
+    previewUrl: null,
+    status: 'completed',
+    workflowRunId: 'run-123',
+    generatedAt: new Date('2026-06-26T00:00:00Z'),
+    error: null,
+    promptHash: null,
+    inputHash: 'img-hash',
+    pendingInputHash: null,
+    dependsOnVersionId: null,
+    promptVersionId: null,
+    discardedAt: null,
+    createdAt: shot.createdAt,
+    updatedAt: shot.updatedAt,
+    ...overrides,
+  };
+}
+
 describe('projectShotWithImage', () => {
-  it('mirrors the anchor frame image surface onto the legacy thumbnail aliases', () => {
+  it('projects the still off the SELECTED version, not the frame (#1067)', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
+    const version = makeVersion(shot);
 
-    const projected = projectShotWithImage(shot, frame, {
+    const projected = projectShotWithImage(shot, frame, version, {
       url: 'https://cdn/grid.png',
       status: 'completed',
     });
 
-    expect(projected.thumbnailUrl).toBe(frame.imageUrl);
+    // From the version — the row that recorded the generation.
+    expect(projected.thumbnailUrl).toBe(version.url);
+    expect(projected.thumbnailPath).toBe(version.storagePath);
+    expect(projected.imageModel).toBe('flux');
+    expect(projected.thumbnailInputHash).toBe(version.inputHash);
+    // Frame-owned: the preview stand-in and the primary render's lifecycle.
     expect(projected.previewThumbnailUrl).toBe(frame.previewImageUrl);
-    expect(projected.thumbnailPath).toBe(frame.imagePath);
     expect(projected.thumbnailStatus).toBe(frame.imageStatus);
     expect(projected.thumbnailWorkflowRunId).toBe(frame.imageWorkflowRunId);
     expect(projected.thumbnailError).toBe(frame.imageError);
-    expect(projected.imageModel).toBe('flux');
     expect(projected.imagePrompt).toBe('a prompt');
-    expect(projected.thumbnailInputHash).toBe(frame.imageInputHash);
     expect(projected.visualPromptInputHash).toBe(frame.visualPromptInputHash);
     // The raw frame is carried verbatim for version-aware callers.
     expect(projected.frame).toBe(frame);
+  });
+
+  it('nulls the still when the frame has no selected version', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot, { selectedImageVersionId: null });
+
+    const projected = projectShotWithImage(shot, frame, null);
+
+    expect(projected.thumbnailUrl).toBeNull();
+    expect(projected.thumbnailPath).toBeNull();
+    expect(projected.thumbnailInputHash).toBeNull();
+    // imageModel must be null, NOT a default — a frame that never generated
+    // has no model anyone chose (see resolve-asset-models).
+    expect(projected.imageModel).toBeNull();
+    // The preview stand-in survives: it is not part of the selection.
+    expect(projected.previewThumbnailUrl).toBe('https://cdn/preview.png');
   });
 
   it('maps the grid sheet into variantImage* (3×3 framing surface)', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
 
-    const projected = projectShotWithImage(shot, frame, {
+    const projected = projectShotWithImage(shot, frame, makeVersion(shot), {
       url: 'https://cdn/grid.png',
       status: 'generating',
     });
@@ -93,7 +137,7 @@ describe('projectShotWithImage', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
 
-    const projected = projectShotWithImage(shot, frame);
+    const projected = projectShotWithImage(shot, frame, makeVersion(shot));
 
     expect(projected.variantImageUrl).toBeNull();
     expect(projected.variantImageStatus).toBeNull();
@@ -111,9 +155,9 @@ describe('projectShotMissingFrame', () => {
     expect(projected.thumbnailStatus).toBeNull();
     expect(projected.variantImageUrl).toBeNull();
     expect(projected.variantImageStatus).toBeNull();
-    // Synthetic placeholder frame: id mirrors the shot (in-memory only) and the
-    // column-default model fills the shape.
+    // Synthetic placeholder frame: id mirrors the shot (in-memory only). No
+    // selected version → no model, rather than a made-up default (#1067).
     expect(projected.frame.shotId).toBe(shot.id);
-    expect(projected.imageModel).toBe('nano_banana_2');
+    expect(projected.imageModel).toBeNull();
   });
 });

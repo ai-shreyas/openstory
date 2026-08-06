@@ -26,7 +26,13 @@ import type {
   Scene,
 } from '@/lib/ai/scene-analysis.schema';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { Frame, Sequence, Shot, StyleConfig } from '@/lib/db/schema';
+import type {
+  Frame,
+  FrameVariant,
+  Sequence,
+  Shot,
+  StyleConfig,
+} from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getLogger } from '@/lib/observability/logger';
 import { assembleSequenceSegments } from '@/lib/scenes/scene-segments';
@@ -214,6 +220,11 @@ export async function computePlan(args: {
         : Promise.resolve(null),
     ]);
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
+  // Stills live on the selected `frame_variants` rows (#1067) — one batch read
+  // so the per-shot loop below stays query-free on the image surface.
+  const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
+    anchorRows.map((f) => f.id)
+  );
   const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
   const targets: PlanTarget[] = [];
@@ -230,6 +241,7 @@ export async function computePlan(args: {
       sequence,
       shot,
       frame,
+      selectedImage: frame ? (selectedByFrame.get(frame.id) ?? null) : null,
       scene,
       refs,
       depth,
@@ -362,6 +374,8 @@ async function decideShotTarget(args: {
   sequence: Sequence;
   shot: Shot;
   frame: Frame | undefined;
+  /** Selected `frame_variants` row — the still's url/model/hash (#1067). */
+  selectedImage: FrameVariant | null;
   scene: Scene | null;
   refs: ShotStalenessRefs;
   depth: UpdateStaleDepth;
@@ -374,6 +388,7 @@ async function decideShotTarget(args: {
     sequence,
     shot,
     frame,
+    selectedImage,
     scene,
     refs,
     depth,
@@ -399,6 +414,7 @@ async function decideShotTarget(args: {
     sequence,
     shot,
     frame,
+    selectedImage,
     scene,
     refs,
   });
@@ -412,7 +428,7 @@ async function decideShotTarget(args: {
     };
   }
 
-  const flags = cascadeFlags({ staleness, frame, depth, videoState });
+  const flags = cascadeFlags({ staleness, selectedImage, depth, videoState });
   if (
     !flags.regenVisual &&
     !flags.regenMotion &&
@@ -432,14 +448,17 @@ async function decideShotTarget(args: {
         flags.regenMotion && idx > 0 ? (allShots[idx - 1]?.id ?? null) : null,
       afterShotId:
         flags.regenMotion && idx >= 0 ? (allShots[idx + 1]?.id ?? null) : null,
-      startingFrameImageUrl: frame.imageUrl,
+      startingFrameImageUrl: selectedImage?.url ?? null,
       regenVisual: flags.regenVisual,
       regenMotion: flags.regenMotion,
       regenImage: flags.regenImage,
       visualLiveHash: staleness.liveHashes.visualPrompt,
       motionLiveHash: staleness.liveHashes.motionPrompt,
       imageLiveHash: staleness.liveHashes.thumbnail,
-      imageModel: safeTextToImageModel(frame.imageModel, DEFAULT_IMAGE_MODEL),
+      imageModel: safeTextToImageModel(
+        selectedImage?.model,
+        DEFAULT_IMAGE_MODEL
+      ),
       regenVideo: flags.regenVideo,
     },
   };
@@ -463,7 +482,7 @@ function hasUnknownStaleness(staleness: ShotStalenessResult): boolean {
  */
 function cascadeFlags(args: {
   staleness: ShotStalenessResult;
-  frame: Pick<Frame, 'imageUrl'>;
+  selectedImage: Pick<FrameVariant, 'url'> | null;
   depth: UpdateStaleDepth;
   videoState: ShotVideoState | undefined;
 }): {
@@ -472,7 +491,7 @@ function cascadeFlags(args: {
   regenImage: boolean;
   regenVideo: boolean;
 } {
-  const { staleness, frame, depth, videoState } = args;
+  const { staleness, selectedImage, depth, videoState } = args;
 
   // 'stale' only — 'updating' is a live claim already fixing this artifact.
   const regenVisual = staleness.visualPrompt === 'stale';
@@ -483,7 +502,7 @@ function cascadeFlags(args: {
   // Depth 'prompts' renders nothing. Never a FIRST still.
   const regenImage =
     depthIncludes(depth, 'images') &&
-    !!frame.imageUrl &&
+    !!selectedImage?.url &&
     (staleness.thumbnail === 'stale' || regenVisual);
 
   // Depth ≥ video: existing videos whose upstream changes in this run, or

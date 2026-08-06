@@ -65,7 +65,7 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <Link
-          to="/sequences"
+          to="/"
           className="flex h-10 items-center px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
         >
           <OpenStoryLogo
@@ -84,7 +84,10 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild tooltip="New sequence">
-                  <Link to="/sequences/new">
+                  {/* `/` is the free composer for everyone (#1104); the
+                      signed-in alias `/sequences/new` is for copy/breadcrumb
+                      entry points that require a session. */}
+                  <Link to="/">
                     <Plus />
                     <span>New sequence</span>
                   </Link>

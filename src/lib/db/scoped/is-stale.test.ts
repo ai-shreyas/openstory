@@ -102,7 +102,7 @@ beforeEach(async () => {
 
 describe('shots input-hash columns', () => {
   // The still-image hash columns (thumbnail / variantImage) moved to `frames`
-  // in #989; only the shot-owned video/audio artifact hashes remain here.
+  // in #989; only the shot-owned video artifact hash remains here.
   it('default to null and persist when set', async () => {
     const [shot] = await db
       .insert(shots)
@@ -110,14 +110,10 @@ describe('shots input-hash columns', () => {
       .returning();
     if (!shot) throw new Error('test setup: shot insert returned nothing');
     expect(shot.videoInputHash).toBeNull();
-    expect(shot.audioInputHash).toBeNull();
 
     await db
       .update(shots)
-      .set({
-        videoInputHash: 'm',
-        audioInputHash: 'a',
-      })
+      .set({ videoInputHash: 'm' })
       .where(eq(shots.id, shot.id));
     const [refreshed] = await db
       .select()
@@ -125,7 +121,6 @@ describe('shots input-hash columns', () => {
       .where(eq(shots.id, shot.id));
     if (!refreshed) throw new Error('test setup: refresh failed');
     expect(refreshed.videoInputHash).toBe('m');
-    expect(refreshed.audioInputHash).toBe('a');
   });
 });
 
@@ -264,75 +259,43 @@ describe('talent_sheets.input_hash', () => {
 });
 
 describe('shots.isStale', () => {
-  const ARTIFACTS: Array<{
-    artifact: ShotHashArtifact;
-    column: 'videoInputHash' | 'audioInputHash';
-  }> = [
-    { artifact: 'video', column: 'videoInputHash' },
-    { artifact: 'audio', column: 'audioInputHash' },
-  ];
+  // `video` is the only shot-owned artifact hash (#1067 dropped the never-built
+  // per-shot audio columns).
+  const ARTIFACT: ShotHashArtifact = 'video';
 
   it('throws when the shot does not exist', () => {
     const m = createShotsMethods(db);
-    expect(m.isStale(generateId(), 'video', 'h')).rejects.toThrow(/not found/);
+    expect(m.isStale(generateId(), ARTIFACT, 'h')).rejects.toThrow(/not found/);
   });
 
-  it.each(ARTIFACTS)(
-    '$artifact: returns false when stored hash is null (legacy artifact)',
-    async ({ artifact }) => {
-      const [shot] = await db
-        .insert(shots)
-        .values({ sequenceId, orderIndex: 0 })
-        .returning();
-      if (!shot) throw new Error('test setup: shot insert returned nothing');
-      const m = createShotsMethods(db);
-      expect(await m.isStale(shot.id, artifact, 'anything')).toBe(false);
-    }
-  );
-
-  it.each(ARTIFACTS)(
-    '$artifact: returns false when stored hash matches the current hash',
-    async ({ artifact, column }) => {
-      const [shot] = await db
-        .insert(shots)
-        .values({ sequenceId, orderIndex: 0, [column]: 'h-match' })
-        .returning();
-      if (!shot) throw new Error('test setup: shot insert returned nothing');
-      const m = createShotsMethods(db);
-      expect(await m.isStale(shot.id, artifact, 'h-match')).toBe(false);
-    }
-  );
-
-  it.each(ARTIFACTS)(
-    '$artifact: returns true when stored hash differs from the current hash',
-    async ({ artifact, column }) => {
-      const [shot] = await db
-        .insert(shots)
-        .values({ sequenceId, orderIndex: 0, [column]: 'h-old' })
-        .returning();
-      if (!shot) throw new Error('test setup: shot insert returned nothing');
-      const m = createShotsMethods(db);
-      expect(await m.isStale(shot.id, artifact, 'h-new')).toBe(true);
-    }
-  );
-
-  it('reads from the column matching the requested artifact (no cross-talk)', async () => {
+  it('returns false when stored hash is null (legacy artifact)', async () => {
     const [shot] = await db
       .insert(shots)
-      .values({
-        sequenceId,
-        orderIndex: 0,
-        videoInputHash: 'm-hash',
-        audioInputHash: 'a-hash',
-      })
+      .values({ sequenceId, orderIndex: 0 })
       .returning();
     if (!shot) throw new Error('test setup: shot insert returned nothing');
     const m = createShotsMethods(db);
-    // Each artifact key compares against ONLY its own column.
-    expect(await m.isStale(shot.id, 'video', 'm-hash')).toBe(false);
-    expect(await m.isStale(shot.id, 'video', 'a-hash')).toBe(true);
-    expect(await m.isStale(shot.id, 'audio', 'a-hash')).toBe(false);
-    expect(await m.isStale(shot.id, 'audio', 'm-hash')).toBe(true);
+    expect(await m.isStale(shot.id, ARTIFACT, 'anything')).toBe(false);
+  });
+
+  it('returns false when stored hash matches the current hash', async () => {
+    const [shot] = await db
+      .insert(shots)
+      .values({ sequenceId, orderIndex: 0, videoInputHash: 'h-match' })
+      .returning();
+    if (!shot) throw new Error('test setup: shot insert returned nothing');
+    const m = createShotsMethods(db);
+    expect(await m.isStale(shot.id, ARTIFACT, 'h-match')).toBe(false);
+  });
+
+  it('returns true when stored hash differs from the current hash', async () => {
+    const [shot] = await db
+      .insert(shots)
+      .values({ sequenceId, orderIndex: 0, videoInputHash: 'h-old' })
+      .returning();
+    if (!shot) throw new Error('test setup: shot insert returned nothing');
+    const m = createShotsMethods(db);
+    expect(await m.isStale(shot.id, ARTIFACT, 'h-new')).toBe(true);
   });
 });
 

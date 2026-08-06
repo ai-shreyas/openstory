@@ -53,9 +53,41 @@ describe('buildSampleEntries', () => {
     expect(entries[0]?.video.kind).toBe('canonical');
   });
 
-  it('skips styles with no sample videos', () => {
+  it('derives canonical.mp4 from previewUrl when sampleVideos is empty', () => {
+    // PR-preview / fresh D1: system seed leaves sampleVideos empty.
     const styles = [
-      makeStyle({ id: 's1', category: 'commercial', sampleVideos: [] }),
+      makeStyle({
+        id: 's1',
+        name: 'Product Ad',
+        category: 'commercial',
+        sampleVideos: [],
+        previewUrl:
+          'https://assets.openstory.so/styles/product-ad/thumbnail.webp',
+      }),
+      makeStyle({
+        id: 's2',
+        category: 'commercial',
+        sampleVideos: [],
+        previewUrl: null,
+      }),
+    ];
+    const entries = buildSampleEntries(styles);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.styleId).toBe('s1');
+    expect(entries[0]?.video.kind).toBe('canonical');
+    expect(entries[0]?.video.url).toBe(
+      'https://assets.openstory.so/styles/product-ad/canonical.mp4'
+    );
+  });
+
+  it('skips styles with no sample videos and no derivable asset folder', () => {
+    const styles = [
+      makeStyle({
+        id: 's1',
+        category: 'commercial',
+        sampleVideos: [],
+        previewUrl: null,
+      }),
       makeStyle({
         id: 's2',
         category: 'commercial',
