@@ -34,23 +34,35 @@ export type VideoVariantGroup = {
   model: string;
 };
 
+// One bound param per shot, so chunk below D1's 100-param ceiling — this runs
+// on the shots read path with every shot of a sequence (matches
+// SELECTED_MOTION_BY_SHOTS_BATCH).
+const PRIMARY_BY_SHOTS_BATCH = 90;
+
 export async function getPrimaryVideoByShotIds(
   db: Database,
   shotIds: string[]
 ): Promise<Map<string, VideoVariant>> {
   if (shotIds.length === 0) return new Map();
-  const rows = await db
-    .select({ shotId: shots.id, version: videoVariants })
-    .from(shots)
-    .innerJoin(
-      videoVariants,
-      eq(videoVariants.renderSegmentId, shots.renderSegmentId)
-    )
-    .where(and(inArray(shots.id, shotIds), eq(videoVariants.isPrimary, true)))
-    .orderBy(asc(videoVariants.id));
   // asc by id (≈ time) → last write per shot wins.
   const byShot = new Map<string, VideoVariant>();
-  for (const r of rows) byShot.set(r.shotId, r.version);
+  for (let i = 0; i < shotIds.length; i += PRIMARY_BY_SHOTS_BATCH) {
+    const rows = await db
+      .select({ shotId: shots.id, version: videoVariants })
+      .from(shots)
+      .innerJoin(
+        videoVariants,
+        eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+      )
+      .where(
+        and(
+          inArray(shots.id, shotIds.slice(i, i + PRIMARY_BY_SHOTS_BATCH)),
+          eq(videoVariants.isPrimary, true)
+        )
+      )
+      .orderBy(asc(videoVariants.id));
+    for (const r of rows) byShot.set(r.shotId, r.version);
+  }
   return byShot;
 }
 

@@ -10,39 +10,19 @@ import { generateId } from '@/lib/db/id';
 import { user } from '@/lib/db/schema/auth';
 import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
-import { scenes } from '@/lib/db/schema/scenes';
-import { framePromptVersions } from '@/lib/db/schema/frame-prompt-versions';
-import { frameVariants } from '@/lib/db/schema/frame-variants';
-import { frames } from '@/lib/db/schema/frames';
-import { renderSegments } from '@/lib/db/schema/render-segments';
-import { videoVariants } from '@/lib/db/schema/video-variants';
-import { getPrimaryVideoByShotIds } from './video-variants';
-import { getSelectedMotionByShotIds } from './shot-prompt-versions';
-import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import {
+  assembleShotViews,
+  selectShotViewRows,
+  shotHierarchicalOrder,
+} from './shot-view-query';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
 import type { Sequence } from '@/lib/db/schema';
-import {
-  shotViewMissingFrame,
-  toShotView,
-  type ShotView,
-} from '@/lib/shots/shot-view';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { teamMembers, teams } from '@/lib/db/schema/teams';
 import { ValidationError } from '@/lib/errors';
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  exists,
-  isNull,
-  like,
-  not,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, count, desc, eq, exists, like, not, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
 // Ambiguity-free alphabet (no 0/O/1/I) -- 32 chars -> 32^6 ~ 1B combinations
@@ -224,64 +204,10 @@ export function createAdminMethods(db: Database) {
   }
 
   async function getShotsForSequence(sequenceId: string): Promise<ShotView[]> {
-    // Project the anchor-frame image surface (#989) — the shot's first frame
-    // (orderIndex 0), joined by shotId (NOT id-reuse).
-    const rows = await db
-      .select()
-      .from(shots)
-      .leftJoin(
-        frames,
-        and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
-      )
-      // The still lives on the SELECTED version (#1067).
-      .leftJoin(
-        frameVariants,
-        and(
-          eq(frameVariants.id, frames.selectedImageVersionId),
-          isNull(frameVariants.discardedAt)
-        )
-      )
-      .leftJoin(
-        framePromptVersions,
-        eq(framePromptVersions.id, frames.selectedImagePromptVersionId)
-      )
-      // The video lives on the version the shot's render segment points at
-      // (#1067 phase 2d).
-      .leftJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
-      .leftJoin(
-        videoVariants,
-        and(
-          eq(videoVariants.id, renderSegments.selectedVideoVersionId),
-          isNull(videoVariants.discardedAt)
-        )
-      )
-      .leftJoin(scenes, eq(scenes.id, shots.sceneId))
+    const rows = await selectShotViewRows(db)
       .where(eq(shots.sequenceId, sequenceId))
-      // Hierarchical order. Left join + NULLS LAST so a shot that somehow lost
-      // its scene sorts to the end instead of vanishing from the list.
-      .orderBy(sql`${scenes.orderIndex} ASC NULLS LAST`, asc(shots.shotNumber));
-    const shotIds = rows.map((r) => r.shots.id);
-    const [primaryByShot, selectedMotionByShot] = await Promise.all([
-      getPrimaryVideoByShotIds(db, shotIds),
-      getSelectedMotionByShotIds(db, shotIds),
-    ]);
-    return rows.map((row) => {
-      const selectedMotion = selectedMotionByShot.get(row.shots.id);
-      const video = {
-        video: row.video_variants,
-        primaryVideo: primaryByShot.get(row.shots.id) ?? null,
-        motionPrompt: selectedMotion
-          ? motionPromptFromVersion(selectedMotion)
-          : null,
-      };
-      return row.frames
-        ? toShotView(row.shots, row.frames, {
-            image: row.frame_variants,
-            imagePromptVersion: row.frame_prompt_versions,
-            ...video,
-          })
-        : shotViewMissingFrame(row.shots, video);
-    });
+      .orderBy(...shotHierarchicalOrder);
+    return assembleShotViews(db, rows);
   }
 
   // ---- User activity reporting ----

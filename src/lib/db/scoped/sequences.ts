@@ -9,39 +9,17 @@ import {
   DEFAULT_ASPECT_RATIO,
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
-import { getPrimaryVideoByShotIds } from './video-variants';
-import { getSelectedMotionByShotIds } from './shot-prompt-versions';
-import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import {
-  framePromptVersions,
-  frameVariants,
-  frames,
-  renderSegments,
-  scenes,
-  sequences,
-  shots,
-  videoVariants,
-} from '@/lib/db/schema';
+  assembleShotViews,
+  selectShotViewRows,
+  shotHierarchicalOrder,
+} from './shot-view-query';
+import { sequences, shots } from '@/lib/db/schema';
 import type { NewSequence, Sequence } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
-import {
-  shotViewMissingFrame,
-  toShotView,
-  type ShotView,
-} from '@/lib/shots/shot-view';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { ValidationError } from '@/lib/errors';
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  inArray,
-  isNull,
-  lt,
-  not,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, not, or } from 'drizzle-orm';
 
 export type MusicFieldsUpdate = {
   musicStatus?: MusicStatus;
@@ -148,85 +126,18 @@ function createSequencesReadMethods(db: Database, teamId: string) {
       }
       const results = await Promise.all(
         batches.map((batch) =>
-          db
-            .select()
-            .from(shots)
+          selectShotViewRows(db)
+            // teamId is filtered through the join, so caller-supplied ids from
+            // another team return nothing rather than leak.
             .innerJoin(sequences, eq(shots.sequenceId, sequences.id))
-            // Anchor frame holds the image surface (#989) — the shot's first
-            // frame (orderIndex 0), joined by shotId (NOT id-reuse).
-            .leftJoin(
-              frames,
-              and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
-            )
-            // The still itself lives on the SELECTED version (#1067). Joined
-            // here rather than fetched per row so the batch stays one query;
-            // `discardedAt` is in the JOIN condition (not the WHERE) so a frame
-            // whose selection was discarded still yields its shot, imageless.
-            .leftJoin(
-              frameVariants,
-              and(
-                eq(frameVariants.id, frames.selectedImageVersionId),
-                isNull(frameVariants.discardedAt)
-              )
-            )
-            .leftJoin(
-              framePromptVersions,
-              eq(framePromptVersions.id, frames.selectedImagePromptVersionId)
-            )
-            // Same story for the video (#1067 phase 2d): the shot's render
-            // segment owns the selection pointer, and the chosen version holds
-            // the url/path/model. Both are left joins with `discardedAt` in the
-            // join condition, so a shot with no segment or a discarded
-            // selection still comes back — videoless, not missing.
-            .leftJoin(
-              renderSegments,
-              eq(renderSegments.id, shots.renderSegmentId)
-            )
-            .leftJoin(
-              videoVariants,
-              and(
-                eq(videoVariants.id, renderSegments.selectedVideoVersionId),
-                isNull(videoVariants.discardedAt)
-              )
-            )
-            .leftJoin(scenes, eq(scenes.id, shots.sceneId))
             .where(
               and(
                 inArray(shots.sequenceId, batch),
                 eq(sequences.teamId, teamId)
               )
             )
-            .orderBy(
-              asc(shots.sequenceId),
-              // Hierarchical order; NULLS LAST so a scene-less shot sorts to
-              // the end rather than jumping to the front.
-              sql`${scenes.orderIndex} ASC NULLS LAST`,
-              asc(shots.shotNumber)
-            )
-            .then(async (rows) => {
-              const shotIds = rows.map((r) => r.shots.id);
-              const [primaryByShot, selectedMotionByShot] = await Promise.all([
-                getPrimaryVideoByShotIds(db, shotIds),
-                getSelectedMotionByShotIds(db, shotIds),
-              ]);
-              return rows.map((row) => {
-                const selectedMotion = selectedMotionByShot.get(row.shots.id);
-                const video = {
-                  video: row.video_variants,
-                  primaryVideo: primaryByShot.get(row.shots.id) ?? null,
-                  motionPrompt: selectedMotion
-                    ? motionPromptFromVersion(selectedMotion)
-                    : null,
-                };
-                return row.frames
-                  ? toShotView(row.shots, row.frames, {
-                      image: row.frame_variants,
-                      imagePromptVersion: row.frame_prompt_versions,
-                      ...video,
-                    })
-                  : shotViewMissingFrame(row.shots, video);
-              });
-            })
+            .orderBy(asc(shots.sequenceId), ...shotHierarchicalOrder)
+            .then((rows) => assembleShotViews(db, rows))
         )
       );
       return results.flat();
