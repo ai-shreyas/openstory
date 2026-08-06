@@ -200,7 +200,6 @@ function makeScene(overrides: Partial<SceneRow> = {}): SceneRow {
     storyBeat: null,
     title: null,
     continuity: null,
-    musicDesign: null,
     selectedScriptVersionId: null,
     createdAt: new Date(),
     updatedAt: new Date(),

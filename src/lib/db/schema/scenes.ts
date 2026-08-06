@@ -52,7 +52,6 @@ export const dbSceneId = (id: string): DbSceneId => id as DbSceneId;
 // JSON columns stay precisely typed without re-declaring the shapes. Both
 // columns are nullable (the backfill writes NULL for a null-metadata shot).
 type SceneContinuity = NonNullable<Scene['continuity']>;
-type SceneMusicDesign = NonNullable<Scene['musicDesign']>;
 
 /**
  * Scenes table — narrative units within a sequence.
@@ -77,8 +76,6 @@ export const scenes = snakeCase.table(
     title: text(),
     // Typed JSON slices of the analysis Scene object.
     continuity: text({ mode: 'json' }).$type<SceneContinuity>(),
-    // TB-20260805: DB-Audit: musicDesign is dead by construction. It should be removed.
-    musicDesign: text({ mode: 'json' }).$type<SceneMusicDesign>(),
 
     // The scene's script: the pointer to the selected row in
     // `scene_script_versions` (#1030) IS the script — there is no column copy.

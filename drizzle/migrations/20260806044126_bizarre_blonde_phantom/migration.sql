@@ -1,0 +1,21 @@
+-- #1067 — drop `scenes.music_design`: write-dead since March.
+--
+-- The only writer is `buildSceneInsert`, called only from scene-split. But
+-- `sceneSplittingResultSchema` picks just sceneId/sceneNumber/originalScript/
+-- metadata plus an extended `continuity` — `musicDesign` is NOT in the split
+-- LLM's output, so `scene.musicDesign` is always undefined there and the insert
+-- always wrote NULL. `motion-music-prompts-workflow` does compute music design,
+-- but attaches it to an in-memory scene that is never persisted.
+--
+-- Production confirms it: all 657 rows carrying a value were created between
+-- 2026-03-13 and 2026-03-25; every one of the 3677 scenes created since is
+-- NULL, right up to today.
+--
+-- The in-memory `Scene['musicDesign']` field STAYS — analyze-script reads it
+-- live off the motion-music workflow's result to decide whether to generate
+-- music. Only the column, and the reads that resolved from it, are gone. The
+-- music prompt's `musicPresence` guidance went too: nothing supplied it.
+--
+-- DROP COLUMN rebuilds no table, so the #612 cascade trap does not apply.
+
+ALTER TABLE `scenes` DROP COLUMN `music_design`;

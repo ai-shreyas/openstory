@@ -46,7 +46,6 @@ const mockScene: SceneWithScript = {
   storyBeat: 'Establish protagonist stress and setting',
   title: 'Coffee Shop Introduction',
   continuity: null,
-  musicDesign: null,
   script: {
     extract:
       'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',

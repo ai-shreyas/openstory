@@ -24,7 +24,6 @@ export function buildMusicSceneSummaries(
         `Scene ${scene.sceneId} is missing metadata; cannot build music scene summary`
       );
     }
-    const music = scene.musicDesign;
     return {
       sceneId: scene.sceneId,
       title: scene.metadata.title,
@@ -33,16 +32,6 @@ export function buildMusicSceneSummaries(
       location: scene.metadata.location,
       timeOfDay: scene.metadata.timeOfDay,
       visualSummary: visualSummaryBySceneId[scene.sceneId] ?? '',
-      // Spread, not defaulted: the prompt asks the model to reason about
-      // `musicPresence`, and empty placeholders would re-stale every sequence
-      // that never had music design.
-      ...(music
-        ? {
-            musicPresence: music.presence,
-            musicStyle: music.style,
-            musicMood: music.mood,
-          }
-        : {}),
     };
   });
 }

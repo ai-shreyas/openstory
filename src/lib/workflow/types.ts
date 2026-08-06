@@ -22,8 +22,6 @@ import type {
   VisualPrompt,
 } from '@/lib/ai/scene-analysis.schema';
 
-type SceneMusicDesign = NonNullable<Scene['musicDesign']>;
-
 /**
  * Structured motion direction (dialogue + audio) carried forward onto a
  * user-edit motion prompt version. Captured at trigger time from the version
@@ -833,15 +831,6 @@ export type MusicSceneSummary = {
   location: string;
   timeOfDay: string;
   visualSummary: string;
-  /**
-   * From the scene's `musicDesign`. Optional, and omitted rather than
-   * defaulted when the scene has none: the whole summary is JSON-serialized
-   * into the music prompt input hash, so empty placeholders would re-stale
-   * every sequence that never had music design.
-   */
-  musicPresence?: SceneMusicDesign['presence'];
-  musicStyle?: string;
-  musicMood?: string;
 };
 
 /**

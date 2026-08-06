@@ -19,6 +19,7 @@
  */
 
 import {
+  musicDesignSchema,
   originalScriptSchema,
   type Scene,
 } from '@/lib/ai/scene-analysis.schema';
@@ -104,6 +105,17 @@ async function readSceneOriginalScript(sceneId: string) {
   const value = rows[0]?.script;
   return typeof value === 'string'
     ? originalScriptSchema.parse(JSON.parse(value))
+    : null;
+}
+
+async function readSceneMusicDesign(sceneId: string) {
+  const { rows } = await client.execute({
+    sql: 'SELECT `music_design` AS design FROM `scenes` WHERE `id` = ?',
+    args: [sceneId],
+  });
+  const value = rows[0]?.design;
+  return typeof value === 'string'
+    ? musicDesignSchema.parse(JSON.parse(value))
     : null;
 }
 
@@ -208,6 +220,7 @@ beforeAll(async () => {
   await restoreDroppedColumn('shots', 'metadata', 'text');
   await restoreDroppedColumn('shots', 'order_index', 'integer');
   await restoreDroppedColumn('scenes', 'original_script', 'text');
+  await restoreDroppedColumn('scenes', 'music_design', 'text');
 });
 
 afterAll(() => {
@@ -269,7 +282,7 @@ describe('backfill scenes migration', () => {
     // JSON subtrees survive the json_extract round-trip with their shape intact.
     expect(scene?.continuity?.environmentTag).toBe('office');
     expect(scene?.continuity?.characterTags).toEqual(['sarah']);
-    expect(scene?.musicDesign?.presence).toBe('minimal');
+    expect((await readSceneMusicDesign(shot.id))?.presence).toBe('minimal');
     expect((await readSceneOriginalScript(shot.id))?.extract).toBe(
       'INT. OFFICE - DAY'
     );
@@ -286,7 +299,7 @@ describe('backfill scenes migration', () => {
     expect(scene?.location).toBeNull();
     expect(scene?.title).toBeNull();
     expect(scene?.continuity).toBeNull();
-    expect(scene?.musicDesign).toBeNull();
+    expect(await readSceneMusicDesign(shot.id)).toBeNull();
     expect(await readSceneOriginalScript(shot.id)).toBeNull();
 
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));

@@ -27,7 +27,6 @@ const sceneRowFixture = (overrides: Partial<SceneRow> = {}): SceneRow => ({
   storyBeat: 'setup',
   title: 'Office',
   continuity: null,
-  musicDesign: null,
   selectedScriptVersionId: null,
   createdAt: new Date(),
   updatedAt: new Date(),

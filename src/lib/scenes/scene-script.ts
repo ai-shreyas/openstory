@@ -48,7 +48,6 @@ function composeSceneForShot(
       storyBeat: scene.storyBeat ?? '',
     },
     ...(scene.continuity ? { continuity: scene.continuity } : {}),
-    ...(scene.musicDesign ? { musicDesign: scene.musicDesign } : {}),
   };
 }
 

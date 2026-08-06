@@ -141,7 +141,6 @@ export const fixtureScenes: SceneWithScript[] = [
         'soft glowing key with discreet edge light and gentle backlight halo',
       styleTag: 'macro_beauty_photography_luxurious',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:
@@ -167,7 +166,6 @@ export const fixtureScenes: SceneWithScript[] = [
       lightingSetup: 'soft key raking low with edge light and backlight',
       styleTag: 'macro_beauty_photography',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:
@@ -194,7 +192,6 @@ export const fixtureScenes: SceneWithScript[] = [
         'Soft glowing key with discreet edge light and subtle bounce',
       styleTag: 'macro_beauty_photography',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:
@@ -221,7 +218,6 @@ export const fixtureScenes: SceneWithScript[] = [
         'Soft glowing key with discreet edge light and subtle backlight',
       styleTag: 'macro_beauty_photography',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:
@@ -248,7 +244,6 @@ export const fixtureScenes: SceneWithScript[] = [
         'soft glowing key light from above with warm gold rim and edge light',
       styleTag: 'macro_beauty_photography_luxurious',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:
@@ -275,7 +270,6 @@ export const fixtureScenes: SceneWithScript[] = [
         'Soft glowing key from upper left with discreet golden edge light',
       styleTag: 'macro_beauty_photography',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:
@@ -301,7 +295,6 @@ export const fixtureScenes: SceneWithScript[] = [
       lightingSetup: 'soft_glowing_key_upper_left',
       styleTag: 'macro_beauty_photography',
     },
-    musicDesign: null,
     selectedScriptVersionId: null,
     script: {
       extract:

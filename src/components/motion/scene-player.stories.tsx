@@ -101,7 +101,6 @@ const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
   storyBeat: 'Introduction',
   title,
   continuity: null,
-  musicDesign: null,
   script: { extract: 'Sample scene text', dialogue: [] },
   selectedScriptVersionId: null,
   createdAt: new Date(),

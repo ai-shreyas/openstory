@@ -102,7 +102,6 @@ function makeSceneRow(id: string, orderIndex: number): SceneRow {
     storyBeat: null,
     title: null,
     continuity: null,
-    musicDesign: null,
     selectedScriptVersionId: null,
     createdAt: now,
     updatedAt: now,

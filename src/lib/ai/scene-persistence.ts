@@ -38,7 +38,6 @@ export function buildSceneInsert(
     storyBeat: scene.metadata?.storyBeat ?? null,
     title: scene.metadata?.title ?? null,
     continuity: scene.continuity ?? null,
-    musicDesign: scene.musicDesign ?? null,
   };
 }
 
