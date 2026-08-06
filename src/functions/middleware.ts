@@ -292,34 +292,44 @@ export const authRequestMiddleware = createMiddleware().server(
  */
 export const authWithTeamRequestMiddleware = createMiddleware().server(
   async ({ next, request }) => {
-    const session = await resolveRequestSession(request);
+    // Server ROUTES don't get `analyticsFlushMiddleware` — that one is
+    // `type: 'function'`, so it only composes into server functions. Without
+    // a flush here, a product event captured by a route handler (e.g.
+    // `sequence_generated` from the public v1 create endpoint) races isolate
+    // teardown: `captureProductEvent` is fire-and-forget, and on Workers an
+    // in-flight fetch is cancelled once the response is returned.
+    try {
+      const session = await resolveRequestSession(request);
 
-    if (!session?.user) {
-      throw authErrorResponse(
-        401,
-        'UNAUTHORIZED',
-        'Valid authentication required. Provide an API key via "Authorization: Bearer <key>" or "x-api-key".'
-      );
+      if (!session?.user) {
+        throw authErrorResponse(
+          401,
+          'UNAUTHORIZED',
+          'Valid authentication required. Provide an API key via "Authorization: Bearer <key>" or "x-api-key".'
+        );
+      }
+
+      const team = await resolveUserTeam(session.user.id);
+
+      if (!team) {
+        throw authErrorResponse(
+          403,
+          'NO_TEAM',
+          'No team is associated with this account.'
+        );
+      }
+
+      return await next({
+        context: {
+          user: session.user,
+          session,
+          teamId: team.teamId,
+          scopedDb: createScopedDb(team.teamId, session.user.id),
+        },
+      });
+    } finally {
+      await scheduleFlushAnalytics();
     }
-
-    const team = await resolveUserTeam(session.user.id);
-
-    if (!team) {
-      throw authErrorResponse(
-        403,
-        'NO_TEAM',
-        'No team is associated with this account.'
-      );
-    }
-
-    return next({
-      context: {
-        user: session.user,
-        session,
-        teamId: team.teamId,
-        scopedDb: createScopedDb(team.teamId, session.user.id),
-      },
-    });
   }
 );
 
