@@ -426,6 +426,9 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
           teamId: input.teamId,
           sequenceId,
           shotId,
+          // Mandatory alongside `shotId` — without it the child renders and
+          // bills, then writes nothing back to the frame (#1119).
+          frameId: snapshot.frameId ?? undefined,
           prompt: editPrompt,
           model,
           imageSize: aspectRatioToImageSize(aspectRatio),
