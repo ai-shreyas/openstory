@@ -208,7 +208,13 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         let finalText = '';
         let chunkCount = 0;
         let prevScene: SceneSplittingScene | undefined = undefined;
-        let prevShotId: string | undefined = undefined;
+        /**
+         * The previous scene's shot AND its anchor frame, as one value: the
+         * preview trigger needs both, and `ImageWorkflow` silently stands down
+         * on a payload that carries `shotId` without `frameId` (#1119). Paired
+         * so the two can't drift apart again.
+         */
+        let prevShot: { id: string; frameId: string } | undefined = undefined;
         let parsedResult: SceneSplittingResult | undefined;
         let capturedUsage: TokenUsage | undefined;
 
@@ -346,7 +352,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                     orderIndex: ev.index,
                   }
                 );
-                if (prevScene && prevShotId) {
+                if (prevScene && prevShot) {
                   const sceneText =
                     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
                     prevScene.originalScript?.extract ??
@@ -370,20 +376,23 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                       model: PREVIEW_IMAGE_MODEL,
                       imageSize: aspectRatioToImageSize(aspectRatio),
                       numImages: 1,
-                      shotId: prevShotId,
+                      shotId: prevShot.id,
+                      // Without this the run generates (and bills) the preview,
+                      // then drops it at `store-preview-url` (#1119).
+                      frameId: prevShot.frameId,
                       skipStorage: true,
                     } satisfies ImageWorkflowInput,
                     {
                       label: buildWorkflowLabel(sequenceId),
                       deduplicationId: previewImageDedupId(
                         event.instanceId,
-                        prevShotId
+                        prevShot.id
                       ),
                     }
                   );
                 }
 
-                prevShotId = shot.id;
+                prevShot = { id: shot.id, frameId: shot.anchorFrameId };
               }
               prevScene = ev.scene;
             }
@@ -391,7 +400,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         }
 
         // Trigger preview for the last scene (the loop only triggers N-1).
-        if (prevScene && prevShotId && sequenceId) {
+        if (prevScene && prevShot && sequenceId) {
           const sceneText =
             // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
             prevScene.originalScript?.extract ??
@@ -410,14 +419,15 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
               model: PREVIEW_IMAGE_MODEL,
               imageSize: aspectRatioToImageSize(aspectRatio),
               numImages: 1,
-              shotId: prevShotId,
+              shotId: prevShot.id,
+              frameId: prevShot.frameId,
               skipStorage: true,
             } satisfies ImageWorkflowInput,
             {
               label: buildWorkflowLabel(sequenceId),
               deduplicationId: previewImageDedupId(
                 event.instanceId,
-                prevShotId
+                prevShot.id
               ),
             }
           );

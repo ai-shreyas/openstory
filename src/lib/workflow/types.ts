@@ -92,8 +92,14 @@ export interface ImageWorkflowInput extends SequenceWorkflowContext {
   /**
    * The shot's anchor frame, resolved at trigger time. Frame id ≠ shot id
    * (#989); passing it keeps every step of the run bound to the SAME frame
-   * instead of re-resolving the anchor per step. Optional for un-migrated
-   * triggers, which fall back to `frames.getAnchorByShot`.
+   * instead of re-resolving the anchor per step.
+   *
+   * MANDATORY whenever `shotId` is set. There is no `frames.getAnchorByShot`
+   * fallback any more (#1067) — a payload with a `shotId` and no `frameId`
+   * writes NOTHING back to the frame: the image still generates and bills, and
+   * every frame write (status, variant selection, preview url) is skipped.
+   * Optional in the type only for shotless ad-hoc runs and for stale in-flight
+   * instances spawned by a pre-#1067 build. See #1119.
    */
   frameId?: string;
   /**

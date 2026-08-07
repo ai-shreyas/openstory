@@ -155,6 +155,9 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
           teamId,
           sequenceId,
           shotId: snapshot.shotId,
+          // Mandatory alongside `shotId` — without it the child renders and
+          // bills, then writes nothing back to the frame (#1119).
+          frameId: snapshot.frameId ?? undefined,
           prompt: snapshot.imagePrompt,
           model: imageModel,
           imageSize: aspectRatioToImageSize(aspectRatio),

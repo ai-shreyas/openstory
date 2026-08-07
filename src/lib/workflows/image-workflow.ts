@@ -75,12 +75,27 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
    * in-flight instance from a previous build — stand down rather than
    * resolve the anchor by shot, which could land on a DIFFERENT frame than
    * a sibling step resolved.
+   *
+   * A `shotId` with no `frameId` is logged as the invariant violation it is:
+   * every caller of this reports the null as "the frame is gone", which read
+   * as a routine skip for a whole release while scene-split's preview triggers
+   * silently wrote nothing (#1119).
    */
   private resolveFrame(
     scopedDb: WorkflowScopedDb,
     input: Pick<ImageWorkflowInput, 'frameId' | 'shotId'>
   ): Promise<Frame | null> {
-    if (!input.frameId) return Promise.resolve(null);
+    if (!input.frameId) {
+      if (input.shotId) {
+        logger.warn(
+          `[ImageWorkflow] Shot ${input.shotId} was triggered without a frameId; ` +
+            `this run writes nothing back to the frame. Either a stale in-flight ` +
+            `instance from a pre-#1067 build, or a spawner that failed to thread ` +
+            `the anchor frame id.`
+        );
+      }
+      return Promise.resolve(null);
+    }
     return scopedDb.liveRead.frames.getById(input.frameId);
   }
 
