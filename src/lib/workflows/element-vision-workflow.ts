@@ -60,6 +60,11 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
         imageUrl,
         filename,
         llmKey: llmKeyInfo,
+        observability: {
+          userId: event.payload.userId,
+          sessionId: event.payload.sequenceId,
+          metadata: { elementId },
+        },
       });
     });
 

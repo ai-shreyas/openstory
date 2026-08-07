@@ -157,6 +157,11 @@ export const analyzeDraftElementFn = createServerFn({ method: 'POST' })
       imageUrl: data.publicUrl,
       filename: data.filename,
       llmKey: llmKeyInfo,
+      observability: {
+        userId: context.user.id,
+        tags: ['vision', 'draft'],
+        metadata: { draft: true },
+      },
     });
 
     if (!result.usedOwnKey) {

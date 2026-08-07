@@ -161,7 +161,6 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
           // sequence aspect ratio; placement happens at shot-generation time.
           imageSize: 'square_hd' as const,
           numImages: 1,
-          traceName: 'element-sheet-image',
         };
 
         const imageResult = await step.do(

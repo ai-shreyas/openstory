@@ -125,7 +125,6 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           numImages: input.numImages ?? 1,
           seed: input.seed,
           referenceImageUrls: referenceUrls,
-          traceName: 'shot-image',
         };
 
         // No frame context (preview mode, or shotless ad-hoc): generate without
@@ -311,7 +310,16 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           }
         );
       }
-      return generateImageWithProvider(prep.params, { scopedDb });
+      return generateImageWithProvider(prep.params, {
+        scopedDb,
+        observability: {
+          observationName: 'shot-image',
+          tags: ['image'],
+          userId: input.userId,
+          sessionId: input.sequenceId,
+          metadata: { shotId: input.shotId, model: prep.params.model },
+        },
+      });
     });
 
     const imageCostMicros = imageResult.metadata.cost ?? ZERO_MICROS;

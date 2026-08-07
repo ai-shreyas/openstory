@@ -143,7 +143,6 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
           // Use talent reference image(s) for visual consistency
           referenceImageUrls:
             referenceUrls.length > 0 ? referenceUrls : undefined,
-          traceName: 'character-sheet-image',
         } satisfies ImageGenerationParams;
       }
     );

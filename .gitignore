@@ -101,9 +101,6 @@ dist/
 # doppler
 doppler.json
 
-# schemas
-scripts/schemas/
-
 .tanstack
 
 # claude code local state

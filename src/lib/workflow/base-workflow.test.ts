@@ -40,6 +40,9 @@ vi.doMock('@/lib/workflow/await-child', async () => {
   return { ...real, notifyParent, notifyParentOfFailure };
 });
 
+const flushAnalytics = vi.fn(() => Promise.resolve());
+vi.doMock('@/lib/observability/flush-analytics', () => ({ flushAnalytics }));
+
 // Dynamic import so the mocks above apply (vi.doMock is not hoisted).
 const { OpenStoryWorkflowEntrypoint } = await import('./base-workflow');
 
@@ -229,5 +232,49 @@ describe('OpenStoryWorkflowEntrypoint.run', () => {
       'ok'
     );
     expect(notifyParent).not.toHaveBeenCalled();
+  });
+
+  // Workflows are where nearly every instrumented LLM/media call runs, and no
+  // other flush caller covers them. If this regresses, buffered PostHog events
+  // and AI OTel spans die with the isolate — silently, since nothing fails.
+  describe('analytics flush', () => {
+    test('flushes on the success path', async () => {
+      notifyParent.mockReset();
+      flushAnalytics.mockClear();
+      const { workflow } = makeWorkflow(() => Promise.resolve('ok'));
+
+      await workflow.run(makeEvent(false), makeStep());
+
+      expect(flushAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('flushes on the failure path', async () => {
+      notifyParent.mockReset();
+      notifyParentOfFailure.mockReset();
+      notifyParentOfFailure.mockResolvedValue(undefined);
+      flushAnalytics.mockClear();
+      const { workflow } = makeWorkflow(() =>
+        Promise.reject(new Error('fal request failed'))
+      );
+
+      await expect(workflow.run(makeEvent(false), makeStep())).rejects.toThrow(
+        'fal request failed'
+      );
+
+      expect(flushAnalytics).toHaveBeenCalledTimes(1);
+    });
+
+    test('flushes even when the engine aborts mid-run', async () => {
+      flushAnalytics.mockClear();
+      const { workflow } = makeWorkflow(() =>
+        Promise.reject(new Error(ENGINE_ABORT))
+      );
+
+      await expect(workflow.run(makeEvent(false), makeStep())).rejects.toThrow(
+        'Grace period complete'
+      );
+
+      expect(flushAnalytics).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { PostHogIdentify } from '@/components/observability/posthog-identify';
+import { sessionQueryOptions } from '@/lib/auth/session-query';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { configureLogging } from '@/lib/observability/logger';
@@ -55,9 +56,10 @@ type ProvidersProps = {
   queryClient: QueryClient;
 };
 
-const ObservabilityProvider: FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+const ObservabilityProvider: FC<{
+  children: React.ReactNode;
+  queryClient: QueryClient;
+}> = ({ children, queryClient }) => {
   const posthogToken =
     process.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN ||
     import.meta.env.VITE_PUBLIC_POSTHOG_PROJECT_TOKEN;
@@ -69,6 +71,17 @@ const ObservabilityProvider: FC<{ children: React.ReactNode }> = ({
   if (!posthogToken || !apiHost) {
     return children;
   }
+
+  // Bootstrap PostHog with the already-authenticated user (session is
+  // SSR-hydrated into the query cache for _app routes). Without this the SDK
+  // starts anonymous, so the first page-load events (pageview, web vitals,
+  // autocapture) are stamped with the anon device id — and PostHog won't merge
+  // a fresh anon device into an already-identified distinct_id, leaving those
+  // events unattributed. Bootstrapping starts the SDK already-identified so
+  // they carry `user.id` from the first event. PostHogIdentify still handles
+  // login/logout transitions within a session.
+  const user = queryClient.getQueryData(sessionQueryOptions.queryKey)?.user;
+
   return (
     <PostHogProvider
       apiKey={posthogToken}
@@ -77,6 +90,9 @@ const ObservabilityProvider: FC<{ children: React.ReactNode }> = ({
         defaults: '2025-05-24',
         capture_exceptions: true,
         debug: false,
+        ...(user && {
+          bootstrap: { distinctID: user.id, isIdentifiedID: true },
+        }),
       }}
     >
       {children}
@@ -117,7 +133,7 @@ function useRealtimeEnabled(): boolean {
 export function Providers({ children, queryClient }: ProvidersProps) {
   const realtimeEnabled = useRealtimeEnabled();
   return (
-    <ObservabilityProvider>
+    <ObservabilityProvider queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <PostHogIdentify />

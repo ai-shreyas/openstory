@@ -39,7 +39,7 @@ To use AI generation features you need two API keys — run `bun setup` to add t
 
 ## Environment Variables
 
-See [`.env.example`](https://github.com/openstory-so/openstory/blob/main/.env.example) for the full list of available environment variables, including optional services like Google OAuth, Stripe, Langfuse, PostHog, and remote R2 storage.
+See [`.env.example`](https://github.com/openstory-so/openstory/blob/main/.env.example) for the full list of available environment variables, including optional services like Google OAuth, Stripe, PostHog, and remote R2 storage.
 
 ## Database
 

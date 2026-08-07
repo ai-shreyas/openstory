@@ -194,7 +194,7 @@ const visualPromptComponentsSchema = z.object({
     .meta({ description: 'Mood, emotion, and ambient feeling' }),
 });
 
-export const visualPromptSchema = z.object({
+const visualPromptSchema = z.object({
   fullPrompt: z.string().meta({
     description: 'Complete image generation prompt with all visual details',
   }),

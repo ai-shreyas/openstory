@@ -7,6 +7,10 @@
 
 import type { Microdollars } from '@/lib/billing/money';
 import type { ResolvedLlmKey } from '@/lib/db/scoped/api-keys';
+import {
+  aiObservabilityMiddleware,
+  type AIObservabilityMeta,
+} from '@/lib/observability/ai-otel';
 import type { ChatMessage, ChatMessageImagePart } from '@/lib/prompts';
 import { toVisionImageSource } from '@/lib/storage/external-url';
 import { chat, type TokenUsage } from '@tanstack/ai';
@@ -30,6 +34,8 @@ export type DescribeElementInput = {
   filename: string;
   /** Resolved LLM key (team OpenRouter, team fal, or platform) */
   llmKey?: ResolvedLlmKey;
+  /** PostHog LLM-analytics metadata for the generation span. */
+  observability?: AIObservabilityMeta;
 };
 
 export type ElementVisionResult = ElementDescription & {
@@ -116,6 +122,11 @@ export async function describeElementImage(
     modelOptions: { temperature: 0.3 },
     outputSchema: responseSchema,
     middleware: [
+      ...aiObservabilityMiddleware({
+        observationName: 'element-vision',
+        tags: ['vision'],
+        ...input.observability,
+      }),
       {
         onFinish: (_ctx, info) => {
           capturedUsage = info.usage;

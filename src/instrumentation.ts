@@ -1,18 +1,13 @@
 /**
- * OpenTelemetry instrumentation boot.
+ * Observability boot.
  *
- * Imported as the very first statement of `src/server.ts` so the OTel tracer
- * provider and the @tanstack/ai event bridge are registered before any
- * TanStack Start routes, server functions, or middleware modules load.
- *
- * Both init functions are idempotent (guarded by module-local flags) so the
- * module is safe to load more than once per isolate.
+ * Imported as the very first statement of `src/server.ts` so logging is
+ * configured before any TanStack Start routes, server functions, or
+ * middleware modules load. (LLM analytics needs no boot step — the OTel
+ * middleware in `@/lib/observability/ai-otel` initializes lazily per
+ * `chat()` call.)
  */
 
-import { initAIEventBridge } from '@/lib/observability/ai-event-bridge';
-import { initTracing } from '@/lib/observability/langfuse';
 import { configureLogging } from '@/lib/observability/logger';
 
 configureLogging();
-initTracing();
-initAIEventBridge();

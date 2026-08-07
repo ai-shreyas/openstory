@@ -1,19 +1,19 @@
 import { getEnv } from '#env';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
-import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
   AUDIO_MODELS,
   DEFAULT_MUSIC_MODEL,
   type AudioModel,
   type AudioModelConfig,
 } from '@/lib/ai/models';
-import { microsToUsd, type Microdollars } from '@/lib/billing/money';
+import { type Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { isContentRejectionError } from '@/lib/ai/content-rejection';
+import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
-  endSpanError,
-  endSpanSuccess,
-  startGenAISpan,
-} from '@/lib/observability/tracer';
+  recordMediaGenerationSpan,
+  type AIObservabilityMeta,
+} from '@/lib/observability/ai-otel';
 import { generateAudio } from '@tanstack/ai';
 import { falAudio } from '@tanstack/ai-fal';
 
@@ -23,6 +23,8 @@ const logger = getLogger(['openstory', 'audio', 'music-generation']);
 
 export type GenerateMusicOptions = {
   scopedDb?: ScopedDb;
+  /** PostHog LLM-analytics metadata for the generation span. */
+  observability?: AIObservabilityMeta;
   /** Style/mood prompt for the music (e.g., "tense orchestral, dark atmosphere") */
   prompt: string;
   /** Comma-separated genre tags (e.g., "orchestral, ambient, cinematic") */
@@ -36,7 +38,6 @@ export type GenerateMusicOptions = {
   model?: AudioModel;
   /** Number of diffusion steps (default: 27) */
   steps?: number;
-  traceName?: string;
 };
 
 export type MusicResult = {
@@ -142,29 +143,43 @@ export async function generateMusic(
   const modelKey = options.model || DEFAULT_MUSIC_MODEL;
   const modelConfig = AUDIO_MODELS[modelKey];
 
-  const span = startGenAISpan(options.traceName ?? 'fal-music', {
-    model: modelKey,
-    provider: 'fal',
-    operation: 'generate_content',
-    input: {
-      prompt: options.prompt,
-      tags: options.tags,
-      duration: options.duration,
-      instrumental: options.instrumental,
-    },
-  });
+  // Recorded out here rather than as middleware — see
+  // recordMediaGenerationSpan.
+  const startedAt = Date.now();
+  const attribution = {
+    ...options.observability,
+    // `??` after the spread — see the note in image-generation.ts.
+    userId: options.observability?.userId ?? options.scopedDb?.userId,
+  };
 
   try {
     const result = await callFalAudio(options, modelConfig);
-
-    if (result.metadata.cost) {
-      span.setAttribute('gen_ai.usage.cost', microsToUsd(result.metadata.cost));
-    }
-    endSpanSuccess(span, { audioUrl: result.audioUrl });
-
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: modelKey,
+      provider: 'fal',
+      activity: 'audio',
+      durationMs: Date.now() - startedAt,
+      costMicros: result.metadata.cost,
+      unitsBilled: result.metadata.unitsBilled,
+      usedOwnKey: result.metadata.usedOwnKey,
+      prompt: options.prompt,
+      outputUrl: result.audioUrl,
+    });
     return result;
   } catch (error) {
-    endSpanError(span, extractFalErrorMessage(error));
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: modelKey,
+      provider: 'fal',
+      activity: 'audio',
+      durationMs: Date.now() - startedAt,
+      prompt: options.prompt,
+      errorType: isContentRejectionError(error)
+        ? 'content_filter'
+        : 'provider_error',
+      errorMessage: extractFalErrorMessage(error),
+    });
     throw error;
   }
 }

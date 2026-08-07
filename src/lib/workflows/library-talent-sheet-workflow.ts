@@ -122,7 +122,6 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         imageSize: 'landscape_16_9',
         numImages: 1,
         resolution: '2K',
-        traceName: 'talent-sheet-image',
       } satisfies ImageGenerationParams;
 
       // Only include referenceImageUrls if provided
@@ -331,7 +330,6 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
           prompt,
           imageSize: 'square_hd',
           numImages: 1,
-          traceName: 'talent-headshot-image',
         } satisfies ImageGenerationParams;
 
         // Only include referenceImageUrls if provided

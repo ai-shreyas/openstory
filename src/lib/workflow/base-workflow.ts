@@ -14,8 +14,6 @@
  *     and `onFailure`.
  *   - Sanitizes the error message and emits it in a `step.do('emit-failure')`
  *     so the failure write itself benefits from retries + step durability.
- *
- * See docs/investigations/cloudflare-workflows.md §4 Gap D.
  */
 
 import { configureFalProxyFromEnv } from '@/lib/ai/fal-config';
@@ -39,6 +37,7 @@ import {
   type WorkflowStep,
 } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
+import { flushAnalytics } from '@/lib/observability/flush-analytics';
 import { getLogger, serializeError } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'cf', 'base']);
@@ -225,6 +224,27 @@ export abstract class OpenStoryWorkflowEntrypoint<
         throw new NonRetryableError(sanitized, error.name);
       }
       throw error;
+    } finally {
+      // Push buffered PostHog events + AI OTel spans before this invocation's
+      // isolate is torn down. Nothing else covers workflows: the other flush
+      // callers are the server-fn middleware, the request middleware, and the
+      // auth route — and almost every instrumented LLM/media call in the app
+      // runs in here, not in any of those. Without this the spans sit in the
+      // BatchSpanProcessor buffer and die with the isolate.
+      //
+      // Awaited directly rather than routed through `#flush-scheduler`: that
+      // indirection exists to keep the flush off a request's critical path
+      // (#770), which is a latency concern workflows don't have. `run()` has
+      // no response to block, and awaiting is deterministic where `waitUntil`
+      // is not. `flushAnalytics` never rejects, so this cannot mask the error
+      // being propagated on the throw path.
+      //
+      // Residual gap: a workflow that hibernates mid-run can still lose the
+      // spans buffered by the isolate it hibernated from — `run()` re-executes
+      // from the top on resume, so this `finally` only covers the invocation
+      // that reaches a terminal state. The processor's own timer is what
+      // covers the rest.
+      await flushAnalytics();
     }
   }
 }

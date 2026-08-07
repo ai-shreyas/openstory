@@ -10,12 +10,11 @@
  *     (see `base-workflow.ts`).
  *   - Uses `step.do` instead of `context.run`.
  *   - Reads payload from `event.payload`.
- *   - Gap C: the streaming LLM call + per-chunk DB writes + per-chunk
+ *   - The streaming LLM call + per-chunk DB writes + per-chunk
  *     `generation.scene:*` event emissions + per-chunk preview-image
  *     fire-and-forget trigger all run inline inside a single top-level
  *     `step.do('scene-splitting-stream', …)`. If that step fails partway,
- *     the engine replays the entire LLM call — acceptable per the
- *     investigation (`docs/investigations/cloudflare-workflows.md` §Gap C).
+ *     the engine replays the entire LLM call — an accepted trade-off.
  *   - The final value returned from `scene-splitting-stream` is Zod-inferred
  *     and structurally rejected by CF's `Rpc.Serializable<T>` check, so we
  *     JSON-stringify around the step boundary (same pattern as
@@ -153,12 +152,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     // `generation.phase:start`) and per-chunk fire-and-forget preview-image
     // triggers all run inline. On step failure the engine replays the whole
     // stream — acceptable per the investigation. The prompt fetch is folded
-    // in because the Langfuse `ChatPromptClient` reference is not
-    // `Rpc.Serializable<T>` and so can't cross a step boundary; keeping it
-    // local also means the per-chunk side effects share the same retry
-    // boundary as the LLM call that produced them. JSON-stringify the final
-    // value around the boundary so the Zod-inferred result survives CF's
-    // `Rpc.Serializable<T>` typecheck.
+    // in so the per-chunk side effects share the same retry boundary as the
+    // LLM call that produced them. JSON-stringify the final value around the
+    // boundary so the Zod-inferred result survives CF's `Rpc.Serializable<T>`
+    // typecheck.
     const streamResultJson = await step.do(
       'scene-splitting-stream',
       async (): Promise<string> => {
@@ -176,14 +173,11 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                 })
                 .join('\n')
             : '(none)';
-        const { prompt: promptReference, messages } = await getChatPrompt(
-          input.promptName,
-          {
-            aspectRatio,
-            script: input.script,
-            elements: elementsBlock,
-          }
-        );
+        const { messages } = await getChatPrompt(input.promptName, {
+          aspectRatio,
+          script: input.script,
+          elements: elementsBlock,
+        });
 
         const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
 
@@ -218,7 +212,6 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           apiKey: llmKeyInfo,
           reasoning: PROMPT_REASONING,
           observationName: LOG_NAME,
-          prompt: promptReference,
           tags: LOG_TAGS,
           metadata: LOG_METADATA,
           userId: input.userId,

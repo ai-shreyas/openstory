@@ -74,12 +74,12 @@ flowchart TD
     MotionMusicPrompts -->|"motionPrompts + musicPrompt"| MotionBatch
     MotionMusicPrompts -->|"musicPrompt + tags"| MusicGen
 
-    MergeAudioVideo --> Trace
-    MotionMusicPrompts -->|"if no motion/music"| Trace
-    Trace["<b>Record Trace</b> · <1s<br/>IN: script, styleConfig, completeScenes[]<br/>OUT: Langfuse trace + generation.complete"]
+    MergeAudioVideo --> Done
+    MotionMusicPrompts -->|"if no motion/music"| Done
+    Done["<b>Complete</b> · <1s<br/>OUT: generation.complete + completeScenes[]"]
 
     style Verify fill:#2d2d44,color:#fff
-    style Trace fill:#1a472a,color:#fff
+    style Done fill:#1a472a,color:#fff
 ```
 
 > **Timing source:** Measured from local Cloudflare Workflows runs (Workerd via Miniflare) for a 9-scene run. As of #929, Phase 4 runs **sequentially** — frame images render first, then motion/music prompts — because the motion-prompt pass is conditioned on the actual rendered starting frame (passed to the LLM as a vision input). This trades the prior image∥prompt parallelism for image-grounded motion.
@@ -161,15 +161,14 @@ Uses streaming LLM output to create frames progressively as scenes arrive, plus 
 
 **Steps:**
 
-1. **`prepare-scene-splitting`** — Fetches the prompt template from Langfuse
-2. **`scene-splitting-stream`** — Streams the LLM response through `createStreamingSceneParser()`:
+1. **`scene-splitting-stream`** — Resolves the prompt template from the local registry, then streams the LLM response through `createStreamingSceneParser()`:
    - Parses incremental JSON chunks via `partial-json`
    - On each complete scene: calls `upsertFrame()` to create/update the frame in DB, emits `generation.scene:new` and `generation.frame:created`
    - On title detection: updates the sequence title, emits `generation.updated`
    - **Preview images:** After each scene completes, triggers an image workflow (fire-and-forget via `triggerWorkflow`) using `PREVIEW_IMAGE_MODEL` for instant visual feedback
    - On `scene:updated` events: upserts frame with partial metadata as scenes stream in
-3. **`reconcile-frames`** — Bulk upserts all frames via `bulkInsertFrames()` for workflow replay safety — a Cloudflare Workflows body re-executes from the top on every step callback, so this is idempotent on `sequenceId + orderIndex` conflict. Also emits `frame:created` for any frames missed during streaming.
-4. **`deduct-llm-credits-scene-splitting`** — Credit deduction
+2. **`reconcile-frames`** — Bulk upserts all frames via `bulkInsertFrames()` for workflow replay safety — a Cloudflare Workflows body re-executes from the top on every step callback, so this is idempotent on `sequenceId + orderIndex` conflict. Also emits `frame:created` for any frames missed during streaming.
+3. **`deduct-llm-credits-scene-splitting`** — Credit deduction
 
 - **Prompt:** `phase/scene-splitting-chat`
 - **Variables:** `{ aspectRatio, script }` (script is sanitized)
@@ -298,11 +297,7 @@ flowchart TD
     Music --> MergeAV
 ```
 
-### Final: Record Trace + Return
-
-**Step:** `record-workflow-trace`
-
-- Records a trace to Langfuse for observability (input script, style config, aspect ratio, complete scenes, timing)
+### Final: Return
 
 Returns the `completeScenes` array.
 

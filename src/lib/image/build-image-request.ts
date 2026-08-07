@@ -43,7 +43,6 @@ export type ImageGenerationParams = {
   acceleration?: 'none' | 'regular' | 'high';
   enablePromptExpansion?: boolean;
   referenceImageUrls?: string[];
-  traceName?: string;
 };
 
 const ASPECT_RATIO_MAP: Record<ImageSize, string> = {

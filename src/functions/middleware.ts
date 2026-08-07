@@ -3,7 +3,7 @@
  * Reusable middleware for authentication, team access, and resource validation
  */
 
-import { scheduleFlushTracing } from '#flush-scheduler';
+import { scheduleFlushAnalytics } from '#flush-scheduler';
 import {
   requireTeamAdminAccess,
   requireTeamMemberAccess,
@@ -27,7 +27,6 @@ import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { NotFoundError } from '@/lib/errors';
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
-import { withTraceContextAsync } from '@/lib/observability/tracer';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import type { Frame } from '@/lib/db/schema';
 import type { Shot, Sequence } from '@/types/database';
@@ -293,34 +292,44 @@ export const authRequestMiddleware = createMiddleware().server(
  */
 export const authWithTeamRequestMiddleware = createMiddleware().server(
   async ({ next, request }) => {
-    const session = await resolveRequestSession(request);
+    // Server ROUTES don't get `analyticsFlushMiddleware` — that one is
+    // `type: 'function'`, so it only composes into server functions. Without
+    // a flush here, a product event captured by a route handler (e.g.
+    // `sequence_generated` from the public v1 create endpoint) races isolate
+    // teardown: `captureProductEvent` is fire-and-forget, and on Workers an
+    // in-flight fetch is cancelled once the response is returned.
+    try {
+      const session = await resolveRequestSession(request);
 
-    if (!session?.user) {
-      throw authErrorResponse(
-        401,
-        'UNAUTHORIZED',
-        'Valid authentication required. Provide an API key via "Authorization: Bearer <key>" or "x-api-key".'
-      );
+      if (!session?.user) {
+        throw authErrorResponse(
+          401,
+          'UNAUTHORIZED',
+          'Valid authentication required. Provide an API key via "Authorization: Bearer <key>" or "x-api-key".'
+        );
+      }
+
+      const team = await resolveUserTeam(session.user.id);
+
+      if (!team) {
+        throw authErrorResponse(
+          403,
+          'NO_TEAM',
+          'No team is associated with this account.'
+        );
+      }
+
+      return await next({
+        context: {
+          user: session.user,
+          session,
+          teamId: team.teamId,
+          scopedDb: createScopedDb(team.teamId, session.user.id),
+        },
+      });
+    } finally {
+      await scheduleFlushAnalytics();
     }
-
-    const team = await resolveUserTeam(session.user.id);
-
-    if (!team) {
-      throw authErrorResponse(
-        403,
-        'NO_TEAM',
-        'No team is associated with this account.'
-      );
-    }
-
-    return next({
-      context: {
-        user: session.user,
-        session,
-        teamId: team.teamId,
-        scopedDb: createScopedDb(team.teamId, session.user.id),
-      },
-    });
   }
 );
 
@@ -440,30 +449,21 @@ export const authMiddleware = createMiddleware({ type: 'function' }).server(
 );
 
 /**
- * Tracing middleware — wraps the request in an OTel trace-context with the
- * authenticated user's id and flushes tracing after the handler returns so
- * spans ship before serverless isolates suspend.
+ * Analytics flush middleware — schedules a PostHog flush after the handler
+ * returns so buffered events ship before serverless isolates suspend.
  */
-export const tracingMiddleware = createMiddleware({ type: 'function' })
+const analyticsFlushMiddleware = createMiddleware({ type: 'function' })
   .middleware([authMiddleware])
-  .server(async ({ next, context, serverFnMeta }) => {
-    return withTraceContextAsync(
-      {
-        userId: context.user.id,
-        tags: [`fn:${serverFnMeta.name}`],
-      },
-      async () => {
-        try {
-          return await next();
-        } finally {
-          // Schedule (don't await) so the Langfuse OTLP POST doesn't add
-          // its 100-500ms to the user-visible request duration. On
-          // Workers this uses `waitUntil` to keep the isolate alive; in
-          // dev/test it falls back to awaiting. See issue #770.
-          await scheduleFlushTracing();
-        }
-      }
-    );
+  .server(async ({ next }) => {
+    try {
+      return await next();
+    } finally {
+      // Schedule (don't await) so the PostHog flush doesn't add to the
+      // user-visible request duration. On Workers this uses `waitUntil` to
+      // keep the isolate alive; in dev/test it falls back to awaiting.
+      // See issue #770.
+      await scheduleFlushAnalytics();
+    }
   });
 
 /**
@@ -471,7 +471,7 @@ export const tracingMiddleware = createMiddleware({ type: 'function' })
  * Automatically resolves user's default team
  */
 export const authWithTeamMiddleware = createMiddleware({ type: 'function' })
-  .middleware([tracingMiddleware])
+  .middleware([analyticsFlushMiddleware])
   .server(async ({ next, context }) => {
     const team = await resolveUserTeam(context.user.id);
 

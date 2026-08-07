@@ -28,7 +28,7 @@ import {
 } from '@/lib/ai/input-hash';
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
 import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
-import { microsToUsd, type Microdollars } from '@/lib/billing/money';
+import { microsToUsd } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   recordFalUsageStep,
@@ -45,9 +45,9 @@ import { gateEstimate } from '@/lib/billing/cost-estimation';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
+import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
 import { getAnchorImageUrl } from '@/lib/shots/frame-image';
 import { getLogger } from '@/lib/observability/logger';
-import { endSpanSuccess, startGenAISpan } from '@/lib/observability/tracer';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -105,29 +105,6 @@ function classifyMotionFailure(message: string): MotionPollOutcome {
   return isContentRejectionError(message)
     ? { kind: 'rejected', rejection: message }
     : { kind: 'failed', error: `Motion generation failed: ${message}` };
-}
-
-function recordMotionObservation(params: {
-  model: string;
-  prompt: string;
-  imageUrl: string;
-  videoUrl: string;
-  cost: Microdollars;
-  videoDuration: number;
-  generationTimeMs: number;
-}) {
-  const span = startGenAISpan('fal-motion', {
-    model: params.model,
-    provider: 'fal',
-    operation: 'generate_content',
-    input: { prompt: params.prompt, imageUrl: params.imageUrl },
-    metadata: {
-      videoDuration: params.videoDuration,
-      generationTimeMs: params.generationTimeMs,
-    },
-  });
-  span.setAttribute('gen_ai.usage.cost', microsToUsd(params.cost));
-  endSpanSuccess(span, { videoUrl: params.videoUrl });
 }
 
 export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowInput> {
@@ -670,15 +647,26 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       falCostFromUnits(billedEndpointId, billedUnits)
     );
 
+    // Motion is submitted to fal's queue and collected by polling, so the
+    // `generateVideo()` call returns before the video exists — a middleware
+    // span there would time the submit and carry no cost, duration, or
+    // output. Record it here instead, where all three are known.
     await step.do('record-motion-observation', async () => {
-      recordMotionObservation({
+      recordMediaGenerationSpan({
         model,
+        provider: 'fal',
+        activity: 'video',
+        durationMs: Date.now() - job.submittedAt,
+        costMicros: actualCost,
+        unitsBilled: billedUnits,
+        usedOwnKey: job.usedOwnKey,
         prompt: input.prompt,
-        imageUrl: input.imageUrl,
-        videoUrl,
-        cost: actualCost,
-        videoDuration: duration,
-        generationTimeMs: Date.now() - job.submittedAt,
+        outputUrl: videoUrl,
+        observationName: 'motion',
+        tags: ['motion'],
+        userId: input.userId,
+        sessionId: input.sequenceId,
+        metadata: { model, shotId: input.shotId },
       });
     });
 
@@ -811,6 +799,28 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
   }): Promise<void> {
     const input = event.payload;
     const model = input.model || DEFAULT_VIDEO_MODEL;
+
+    // The success span is recorded in runImpl, which every failure exit skips
+    // (submit 422, hard poll failure, poll-budget timeout, content-rejection
+    // exhaustion, step-retry exhaustion). Emitting here — the one choke point
+    // all of them pass through — is what keeps motion's error rate visible in
+    // PostHog alongside image and audio. No duration: the start time lives in
+    // a step return this hook can't see.
+    recordMediaGenerationSpan({
+      model,
+      provider: 'fal',
+      activity: 'video',
+      prompt: input.prompt,
+      errorType: isContentRejectionError(error)
+        ? 'content_filter'
+        : 'provider_error',
+      errorMessage: error,
+      observationName: 'motion',
+      tags: ['motion'],
+      userId: input.userId,
+      sessionId: input.sequenceId,
+      metadata: { model, shotId: input.shotId },
+    });
 
     // Motion is always sequence-scoped (every trigger sets both ids), and the
     // dual-write needs sequenceId for the `video_variants` version — so gate on

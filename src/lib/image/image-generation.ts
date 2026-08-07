@@ -1,18 +1,18 @@
+import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
-import { type Microdollars, microsToUsd } from '@/lib/billing/money';
+import { type Microdollars } from '@/lib/billing/money';
 import {
   buildImageRequest,
   type ImageGenerationParams,
 } from '@/lib/image/build-image-request';
-import {
-  endSpanError,
-  endSpanSuccess,
-  startGenAISpan,
-} from '@/lib/observability/tracer';
 
 import { getEnv } from '#env';
 import type { ScopedDb } from '@/lib/db/scoped';
+import {
+  recordMediaGenerationSpan,
+  type AIObservabilityMeta,
+} from '@/lib/observability/ai-otel';
 import { ensureExternallyFetchableUrls } from '@/lib/storage/external-url';
 import { generateImage } from '@tanstack/ai';
 import { falImage } from '@tanstack/ai-fal';
@@ -26,15 +26,13 @@ export type { ImageGenerationParams } from '@/lib/image/build-image-request';
 /** Non-serializable options passed separately from ImageGenerationParams */
 export type ImageGenerationOptions = {
   scopedDb?: ScopedDb;
+  /** PostHog LLM-analytics metadata for the generation span. */
+  observability?: AIObservabilityMeta;
   onQueueUpdate?: (update: {
     status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
     logs?: string[];
     progress?: number;
   }) => void;
-  /** User id for span attribution (Langfuse user.id, PostHog distinct_id) */
-  userId?: string;
-  /** Session id for Langfuse trace grouping (typically sequenceId) */
-  sessionId?: string;
 };
 
 export type ImageGenerationResult = {
@@ -75,32 +73,47 @@ export async function generateImageWithProvider(
   params: ImageGenerationParams,
   options?: ImageGenerationOptions
 ): Promise<ImageGenerationResult> {
-  const span = startGenAISpan(params.traceName ?? 'fal-image', {
-    model: params.model,
-    provider: 'fal',
-    operation: 'generate_content',
-    userId: options?.userId,
-    sessionId: options?.sessionId,
-    input: {
-      prompt: params.prompt,
-      imageSize: params.imageSize,
-      ...(params.referenceImageUrls?.length && {
-        referenceImageUrls: params.referenceImageUrls,
-      }),
-    },
-  });
+  // Observability wraps the OUTER call, not the `generateImage()` inside —
+  // see recordMediaGenerationSpan.
+  const startedAt = Date.now();
+  const attribution = {
+    ...options?.observability,
+    // `??` after the spread: an explicit `userId: undefined` in
+    // `observability` would otherwise overwrite the derived id.
+    userId: options?.observability?.userId ?? options?.scopedDb?.userId,
+  };
 
   try {
     const result = await generateImageInternal(params, options);
-
-    if (result.metadata.cost) {
-      span.setAttribute('gen_ai.usage.cost', microsToUsd(result.metadata.cost));
-    }
-    endSpanSuccess(span, { imageUrls: result.imageUrls });
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: params.model,
+      provider: 'fal',
+      activity: 'image',
+      // Measured inside, so it excludes key resolution and the reference-URL
+      // upload — the generation itself.
+      durationMs: result.processingTimeMs,
+      costMicros: result.metadata.cost,
+      unitsBilled: result.metadata.unitsBilled,
+      usedOwnKey: result.metadata.usedOwnKey,
+      prompt: params.prompt,
+      outputUrl: result.imageUrls,
+    });
     return result;
   } catch (error) {
     const errorMessage = extractFalErrorMessage(error);
-    endSpanError(span, errorMessage);
+    recordMediaGenerationSpan({
+      ...attribution,
+      model: params.model,
+      provider: 'fal',
+      activity: 'image',
+      durationMs: Date.now() - startedAt,
+      prompt: params.prompt,
+      errorType: isContentRejectionError(error)
+        ? 'content_filter'
+        : 'provider_error',
+      errorMessage,
+    });
 
     // Re-throw with the full detail so workflow failure handlers get the real message
     if (errorMessage !== (error instanceof Error ? error.message : '')) {

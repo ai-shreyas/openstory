@@ -105,7 +105,6 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
           numImages: input.numImages ?? 1,
           seed: input.seed,
           referenceImageUrls: referenceUrls,
-          traceName: 'variant-image',
         };
 
         // No frame to attach the sheet to (deleted mid-flight) → skip.

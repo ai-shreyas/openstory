@@ -95,7 +95,7 @@ async function localSetup() {
 
   p.note(
     [
-      'Optional services (Google OAuth, Stripe, Langfuse, PostHog, remote R2)',
+      'Optional services (Google OAuth, Stripe, PostHog, remote R2)',
       'are documented in .env.example — add them to .env.local when needed.',
     ].join('\n'),
     'Optional'
