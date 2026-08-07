@@ -1,3 +1,4 @@
+import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import { type Microdollars } from '@/lib/billing/money';
@@ -72,20 +73,13 @@ export async function generateImageWithProvider(
   params: ImageGenerationParams,
   options?: ImageGenerationOptions
 ): Promise<ImageGenerationResult> {
-  // Observability wraps the OUTER call, not the `generateImage()` inside:
-  // the span carries our own cost, which only resolves from D1 pricing after
-  // the adapter returns. See recordMediaGenerationSpan.
+  // Observability wraps the OUTER call, not the `generateImage()` inside —
+  // see recordMediaGenerationSpan.
   const startedAt = Date.now();
   const attribution = {
     ...options?.observability,
     // `??` after the spread: an explicit `userId: undefined` in
-    // `observability` would otherwise overwrite the derived id and land the
-    // generation unattributed. Attribution is DERIVED from `scopedDb` — it is
-    // already built from (teamId, userId) and already passed by every call
-    // site that has a user, so a new call site is attributed correctly
-    // without remembering to opt in. Explicit `observability` still wins for
-    // the semantic bits (observationName, tags, sessionId) only the caller
-    // knows.
+    // `observability` would otherwise overwrite the derived id.
     userId: options?.observability?.userId ?? options?.scopedDb?.userId,
   };
 
@@ -96,9 +90,12 @@ export async function generateImageWithProvider(
       model: params.model,
       provider: 'fal',
       activity: 'image',
+      // Measured inside, so it excludes key resolution and the reference-URL
+      // upload — the generation itself.
       durationMs: result.processingTimeMs,
       costMicros: result.metadata.cost,
       unitsBilled: result.metadata.unitsBilled,
+      usedOwnKey: result.metadata.usedOwnKey,
       prompt: params.prompt,
       outputUrl: result.imageUrls,
     });
@@ -112,7 +109,10 @@ export async function generateImageWithProvider(
       activity: 'image',
       durationMs: Date.now() - startedAt,
       prompt: params.prompt,
-      errorType: errorMessage,
+      errorType: isContentRejectionError(error)
+        ? 'content_filter'
+        : 'provider_error',
+      errorMessage,
     });
 
     // Re-throw with the full detail so workflow failure handlers get the real message

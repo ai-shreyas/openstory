@@ -32,6 +32,13 @@ export async function flushAnalytics(): Promise<void> {
   if (spans.status === 'rejected') {
     logger.error('AI OTel span flush failed', {
       err: toErrorPayload(spans.reason),
+      // `flushAIObservability` rejects with an AggregateError, whose causes
+      // live on `.errors` — and `toErrorPayload` only walks `.cause`. Without
+      // this the log says "AI observability flush failed" and nothing about
+      // WHY, which is the whole point of not swallowing it.
+      ...(spans.reason instanceof AggregateError && {
+        reasons: spans.reason.errors.map((e) => toErrorPayload(e)),
+      }),
     });
   }
 }

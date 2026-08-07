@@ -8,6 +8,7 @@ import {
 } from '@/lib/ai/models';
 import { type Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
   recordMediaGenerationSpan,
@@ -142,9 +143,8 @@ export async function generateMusic(
   const modelKey = options.model || DEFAULT_MUSIC_MODEL;
   const modelConfig = AUDIO_MODELS[modelKey];
 
-  // Recorded out here rather than as middleware on `generateAudio`: the span
-  // carries our own cost, which only resolves from D1 pricing after the
-  // adapter returns. See recordMediaGenerationSpan.
+  // Recorded out here rather than as middleware — see
+  // recordMediaGenerationSpan.
   const startedAt = Date.now();
   const attribution = {
     ...options.observability,
@@ -162,6 +162,7 @@ export async function generateMusic(
       durationMs: Date.now() - startedAt,
       costMicros: result.metadata.cost,
       unitsBilled: result.metadata.unitsBilled,
+      usedOwnKey: result.metadata.usedOwnKey,
       prompt: options.prompt,
       outputUrl: result.audioUrl,
     });
@@ -174,7 +175,10 @@ export async function generateMusic(
       activity: 'audio',
       durationMs: Date.now() - startedAt,
       prompt: options.prompt,
-      errorType: extractFalErrorMessage(error),
+      errorType: isContentRejectionError(error)
+        ? 'content_filter'
+        : 'provider_error',
+      errorMessage: extractFalErrorMessage(error),
     });
     throw error;
   }

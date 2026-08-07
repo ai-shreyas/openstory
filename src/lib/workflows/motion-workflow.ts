@@ -659,6 +659,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         durationMs: Date.now() - job.submittedAt,
         costMicros: actualCost,
         unitsBilled: billedUnits,
+        usedOwnKey: job.usedOwnKey,
         prompt: input.prompt,
         outputUrl: videoUrl,
         observationName: 'motion',
@@ -798,6 +799,28 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
   }): Promise<void> {
     const input = event.payload;
     const model = input.model || DEFAULT_VIDEO_MODEL;
+
+    // The success span is recorded in runImpl, which every failure exit skips
+    // (submit 422, hard poll failure, poll-budget timeout, content-rejection
+    // exhaustion, step-retry exhaustion). Emitting here — the one choke point
+    // all of them pass through — is what keeps motion's error rate visible in
+    // PostHog alongside image and audio. No duration: the start time lives in
+    // a step return this hook can't see.
+    recordMediaGenerationSpan({
+      model,
+      provider: 'fal',
+      activity: 'video',
+      prompt: input.prompt,
+      errorType: isContentRejectionError(error)
+        ? 'content_filter'
+        : 'provider_error',
+      errorMessage: error,
+      observationName: 'motion',
+      tags: ['motion'],
+      userId: input.userId,
+      sessionId: input.sequenceId,
+      metadata: { model, shotId: input.shotId },
+    });
 
     // Motion is always sequence-scoped (every trigger sets both ids), and the
     // dual-write needs sequenceId for the `video_variants` version — so gate on

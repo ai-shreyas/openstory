@@ -8,8 +8,7 @@ let posthogClient: PostHog | null = null;
  * `posthog-node` import is dead-code-eliminated from the client bundle:
  * `posthog-node` runs Node-only stack-trace parsing at module scope that throws
  * in the browser, so it must never be reachable from a client chunk no matter
- * which server module (AI OTel middleware, style popularity, webhooks…) pulls it
- * in.
+ * which server module pulls it in.
  */
 export const getPostHogClient = createServerOnlyFn((): PostHog | null => {
   if (!posthogClient) {

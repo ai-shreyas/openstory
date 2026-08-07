@@ -12,9 +12,25 @@ import type {
   OtelSpanInfo,
 } from '@tanstack/ai/middlewares/otel';
 import type { Attributes, SpanOptions, SpanStatus } from '@opentelemetry/api';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { diag, SpanStatusCode } from '@opentelemetry/api';
 import { micros } from '@/lib/billing/money';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mockLogError = vi.fn(
+  (_message: string, _properties?: Record<string, unknown>) => {}
+);
+vi.doMock('./logger', async () => {
+  const real = await import('./logger');
+  return {
+    ...real,
+    getLogger: () => ({
+      error: mockLogError,
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    }),
+  };
+});
 
 const otelMiddlewareReturn: ChatMiddleware = { name: 'mock-otel' };
 const mockOtelMiddleware = vi.fn(
@@ -256,6 +272,27 @@ describe('aiObservabilityMiddleware', () => {
       });
     });
 
+    it('drops reserved metadata keys even when the real field is absent', async () => {
+      // The reserved-key writes are conditional, so overwrite-order alone
+      // wouldn't help here — an unattributed span would keep the caller's
+      // distinct_id.
+      const { aiObservabilityMiddleware } = await importAiOtel({
+        token: 'phc_test',
+      });
+
+      aiObservabilityMiddleware({
+        metadata: {
+          'posthog.distinct_id': 'attacker',
+          $ai_tags: 'spoofed',
+          shotId: 'shot-1',
+        },
+      });
+
+      const { attributeEnricher } = capturedOptions();
+      if (!attributeEnricher) throw new Error('expected attributeEnricher');
+      expect(attributeEnricher(chatSpanInfo())).toEqual({ shotId: 'shot-1' });
+    });
+
     it('omits attributes for absent meta and empty tags', async () => {
       const { aiObservabilityMiddleware } = await importAiOtel({
         token: 'phc_test',
@@ -295,16 +332,10 @@ describe('aiObservabilityMiddleware', () => {
   });
 });
 
-/**
- * Every fal media generation reports through this rather than middleware:
- * cost is OURS (priced from D1 after the adapter returns, since fal reports
- * units not dollars), and video additionally completes by polling long after
- * `generateVideo()` returned.
- */
 describe('recordMediaGenerationSpan', () => {
   const record = {
     model: 'kling-v2.5',
-    provider: 'fal',
+    provider: 'fal' as const,
     activity: 'video' as const,
     durationMs: 42_000,
     costMicros: micros(350_000),
@@ -351,9 +382,7 @@ describe('recordMediaGenerationSpan', () => {
       'gen_ai.system': 'fal',
       'gen_ai.operation.name': 'video_generation',
       'gen_ai.request.model': 'kling-v2.5',
-      // 350_000 microdollars → $0.35, priced from OUR model_pricing table.
-      // Without this the generation lands in PostHog with no cost at all:
-      // fal's adapter reports billable units and never dollars.
+      // 350_000 microdollars → $0.35.
       'gen_ai.usage.cost': 0.35,
       'tanstack.ai.usage.units_billed': 5,
       'gen_ai.input.messages': 'a cat on a skateboard',
@@ -394,34 +423,119 @@ describe('recordMediaGenerationSpan', () => {
       provider: 'fal',
       activity: 'video',
       durationMs: 1_000,
-      errorType: 'content flagged',
+      errorType: 'content_filter',
+      errorMessage: 'flagged: sensitive content detected in frame 3',
       userId: 'user-1',
     });
 
     const [, options] = mockStartSpan.mock.calls[0] ?? [];
     expect(options?.attributes).toMatchObject({
-      'error.type': 'content flagged',
+      'error.type': 'content_filter',
+      'error.message': 'flagged: sensitive content detected in frame 3',
     });
     expect(options?.attributes).not.toHaveProperty('gen_ai.usage.cost');
     expect(mockSpan.setStatus).toHaveBeenCalledWith({
       code: SpanStatusCode.ERROR,
-      message: 'content flagged',
+      message: 'flagged: sensitive content detected in frame 3',
     });
   });
 
-  it('records the duration histogram without per-user attributes', async () => {
-    // PostHog bills and guards metrics per series, so `posthog.distinct_id`
-    // must never reach one — that would be a series per user.
+  it('clamps a bogus duration instead of ending the span before it started', async () => {
     const { recordMediaGenerationSpan } = await importAiOtel({
       token: 'phc_test',
     });
 
-    recordMediaGenerationSpan(record);
+    // An epoch value passed where an interval was expected.
+    recordMediaGenerationSpan({ ...record, durationMs: Date.now() + 1_000 });
+
+    const [, options] = mockStartSpan.mock.calls[0] ?? [];
+    const endTime = mockSpan.end.mock.calls[0]?.[0];
+    if (typeof options?.startTime !== 'number' || typeof endTime !== 'number') {
+      throw new Error('expected numeric startTime/endTime');
+    }
+    expect(options.startTime).toBeLessThanOrEqual(endTime);
+  });
+
+  it('never throws — bookkeeping must not fail the generation it describes', async () => {
+    // motion calls this inside a `step.do` (a throw would fail the workflow
+    // after fal already billed the video) and image/music call it from a catch
+    // block (a throw would replace the real fal error).
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+    mockStartSpan.mockImplementationOnce(() => {
+      throw new Error('tracer exploded');
+    });
+
+    expect(() => recordMediaGenerationSpan(record)).not.toThrow();
+  });
+
+  it('omits the duration histogram when the duration is unknown', async () => {
+    // Motion's onFailure has no start time. A fabricated 0 would drag the
+    // latency distribution down.
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    const { durationMs: _omitted, ...withoutDuration } = record;
+    recordMediaGenerationSpan(withoutDuration);
+
+    expect(mockStartSpan).toHaveBeenCalledTimes(1);
+    expect(mockRecordHistogram).not.toHaveBeenCalled();
+  });
+
+  it('omits the output attribute for an empty url list', async () => {
+    // `[]` is truthy — a bare truthiness gate would emit an empty string.
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    recordMediaGenerationSpan({ ...record, outputUrl: [] });
+
+    const [, options] = mockStartSpan.mock.calls[0] ?? [];
+    expect(options?.attributes).not.toHaveProperty('gen_ai.output.messages');
+  });
+
+  it('logs the OTel diag text as data, not as a message template', async () => {
+    // LogTape treats `{…}` in a message as a placeholder, and OTel's default
+    // error handler hands over `JSON.stringify(...)` — which starts with `{`.
+    // Templating it renders the entire error as the literal "undefined", which
+    // is how a rotated token stays invisible.
+    mockLogError.mockClear();
+    const { aiObservabilityMiddleware } = await importAiOtel({
+      token: 'phc_test',
+    });
+    aiObservabilityMiddleware({ userId: 'user-1' }); // forces provider setup
+
+    const otelPayload = JSON.stringify({ message: 'HTTP 401 Unauthorized' });
+    diag.error(otelPayload);
+
+    const call = mockLogError.mock.calls.at(-1);
+    if (!call) throw new Error('expected the diag bridge to log');
+    const [message, properties] = call;
+    expect(message).not.toBe(otelPayload);
+    expect(message).toContain('{otelMessage}');
+    expect(properties?.otelMessage).toBe(otelPayload);
+  });
+
+  it('keeps per-user attributes and provider prose out of the histogram', async () => {
+    // Every histogram attribute is a metric series. `posthog.distinct_id`
+    // would be one per user; a raw provider message one per message.
+    const { recordMediaGenerationSpan } = await importAiOtel({
+      token: 'phc_test',
+    });
+
+    recordMediaGenerationSpan({
+      ...record,
+      errorType: 'provider_error',
+      errorMessage: 'Unprocessable Entity: seed 12345 rejected',
+    });
 
     expect(mockRecordHistogram).toHaveBeenCalledWith(42, {
       'gen_ai.system': 'fal',
       'gen_ai.operation.name': 'video_generation',
       'gen_ai.request.model': 'kling-v2.5',
+      'error.type': 'provider_error',
     });
   });
 });

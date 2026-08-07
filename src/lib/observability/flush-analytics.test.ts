@@ -1,8 +1,7 @@
 /**
- * `flushAnalytics` must never reject. Three call sites depend on it:
- * `base-workflow`'s `finally` (which runs while a real error is propagating —
- * a rejection here would replace it), the Cloudflare `waitUntil` scheduler,
- * and both `finally` blocks in the server-fn / request middleware.
+ * `flushAnalytics` must never reject — `base-workflow` awaits it in a
+ * `finally` while a real error is propagating, so a rejection here would
+ * replace it. Middleware `finally` blocks depend on the same guarantee.
  */
 
 import { describe, expect, it, vi } from 'vitest';

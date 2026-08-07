@@ -69,26 +69,33 @@ const METRIC_EXPORT_INTERVAL_MS = 300_000;
 /**
  * Route the OTel SDK's internal diagnostics into our logger.
  *
- * This is the ONLY way most export failures become visible.
- * `MeterProvider.forceFlush()` bottoms out in
- * `PeriodicExportingMetricReader._runOnce()`, which catches every export
- * error into `globalErrorHandler` and resolves normally — so
- * `flushAIObservability` below cannot observe it, and a permanently broken
- * metrics exporter (rotated token, 401 on /i/v1/metrics) is otherwise
- * indistinguishable from a healthy one. The default `globalErrorHandler`
- * forwards to `diag.error`, and `diag` drops everything on the floor until a
- * logger is registered. The `BatchSpanProcessor`'s own timer-driven exports —
- * the designated backstop for hibernated workflows — report the same way.
+ * The trap: metric `forceFlush()` resolves even when the export failed. The
+ * periodic reader catches export errors into OTel's global error handler,
+ * which forwards to `diag` — and `diag` discards everything until a logger is
+ * registered. Without this, a 401 on /i/v1/metrics is indistinguishable from a
+ * healthy exporter.
  *
  * Registered inside the server-only telemetry factory rather than
  * `configureLogging()` because that runs in the browser too, and this pulls
  * OTel into whatever bundle it lands in.
  */
 function bridgeOtelDiagnostics(): void {
+  // The diag text is passed as a PROPERTY, never as the message template.
+  // LogTape parses `{…}` in a message as a placeholder, and OTel's default
+  // error handler hands us `JSON.stringify(...)` — which starts with `{`, so
+  // templating it renders the whole error as the literal string "undefined".
   diag.setLogger(
     {
-      error: (message, ...args) => logger.error(message, { args }),
-      warn: (message, ...args) => logger.warn(message, { args }),
+      error: (message, ...args) =>
+        logger.error('OTel diagnostic: {otelMessage}', {
+          otelMessage: message,
+          args,
+        }),
+      warn: (message, ...args) =>
+        logger.warn('OTel diagnostic: {otelMessage}', {
+          otelMessage: message,
+          args,
+        }),
       info: () => {},
       debug: () => {},
       verbose: () => {},
@@ -100,11 +107,6 @@ function bridgeOtelDiagnostics(): void {
 type Telemetry = {
   tracer: Tracer;
   meter: Meter;
-  /**
-   * Same instrument `otelMiddleware` creates for in-call generations, so the
-   * spans `recordMediaGenerationSpan` emits contribute to one series rather
-   * than leaving a hole where media used to report.
-   */
   mediaDurationHistogram: Histogram;
   traceProvider: BasicTracerProvider;
   meterProvider: MeterProvider;
@@ -215,14 +217,28 @@ export type AIObservabilityMeta = {
   userId?: string;
 };
 
+/**
+ * Attribute keys this module owns. A runtime skip-list because TypeScript
+ * can't express "any string key except these" over an open key domain.
+ */
+const RESERVED_ATTRIBUTE_KEYS = new Set([
+  'posthog.distinct_id',
+  '$ai_session_id',
+  '$ai_span_name',
+  '$ai_tags',
+]);
+
 function buildAttributes(
   meta: AIObservabilityMeta
 ): Record<string, AttributeValue> {
   const attrs: Record<string, AttributeValue> = {};
-  // Caller metadata is written FIRST so the reserved keys below always win.
-  // The other order lets `metadata: { 'posthog.distinct_id': … }` silently
-  // re-attribute a generation to a different user.
+  // Caller metadata may not claim the reserved keys — `metadata: {
+  // 'posthog.distinct_id': … }` would otherwise re-attribute the generation to
+  // another user. Skipped rather than merely overwritten below: the writes
+  // there are conditional, so an absent `userId` would leave the caller's
+  // value standing.
   for (const [key, value] of Object.entries(meta.metadata ?? {})) {
+    if (RESERVED_ATTRIBUTE_KEYS.has(key)) continue;
     if (value === undefined || value === null) continue;
     if (
       typeof value === 'string' ||
@@ -276,77 +292,115 @@ export function aiObservabilityMiddleware(
   ];
 }
 
+export type MediaActivity = 'video' | 'image' | 'audio';
+
+/**
+ * Failure class for a media generation. Deliberately a closed, small union:
+ * this is the ONLY error field that reaches the duration histogram, and every
+ * distinct value there is a new metric series. Provider prose goes in
+ * `errorMessage`, which is span-only.
+ */
+export type MediaErrorType = 'content_filter' | 'provider_error';
+
 export type MediaGenerationRecord = AIObservabilityMeta & {
   /** Model id as submitted to the provider. */
   model: string;
   /** `gen_ai.system` — the provider the request was billed by. */
-  provider: string;
+  provider: 'fal';
   /** Media activity, mapped to the `gen_ai.operation.name` semconv value. */
-  activity: 'video' | 'image' | 'audio';
-  /** Wall-clock duration of the whole generation, submit → result. */
-  durationMs: number;
+  activity: MediaActivity;
   /**
-   * Final charge, once known. Becomes `gen_ai.usage.cost` (USD).
+   * Wall-clock duration of the whole generation, submit → result. An interval
+   * in ms, NOT a timestamp — it backdates the span, so passing an epoch value
+   * silently dates the span to 1970.
    *
-   * Always OUR figure, priced from `model_pricing` in D1 — never the
-   * provider's. fal's adapter reports billable *units* and nothing else, and
-   * it can't do better: the dollar rate depends on whose key ran the job
-   * (team BYOK vs platform) and on rates we bill-verify ourselves (#1069).
+   * Omit when genuinely unknown (a failure discovered without a start time).
+   * The span is then zero-length and contributes nothing to the duration
+   * histogram, rather than skewing it with a fabricated 0.
+   */
+  durationMs?: number;
+  /**
+   * Final charge in USD (`gen_ai.usage.cost`) — always our figure, priced from
+   * `model_pricing` in D1. fal reports billable units only.
    */
   costMicros?: Microdollars;
   /** Provider-reported billable units for the completed job. */
   unitsBilled?: number;
+  /**
+   * True when a team's own provider key paid for this. `costMicros` is priced
+   * the same either way, but only the `false` case is spend on us — without
+   * this a BYOK generation inflates cost dashboards.
+   */
+  usedOwnKey?: boolean;
   /** Request prompt, recorded as the span's input. */
   prompt?: string;
   /** Terminal media URL(s), recorded as the span's output. */
   outputUrl?: string | string[];
   /** Set on a failed generation — marks the span ERROR instead of OK. */
-  errorType?: string;
+  errorType?: MediaErrorType;
+  /** Provider failure detail. Span only — never a metric attribute. */
+  errorMessage?: string;
 };
 
 const MEDIA_OPERATION_NAME = {
   video: 'video_generation',
   image: 'image_generation',
   audio: 'audio_generation',
-} as const;
+} as const satisfies Record<MediaActivity, string>;
 
 /**
  * Emit one span for a completed media generation, recorded by the caller
  * after the fact rather than by middleware around the adapter call.
  *
- * Every fal media surface needs this for one of two reasons:
+ * Middleware can't cover fal media for two reasons. Cost: our figure comes
+ * from an async D1 pricing read that finishes AFTER `generateImage` /
+ * `generateAudio` return, by which point a middleware span has closed. Async
+ * completion: `generateVideo()` returns as soon as fal accepts the queue job,
+ * so a span there would time the submit, not the generation.
  *
- *   - **Cost.** fal's adapter reports billable units, never dollars, and it
- *     can't do otherwise — the rate depends on whose key ran the job and on
- *     prices we bill-verify into `model_pricing` (#1069). Resolving it means
- *     an async D1 read that finishes AFTER `generateImage`/`generateAudio`
- *     return, by which point a middleware span has already closed. So the
- *     span has to be emitted here, where our own cost is known.
- *   - **Async completion.** `generateVideo()` returns as soon as fal accepts
- *     the job; the video is collected by polling in later workflow steps. A
- *     middleware span there would time the queue submit and carry no cost,
- *     duration, or output at all.
+ * `durationMs` is caller-supplied (not measured here) so the span covers the
+ * generation rather than this bookkeeping call — it backdates the span.
  *
- * `durationMs` is supplied by the caller (not measured here) so the span
- * covers the generation rather than this bookkeeping call — the span is
- * backdated by it.
- *
- * Attributes mirror what `otelMiddleware` sets for an in-call generation
- * (`gen_ai.system` / `operation.name` / `request.model` + `usageAttributes`),
- * and the duration histogram is the same instrument, so PostHog sees one
- * consistent `$ai_generation` shape and one metric series either way.
+ * Attributes and the duration histogram mirror `otelMiddleware`'s for an
+ * in-call generation, so PostHog sees one consistent shape either way.
  */
 export function recordMediaGenerationSpan(record: MediaGenerationRecord): void {
+  // Never let bookkeeping fail the generation it describes. `otelMiddleware`
+  // gets this for free (every hook runs under its `safeCall`); calling the
+  // tracer directly does not, and the call sites make a throw expensive:
+  // motion runs it inside a `step.do`, so a throw would fail the workflow
+  // after fal already billed the video, and image/music call it from a catch
+  // block, where a throw would replace the real fal error.
+  try {
+    emitMediaGenerationSpan(record);
+  } catch (error) {
+    logger.error('Failed to record media generation span', {
+      err: toErrorPayload(error),
+    });
+  }
+}
+
+function emitMediaGenerationSpan(record: MediaGenerationRecord): void {
   const active = getAITelemetry();
   if (!active) return;
 
   const operationName = MEDIA_OPERATION_NAME[record.activity];
   const endTime = Date.now();
+  // Clamped: a caller passing an epoch value, or clock skew across isolates,
+  // would otherwise produce a span ending before it started.
+  const durationMs =
+    record.durationMs === undefined
+      ? undefined
+      : Math.max(0, record.durationMs);
+  const outputUrls =
+    typeof record.outputUrl === 'string'
+      ? [record.outputUrl]
+      : record.outputUrl;
   const span = active.tracer.startSpan(
     record.observationName ?? `${operationName} ${record.model}`,
     {
       kind: SpanKind.CLIENT,
-      startTime: endTime - record.durationMs,
+      startTime: endTime - (durationMs ?? 0),
       attributes: {
         'gen_ai.system': record.provider,
         'gen_ai.operation.name': operationName,
@@ -357,27 +411,36 @@ export function recordMediaGenerationSpan(record: MediaGenerationRecord): void {
         ...(record.unitsBilled !== undefined && {
           'tanstack.ai.usage.units_billed': record.unitsBilled,
         }),
+        ...(record.usedOwnKey !== undefined && {
+          'openstory.used_own_key': record.usedOwnKey,
+        }),
         ...(record.prompt && { 'gen_ai.input.messages': record.prompt }),
-        ...(record.outputUrl && {
-          'gen_ai.output.messages': Array.isArray(record.outputUrl)
-            ? record.outputUrl.join('\n')
-            : record.outputUrl,
+        ...(outputUrls?.length && {
+          'gen_ai.output.messages': outputUrls.join('\n'),
         }),
         ...(record.errorType && { 'error.type': record.errorType }),
+        ...(record.errorMessage && { 'error.message': record.errorMessage }),
       },
     }
   );
   span.setAttributes(buildAttributes(record));
   span.setStatus(
     record.errorType
-      ? { code: SpanStatusCode.ERROR, message: record.errorType }
+      ? {
+          code: SpanStatusCode.ERROR,
+          message: record.errorMessage ?? record.errorType,
+        }
       : { code: SpanStatusCode.OK }
   );
   span.end(endTime);
 
-  // Attributes deliberately exclude the per-user ones — PostHog bills and
-  // guards metrics per series, so `posthog.distinct_id` must never reach one.
-  active.mediaDurationHistogram.record(record.durationMs / 1000, {
+  if (durationMs === undefined) return;
+
+  // Every attribute here must be low-cardinality: PostHog bills and guards
+  // metrics per series. That rules out `posthog.distinct_id` (a series per
+  // user) and is why `errorType` is a closed union while the provider's
+  // message stays on the span above.
+  active.mediaDurationHistogram.record(durationMs / 1000, {
     'gen_ai.system': record.provider,
     'gen_ai.operation.name': operationName,
     'gen_ai.request.model': record.model,
@@ -390,11 +453,8 @@ export function recordMediaGenerationSpan(record: MediaGenerationRecord): void {
  * serverless isolate suspends (see flush-scheduler + base-workflow).
  *
  * `allSettled` so a failing span export can't strand the metric export, or
- * vice versa — and a rejection is rethrown so `flushAnalytics` logs it.
- *
- * Only the trace side actually reports that way. `MeterProvider.forceFlush()`
- * swallows export errors into the OTel global error handler and resolves —
- * `bridgeOtelDiagnostics` above is what makes those visible.
+ * vice versa — and a rejection is rethrown so `flushAnalytics` logs it. Note
+ * only the trace side can reject; see `bridgeOtelDiagnostics`.
  */
 export async function flushAIObservability(): Promise<void> {
   if (!telemetry) return;
