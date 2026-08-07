@@ -20,6 +20,7 @@ import {
   DEFAULT_UPDATE_STALE_DEPTH,
   UPDATE_STALE_DEPTHS,
 } from '@/lib/shots/update-stale-depth';
+import { computePlan } from '@/lib/shots/update-stale-plan';
 import {
   toShotView,
   shotViewMissingFrame,
@@ -659,14 +660,21 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
   });
 
 /**
- * "Update all" (#1077, depth picker #1085): enqueue the durable
- * `UpdateStaleShotsWorkflow` for a shot / scene / the whole sequence. The
- * workflow recomputes staleness server-side and regenerates what reads stale
- * up to the chosen `depth` cascade — at 'images' and above a regenerated
- * prompt cascades into its still; at 'video'/'music' existing videos and
- * music re-render behind their regenerated upstreams (never a FIRST render).
- * Returns the run id; progress surfaces through the staleness indicators as
- * artifacts land.
+ * "Update all" (#1077, depth picker #1085): compute the regeneration plan and
+ * enqueue the durable `UpdateStaleShotsWorkflow` to execute it, for a shot /
+ * scene / the whole sequence. Staleness is recomputed server-side (never from
+ * the client's cache) and everything reading stale up to the chosen `depth`
+ * cascade is planned — at 'images' and above a regenerated prompt cascades
+ * into its still; at 'video'/'music' existing videos and music re-render
+ * behind their regenerated upstreams (never a FIRST render). Returns the run
+ * id; progress surfaces through the staleness indicators as artifacts land.
+ *
+ * The plan is computed HERE rather than at run start so the run is bound to
+ * the state the user clicked on. A queued run can start minutes later; by then
+ * the sequence may have moved, and a plan computed then would bill for work
+ * nobody asked for. Drift between this point and execution is already handled
+ * downstream — every stage re-checks its claim hash / in-flight status before
+ * spending.
  *
  * Preflights credits before enqueuing. Inside the workflow an out-of-credits
  * failure can only land in the run result, where it reads as "nothing
@@ -688,10 +696,11 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user, scopedDb } = context;
     const depth = data.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
-    // The plan isn't known yet, so this can't be the exact cost — it's a
-    // floor: a run that can't afford even one artifact of its most expensive
-    // level should never start. 'prompts' has no render cost; LLM spend is
-    // deducted inside the workflow as always.
+    // Deliberately before the plan: this is a floor, not a quote — a run that
+    // can't afford even one artifact of its most expensive level should never
+    // start, and there's no point planning a whole sequence to tell the user
+    // that. 'prompts' has no render cost; LLM spend is deducted inside the
+    // workflow as always.
     if (depth !== 'prompts') {
       const model = safeTextToImageModel(
         sequence.imageModel,
@@ -708,15 +717,20 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
         { errorMessage: 'Insufficient credits to update out-of-date shots' }
       );
     }
+    const plan = await computePlan({
+      scopedDb,
+      sequenceId: sequence.id,
+      sceneId: data.sceneId,
+      shotId: data.shotId,
+      depth,
+    });
     const workflowRunId = await triggerWorkflow<UpdateStaleShotsWorkflowInput>(
       '/update-stale-shots',
       {
         userId: user.id,
         teamId,
         sequenceId: sequence.id,
-        sceneId: data.sceneId,
-        shotId: data.shotId,
-        depth,
+        plan,
       },
       {
         label: buildWorkflowLabel(sequence.id),

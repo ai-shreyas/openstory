@@ -367,4 +367,81 @@ describe('cascadeRename', () => {
     expect(result.shotsUpdated).toBe(0);
     expect(result.scriptUpdated).toBe(false);
   });
+
+  describe('expectedToken (compare-and-swap)', () => {
+    it('applies the rename and cascade while the element still carries it', async () => {
+      const methods = createSequenceElementsMethods(db);
+      const element = await insertElement('LOGO');
+      await db
+        .update(sequences)
+        .set({ script: 'The LOGO appears.' })
+        .where(eq(sequences.id, sequenceId));
+
+      const result = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+
+      expect(result.renamed).toBe(true);
+      expect(result.element.token).toBe('BRAND');
+      expect(result.scriptUpdated).toBe(true);
+    });
+
+    it('keeps a concurrent user rename and leaves the script alone', async () => {
+      const methods = createSequenceElementsMethods(db);
+      const element = await insertElement('LOGO');
+      await db
+        .update(sequences)
+        .set({ script: 'The HERO_LOGO appears.' })
+        .where(eq(sequences.id, sequenceId));
+      // The user renamed LOGO → HERO_LOGO (rewriting the script with it) while
+      // vision was running; vision's swap must now find nothing to swap.
+      await methods.update(element.id, { token: 'HERO_LOGO' });
+
+      const result = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+
+      expect(result.renamed).toBe(false);
+      expect(result.element.token).toBe('HERO_LOGO');
+      expect(result.scriptUpdated).toBe(false);
+
+      const [seq] = await db
+        .select({ script: sequences.script })
+        .from(sequences)
+        .where(eq(sequences.id, sequenceId));
+      expect(seq?.script).toBe('The HERO_LOGO appears.');
+    });
+
+    it('skips a replay of an already-applied rename', async () => {
+      const methods = createSequenceElementsMethods(db);
+      const element = await insertElement('LOGO');
+
+      const first = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+      expect(first.renamed).toBe(true);
+
+      const replay = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+      expect(replay.renamed).toBe(false);
+      expect(replay.element.token).toBe('BRAND');
+    });
+  });
 });

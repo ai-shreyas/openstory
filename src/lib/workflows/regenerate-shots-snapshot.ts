@@ -50,6 +50,10 @@ export async function buildRegenerateShotSnapshot(params: {
    * `frame.imagePrompt`.
    */
   imagePrompt: string | null;
+  /** The prompt version `imagePrompt` came from, when the caller resolved one. */
+  imagePromptVersionId?: string | null;
+  /** The shot's anchor frame, when the caller already resolved it. */
+  frameId?: string;
   characters: Character[];
   locations: SequenceLocation[];
   elements: SequenceElement[];
@@ -60,6 +64,8 @@ export async function buildRegenerateShotSnapshot(params: {
     shot,
     scene,
     imagePrompt,
+    imagePromptVersionId,
+    frameId,
     characters,
     locations,
     elements,
@@ -81,7 +87,7 @@ export async function buildRegenerateShotSnapshot(params: {
   }
 
   // Resolve the scene's character / location / element references exactly the
-  // way image generation does (`computeImageWorkflowHashCurrent`) — same
+  // way the image-generation trigger snapshot does — same
   // matchers, same reference-hash sets — so this verify-time hash equals the
   // thumbnail hash stamped at generation. Omitting the element/location sets
   // here made every product-/location-bearing shot report stale. See #867.
@@ -110,6 +116,8 @@ export async function buildRegenerateShotSnapshot(params: {
   return {
     shotId: shot.id,
     imagePrompt: effectivePrompt,
+    imagePromptVersionId: imagePromptVersionId ?? null,
+    frameId: frameId ?? null,
     characterSheetHashes: refs.characterSheetHashes,
     locationSheetHashes: refs.locationSheetHashes,
     elementReferenceHashes: refs.elementReferenceHashes,

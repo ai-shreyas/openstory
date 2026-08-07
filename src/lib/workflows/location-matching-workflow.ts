@@ -20,7 +20,7 @@
 
 import { buildLocationMatchingPromptVariables } from '@/lib/ai/location-matching-prompt';
 import { locationMatchResponseSchema } from '@/lib/ai/response-schemas';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { durableLLMCallCf } from '@/lib/workflows/llm-call-helper';
@@ -45,7 +45,7 @@ export class LocationMatchingWorkflow extends OpenStoryWorkflowEntrypoint<Locati
   protected override async runImpl(
     event: Readonly<WorkflowEvent<LocationMatchingWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<LocationMatchingWorkflowOutput> {
     const input = event.payload;
     const { suggestedLocationIds, sequenceId, analysisModelId } = input;
@@ -58,42 +58,52 @@ export class LocationMatchingWorkflow extends OpenStoryWorkflowEntrypoint<Locati
     // no uploaded image — only gets its reference once the fire-and-forget
     // `/library-location-sheet` workflow finishes. Wait (bounded) for those
     // references first so pre-selected locations aren't silently skipped.
-    if (suggestedLocationIds?.length && input.teamId) {
-      await waitForLocationReferences(step, scopedDb, suggestedLocationIds, {
-        // Surface the wait in the generation progress dialog (phase 2 is the
-        // "Casting characters & locations…" step). Only emitted when we actually
-        // have to wait, so a ready library never flashes a spurious status.
-        onWaitNeeded: async () => {
-          if (!sequenceId) return;
-          await getGenerationChannel(sequenceId).emit(
-            'generation.phase:start',
-            {
-              phase: 2,
-              phaseName: 'Waiting for location references…',
-            }
-          );
-        },
-      });
-    }
+    const referenceRows =
+      suggestedLocationIds?.length && input.teamId
+        ? (
+            await waitForLocationReferences(
+              step,
+              scopedDb.liveRead,
+              suggestedLocationIds,
+              {
+                // Surface the wait in the generation progress dialog (phase 2
+                // is the "Casting characters & locations…" step). Only emitted
+                // when we actually have to wait, so a ready library never
+                // flashes a spurious status.
+                onWaitNeeded: async () => {
+                  if (!sequenceId) return;
+                  await getGenerationChannel(sequenceId).emit(
+                    'generation.phase:start',
+                    {
+                      phase: 2,
+                      phaseName: 'Waiting for location references…',
+                    }
+                  );
+                },
+              }
+            )
+          ).rows
+        : [];
 
-    const { libraryLocationList, locationMatchingPromptVariables } =
-      await step.do('get-library-locations', async () => {
-        if (!suggestedLocationIds?.length || !input.teamId) {
-          return {
-            libraryLocationList: [],
-            locationMatchingPromptVariables: {},
-          };
-        }
-        const libraryLocationList =
-          await scopedDb.locations.getByIds(suggestedLocationIds);
-        return {
-          libraryLocationList,
-          locationMatchingPromptVariables: buildLocationMatchingPromptVariables(
+    // The wait's final poll IS the read. Name/description come from the
+    // trigger-time snapshot; only `referenceImageUrl` legitimately arrives
+    // late (fire-and-forget `/library-location-sheet`).
+    const snapshotById = new Map(
+      (input.suggestedLocations ?? []).map((l) => [l.locationId, l])
+    );
+    const libraryLocationList = referenceRows.map((row) => {
+      const snapshot = snapshotById.get(row.id);
+      return snapshot
+        ? { ...row, name: snapshot.name, description: snapshot.description }
+        : row;
+    });
+    const locationMatchingPromptVariables =
+      libraryLocationList.length > 0
+        ? buildLocationMatchingPromptVariables(
             locationBible,
             libraryLocationList
-          ),
-        };
-      });
+          )
+        : {};
 
     const { matches: locationMatches } =
       libraryLocationList.length > 0
@@ -189,7 +199,7 @@ export class LocationMatchingWorkflow extends OpenStoryWorkflowEntrypoint<Locati
   }: {
     event: Readonly<WorkflowEvent<LocationMatchingWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
     logger.error(

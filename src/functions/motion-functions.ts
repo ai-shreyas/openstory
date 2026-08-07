@@ -31,7 +31,6 @@ import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { BatchMotionMusicWorkflowInput } from '@/lib/workflow/types';
 
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
-import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { toShotView } from '@/lib/shots/shot-view';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 import { buildUserEditProvenance } from '@/lib/prompts/user-edit-provenance';
@@ -53,12 +52,16 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
     const { shot, frame, sequence, teamId } = context;
 
     // The still lives on the anchor frame's SELECTED version (#989/#1067).
-    // Capture into a const so the non-null narrowing survives the awaits
-    // before the workflow input.
-    const imageUrl = await getFrameImageUrl(context.scopedDb, frame.id);
-    if (!imageUrl) {
+    // Resolved as the whole row, not just the URL: the render manifest records
+    // WHICH version the clip rendered from, and re-reading the pointer in the
+    // workflow could name a different still than the one submitted.
+    const selectedStill = await context.scopedDb.frameVariants.getSelected(
+      frame.id
+    );
+    if (!selectedStill?.url) {
       throw new Error('Shot has no thumbnail to generate motion from');
     }
+    const imageUrl = selectedStill.url;
 
     // Model identity lives on the version that rendered the clip (#1066):
     // explicit request model wins, else the version the shot's render segment
@@ -176,7 +179,10 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       shots: [
         {
           shotId: shot.id,
+          sceneId: shot.sceneId,
           imageUrl,
+          frameVersionId: selectedStill.id,
+          motionPromptVersionId: selectedMotion?.id ?? null,
           prompt,
           model,
           duration,
@@ -185,6 +191,7 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
           aspectRatio: sequence.aspectRatio,
           generateAudio: data.generateAudio,
           sceneTitle: context.scene?.metadata?.title,
+          sequenceTitle: sequence.title,
           userEditProvenance,
           priorMotion: userEditProvenance
             ? {
@@ -380,11 +387,17 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       shots: eligibleShots.map((shot) => {
         const shotModel = resolveShotVideoModel(shot);
         const scene = sceneOf(shot);
+        const selectedMotion = selectedMotionByShot.get(shot.id);
         return {
           shotId: shot.id,
+          sceneId: shot.sceneId,
           imageUrl: shot.image?.url ?? '',
+          // The versions this clip renders from, pinned here so the render
+          // manifest can't name rows a concurrent edit repointed to.
+          frameVersionId: shot.image?.id ?? null,
+          motionPromptVersionId: selectedMotion?.id ?? null,
           prompt: resolveMotionPromptFromVersion(
-            selectedMotionByShot.get(shot.id),
+            selectedMotion,
             {
               characterTags: scene?.continuity?.characterTags,
               description: scene?.originalScript.extract ?? null,
@@ -393,6 +406,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
           ),
           model: shotModel,
           sceneTitle: scene?.metadata?.title,
+          sequenceTitle: sequence.title,
           duration:
             data.duration ?? (shot.durationMs ? shot.durationMs / 1000 : 3),
           fps: data.fps,

@@ -12,7 +12,7 @@ import {
   motionPromptSchema,
   type MotionPrompt,
 } from '@/lib/ai/scene-analysis.schema';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { getShotPromptChannel, getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type { MotionPromptWorkflowInput } from '@/lib/workflow/types';
@@ -23,16 +23,25 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'motion-prompt']);
 
-type MotionPromptWorkflowResult = {
+export type MotionPromptWorkflowResult = {
   sceneId: string;
   motionPrompt: MotionPrompt;
+  /**
+   * The version id that ended up live for this run (#1067) — the completed
+   * claim, or, on the unique-index collision path, the identical existing row
+   * the claim retired in favour of. Null when nothing was persisted (no shot,
+   * or the claim was cancelled mid-flight). Parents chain their render off
+   * THIS id rather than re-reading the shot's selection pointer, which a
+   * concurrent edit can move to a different prompt between the two steps.
+   */
+  finalVersionId: string | null;
 };
 
 export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionPromptWorkflowInput> {
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MotionPromptWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<MotionPromptWorkflowResult> {
     const input = event.payload;
     const {
@@ -144,6 +153,11 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
     // when the LLM omits them (common on explicit regenerate runs).
     const motionPrompt = hydrateMotionPromptFromScene(scene, llmMotionPrompt);
 
+    // The version this run left live, returned to the parent so a chained
+    // render resolves its prompt by explicit id instead of re-reading the
+    // shot's selection pointer (#1067).
+    let finalVersionId: string | null = null;
+
     if (sequenceId && shotId) {
       if (!motionPrompt.fullPrompt) {
         throw new Error(
@@ -155,18 +169,42 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
       // so the stored hash equals the verify-time recompute by construction.
       const inputHash = await computeMotionPromptInputHash(narrowed);
 
-      await step.do('save-motion-prompt-to-db', async () => {
-        // The motion prompt is NOT written into `scene.metadata` any more
-        // (#713). The version write mirrors its text onto `shot.motionPrompt`
-        // and repoints `selectedMotionPromptVersionId` — superseding any prior
-        // user override automatically (the override stays in history and can
-        // be restored).
-        if (input.targetVersionId) {
-          // #1085: complete the pre-created pending claim in place. Null =
-          // cancelled mid-flight; the output is deliberately discarded.
-          const completed =
-            await scopedDb.shotPromptVersions.completePendingAiVersion({
-              versionId: input.targetVersionId,
+      finalVersionId = await step.do(
+        'save-motion-prompt-to-db',
+        async (): Promise<string | null> => {
+          let persistedVersionId: string | null = null;
+          // The motion prompt is NOT written into `scene.metadata` any more
+          // (#713). The version write mirrors its text onto `shot.motionPrompt`
+          // and repoints `selectedMotionPromptVersionId` — superseding any prior
+          // user override automatically (the override stays in history and can
+          // be restored).
+          if (input.targetVersionId) {
+            // #1085: complete the pre-created pending claim in place. Null =
+            // cancelled mid-flight; the output is deliberately discarded.
+            const completed =
+              await scopedDb.shotPromptVersions.completePendingAiVersion({
+                versionId: input.targetVersionId,
+                shotId,
+                text: motionPrompt.fullPrompt,
+                components: motionPrompt.components,
+                parameters: motionPrompt.parameters,
+                dialogue: motionPrompt.dialogue ?? null,
+                audio: motionPrompt.audio ?? null,
+                inputHash,
+                analysisModel: analysisModelId,
+              });
+            if (!completed) {
+              logger.info(
+                `[MotionPromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
+              );
+              return null;
+            }
+            // The claim itself when it completed; the identical existing row it
+            // retired in favour of on the unique-index collision path. Either
+            // way this is the version a chained render must consume.
+            persistedVersionId = completed.id;
+          } else {
+            const written = await scopedDb.shotPromptVersions.writeAiVersion({
               shotId,
               text: motionPrompt.fullPrompt,
               components: motionPrompt.components,
@@ -176,41 +214,30 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
               inputHash,
               analysisModel: analysisModelId,
             });
-          if (!completed) {
-            logger.info(
-              `[MotionPromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
-            );
-            return;
+            persistedVersionId = written.id;
           }
-        } else {
-          await scopedDb.shotPromptVersions.writeAiVersion({
-            shotId,
-            text: motionPrompt.fullPrompt,
-            components: motionPrompt.components,
-            parameters: motionPrompt.parameters,
-            dialogue: motionPrompt.dialogue ?? null,
-            audio: motionPrompt.audio ?? null,
-            inputHash,
-            analysisModel: analysisModelId,
-          });
-        }
 
-        // The prompt lives on `shot.motionPrompt` (mirror) now, not metadata;
-        // carry the base scene so the client refreshes the shot on this event.
-        await getGenerationChannel(sequenceId).emit('generation.shot:updated', {
-          shotId,
-          updateType: 'motion-prompt',
-          metadata: scene,
-        });
+          // The prompt lives on `shot.motionPrompt` (mirror) now, not metadata;
+          // carry the base scene so the client refreshes the shot on this event.
+          await getGenerationChannel(sequenceId).emit(
+            'generation.shot:updated',
+            {
+              shotId,
+              updateType: 'motion-prompt',
+              metadata: scene,
+            }
+          );
 
-        if (input.emitStreaming) {
-          await getShotPromptChannel(shotId).emit('shotPrompt.completed', {
-            promptType: 'motion',
-          });
+          if (input.emitStreaming) {
+            await getShotPromptChannel(shotId).emit('shotPrompt.completed', {
+              promptType: 'motion',
+            });
+          }
+          return persistedVersionId;
         }
-      });
+      );
     }
-    return { sceneId: scene.sceneId, motionPrompt };
+    return { sceneId: scene.sceneId, motionPrompt, finalVersionId };
   }
 
   protected override async onFailure({
@@ -220,7 +247,7 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
   }: {
     event: Readonly<WorkflowEvent<MotionPromptWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     logger.error('[MotionPromptWorkflow:cf] Failed', { error });
     // #1085: fail the pending claim so it stops reading as "updating".

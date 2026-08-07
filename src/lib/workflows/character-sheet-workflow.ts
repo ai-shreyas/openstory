@@ -27,7 +27,7 @@ import {
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import {
   generateImageWithProvider,
   type ImageGenerationParams,
@@ -71,7 +71,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
   protected override async runImpl(
     event: Readonly<WorkflowEvent<CharacterSheetWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<CharacterSheetWorkflowResult> {
     const input = event.payload;
     const workflowRunId = event.instanceId;
@@ -170,7 +170,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
           );
           try {
             const result = await generateImageWithProvider(generationParams, {
-              scopedDb,
+              scopedDb: scopedDb.credentials,
             });
             return { ok: true, result };
           } catch (error) {
@@ -317,7 +317,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
           );
 
           const currentHash = snapshotInputHash
-            ? await computeCharacterSheetHashCurrent(input, scopedDb)
+            ? await computeCharacterSheetHashCurrent(input, scopedDb.liveRead)
             : null;
 
           const decision = decideSheetDivergence(
@@ -387,6 +387,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
           sheetImageUrl,
           sheetImagePath,
           characterDbId: input.characterDbId,
+          diverged: true,
         };
       }
     }
@@ -420,7 +421,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
   }: {
     event: Readonly<WorkflowEvent<CharacterSheetWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

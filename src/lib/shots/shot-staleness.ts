@@ -141,6 +141,7 @@ export async function computeShotStaleness(args: {
         const snapshot = await buildRegenerateShotSnapshot({
           shot,
           scene,
+          frameId: frame.id,
           imagePrompt: effectivePrompt,
           characters,
           locations,

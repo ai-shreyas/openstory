@@ -26,7 +26,7 @@
 
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
@@ -70,7 +70,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     step: WorkflowStep,
     // The reconcile pass that used scopedDb is retired (#989): image-workflow now
     // appends + selects each version itself.
-    _scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<RegenerateShotsResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -244,6 +244,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
               teamId,
               sequenceId,
               shotId: result.shotId,
+              frameId: snapshot.frameId ?? undefined,
               thumbnailUrl: result.imageUrl,
               scenePrompt: snapshot.imagePrompt,
               characterReferences:
@@ -301,7 +302,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
   }: {
     event: Readonly<WorkflowEvent<RegenerateShotsWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

@@ -25,11 +25,27 @@
  * between reads, mirroring the batched-polling pattern in `motion-workflow.ts`.
  */
 
+import type {
+  LibraryLocation,
+  SequenceElement,
+  TalentWithSheets,
+} from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { getLogger } from '@/lib/observability/logger';
 import type { WorkflowSleepDuration, WorkflowStep } from 'cloudflare:workers';
 
 const logger = getLogger(['openstory', 'workflow', 'wait-for-sheets']);
+
+/**
+ * The three polling reads these helpers make. Narrowed so callers hand over
+ * `scopedDb.liveRead` — polling a sibling workflow's late writes is one of the
+ * sanctioned live reads, and this type is what says so at the boundary.
+ */
+export type WaitForSheetsReadDb = {
+  talent: Pick<ScopedDb['talent'], 'getByIds'>;
+  locations: Pick<ScopedDb['locations'], 'getByIds'>;
+  sequenceElements: Pick<ScopedDb['sequenceElements'], 'listByIds'>;
+};
 
 /** Read interval between durable poll attempts. */
 const POLL_INTERVAL: WorkflowSleepDuration = '5 seconds';
@@ -42,11 +58,17 @@ const POLL_INTERVAL: WorkflowSleepDuration = '5 seconds';
  */
 const MAX_ATTEMPTS = 36;
 
-export type WaitForSheetsResult = {
+export type WaitForSheetsResult<TRow> = {
   /** True if every entity became ready before the timeout. */
   ready: boolean;
   /** Ids of entities still missing a sheet when the wait returned. */
   pendingIds: string[];
+  /**
+   * Rows from the final poll — the freshest read the wait already performed.
+   * Callers consume these instead of issuing a second read, which would both
+   * cost an extra query and re-open the very window the wait just closed.
+   */
+  rows: TRow[];
 };
 
 /**
@@ -58,39 +80,43 @@ export type WaitForSheetsResult = {
  */
 type OnWaitNeeded = (pendingCount: number) => Promise<void> | void;
 
-type PollArgs = {
+type PollArgs<TRow> = {
   ids: string[];
   /** Prefix for the durable step names; must be unique within the workflow. */
   stepPrefix: string;
   /** Human-readable label for log lines. */
   label: string;
   /**
-   * Returns the subset of `ids` that are NOT yet ready. Only entities the
-   * scoped read actually returns are considered — an id the read doesn't return
-   * (deleted, or another team's private row) is treated as "not pending" so we
-   * never wait the full timeout for something matching will skip anyway.
+   * Reads the entities and splits them into the rows it saw plus the subset of
+   * `ids` that are NOT yet ready. Only entities the scoped read actually
+   * returns are considered — an id the read doesn't return (deleted, or
+   * another team's private row) is treated as "not pending" so we never wait
+   * the full timeout for something matching will skip anyway.
    */
-  findPending: () => Promise<string[]>;
+  check: () => Promise<{ rows: TRow[]; pendingIds: string[] }>;
   onWaitNeeded?: OnWaitNeeded;
 };
 
-async function pollUntilReady(
+async function pollUntilReady<TRow extends Rpc.Serializable<TRow>>(
   step: WorkflowStep,
-  { ids, stepPrefix, label, findPending, onWaitNeeded }: PollArgs
-): Promise<WaitForSheetsResult> {
+  { ids, stepPrefix, label, check, onWaitNeeded }: PollArgs<TRow>
+): Promise<WaitForSheetsResult<TRow>> {
   if (ids.length === 0) {
-    return { ready: true, pendingIds: [] };
+    return { ready: true, pendingIds: [], rows: [] };
   }
 
+  let rows: TRow[] = [];
   let pendingIds: string[] = ids;
   let notifiedWaiting = false;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    pendingIds = await step.do(`${stepPrefix}-check-${attempt}`, async () =>
-      findPending()
+    const checked = await step.do(`${stepPrefix}-check-${attempt}`, async () =>
+      check()
     );
+    rows = checked.rows;
+    pendingIds = checked.pendingIds;
 
     if (pendingIds.length === 0) {
-      return { ready: true, pendingIds: [] };
+      return { ready: true, pendingIds: [], rows };
     }
 
     // First time we discover we actually have to wait, fire the hook once.
@@ -114,7 +140,7 @@ async function pollUntilReady(
     `[wait-for-sheets] Timed out waiting for ${label} after ${MAX_ATTEMPTS} attempts; proceeding with ${pendingIds.length} still pending`,
     { pendingIds }
   );
-  return { ready: false, pendingIds };
+  return { ready: false, pendingIds, rows };
 }
 
 /**
@@ -125,18 +151,23 @@ async function pollUntilReady(
  */
 export async function waitForTalentSheets(
   step: WorkflowStep,
-  scopedDb: ScopedDb,
+  scopedDb: WaitForSheetsReadDb,
   talentIds: string[],
   opts?: { onWaitNeeded?: OnWaitNeeded }
-): Promise<WaitForSheetsResult> {
+): Promise<WaitForSheetsResult<TalentWithSheets>> {
   return pollUntilReady(step, {
     ids: talentIds,
     stepPrefix: 'wait-talent-sheets',
     label: 'talent sheets',
     onWaitNeeded: opts?.onWaitNeeded,
-    findPending: async () => {
-      const talent = await scopedDb.talent.getByIds(talentIds);
-      return talent.filter((t) => !t.defaultSheet?.imageUrl).map((t) => t.id);
+    check: async () => {
+      const rows = await scopedDb.talent.getByIds(talentIds);
+      return {
+        rows,
+        pendingIds: rows
+          .filter((t) => !t.defaultSheet?.imageUrl)
+          .map((t) => t.id),
+      };
     },
   });
 }
@@ -149,18 +180,21 @@ export async function waitForTalentSheets(
  */
 export async function waitForLocationReferences(
   step: WorkflowStep,
-  scopedDb: ScopedDb,
+  scopedDb: WaitForSheetsReadDb,
   locationIds: string[],
   opts?: { onWaitNeeded?: OnWaitNeeded }
-): Promise<WaitForSheetsResult> {
+): Promise<WaitForSheetsResult<LibraryLocation>> {
   return pollUntilReady(step, {
     ids: locationIds,
     stepPrefix: 'wait-location-refs',
     label: 'location references',
     onWaitNeeded: opts?.onWaitNeeded,
-    findPending: async () => {
-      const locations = await scopedDb.locations.getByIds(locationIds);
-      return locations.filter((l) => !l.referenceImageUrl).map((l) => l.id);
+    check: async () => {
+      const rows = await scopedDb.locations.getByIds(locationIds);
+      return {
+        rows,
+        pendingIds: rows.filter((l) => !l.referenceImageUrl).map((l) => l.id),
+      };
     },
   });
 }
@@ -169,7 +203,7 @@ export async function waitForLocationReferences(
 const ELEMENT_VISION_IN_FLIGHT = new Set(['pending', 'analyzing']);
 
 /**
- * Block until every sequence element has a terminal vision status
+ * Block until every element in `elementIds` has a terminal vision status
  * (`completed`/`failed`), or the timeout expires.
  *
  * Elements uploaded while creating a sequence kick off
@@ -179,18 +213,23 @@ const ELEMENT_VISION_IN_FLIGHT = new Set(['pending', 'analyzing']);
  * descriptions when it builds the element bible for scene-split, so a still-
  * running vision means the element is fed into generation with no description.
  *
- * We first scan the sequence for elements still in flight, then poll only those
- * by id — completed/failed elements never enter the wait set, so a sequence
- * whose vision already finished short-circuits with no added latency.
+ * `elementIds` is the run's trigger-time element set, NOT a live enumeration:
+ * an element uploaded after generation started is not part of this run, and
+ * scanning for it here would make its pending vision hard-fail the run at the
+ * `load-elements` guard.
+ *
+ * We first scan those ids for the ones still in flight, then poll only those —
+ * completed/failed elements never enter the wait set, so a sequence whose
+ * vision already finished short-circuits with no added latency.
  */
 export async function waitForElementVision(
   step: WorkflowStep,
-  scopedDb: ScopedDb,
-  sequenceId: string,
+  scopedDb: WaitForSheetsReadDb,
+  elementIds: string[],
   opts?: { onWaitNeeded?: OnWaitNeeded }
-): Promise<WaitForSheetsResult> {
+): Promise<WaitForSheetsResult<SequenceElement>> {
   const inFlightIds = await step.do('wait-element-vision-scan', async () => {
-    const elements = await scopedDb.sequenceElements.list(sequenceId);
+    const elements = await scopedDb.sequenceElements.listByIds(elementIds);
     return elements
       .filter((el) => ELEMENT_VISION_IN_FLIGHT.has(el.visionStatus))
       .map((el) => el.id);
@@ -201,11 +240,14 @@ export async function waitForElementVision(
     stepPrefix: 'wait-element-vision',
     label: 'element vision',
     onWaitNeeded: opts?.onWaitNeeded,
-    findPending: async () => {
-      const elements = await scopedDb.sequenceElements.listByIds(inFlightIds);
-      return elements
-        .filter((el) => ELEMENT_VISION_IN_FLIGHT.has(el.visionStatus))
-        .map((el) => el.id);
+    check: async () => {
+      const rows = await scopedDb.sequenceElements.listByIds(inFlightIds);
+      return {
+        rows,
+        pendingIds: rows
+          .filter((el) => ELEMENT_VISION_IN_FLIGHT.has(el.visionStatus))
+          .map((el) => el.id),
+      };
     },
   });
 }

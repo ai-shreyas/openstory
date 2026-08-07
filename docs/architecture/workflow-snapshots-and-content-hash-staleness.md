@@ -115,6 +115,29 @@ Workflows must not read mutable state inside a `step.do()` for anything that sho
 
 **At write time** (inside the final `step.do()` that commits the artifact): recompute `currentInputHash` from the _live_ scoped-DB state, and branch on whether it still matches `snapshotInputHash`. (See Pillar 3.)
 
+### How the rule is enforced (#1067)
+
+Two mechanisms, so the rule survives without a reviewer noticing it:
+
+- **`WorkflowScopedDb`** (`src/lib/db/scoped-workflow.ts`) is what `runImpl` receives instead of `ScopedDb`: the same write surface with every read-shaped method (`get*`, `list*`, `find*`, `resolve*`, `has*`, …) removed from every domain. A mid-run read is a type error. The narrowing is purely type-level — `toWorkflowScopedDb` returns the same object.
+- **Three named hatches** carry what a run legitimately cannot know at the trigger. One catch-all would make every exception look alike; the name at the call site is the argument:
+
+  | hatch                                   | what it is                                | why it's safe                                                                                             |
+  | --------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+  | `scopedDb.credentials.…`                | `resolveKey` / `resolveLlmKey`, flat      | returns a secret, never a row a generation decision can turn on                                           |
+  | `scopedDb.claims.<domain>.getById…(id)` | an append-only row by an id the run holds | the id names one immutable row — nothing for a concurrent edit to substitute                              |
+  | `scopedDb.liveRead.<domain>.…`          | live by design                            | divergence recomputation, sibling-workflow polling, balance + spawn-time billing guards, existence guards |
+
+  The split is load-bearing rather than cosmetic: `claims` **cannot express a selection pointer** and `credentials` **cannot express a row**, so the two failure modes behind this work — rendering from a pointer a concurrent edit moved, and treating key access as licence to read data — are unspellable, not merely discouraged.
+
+  `src/lib/workflow/no-mid-run-reads.test.ts` scans `src/lib/workflows/*.ts` and fails on any read not in its per-file allow-list, on an allow-list entry whose call site is gone, and on a read whose recorded category doesn't match the hatch its call site used (a `CLAIM-BY-ID` read reached via `liveRead` fails). Helper modules that declare a narrowed dependency type (`SheetSnapshotReadDb`, `WaitForSheetsReadDb`, `FrameImageReadDb`, `PreflightScopedDb`, `FalCredentialScopedDb`) are handed the hatch by their workflow caller.
+
+**Chained renders resolve their prompt by id, never by pointer.** `completePendingAiVersion` can end a run on either of two rows: the claim it completed, or — when a completed row already carries the same `(parent, input_hash)` and the same text — the existing row the claim retires in favour of. The prompt children return whichever one ended up live as `finalVersionId` (`FramePromptResult`, `MotionPromptWorkflowResult`), and the parent re-reads that id with `getByIdForFrame` / `getByIdForShot`. Resolving the collision by comparing the selection pointer's `inputHash` against the plan's live hash instead would be wrong twice over: `input_hash` pins the generation _inputs_, not the text, so a same-inputs-different-text version passes the check; and the pointer can move between the check and the render. No child result means the prompt didn't land, which is a stand-down, not a fallback.
+
+The one wide hatch is `scopedDb.stalenessPlanning` (full `ScopedDb`), used only by `update-stale-shots-workflow.ts` for the planner: staleness IS a live-state comparison, so there is nothing to freeze, and the same code renders the "what's stale" preview in the server fns. The same test asserts it has exactly one consumer.
+
+Helper modules shared between server fns and workflows declare a narrowed dependency type instead of taking `ScopedDb` — `SheetSnapshotReadDb`, `WaitForSheetsReadDb`, `FrameImageReadDb`, `PreflightScopedDb`, `FalCredentialScopedDb` — so a workflow hands over `scopedDb.liveRead` and a server fn its full `ScopedDb`.
+
 ### Per-workflow snapshot modules
 
 There is no centralized `snapshot` config on `OpenStoryWorkflowEntrypoint`. Each migrated workflow owns a companion `*-snapshot.ts` module that:

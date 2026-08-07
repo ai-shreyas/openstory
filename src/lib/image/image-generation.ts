@@ -8,7 +8,7 @@ import {
 } from '@/lib/image/build-image-request';
 
 import { getEnv } from '#env';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { FalCredentialScopedDb } from '@/lib/db/scoped-workflow';
 import {
   recordMediaGenerationSpan,
   type AIObservabilityMeta,
@@ -25,7 +25,7 @@ export type { ImageGenerationParams } from '@/lib/image/build-image-request';
 
 /** Non-serializable options passed separately from ImageGenerationParams */
 export type ImageGenerationOptions = {
-  scopedDb?: ScopedDb;
+  scopedDb?: FalCredentialScopedDb;
   /** PostHog LLM-analytics metadata for the generation span. */
   observability?: AIObservabilityMeta;
   onQueueUpdate?: (update: {
@@ -133,7 +133,7 @@ async function generateImageInternal(
   // be empty and the upload would fail with "Authorization header is required"
   // before we ever reach generation (#924).
   const falApiKeyInfo = options?.scopedDb
-    ? await options.scopedDb.apiKeys.resolveKey('fal')
+    ? await options.scopedDb.resolveKey('fal')
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
   // Locally-served /r2/ reference URLs aren't reachable by real fal — swap

@@ -46,13 +46,10 @@ function locationDb(getByIds: ReturnType<typeof vi.fn>): ScopedDb {
   return { locations: { getByIds } } as unknown as ScopedDb;
 }
 
-/** ScopedDb stub exposing `sequenceElements.list` + `.listByIds`. */
-function elementDb(
-  list: ReturnType<typeof vi.fn>,
-  listByIds: ReturnType<typeof vi.fn>
-): ScopedDb {
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- helper only reaches scopedDb.sequenceElements.{list,listByIds}
-  return { sequenceElements: { list, listByIds } } as unknown as ScopedDb;
+/** ScopedDb stub exposing `sequenceElements.listByIds`. */
+function elementDb(listByIds: ReturnType<typeof vi.fn>): ScopedDb {
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- helper only reaches scopedDb.sequenceElements.listByIds
+  return { sequenceElements: { listByIds } } as unknown as ScopedDb;
 }
 
 describe('waitForTalentSheets', () => {
@@ -62,7 +59,7 @@ describe('waitForTalentSheets', () => {
 
     const result = await waitForTalentSheets(step, talentDb(getByIds), []);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
     expect(getByIds).not.toHaveBeenCalled();
     expect(doSpy).not.toHaveBeenCalled();
     expect(sleepSpy).not.toHaveBeenCalled();
@@ -80,7 +77,7 @@ describe('waitForTalentSheets', () => {
       't2',
     ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
     expect(getByIds).toHaveBeenCalledTimes(1);
     // Ready immediately → never sleeps.
     expect(sleepSpy).not.toHaveBeenCalled();
@@ -111,7 +108,7 @@ describe('waitForTalentSheets', () => {
       't2',
     ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
     expect(getByIds).toHaveBeenCalledTimes(3);
     // Slept after the two not-ready reads, not after the ready one.
     expect(sleepSpy).toHaveBeenCalledTimes(2);
@@ -129,7 +126,7 @@ describe('waitForTalentSheets', () => {
       'ghost',
     ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
     expect(getByIds).toHaveBeenCalledTimes(1);
   });
 
@@ -168,6 +165,22 @@ describe('waitForTalentSheets', () => {
     expect(onWaitNeeded).not.toHaveBeenCalled();
   });
 
+  test('returns the rows from the final poll so callers need no second read', async () => {
+    const { step } = fakeStep();
+    const ready = [
+      { id: 't1', defaultSheet: { imageUrl: 'https://cdn/t1.png' } },
+    ];
+    const getByIds = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: 't1', defaultSheet: null }])
+      .mockResolvedValueOnce(ready);
+
+    const result = await waitForTalentSheets(step, talentDb(getByIds), ['t1']);
+
+    // The freshest read, not the one that found the sheet missing.
+    expect(result.rows).toEqual(ready);
+  });
+
   test('gives up after the bounded number of attempts and reports pending ids', async () => {
     const { step, doSpy, sleepSpy } = fakeStep();
     // Never becomes ready.
@@ -177,6 +190,9 @@ describe('waitForTalentSheets', () => {
 
     expect(result.ready).toBe(false);
     expect(result.pendingIds).toEqual(['t1']);
+    // Even on timeout the caller gets the last read, so matching can proceed
+    // best-effort with whatever the rows do have.
+    expect(result.rows).toEqual([{ id: 't1', defaultSheet: null }]);
     // One check per attempt; one fewer sleep (no sleep after the final check).
     const attempts = getByIds.mock.calls.length;
     expect(attempts).toBeGreaterThan(1);
@@ -196,7 +212,7 @@ describe('waitForLocationReferences', () => {
       []
     );
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({ ready: true, pendingIds: [], rows: [] });
     expect(getByIds).not.toHaveBeenCalled();
   });
 
@@ -210,12 +226,12 @@ describe('waitForLocationReferences', () => {
       'l1',
     ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
     expect(getByIds).toHaveBeenCalledTimes(1);
     expect(sleepSpy).not.toHaveBeenCalled();
   });
 
-  test('polls until the reference image is written', async () => {
+  test('polls until the reference image is written, returning the resolved rows', async () => {
     const { step, sleepSpy } = fakeStep();
     const getByIds = vi
       .fn()
@@ -228,7 +244,11 @@ describe('waitForLocationReferences', () => {
       'l1',
     ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
+    expect(result).toMatchObject({
+      ready: true,
+      pendingIds: [],
+      rows: [{ id: 'l1', referenceImageUrl: 'https://cdn/l1.png' }],
+    });
     expect(getByIds).toHaveBeenCalledTimes(2);
     expect(sleepSpy).toHaveBeenCalledTimes(1);
   });
@@ -238,63 +258,73 @@ describe('waitForElementVision', () => {
   test('short-circuits without polling when no element is in flight', async () => {
     const { step, sleepSpy } = fakeStep();
     // Terminal states only ('completed' / 'failed') → nothing to wait on.
-    const list = vi.fn(async () => [
+    const listByIds = vi.fn(async () => [
       { id: 'e1', visionStatus: 'completed' },
       { id: 'e2', visionStatus: 'failed' },
     ]);
-    const listByIds = vi.fn();
 
-    const result = await waitForElementVision(
-      step,
-      elementDb(list, listByIds),
-      'seq1'
-    );
+    const result = await waitForElementVision(step, elementDb(listByIds), [
+      'e1',
+      'e2',
+    ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
-    expect(list).toHaveBeenCalledTimes(1);
-    // Nothing in flight → the by-id poll never runs.
-    expect(listByIds).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
+    // One scan; nothing in flight → the poll loop never runs.
+    expect(listByIds).toHaveBeenCalledTimes(1);
     expect(sleepSpy).not.toHaveBeenCalled();
   });
 
   test('polls only the in-flight elements until vision is terminal', async () => {
     const { step, sleepSpy } = fakeStep();
-    // Scan: e1 done, e2 still analyzing → only e2 enters the wait set.
-    const list = vi.fn(async () => [
-      { id: 'e1', visionStatus: 'completed' },
-      { id: 'e2', visionStatus: 'analyzing' },
-    ]);
     const listByIds = vi
       .fn()
+      // Scan: e1 done, e2 still analyzing → only e2 enters the wait set.
+      .mockResolvedValueOnce([
+        { id: 'e1', visionStatus: 'completed' },
+        { id: 'e2', visionStatus: 'analyzing' },
+      ])
       .mockResolvedValueOnce([{ id: 'e2', visionStatus: 'analyzing' }])
       .mockResolvedValueOnce([{ id: 'e2', visionStatus: 'completed' }]);
 
-    const result = await waitForElementVision(
-      step,
-      elementDb(list, listByIds),
-      'seq1'
-    );
+    const result = await waitForElementVision(step, elementDb(listByIds), [
+      'e1',
+      'e2',
+    ]);
 
-    expect(result).toEqual({ ready: true, pendingIds: [] });
-    expect(list).toHaveBeenCalledTimes(1);
-    expect(listByIds).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
+    expect(listByIds).toHaveBeenCalledTimes(3);
+    expect(listByIds).toHaveBeenNthCalledWith(1, ['e1', 'e2']);
     expect(listByIds).toHaveBeenLastCalledWith(['e2']);
     expect(sleepSpy).toHaveBeenCalledTimes(1);
   });
 
+  test('scans only the trigger-time set, never the live sequence', async () => {
+    const { step } = fakeStep();
+    // 'e_new' was uploaded after the run started: it is not in the payload, so
+    // its pending vision must not enter the wait set (nor fail the run later).
+    const listByIds = vi.fn(async () => [
+      { id: 'e1', visionStatus: 'completed' },
+    ]);
+
+    const result = await waitForElementVision(step, elementDb(listByIds), [
+      'e1',
+    ]);
+
+    expect(result).toMatchObject({ ready: true, pendingIds: [] });
+    expect(listByIds).toHaveBeenCalledTimes(1);
+    expect(listByIds).toHaveBeenCalledWith(['e1']);
+  });
+
   test('gives up after the bounded number of attempts and reports pending ids', async () => {
     const { step } = fakeStep();
-    const list = vi.fn(async () => [{ id: 'e1', visionStatus: 'pending' }]);
     // Never leaves 'analyzing'.
     const listByIds = vi.fn(async () => [
       { id: 'e1', visionStatus: 'analyzing' },
     ]);
 
-    const result = await waitForElementVision(
-      step,
-      elementDb(list, listByIds),
-      'seq1'
-    );
+    const result = await waitForElementVision(step, elementDb(listByIds), [
+      'e1',
+    ]);
 
     expect(result.ready).toBe(false);
     expect(result.pendingIds).toEqual(['e1']);

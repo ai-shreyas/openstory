@@ -186,6 +186,31 @@ The base class validates `userId`/`teamId` on the payload, builds a
 DB updates directly. For parent→child fan-out (await a child's result), use
 `spawnAndAwaitChild` from `src/lib/workflow/await-child.ts`.
 
+**Workflows must not read mutable D1 state mid-run.** A run starts minutes to
+hours after the click, replays its steps from a durable cache, and races its own
+children — so a live re-read can feed a step a value the user never asked for,
+and can feed two steps of the same run different values. Snapshot everything
+onto the payload in the server fn that triggers the run. This is enforced by
+construction: `runImpl` receives a **`WorkflowScopedDb`**
+(`src/lib/db/scoped-workflow.ts`) — the full write surface with every read
+method removed — so a mid-run read is a type error. The few reads that cannot be
+snapshotted reach the run through three **named hatches**, so the spelling at
+the call site is the justification:
+
+- `scopedDb.credentials.resolveKey('fal')` / `.resolveLlmKey()` — a secret, not a
+  row. Resolved inside the step that spends it.
+- `scopedDb.claims.<domain>.getById…(id)` — an append-only row by an id this run
+  already holds (its own claim, or the row that claim retired into). Cannot
+  express a selection pointer, which is the point.
+- `scopedDb.liveRead.<domain>.<method>()` — genuinely live by design: divergence
+  recomputation, sibling-workflow polling, balance and spawn-time billing guards,
+  existence guards.
+
+Each surface is enumerated in `scoped-workflow.ts` and pinned by
+`src/lib/workflow/no-mid-run-reads.test.ts`, which also fails if a read's
+category doesn't match the hatch it came through. Full rationale:
+`docs/architecture/workflow-snapshots-and-content-hash-staleness.md`.
+
 ## Frame System
 
 Frames are the core content unit — each represents one scene from script analysis.

@@ -100,7 +100,7 @@ type VariantGroup = {
 };
 
 export function createFrameVariantsMethods(db: Database) {
-  return {
+  const methods = {
     getById: async (versionId: string): Promise<FrameVariant | null> => {
       const result = await db
         .select()
@@ -838,6 +838,32 @@ export function createFrameVariantsMethods(db: Database) {
     },
 
     /**
+     * Select `versionId` only while the frame's auto-promote claim still points
+     * at it (#1070). The predicate rides in the claim-consuming UPDATE's WHERE,
+     * so a concurrent kickoff or explicit history select that moved the pointer
+     * between a read and the select can no longer be overwritten. Returns null
+     * when the claim had already moved — the caller finalizes into history.
+     */
+    selectIfPendingPromoteIs: async (
+      frameId: string,
+      versionId: string,
+      opts: { actorId: string | null }
+    ): Promise<FrameVariant | null> => {
+      const claimed = await db
+        .update(frames)
+        .set({ pendingPromoteVersionId: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(frames.id, frameId),
+            eq(frames.pendingPromoteVersionId, versionId)
+          )
+        )
+        .returning({ id: frames.id });
+      if (claimed.length === 0) return null;
+      return await methods.select(frameId, versionId, opts);
+    },
+
+    /**
      * Soft-hide a version (undoable). Commits the `discardedAt` write and an
      * `image.discarded` event in one batch. Returns the timestamp for an Undo.
      */
@@ -950,4 +976,5 @@ export function createFrameVariantsMethods(db: Database) {
       return result.rowsAffected ?? 0;
     },
   };
+  return methods;
 }

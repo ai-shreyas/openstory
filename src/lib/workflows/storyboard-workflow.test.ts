@@ -16,8 +16,10 @@
  */
 
 import { describe, expect, test, vi } from 'vitest';
+import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
+import { DEFAULT_ANALYSIS_MODEL } from '@/lib/ai/models.config';
 import type { WorkflowEvent } from 'cloudflare:workers';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type { StoryboardWorkflowInput } from '@/lib/workflow/types';
 
 vi.doMock('@/lib/db/scoped', () => ({
@@ -42,7 +44,7 @@ class TestableStoryboardWorkflow extends StoryboardWorkflow {
   invokeOnFailure(failure: {
     event: Readonly<WorkflowEvent<StoryboardWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     return this.onFailure(failure);
   }
@@ -60,20 +62,38 @@ function makeWorkflow(): TestableStoryboardWorkflow {
 function makeEvent(
   sequenceId: string | undefined
 ): Readonly<WorkflowEvent<StoryboardWorkflowInput>> {
+  const payload: StoryboardWorkflowInput = {
+    userId: 'u1',
+    teamId: 't1',
+    sequenceId,
+    title: 'The Long Walk',
+    script: 'INT. HALLWAY — NIGHT',
+    aspectRatio: '16:9',
+    musicPromptSource: 'ai-generated',
+    styleConfig: {
+      mood: 'tense and hopeful',
+      artStyle: 'photoreal cinematic',
+      lighting: 'hard key, deep shadows',
+      colorPalette: ['#101020', '#e0d0b0'],
+      cameraWork: 'handheld, tight lenses',
+      referenceFilms: ['Children of Men'],
+      colorGrading: 'cool shadows, warm highlights',
+    },
+    analysisModelId: DEFAULT_ANALYSIS_MODEL,
+    imageModel: DEFAULT_IMAGE_MODEL,
+    videoModel: DEFAULT_VIDEO_MODEL,
+    elementIds: [],
+    options: {
+      shotsPerScene: 3,
+      generateThumbnails: true,
+      generateDescriptions: true,
+      aiProvider: 'openrouter',
+      regenerateAll: true,
+    },
+  };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowEvent stub: onFailure only reads payload
   return {
-    payload: {
-      userId: 'u1',
-      teamId: 't1',
-      sequenceId,
-      options: {
-        shotsPerScene: 3,
-        generateThumbnails: true,
-        generateDescriptions: true,
-        aiProvider: 'openrouter',
-        regenerateAll: true,
-      },
-    },
+    payload,
     instanceId: 'storyboard_run_A',
     timestamp: new Date(0),
   } as unknown as Readonly<WorkflowEvent<StoryboardWorkflowInput>>;
@@ -83,11 +103,12 @@ function makeScopedDb(status: 'processing' | 'failed') {
   const updateStatus = vi.fn();
   const getForUser = vi.fn(async () => ({ id: 'seq_1', status }));
   const stub = {
-    sequences: { getForUser },
+    // The existence guard is a sanctioned live read (#1067).
+    liveRead: { sequences: { getForUser } },
     sequence: vi.fn(() => ({ updateStatus })),
   };
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only what onFailure touches
-  const scopedDb = stub as unknown as ScopedDb;
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowScopedDb stub exposing only what onFailure touches
+  const scopedDb = stub as unknown as WorkflowScopedDb;
   return { scopedDb, updateStatus, getForUser };
 }
 

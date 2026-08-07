@@ -7,7 +7,7 @@ import {
   type AudioModelConfig,
 } from '@/lib/ai/models';
 import { type Microdollars } from '@/lib/billing/money';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { FalCredentialScopedDb } from '@/lib/db/scoped-workflow';
 import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
@@ -22,7 +22,7 @@ import { getLogger } from '@/lib/observability/logger';
 const logger = getLogger(['openstory', 'audio', 'music-generation']);
 
 export type GenerateMusicOptions = {
-  scopedDb?: ScopedDb;
+  scopedDb?: FalCredentialScopedDb;
   /** PostHog LLM-analytics metadata for the generation span. */
   observability?: AIObservabilityMeta;
   /** Style/mood prompt for the music (e.g., "tense orchestral, dark atmosphere") */
@@ -207,7 +207,7 @@ async function callFalAudio(
   });
 
   const falApiKeyInfo = options.scopedDb
-    ? await options.scopedDb.apiKeys.resolveKey('fal')
+    ? await options.scopedDb.resolveKey('fal')
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
   const adapter = falAudio(modelConfig.id, { apiKey: falApiKeyInfo.key });

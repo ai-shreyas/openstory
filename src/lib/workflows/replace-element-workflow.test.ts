@@ -1,12 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import type { ReplaceElementShotSnapshot } from '@/lib/workflow/types';
 import {
   buildEditPrompt,
   decideBatchOutcome,
+  partitionShotIds,
   type ShotResult,
   rejectionReasonMessage,
+  selectVideoRegenShotIds,
   settledToResult,
   shouldDowngradeVisionOnFailure,
 } from './replace-element-workflow';
+
+const snapshot = (
+  overrides: Partial<ReplaceElementShotSnapshot> = {}
+): ReplaceElementShotSnapshot => ({
+  frameId: 'frm1',
+  sourceImageUrl: 'https://r2/still.png',
+  sourceModel: 'nano_banana_2',
+  hasVideo: false,
+  durationMs: 3000,
+  ...overrides,
+});
 
 describe('buildEditPrompt', () => {
   it('includes the previous description in parens when present', () => {
@@ -78,6 +92,50 @@ describe('decideBatchOutcome', () => {
       successCount: 2,
       failedCount: 1,
     });
+  });
+});
+
+describe('partitionShotIds', () => {
+  it('keeps payload order rather than DB row order', () => {
+    expect(partitionShotIds(['s1', 's2', 's3'], ['s3', 's1', 's2'])).toEqual({
+      liveShotIds: ['s1', 's2', 's3'],
+      skippedDeletedShotIds: [],
+    });
+  });
+
+  it('routes shots deleted mid-flight into skipped', () => {
+    expect(partitionShotIds(['s1', 's2', 's3'], ['s1', 's3'])).toEqual({
+      liveShotIds: ['s1', 's3'],
+      skippedDeletedShotIds: ['s2'],
+    });
+  });
+
+  it('treats an empty survivor set as everything deleted', () => {
+    expect(partitionShotIds(['s1', 's2'], [])).toEqual({
+      liveShotIds: [],
+      skippedDeletedShotIds: ['s1', 's2'],
+    });
+  });
+});
+
+describe('selectVideoRegenShotIds', () => {
+  it('selects only shots that had a video AND got a new still', () => {
+    const snapshots = {
+      s1: snapshot({ hasVideo: true }),
+      s2: snapshot({ hasVideo: false }),
+      s3: snapshot({ hasVideo: true }),
+    };
+    expect(
+      selectVideoRegenShotIds(
+        ['s1', 's2', 's3'],
+        snapshots,
+        new Set(['s1', 's2'])
+      )
+    ).toEqual(['s1']);
+  });
+
+  it('skips shots with no snapshot at all', () => {
+    expect(selectVideoRegenShotIds(['s1'], {}, new Set(['s1']))).toEqual([]);
   });
 });
 

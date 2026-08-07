@@ -19,7 +19,7 @@
 
 import { DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
 import type { MotionPrompt, Scene } from '@/lib/ai/scene-analysis.schema';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { snapDuration } from '@/lib/motion/motion-generation';
 import { reinforceInstrumentalTags } from '@/lib/prompts/music-prompt';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -44,7 +44,7 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MotionMusicPromptsWorkflowInput>>,
     step: WorkflowStep,
-    _scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<MotionMusicPromptsWorkflowResult> {
     const input = event.payload;
     const {
@@ -141,6 +141,7 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
             sequenceId,
             sceneSummaries,
             analysisModelId,
+            promptSource: input.musicPromptSource,
           },
           spawnStepName: 'spawn-music-prompt',
           awaitStepName: 'await-music-prompt',
@@ -206,7 +207,7 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
   }: {
     event: Readonly<WorkflowEvent<MotionMusicPromptsWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     logger.error(
       `[MotionMusicPromptsWorkflow:cf] Motion/music prompt generation failed: ${error}`

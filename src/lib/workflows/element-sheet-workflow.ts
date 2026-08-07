@@ -29,8 +29,8 @@ import {
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
-import type { ScopedDb } from '@/lib/db/scoped';
-import type { SequenceElementMinimal } from '@/lib/db/schema';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
+import type { SequenceElement, SequenceElementMinimal } from '@/lib/db/schema';
 import {
   generateImageWithProvider,
   type ImageGenerationParams,
@@ -61,6 +61,21 @@ const MAX_AUTO_ELEMENTS = 3;
  * Uploaded elements always win — the bible echoes their tokens back, so any
  * token already present in `existing` is covered by a real reference image.
  */
+function toMinimalElement(
+  row: Pick<
+    SequenceElement,
+    'id' | 'token' | 'description' | 'imageUrl' | 'consistencyTag'
+  >
+): SequenceElementMinimal {
+  return {
+    id: row.id,
+    token: row.token,
+    description: row.description,
+    imageUrl: row.imageUrl,
+    consistencyTag: row.consistencyTag,
+  };
+}
+
 export function findMissingElementEntries(
   elementBible: ElementBibleEntry[],
   existing: Array<Pick<SequenceElementMinimal, 'token'>>
@@ -101,7 +116,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ElementSheetWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<ElementSheetWorkflowResult> {
     const input = event.payload;
     const { sequenceId, styleConfig } = input;
@@ -129,22 +144,23 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
       entries.map(async (entry, index) => {
         // Idempotency guard: a replayed run (or a token the user uploaded
         // mid-flight) must not violate the (sequenceId, token) unique index.
+        // The id lookup comes first and is the one that survives a rename —
+        // `entry.elementId` is allocated at the spawn and is what `create`
+        // below writes, whereas the token can be rewritten (by the user, or by
+        // the vision auto-rename) between attempts. The token lookup stays as
+        // the uniqueness guard against a concurrent upload of the same token.
         const existing = await step.do(
           `check-existing-element-${index}`,
           async () => {
-            const row = await scopedDb.sequenceElements.getByToken(
-              sequenceId,
-              entry.token
-            );
-            return row
-              ? ({
-                  id: row.id,
-                  token: row.token,
-                  description: row.description,
-                  imageUrl: row.imageUrl,
-                  consistencyTag: row.consistencyTag,
-                } satisfies SequenceElementMinimal)
-              : null;
+            const row =
+              (await scopedDb.liveRead.sequenceElements.getById(
+                entry.elementId
+              )) ??
+              (await scopedDb.liveRead.sequenceElements.getByToken(
+                sequenceId,
+                entry.token
+              ));
+            return row ? toMinimalElement(row) : null;
           }
         );
         if (existing) {
@@ -167,7 +183,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
           `generate-element-image-${index}`,
           async () => {
             return await generateImageWithProvider(generationParams, {
-              scopedDb,
+              scopedDb: scopedDb.credentials,
             });
           }
         );
@@ -226,24 +242,24 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
         );
 
         return await step.do(`ingest-element-${index}`, async () => {
-          // Re-check inside the durable step: the unique (sequenceId, token)
-          // index makes a race with a concurrent upload a hard failure, so
-          // prefer the existing row over our generated one.
-          const raced = await scopedDb.sequenceElements.getByToken(
-            sequenceId,
-            entry.token
-          );
+          // Re-check inside the durable step: this step's own retry would hit
+          // the primary key, and the unique (sequenceId, token) index makes a
+          // race with a concurrent upload a hard failure — prefer the existing
+          // row over our generated one either way.
+          const raced =
+            (await scopedDb.liveRead.sequenceElements.getById(
+              entry.elementId
+            )) ??
+            (await scopedDb.liveRead.sequenceElements.getByToken(
+              sequenceId,
+              entry.token
+            ));
           if (raced) {
-            return {
-              id: raced.id,
-              token: raced.token,
-              description: raced.description,
-              imageUrl: raced.imageUrl,
-              consistencyTag: raced.consistencyTag,
-            } satisfies SequenceElementMinimal;
+            return toMinimalElement(raced);
           }
 
           const created = await scopedDb.sequenceElements.create({
+            id: entry.elementId,
             sequenceId,
             uploadedFilename: `generated-${entry.token.toLowerCase()}.png`,
             token: entry.token,
@@ -261,13 +277,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
             firstMentionLine: entry.firstMention.lineNumber,
           });
 
-          return {
-            id: created.id,
-            token: created.token,
-            description: created.description,
-            imageUrl: created.imageUrl,
-            consistencyTag: created.consistencyTag,
-          } satisfies SequenceElementMinimal;
+          return toMinimalElement(created);
         });
       })
     );
@@ -297,7 +307,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
   }: {
     event: Readonly<WorkflowEvent<ElementSheetWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     // No row to mark failed — sequence_elements rows are only created on
     // success. The parent analysis surfaces this failure to the user.

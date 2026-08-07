@@ -4,7 +4,7 @@
  * that key is what makes a workflow-step replay charge-once (issue #846 RC1).
  */
 
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { describe, expect, it, vi } from 'vitest';
 import { micros, ZERO_MICROS } from './money';
 
@@ -23,11 +23,14 @@ function makeScopedDb({ canAfford = true } = {}) {
   const checkAutoTopUp = vi.fn().mockResolvedValue(undefined);
   const recordUsage = vi.fn().mockResolvedValue(undefined);
   const scopedDbStub = {
-    billing: { deductCredits, hasEnoughCredits, checkAutoTopUp },
+    // The affordability read goes through the sanctioned live-read surface;
+    // the deduction and the usage sample are writes.
+    liveRead: { billing: { hasEnoughCredits, checkAutoTopUp } },
+    billing: { deductCredits },
     modelUsage: { record: recordUsage },
   };
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only the billing methods under test
-  const scopedDb = scopedDbStub as unknown as ScopedDb;
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowScopedDb stub exposing only the billing methods under test
+  const scopedDb = scopedDbStub as unknown as WorkflowScopedDb;
   return {
     scopedDb,
     deductCredits,

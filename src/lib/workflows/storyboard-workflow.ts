@@ -21,25 +21,14 @@
  *     dashboard. CF instances surface in the Workflows dashboard via
  *     `event.instanceId`. */
 
-import {
-  DEFAULT_IMAGE_MODEL,
-  DEFAULT_VIDEO_MODEL,
-  PREVIEW_IMAGE_MODEL,
-  safeImageToVideoModel,
-  safeTextToImageModel,
-} from '@/lib/ai/models';
-import {
-  DEFAULT_ANALYSIS_MODEL,
-  getAnalysisModelById,
-} from '@/lib/ai/models.config';
+import { PREVIEW_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   deductWorkflowCredits,
   extractImageCost,
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
-import { StyleConfigSchema } from '@/lib/db/schema';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
 import { buildPosterPrompt } from '@/lib/prompts/poster-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -52,7 +41,6 @@ import type {
   StoryboardWorkflowInput,
 } from '@/lib/workflow/types';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-import { NonRetryableError } from 'cloudflare:workflows';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'storyboard']);
@@ -61,7 +49,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
   protected override async runImpl(
     event: Readonly<WorkflowEvent<StoryboardWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<void> {
     const input = event.payload;
     const { sequenceId, teamId, userId } = input;
@@ -73,6 +61,9 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     }
     const seq = scopedDb.sequence(sequenceId);
 
+    // Everything this run generates from was snapshotted onto the payload by
+    // `triggerStoryboard`. The step below re-reads the row only to re-assert
+    // that it still exists and to flip its status — never to derive content.
     const {
       title,
       script,
@@ -81,7 +72,10 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
       analysisModelId,
       imageModel,
       videoModel,
-    } = await step.do('verify-clear-and-start-processing', async () => {
+      elementIds,
+    } = input;
+
+    await step.do('verify-clear-and-start-processing', async () => {
       logger.info('[StoryboardWorkflow:cf] Input received:', {
         sequenceId: input.sequenceId,
         teamId: input.teamId,
@@ -90,49 +84,12 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
       });
       validateSequenceAuth(input);
 
-      const sequence = await scopedDb.sequences.getForUser({
-        sequenceId,
-      });
+      // Throws if the sequence was deleted (or moved teams) since the trigger.
+      await scopedDb.liveRead.sequences.getForUser({ sequenceId });
 
-      if (!sequence.script || sequence.script.trim().length === 0) {
-        throw new NonRetryableError('Sequence has no script');
-      }
-
-      if (!sequence.styleId) {
-        throw new NonRetryableError('Sequence has no style selected');
-      }
-
-      const style = await scopedDb.styles.getById(sequence.styleId);
-
-      if (!style) {
-        throw new NonRetryableError('No style found');
-      }
-
-      const existingShots = await scopedDb.shots.listBySequence(sequenceId);
-      await Promise.all(
-        existingShots.map((shot) => scopedDb.shots.delete(shot.id))
-      );
+      await scopedDb.shots.deleteBySequence(sequenceId);
 
       await seq.updateStatus('processing');
-
-      return {
-        sequenceId: sequence.id,
-        title: sequence.title,
-        script: sequence.script,
-        aspectRatio: sequence.aspectRatio,
-        styleConfig: StyleConfigSchema.parse(style.config),
-        analysisModelId:
-          getAnalysisModelById(sequence.analysisModel)?.id ??
-          DEFAULT_ANALYSIS_MODEL,
-        imageModel: safeTextToImageModel(
-          sequence.imageModel,
-          DEFAULT_IMAGE_MODEL
-        ),
-        videoModel: safeImageToVideoModel(
-          sequence.videoModel,
-          DEFAULT_VIDEO_MODEL
-        ),
-      };
     });
 
     // Generate a poster image from the script for the video player empty
@@ -148,7 +105,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
             prompt,
             imageSize: aspectRatioToImageSize(aspectRatio),
           },
-          { scopedDb }
+          { scopedDb: scopedDb.credentials }
         );
       } catch (error) {
         logger.warn('[StoryboardWorkflow:cf] Poster generation failed:', {
@@ -209,6 +166,8 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
         aspectRatio,
         styleConfig,
         analysisModelId,
+        elementIds,
+        musicPromptSource: input.musicPromptSource,
         imageModel,
         imageModels: input.imageModels ?? [imageModel],
         videoModel,
@@ -219,6 +178,8 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
         audioModels: input.audioModels,
         suggestedTalentIds: input.suggestedTalentIds,
         suggestedLocationIds: input.suggestedLocationIds,
+        suggestedTalent: input.suggestedTalent,
+        suggestedLocations: input.suggestedLocations,
       },
       spawnStepName: 'spawn-analyze-script',
       awaitStepName: 'await-analyze-script',
@@ -251,7 +212,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
   }: {
     event: Readonly<WorkflowEvent<StoryboardWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     logger.error(
       `[StoryboardWorkflow:cf] Storyboard generation failed: ${error}`
@@ -269,7 +230,9 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     const { sequenceId } = event.payload;
     if (!sequenceId) return;
 
-    const sequence = await scopedDb.sequences.getForUser({ sequenceId });
+    const sequence = await scopedDb.liveRead.sequences.getForUser({
+      sequenceId,
+    });
     if (sequence.status === 'failed') return;
 
     await scopedDb.sequence(sequenceId).updateStatus('failed', error);

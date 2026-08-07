@@ -3,32 +3,29 @@
  * export in `src/lib/sequence-player/export.ts`.
  *
  * Flow:
- *   1. `gather-export-inputs` — load the reserved export row + sequence +
- *      frames via `scopedDb`, absolutize each scene/music URL, build the
- *      container job. ALL database access lives here, in the Worker — the
- *      container is a stateless renderer and never touches D1.
- *   2. `render-and-upload` — POST the job to the `VideoExportContainer` (Node +
- *      @mediabunny/server), stream the returned MP4 straight into R2.
- *   3. `mark-export-ready` — flip the `sequence_exports` row to `ready`.
+ *   1. `render-and-upload` — absolutize the payload's scene/music URLs, POST
+ *      the job to the `VideoExportContainer` (Node + @mediabunny/server), and
+ *      stream the returned MP4 straight into R2. The cut itself is resolved
+ *      (and validated) by the POST handler that reserved the export row, so
+ *      the workflow performs no reads — the container is a stateless renderer
+ *      and never touches D1 either.
+ *   2. `mark-export-ready` — flip the `sequence_exports` row to `ready`.
  *
  * The container binding is production-only (see wrangler.jsonc); outside prod
  * the render step throws and the row is marked `failed` via `onFailure`.
  */
 
 import { uploadFile } from '#storage';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { STORAGE_BUCKETS, toShareableUrl } from '@/lib/storage/buckets';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
-import type { CloudflareEnv, UserWorkflowContext } from '@/lib/workflow/types';
+import type {
+  CloudflareEnv,
+  SequenceExportWorkflowInput,
+} from '@/lib/workflow/types';
 import type { VideoExportContainer } from '@/lib/containers/video-export-container';
 import { getContainer } from '@cloudflare/containers';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-
-type SequenceExportWorkflowInput = UserWorkflowContext & {
-  sequenceId: string;
-  /** Pre-reserved `sequence_exports` row (status `processing`) to fill in. */
-  exportId: string;
-};
 
 /** Wire contract — keep in sync with `containers/video-export/src/types.ts`. */
 type ContainerExportJob = {
@@ -52,67 +49,26 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
   protected override async runImpl(
     event: Readonly<WorkflowEvent<SequenceExportWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<{ exportId: string; durationSeconds: number }> {
-    const { sequenceId, exportId } = event.payload;
+    const { exportId, storagePath, scenes, musicUrl } = event.payload;
     const env = this.env as CloudflareEnv & ContainerEnv;
 
-    const { job, storagePath } = await step.do(
-      'gather-export-inputs',
-      async () => {
-        const exportRow = await scopedDb.sequenceExports.getById(exportId);
-        if (!exportRow) throw new Error(`Export ${exportId} not found`);
+    if (scenes.length === 0) {
+      throw new Error('No scene videos are ready yet');
+    }
 
-        const sequence = await scopedDb.sequences.getById(sequenceId);
-        if (!sequence) throw new Error(`Sequence ${sequenceId} not found`);
-
-        const shots = await scopedDb.shots.listBySequence(sequenceId, {
-          orderBy: 'sceneOrder',
-          ascending: true,
-        });
-        if (shots.length === 0) throw new Error('Sequence has no shots yet');
-
-        // Each shot's video is the version its render segment points at
-        // (#1067 phase 2d) — one batched read for the whole sequence.
-        const selectedVideoByShot =
-          await scopedDb.videoVariants.getSelectedByShotIds(
-            shots.map((s) => s.id)
-          );
-
-        // Absolutize stored `/r2/...` URLs so the off-platform container can
-        // fetch them (CDN domain in prod, else the worker origin).
-        const origin = env.VITE_APP_URL;
-        const scenes = shots
-          .flatMap((s) => {
-            const url = selectedVideoByShot.get(s.id)?.url;
-            return url ? [{ url }] : [];
-          })
-          .map((s, orderIndex) => ({
-            orderIndex,
-            videoUrl: toShareableUrl(s.url, origin),
-          }));
-        if (scenes.length === 0) {
-          throw new Error('No scene videos are ready yet');
-        }
-        if (scenes.length !== shots.length) {
-          throw new Error(
-            `${shots.length - scenes.length} of ${shots.length} scenes are still generating`
-          );
-        }
-
-        const musicUrl =
-          sequence.includeMusic && sequence.musicUrl
-            ? toShareableUrl(sequence.musicUrl, origin)
-            : null;
-
-        const job: ContainerExportJob = {
-          scenes,
-          musicUrl,
-          musicLoudnessGainDb: null,
-        };
-        return { job, storagePath: exportRow.storagePath };
-      }
-    );
+    // Absolutize stored `/r2/...` URLs so the off-platform container can fetch
+    // them (CDN domain in prod, else the worker origin).
+    const origin = env.VITE_APP_URL;
+    const job: ContainerExportJob = {
+      scenes: scenes.map((scene) => ({
+        orderIndex: scene.orderIndex,
+        videoUrl: toShareableUrl(scene.videoUrl, origin),
+      })),
+      musicUrl: musicUrl ? toShareableUrl(musicUrl, origin) : null,
+      musicLoudnessGainDb: null,
+    };
 
     const { durationSeconds } = await step.do(
       'render-and-upload',
@@ -228,7 +184,7 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
   }: {
     event: Readonly<WorkflowEvent<SequenceExportWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     await scopedDb.sequenceExports.markFailed(event.payload.exportId, error);
   }

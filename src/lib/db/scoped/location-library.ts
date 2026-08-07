@@ -231,14 +231,26 @@ export function createLocationsMethods(
       return location;
     },
 
+    /**
+     * `inputHash` stamps `referenceInputHash` alongside the reference so
+     * `resolveLibraryLocationReferenceHash` returns something for generated
+     * references. Omitting it leaves the stored hash untouched (a null hash
+     * disables every downstream divergence check for this location).
+     */
     updateReference: async (
       id: string,
       referenceImageUrl: string,
-      referenceImagePath: string
+      referenceImagePath: string,
+      inputHash?: string
     ): Promise<LibraryLocation> => {
       const [location] = await db
         .update(locationLibrary)
-        .set({ referenceImageUrl, referenceImagePath, updatedAt: new Date() })
+        .set({
+          referenceImageUrl,
+          referenceImagePath,
+          ...(inputHash === undefined ? {} : { referenceInputHash: inputHash }),
+          updatedAt: new Date(),
+        })
         .where(eq(locationLibrary.id, id))
         .returning();
 

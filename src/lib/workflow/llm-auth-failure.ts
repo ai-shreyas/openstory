@@ -5,7 +5,7 @@
  * — not blindly on the OpenRouter key.
  */
 
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { isLlmAuthError } from './sanitize-fail-response';
 
 /**
@@ -15,7 +15,7 @@ import { isLlmAuthError } from './sanitize-fail-response';
  * error or the run was on the platform key (an ops problem, not the team's).
  */
 export async function handleLlmAuthFailure(
-  scopedDb: ScopedDb,
+  scopedDb: WorkflowScopedDb,
   sanitizedError: string
 ): Promise<string | undefined> {
   if (!isLlmAuthError(sanitizedError)) return undefined;
@@ -25,7 +25,9 @@ export async function handleLlmAuthFailure(
   // — a key already flagged invalid resolves past itself, exactly as the
   // call did. The catch covers a missing platform key ('No platform LLM key
   // available'): nothing to mark, fall through to the raw error.
-  const llmKey = await scopedDb.apiKeys.resolveLlmKey().catch(() => undefined);
+  const llmKey = await scopedDb.credentials
+    .resolveLlmKey()
+    .catch(() => undefined);
   if (llmKey?.source !== 'team') return undefined;
 
   await scopedDb.apiKeys.markKeyInvalid(llmKey.via, sanitizedError);

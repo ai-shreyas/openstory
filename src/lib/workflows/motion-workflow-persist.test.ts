@@ -89,13 +89,31 @@ function buildScopedDbSpy(
       : opts.pendingPromoteVersionId;
 
   const scopedDb: PersistMotionScopedDb = {
-    shots: {
-      getById: async (id) => {
-        callOrder.push('shots.getById');
-        return opts.shotMissing
-          ? null
-          : { id, sequenceId: 'seq1', renderSegmentId: segmentId };
+    liveRead: {
+      shots: {
+        getById: async (id) => {
+          callOrder.push('shots.getById');
+          return opts.shotMissing
+            ? null
+            : { id, sequenceId: 'seq1', renderSegmentId: segmentId };
+        },
       },
+      renderSegments: {
+        getById: async (id) => {
+          callOrder.push('renderSegments.getById');
+          return { id, pendingPromoteVersionId: pending };
+        },
+      },
+    },
+    claims: {
+      videoVariants: {
+        getById: async (versionId) => {
+          callOrder.push('videoVariants.getById');
+          return { id: versionId, workflowRunId: 'run-1' };
+        },
+      },
+    },
+    shots: {
       update: async (shotId, data) => {
         callOrder.push('shots.update');
         shotUpdates.push({ shotId, data });
@@ -107,10 +125,6 @@ function buildScopedDbSpy(
         callOrder.push('videoVariants.update');
         versionUpdates.push({ id: versionId, data });
         return { id: versionId };
-      },
-      getById: async (versionId) => {
-        callOrder.push('videoVariants.getById');
-        return { id: versionId, workflowRunId: 'run-1' };
       },
       select: async (shotId, versionId, selectOpts) => {
         callOrder.push('videoVariants.select');
@@ -129,13 +143,6 @@ function buildScopedDbSpy(
       },
     },
     renderSegments: {
-      getById: async (id) => {
-        callOrder.push('renderSegments.getById');
-        return {
-          id,
-          pendingPromoteVersionId: pending,
-        };
-      },
       setPendingPromoteVersionId: async (_segmentId, versionId) => {
         pending = versionId;
       },

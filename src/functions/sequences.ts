@@ -42,13 +42,14 @@ import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type {
   BatchMotionMusicWorkflowInput,
   MusicWorkflowInput,
-  StoryboardWorkflowInput,
+  StoryboardTriggerInput,
 } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { authWithTeamMiddleware, sequenceAccessMiddleware } from './middleware';
 import { bumpStylePopularity } from '@/lib/style/bump-style-popularity';
+import { simpleHash } from '@/lib/utils/hash';
 import { getLogger } from '@/lib/observability/logger';
 import { createSequences } from '@/lib/sequences/create-sequences';
 
@@ -140,11 +141,13 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
 
     const previousStyleId = context.sequence.styleId;
 
+    // No eager 'processing' write: `triggerStoryboard` owns the status flip
+    // below, so a rejected trigger (mutex held, no script) leaves the sequence
+    // in its real state instead of a spinner that never resolves.
     const sequence = await context.scopedDb.sequences.update({
       id: sequenceId,
       aspectRatio: updateData.aspectRatio ?? DEFAULT_ASPECT_RATIO,
       ...updateData,
-      status: needsRegeneration ? 'processing' : undefined,
     });
 
     // sequences.styleId is `.notNull() + onDelete: 'set null'` — TS types it as
@@ -184,24 +187,24 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
         }
       );
 
-      await triggerWorkflow(
-        '/storyboard',
-        {
-          userId: context.user.id,
-          teamId: context.teamId,
-          sequenceId,
-          options: {
-            shotsPerScene: 3,
-            generateThumbnails: true,
-            generateDescriptions: true,
-            aiProvider: 'openrouter',
-            regenerateAll: true,
-          },
-          autoGenerateMotion: sequence.autoGenerateMotion,
-          autoGenerateMusic: sequence.autoGenerateMusic,
-        } satisfies StoryboardWorkflowInput,
-        { label: buildWorkflowLabel(sequence.id) }
-      );
+      // Owns the generation mutex, the 'processing' status write, the run-id
+      // persistence (#839), and the trigger-time content snapshot. Regeneration
+      // used to trigger `/storyboard` raw, so it both bypassed the mutex and
+      // left the workflow to re-derive the payload mid-run.
+      await triggerStoryboard(context.scopedDb, {
+        userId: context.user.id,
+        teamId: context.teamId,
+        sequenceId,
+        options: {
+          shotsPerScene: 3,
+          generateThumbnails: true,
+          generateDescriptions: true,
+          aiProvider: 'openrouter',
+          regenerateAll: true,
+        },
+        autoGenerateMotion: sequence.autoGenerateMotion,
+        autoGenerateMusic: sequence.autoGenerateMusic,
+      });
     }
 
     return sequence;
@@ -275,7 +278,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
       }
     );
 
-    const workflowInput: StoryboardWorkflowInput = {
+    const workflowInput: StoryboardTriggerInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
@@ -697,6 +700,10 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       Awaited<ReturnType<typeof buildShotImageWorkflowInput>>
     >[] = [];
     for (const f of allShots) {
+      const anchorFrame = imageFramesByShotId.get(f.id);
+      const selectedPrompt = anchorFrame
+        ? promptByFrameId.get(anchorFrame.id)
+        : undefined;
       const input = await buildShotImageWorkflowInput({
         shot: f,
         scene: resolveSceneForShot(f, imageSceneContext).scene,
@@ -708,14 +715,20 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         characters,
         locations,
         elements,
-        imagePrompt:
-          promptByFrameId.get(imageFramesByShotId.get(f.id)?.id ?? '')?.text ??
-          null,
+        imagePrompt: selectedPrompt?.text ?? null,
         // Adding a model never repoints the primary — it lands as an alternate
         // variant only. Promote later with "Set". (#547)
         variantOnly: true,
       });
-      if (input) inputs.push(input);
+      // The anchor + the prompt version this render is built from, snapshotted
+      // here so the workflow stamps the variant with the prompt it actually
+      // rendered rather than whatever the pointer says when it runs (#1070).
+      if (input)
+        inputs.push({
+          ...input,
+          frameId: anchorFrame?.id,
+          promptVersionId: selectedPrompt?.id ?? null,
+        });
     }
     if (inputs.length === 0) {
       throw new Error('No shots have a prompt to generate from');
@@ -904,6 +917,34 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
   });
 
 /**
+ * Deduplication id for a primary music run. CF instance ids are unique
+ * FOREVER, so a constant `music-<sequenceId>` would block every legitimate
+ * rerun; instead the id is the music slot's OBSERVED state (status + last
+ * generated-at) plus this request's inputs. Two rapid triggers read the same
+ * state and collapse onto one instance; a rerun after the slot completed,
+ * failed, or with changed inputs hashes differently and starts a fresh run.
+ */
+function musicRunDedupId(args: {
+  sequenceId: string;
+  musicStatus: string | null;
+  musicGeneratedAt: Date | null;
+  prompt: string;
+  tags: string;
+  duration: number;
+  model: string | undefined;
+}): string {
+  const state = JSON.stringify([
+    args.musicStatus,
+    args.musicGeneratedAt?.getTime() ?? null,
+    args.prompt,
+    args.tags,
+    args.duration,
+    args.model ?? null,
+  ]);
+  return `music-${simpleHash(state)}-${args.sequenceId}`;
+}
+
+/**
  * Trigger sequence-level music generation.
  * Uses pre-generated prompt/tags when available, otherwise builds from shot audio specs.
  */
@@ -976,6 +1017,15 @@ export const generateMusicFn = createServerFn({ method: 'POST' })
     });
 
     await triggerWorkflow('/music', musicInput, {
+      deduplicationId: musicRunDedupId({
+        sequenceId: sequence.id,
+        musicStatus: sequence.musicStatus,
+        musicGeneratedAt: sequence.musicGeneratedAt,
+        prompt: effectivePrompt,
+        tags: effectiveTags,
+        duration: baseInput.duration,
+        model: baseInput.model,
+      }),
       label: buildWorkflowLabel(sequence.id),
     });
 

@@ -14,6 +14,7 @@ import type {
   Scene,
 } from '@/lib/ai/scene-analysis.schema';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { ValidationError } from '@/lib/errors';
 import type { StyleConfig } from '@/lib/db/schema';
 import { StyleConfigSchema } from '@/lib/db/schema';
 import {
@@ -87,7 +88,9 @@ export async function loadShotPromptContext(args: {
   } = args;
 
   if (!sequence.styleId) {
-    throw new Error(
+    // All callers are trigger-side server fns; ValidationError rides the
+    // serialization adapter to the client as a typed 400, not a 500.
+    throw new ValidationError(
       `Sequence ${sequence.id} has no style selected; prompt context unavailable`
     );
   }

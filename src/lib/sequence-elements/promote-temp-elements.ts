@@ -33,24 +33,19 @@ const tempUploadSchema = z.object({
 
 export type TempElementUpload = z.infer<typeof tempUploadSchema>;
 
-async function triggerElementVision(
-  elementId: string,
-  sequenceId: string,
-  imageUrl: string,
-  filename: string,
-  teamId: string,
-  userId: string
-): Promise<void> {
-  const input: ElementVisionWorkflowInput = {
-    userId,
-    teamId,
-    sequenceId,
-    elementId,
-    imageUrl,
-    filename,
-  };
+async function triggerElementVision(params: {
+  elementId: string;
+  sequenceId: string;
+  imageUrl: string;
+  filename: string;
+  token: string;
+  teamId: string;
+  userId: string;
+}): Promise<void> {
+  const { teamId, userId, ...element } = params;
+  const input: ElementVisionWorkflowInput = { userId, teamId, ...element };
   await triggerWorkflow('/element-vision', input, {
-    label: buildWorkflowLabel(sequenceId),
+    label: buildWorkflowLabel(params.sequenceId),
   });
 }
 
@@ -121,14 +116,15 @@ export async function promoteTempElements(params: {
     // upload (the happy path). Fall back to triggering it when description
     // is missing (vision call failed / older client).
     if (triggerVision && !hasInlineVision) {
-      await triggerElementVision(
-        element.id,
+      await triggerElementVision({
+        elementId: element.id,
         sequenceId,
-        element.imageUrl,
-        element.uploadedFilename,
+        imageUrl: element.imageUrl,
+        filename: element.uploadedFilename,
+        token: element.token,
         teamId,
-        userId
-      );
+        userId,
+      });
     }
   }
 }

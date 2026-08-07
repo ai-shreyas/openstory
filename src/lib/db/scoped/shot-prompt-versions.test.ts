@@ -766,6 +766,81 @@ describe('shotPromptVersions.completePendingAiVersion', () => {
     expect(selected?.text).toBe('Original');
   });
 
+  it('identical text at a colliding hash retires the claim and RETURNS the surviving row', async () => {
+    // The returned id is load-bearing (#1067): update-stale-shots threads it
+    // out of the motion-prompt child as `finalVersionId` and re-reads it by
+    // explicit id to render from. If this returned the retired placeholder,
+    // the video chain would resolve a 'cancelled' row and stand down.
+    const m = createShotPromptVersionsMethods(db);
+    const existing = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Same output',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'hash-1',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Same output',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // The existing row wins; the placeholder retires as 'cancelled'.
+    expect(completed?.id).toBe(existing.id);
+    expect(completed?.status).toBe('completed');
+    const [placeholder] = await db
+      .select()
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.id, claim.id));
+    expect(placeholder?.status).toBe('cancelled');
+    // No unique-index violation, and the shot points at the surviving row.
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(existing.id);
+  });
+
+  it('new text at a colliding hash completes as its own row', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const existing = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Old output',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'hash-1',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'New output',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // Same inputs, different text — the claim keeps its real hash and wins the
+    // selection. This is exactly the case a hash comparison against the
+    // selection pointer could not distinguish from the retire path above.
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.id).not.toBe(existing.id);
+    expect(completed?.text).toBe('New output');
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(claim.id);
+  });
+
   it('restore demotes live claims so completion never repoints', async () => {
     const m = createShotPromptVersionsMethods(db);
     const original = await m.write({

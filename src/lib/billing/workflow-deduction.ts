@@ -8,7 +8,7 @@
  * need (#1069). Use `recordFalUsage` in its own workflow step instead.
  */
 
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { reportMissingBillingCost } from './billing-observability';
 import { type Microdollars, microsToUsd, ZERO_MICROS } from './money';
 
@@ -18,7 +18,7 @@ const logger = getLogger(['openstory', 'billing', 'workflow-deduction']);
 
 type WorkflowDeductionOpts = {
   /** Scoped DB context for the team. Skips deduction if undefined (e.g., anonymous workflows). */
-  scopedDb: ScopedDb | undefined;
+  scopedDb: WorkflowScopedDb | undefined;
   costMicros: Microdollars;
   /** Set to true if the team used their own API key for this generation */
   usedOwnKey: boolean;
@@ -58,14 +58,16 @@ export async function deductWorkflowCredits(
     return;
   }
 
-  const canAfford = await scopedDb.billing.hasEnoughCredits(opts.costMicros);
+  const canAfford = await scopedDb.liveRead.billing.hasEnoughCredits(
+    opts.costMicros
+  );
   if (!canAfford) {
     const prefix = opts.workflowName ? `[${opts.workflowName}]` : '[Workflow]';
     logger.warn(
       `${prefix} Insufficient credits (cost: $${microsToUsd(opts.costMicros).toFixed(4)}), skipping deduction`
     );
     // Still attempt auto-top-up so balance can recover
-    void scopedDb.billing.checkAutoTopUp().catch((err) => {
+    void scopedDb.liveRead.billing.checkAutoTopUp().catch((err) => {
       logger.error('Failed:', { err });
     });
     return;
@@ -126,7 +128,7 @@ function falUsageMetadata(metadata: FalUsage): FalUsage {
  * call.
  */
 export async function recordFalUsage(
-  scopedDb: ScopedDb | undefined,
+  scopedDb: WorkflowScopedDb | undefined,
   usage: FalUsage
 ): Promise<void> {
   // Observations are platform-global telemetry with no teamId (see
@@ -164,7 +166,7 @@ export async function recordFalUsage(
  */
 export async function recordFalUsageStep(
   step: { do: (name: string, fn: () => Promise<void>) => Promise<void> },
-  scopedDb: ScopedDb | undefined,
+  scopedDb: WorkflowScopedDb | undefined,
   metadata: FalUsage,
   stepName = 'record-fal-usage'
 ): Promise<FalUsage> {

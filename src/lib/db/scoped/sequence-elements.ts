@@ -53,6 +53,14 @@ export function createSequenceElementsMethods(db: Database) {
     return element;
   };
 
+  const getById = async (id: string): Promise<SequenceElement | null> => {
+    const result = await db
+      .select()
+      .from(sequenceElements)
+      .where(eq(sequenceElements.id, id));
+    return result[0] ?? null;
+  };
+
   const getByToken = async (
     sequenceId: string,
     token: string
@@ -70,13 +78,7 @@ export function createSequenceElementsMethods(db: Database) {
   };
 
   return {
-    getById: async (id: string): Promise<SequenceElement | null> => {
-      const result = await db
-        .select()
-        .from(sequenceElements)
-        .where(eq(sequenceElements.id, id));
-      return result[0] ?? null;
-    },
+    getById,
 
     getByToken,
 
@@ -231,29 +233,65 @@ export function createSequenceElementsMethods(db: Database) {
      * ("Renamed LOGO → BRAND across 5 shots + script"). The caller is
      * expected to have already validated uniqueness of `newToken` within the
      * sequence — this method does not check collisions.
+     *
+     * `expectedToken` turns the rename into a compare-and-swap for
+     * system-driven renames (the vision auto-rename): the element row is only
+     * updated `WHERE token = expectedToken`, and the cascade is skipped
+     * entirely when the row no longer carries it. Callers get `renamed: false`
+     * plus the live row, so a user rename that landed mid-flight wins and the
+     * script is never rewritten against a token the user renamed away from.
      */
     cascadeRename: async (args: {
       sequenceId: string;
       elementId: string;
       oldToken: string;
       newToken: string;
+      expectedToken?: string;
     }): Promise<{
       element: SequenceElement;
       shotsUpdated: number;
       scriptUpdated: boolean;
+      renamed: boolean;
     }> => {
-      const { sequenceId, elementId, oldToken, newToken } = args;
+      const { sequenceId, elementId, oldToken, newToken, expectedToken } = args;
+
+      if (expectedToken !== undefined) {
+        const current = await getById(elementId);
+        if (!current) {
+          throw new Error(`SequenceElement ${elementId} not found`);
+        }
+        if (current.token !== expectedToken) {
+          return {
+            element: current,
+            shotsUpdated: 0,
+            scriptUpdated: false,
+            renamed: false,
+          };
+        }
+      }
 
       if (oldToken === newToken) {
         const element = await update(elementId, { token: newToken });
-        return { element, shotsUpdated: 0, scriptUpdated: false };
+        return {
+          element,
+          shotsUpdated: 0,
+          scriptUpdated: false,
+          renamed: true,
+        };
       }
 
       const now = new Date();
       const elementUpdate = db
         .update(sequenceElements)
         .set({ token: newToken, updatedAt: now })
-        .where(eq(sequenceElements.id, elementId))
+        .where(
+          expectedToken === undefined
+            ? eq(sequenceElements.id, elementId)
+            : and(
+                eq(sequenceElements.id, elementId),
+                eq(sequenceElements.token, expectedToken)
+              )
+        )
         .returning();
 
       const [sequenceRow] = await db
@@ -422,10 +460,31 @@ export function createSequenceElementsMethods(db: Database) {
       ]);
       const element = elementRows[0];
       if (!element) {
+        // Only reachable under `expectedToken` — a rename that landed between
+        // the pre-check above and this batch. D1 has no interactive
+        // transactions, so that microsecond window is the residual: report the
+        // swap as lost and let the caller keep the live row.
+        if (expectedToken !== undefined) {
+          const current = await getById(elementId);
+          if (!current) {
+            throw new Error(`SequenceElement ${elementId} not found`);
+          }
+          return {
+            element: current,
+            shotsUpdated: deltas.length,
+            scriptUpdated,
+            renamed: false,
+          };
+        }
         throw new Error(`SequenceElement ${elementId} not found`);
       }
 
-      return { element, shotsUpdated: deltas.length, scriptUpdated };
+      return {
+        element,
+        shotsUpdated: deltas.length,
+        scriptUpdated,
+        renamed: true,
+      };
     },
 
     delete: async (id: string): Promise<boolean> => {

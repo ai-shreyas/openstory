@@ -24,13 +24,14 @@ import {
 } from '@/lib/api-v1/hal';
 import type { SequenceExport } from '@/lib/db/schema';
 import { generateId } from '@/lib/db/id';
-import { NotFoundError } from '@/lib/errors';
+import { NotFoundError, ValidationError } from '@/lib/errors';
 import {
   STORAGE_BUCKETS,
   getPublicUrl,
   toShareableUrl,
 } from '@/lib/storage/buckets';
 import { triggerWorkflow } from '@/lib/workflow/client';
+import type { SequenceExportWorkflowInput } from '@/lib/workflow/types';
 import { createFileRoute } from '@tanstack/react-router';
 
 const EXPORT_FILENAME_SUFFIX = '_openstory.mp4';
@@ -104,6 +105,39 @@ export const Route = createFileRoute('/api/v1/sequences/$id/exports')({
 
           const origin = new URL(request.url).origin;
 
+          // Resolve the whole cut here, before anything is reserved: the
+          // workflow renders this snapshot and reads no DB, so a shot
+          // finishing mid-render can't change the list under it. An
+          // incomplete sequence is a synchronous 4xx rather than a reserved
+          // row that fails a step later.
+          const shots = await context.scopedDb.shots.listBySequence(params.id, {
+            orderBy: 'sceneOrder',
+            ascending: true,
+          });
+          if (shots.length === 0) {
+            throw new ValidationError('Sequence has no shots yet');
+          }
+          // Each shot's video is the version its render segment points at
+          // (#1067 phase 2d) — one batched read for the whole sequence.
+          const selectedVideoByShot =
+            await context.scopedDb.videoVariants.getSelectedByShotIds(
+              shots.map((s) => s.id)
+            );
+          const scenes = shots
+            .flatMap((s) => {
+              const url = selectedVideoByShot.get(s.id)?.url;
+              return url ? [url] : [];
+            })
+            .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
+          if (scenes.length === 0) {
+            throw new ValidationError('No scene videos are ready yet');
+          }
+          if (scenes.length !== shots.length) {
+            throw new ValidationError(
+              `${shots.length - scenes.length} of ${shots.length} scenes are still generating`
+            );
+          }
+
           // Coalesce: reuse the in-flight export instead of spawning a
           // duplicate render. A stale row means the worker crashed before
           // `onFailure` ran — mark it failed so it stops blocking new exports
@@ -130,8 +164,8 @@ export const Route = createFileRoute('/api/v1/sequences/$id/exports')({
             );
           }
 
-          // Reserve the row BEFORE triggering so the workflow's first step can
-          // read it back (avoids a read-before-commit race). `created: false`
+          // Reserve the row BEFORE triggering so a crash between the two
+          // leaves a row the stale sweep above can reconcile. `created: false`
           // means a concurrent POST won the one-processing-row race — coalesce
           // onto its row rather than starting a second workflow.
           const path = buildExportPath(context.teamId, params.id);
@@ -151,12 +185,22 @@ export const Route = createFileRoute('/api/v1/sequences/$id/exports')({
             );
           }
 
-          const workflowRunId = await triggerWorkflow('sequence-export', {
-            userId: context.user.id,
-            teamId: context.teamId,
-            sequenceId: params.id,
-            exportId: row.id,
-          });
+          const workflowRunId =
+            await triggerWorkflow<SequenceExportWorkflowInput>(
+              'sequence-export',
+              {
+                userId: context.user.id,
+                teamId: context.teamId,
+                sequenceId: params.id,
+                exportId: row.id,
+                storagePath: path,
+                scenes,
+                musicUrl:
+                  sequence.includeMusic && sequence.musicUrl
+                    ? sequence.musicUrl
+                    : null,
+              }
+            );
           await context.scopedDb.sequenceExports.setWorkflowRunId(
             row.id,
             workflowRunId

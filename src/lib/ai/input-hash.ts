@@ -258,6 +258,8 @@ export type LibraryLocationReferenceHashInput = {
   locationBible: LocationBibleHashFields;
   styleConfigHash: string;
   imageModel: string;
+  /** Unordered set of user-uploaded reference image URLs. */
+  referenceMediaHashes?: readonly string[];
 };
 
 export function computeLibraryLocationReferenceInputHash(
@@ -269,6 +271,7 @@ export function computeLibraryLocationReferenceInputHash(
       name: trim(input.locationBible.name),
       description: trim(input.locationBible.description),
     },
+    referenceMediaHashes: sortedRefs(input.referenceMediaHashes),
     styleConfigHash: input.styleConfigHash,
     imageModel: input.imageModel,
   });

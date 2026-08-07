@@ -765,6 +765,9 @@ export const regenerateMusicPromptFn = createServerFn({ method: 'POST' })
         sequenceId: sequence.id,
         sceneSummaries,
         analysisModelId,
+        // Provenance snapshotted here: a prompt already on the sequence makes
+        // this a regeneration.
+        promptSource: sequence.musicPrompt ? 'regenerated' : 'ai-generated',
       },
       {
         // Dedup by the live input hash so a retry of the same upstream context

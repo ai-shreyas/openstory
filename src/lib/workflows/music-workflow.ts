@@ -20,7 +20,7 @@ import {
   deductWorkflowCredits,
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -37,7 +37,7 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MusicWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<MusicWorkflowResult> {
     const input = event.payload;
     const { prompt, tags, duration } = input;
@@ -81,7 +81,7 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
         duration,
         instrumental: true,
         model,
-        scopedDb,
+        scopedDb: scopedDb.credentials,
         observability: {
           observationName: 'music',
           tags: ['music'],
@@ -193,22 +193,21 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
         // `sequence_music_variants` for future surfacing.
         const divergedVariantId = writeResult.variant.id;
         await step.do('update-sequence-music-divergent', async () => {
-          const seq = scopedDb.sequence(sequenceId);
-          let liveMusicUrl: string | undefined;
           if (isPrimary) {
-            const status = await seq.getMusicStatus();
-            await seq.updateMusicFields({
+            await scopedDb.sequence(sequenceId).updateMusicFields({
               musicStatus: 'completed',
               musicError: null,
             });
-            liveMusicUrl = status?.musicUrl ?? undefined;
           }
 
+          // No `audioUrl`: this run's track is the alternate, and the surviving
+          // primary's URL is whatever the client already holds — re-reading it
+          // here raced a concurrent promote/set-music. Omitting the field
+          // leaves the cached `musicUrl` untouched and the client refetches.
           const channel = getGenerationChannel(sequenceId);
           await channel.emit('generation.audio:progress', {
             status: 'completed',
             model,
-            ...(liveMusicUrl ? { audioUrl: liveMusicUrl } : {}),
           });
           await channel.emit('generation.stale:detected', {
             entityType: 'sequence',
@@ -260,7 +259,7 @@ export class MusicWorkflow extends OpenStoryWorkflowEntrypoint<MusicWorkflowInpu
   }: {
     event: Readonly<WorkflowEvent<MusicWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
     const model = input.model || DEFAULT_MUSIC_MODEL;

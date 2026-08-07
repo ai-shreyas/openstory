@@ -5,6 +5,7 @@ import { getGenerationChannel } from '@/lib/realtime';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { RecastLocationWorkflowInput } from '@/lib/workflow/types';
+import { buildRecastRegenerateSnapshots } from '@/lib/workflows/recast-snapshot';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
@@ -107,6 +108,20 @@ export const recastLocationFn = createServerFn({ method: 'POST' })
       ? StyleConfigSchema.parse(style.config)
       : undefined;
 
+    // Bind the sequence location to the library location it was recast from.
+    // Without this the downstream divergence check resolves the OLD (usually
+    // null) link and compares against a hash from the new one.
+    const libraryLocation = await context.scopedDb.locations.getById(
+      data.libraryLocationId
+    );
+    if (!libraryLocation) {
+      throw new Error('Library location not found');
+    }
+    const updatedLocation = await context.scopedDb.sequenceLocations.update(
+      data.locationId,
+      { libraryLocationId: data.libraryLocationId }
+    );
+
     await context.scopedDb.sequenceLocations.updateReferenceStatus(
       data.locationId,
       'generating'
@@ -123,6 +138,20 @@ export const recastLocationFn = createServerFn({ method: 'POST' })
         data.locationId
       );
 
+    // Freeze every regenerate-shots input here, at the trigger. The workflow
+    // used to rebuild this after its sheet child finished — eight live reads
+    // against state the user never authorised.
+    const imageModel = safeTextToImageModel(sequence.imageModel);
+    const { shotSnapshots, snapshotInputHash } =
+      await buildRecastRegenerateSnapshots({
+        scopedDb: context.scopedDb,
+        sequenceId: location.sequenceId,
+        shotIds: affectedShotIds,
+        imageModel,
+        aspectRatio: sequence.aspectRatio,
+        subject: { kind: 'location', location: updatedLocation },
+      });
+
     const workflowRunId = await triggerWorkflow(
       '/recast-location',
       {
@@ -134,9 +163,13 @@ export const recastLocationFn = createServerFn({ method: 'POST' })
         userId: context.user.id,
         referenceImageUrl: data.referenceImageUrl,
         libraryLocationDescription: data.description,
-        imageModel: safeTextToImageModel(sequence.imageModel),
-        affectedShotIds,
+        libraryLocationId: data.libraryLocationId,
+        libraryLocationReferenceHash: libraryLocation.referenceInputHash,
+        imageModel,
         styleConfig,
+        aspectRatio: sequence.aspectRatio,
+        shotSnapshots,
+        snapshotInputHash,
       } satisfies RecastLocationWorkflowInput,
       { label: buildWorkflowLabel(location.sequenceId) }
     );
@@ -144,6 +177,8 @@ export const recastLocationFn = createServerFn({ method: 'POST' })
     return {
       locationId: data.locationId,
       referenceWorkflowRunId: workflowRunId,
-      affectedShotIds,
+      // The shots actually queued — a shot with no selected image prompt is
+      // dropped by the snapshot builder rather than failing the recast.
+      affectedShotIds: shotSnapshots.map((s) => s.shotId),
     };
   });

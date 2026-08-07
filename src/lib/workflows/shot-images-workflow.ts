@@ -24,7 +24,7 @@
 
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { buildElementReferenceImages } from '@/lib/prompts/element-prompt';
 import { buildLocationReferenceImages } from '@/lib/prompts/location-prompt';
@@ -66,7 +66,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ShotImagesWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<ShotImagesWorkflowResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -114,15 +114,12 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
     const label = buildWorkflowLabel(sequenceId);
 
     // Build per-scene character, location, and element maps for reference
-    // image lookup. Re-fetch elements from the DB here (rather than relying
-    // on the snapshot taken at analyze-script start) — vision analysis for
-    // a slow element may have finished during phases 2–3, so re-fetching
-    // picks up the fresh description.
+    // image lookup. The payload's elements are the ONLY source: they are what
+    // `elementReferenceHashes` / `snapshotInputHash` were computed over at the
+    // trigger, so a fresher DB read here would render against elements the
+    // stamped hash does not describe.
     const { sceneCharacterMap, sceneLocationMap, sceneElementMap } =
       await step.do('build-reference-maps', async () => {
-        const elements = sequenceId
-          ? await scopedDb.sequenceElements.list(sequenceId)
-          : elementsFromInput;
         return {
           sceneCharacterMap: Object.fromEntries(
             scenesWithVisualPrompts.map((scene) => [
@@ -147,7 +144,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
             scenesWithVisualPrompts.map((scene) => [
               scene.sceneId,
               matchElementsToScene(
-                elements,
+                elementsFromInput,
                 scene.continuity?.elementTags || [],
                 scene.originalScript.extract || ''
               ),
@@ -252,6 +249,9 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
               aspectRatio,
               numImages: 1,
               shotId: matchedShot?.shotId,
+              // Materialized by scene-split and threaded through the mapping
+              // (#991) — the child never re-resolves the anchor.
+              frameId: matchedShot?.frameId ?? undefined,
               sequenceId,
               referenceImages:
                 allReferences.length > 0 ? allReferences : undefined,
@@ -302,6 +302,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
                     teamId: input.teamId,
                     sequenceId,
                     shotId: matchedShot?.shotId,
+                    frameId: matchedShot?.frameId ?? undefined,
                     thumbnailUrl: childOutput.imageUrl,
                     scenePrompt: visualPrompt,
                     characterReferences:
@@ -395,7 +396,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
   }: {
     event: Readonly<WorkflowEvent<ShotImagesWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     const input = event.payload;
     logger.error(

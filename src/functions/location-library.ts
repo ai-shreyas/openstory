@@ -16,6 +16,7 @@ import {
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { LibraryLocationSheetWorkflowInput } from '@/lib/workflow/types';
+import { computeLibraryLocationSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import {
   createLibraryLocation,
   promoteLocationReferenceImages,
@@ -267,6 +268,8 @@ export const addLocationSheetsFn = createServerFn({ method: 'POST' })
       teamId: context.teamId,
       sequenceId: 'library',
     };
+    workflowInput.snapshotInputHash =
+      await computeLibraryLocationSheetHashFromDto(workflowInput);
 
     const workflowRunId = await triggerWorkflow(
       '/library-location-sheet',

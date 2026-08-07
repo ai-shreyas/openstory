@@ -31,7 +31,7 @@ import { triggerWorkflow } from '@/lib/workflow/client';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type {
-  StoryboardWorkflowInput,
+  StoryboardTriggerInput,
   ShotVariantWorkflowInput,
   UpscaleShotVariantWorkflowInput,
 } from '@/lib/workflow/types';
@@ -69,7 +69,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
       }
     );
 
-    const workflowInput: StoryboardWorkflowInput = {
+    const workflowInput: StoryboardTriggerInput = {
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
@@ -279,15 +279,18 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
 
     const gridConfig = getVariantGridConfig(sequence.aspectRatio);
 
+    const selectedPrompt =
+      await context.scopedDb.framePromptVersions.getSelected(frame.id);
+
     const workflowInput: ShotVariantWorkflowInput = {
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
+      frameId: frame.id,
       thumbnailUrl,
-      scenePrompt:
-        (await context.scopedDb.framePromptVersions.getSelected(frame.id))
-          ?.text ?? undefined,
+      scenePrompt: selectedPrompt?.text ?? undefined,
+      promptVersionId: selectedPrompt?.id ?? null,
       model: data.model,
       aspectRatio: sequence.aspectRatio,
       imageSize: data.imageSize || gridConfig.imageSize,
@@ -410,6 +413,11 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
+      frameId: frame.id,
+      // The prompt selected when the tile was picked: the upscale BECOMES the
+      // frame's selection, so the version it writes must carry the prompt it
+      // was rendered against (#1070).
+      promptVersionId: frame.selectedImagePromptVersionId,
       croppedTileUrl: cropResult.url,
       croppedTilePath: '',
       aspectRatio: sequence.aspectRatio,

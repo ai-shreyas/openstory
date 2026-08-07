@@ -6,8 +6,9 @@
  * frame's primary still at the upscaled version (pointer + mirror via
  * `frameVariants.select`). The e2e suite can't observe that async repoint
  * hermetically, so the outcome is pinned here: `persistUpscaleSelection`
- * completes the in-flight version and repoints the frame — skipping the repoint
- * (but still completing the version) if the anchor frame vanished mid-flight.
+ * completes the in-flight version and repoints the TRIGGER's frame (never
+ * re-resolved from the shot) — skipping the repoint, but still completing the
+ * version, if that frame vanished mid-flight.
  *
  * The new still no longer drops the segment's chosen render (#1067 phase 2d):
  * the old video keeps playing and the manifest-staleness system flags it.
@@ -29,11 +30,11 @@ type SelectCall = {
 type ShotUpdateCall = { shotId: string; data: Partial<NewShot> };
 type CallName =
   | 'frameVariants.update'
-  | 'frames.getAnchorByShot'
+  | 'frames.getById'
   | 'frameVariants.select'
   | 'shots.update';
 
-function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
+function buildScopedDbSpy(opts: { frameMissing?: boolean } = {}): {
   scopedDb: PersistUpscaleScopedDb;
   variantUpdates: VariantUpdateCall[];
   selects: SelectCall[];
@@ -57,10 +58,12 @@ function buildScopedDbSpy(opts: { anchorMissing?: boolean } = {}): {
         return { id: versionId };
       },
     },
-    frames: {
-      getAnchorByShot: async () => {
-        callOrder.push('frames.getAnchorByShot');
-        return opts.anchorMissing ? null : { id: 'anchor-frame-id' };
+    liveRead: {
+      frames: {
+        getById: async (frameId) => {
+          callOrder.push('frames.getById');
+          return opts.frameMissing ? null : { id: frameId };
+        },
       },
     },
     shots: {
@@ -95,6 +98,7 @@ describe('persistUpscaleSelection', () => {
     const result = await persistUpscaleSelection({
       scopedDb,
       shotId: 'shot-1',
+      frameId: 'anchor-frame-id',
       versionId: 'ver-1',
       url: 'https://r2/upscaled.png',
       path: 'team/seq/upscaled.png',
@@ -107,10 +111,10 @@ describe('persistUpscaleSelection', () => {
 
     expect(result).toEqual({ selected: true });
 
-    // Version is completed BEFORE the anchor is resolved + repointed.
+    // Version is completed BEFORE the frame is checked + repointed.
     expect(callOrder).toEqual([
       'frameVariants.update',
-      'frames.getAnchorByShot',
+      'frames.getById',
       'frameVariants.select',
     ]);
 
@@ -125,7 +129,7 @@ describe('persistUpscaleSelection', () => {
       error: null,
     });
 
-    // Repoint targets the ANCHOR frame's id (≠ shotId), not the shot id.
+    // Repoint targets the TRIGGER's frame id (≠ shotId), not the shot id.
     const [select] = selects;
     if (!select) throw new Error('expected frameVariants.select call');
     expect(select.frameId).toBe('anchor-frame-id');
@@ -145,9 +149,9 @@ describe('persistUpscaleSelection', () => {
     ]);
   });
 
-  it('still completes the version but skips the repoint when the anchor frame vanished', async () => {
+  it('still completes the version but skips the repoint when the frame vanished', async () => {
     const { scopedDb, variantUpdates, selects, shotUpdates, callOrder } =
-      buildScopedDbSpy({ anchorMissing: true });
+      buildScopedDbSpy({ frameMissing: true });
     const emits: Array<{
       shotId: string;
       status: string;
@@ -157,6 +161,7 @@ describe('persistUpscaleSelection', () => {
     const result = await persistUpscaleSelection({
       scopedDb,
       shotId: 'shot-1',
+      frameId: 'anchor-frame-id',
       versionId: 'ver-1',
       url: 'https://r2/upscaled.png',
       path: null,
@@ -168,12 +173,9 @@ describe('persistUpscaleSelection', () => {
     });
 
     expect(result).toEqual({ selected: false });
-    // The version is finished, but with no anchor there is nothing to repoint:
+    // The version is finished, but with no frame there is nothing to repoint:
     // no select, no completed emit (a false "ready" signal).
-    expect(callOrder).toEqual([
-      'frameVariants.update',
-      'frames.getAnchorByShot',
-    ]);
+    expect(callOrder).toEqual(['frameVariants.update', 'frames.getById']);
     expect(variantUpdates).toHaveLength(1);
     expect(selects).toEqual([]);
     expect(shotUpdates).toEqual([]);

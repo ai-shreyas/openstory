@@ -18,7 +18,7 @@ import {
   ELEMENT_VISION_MODEL,
 } from '@/lib/ai/element-vision';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type {
   ElementVisionWorkflowInput,
@@ -33,10 +33,10 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ElementVisionWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<ElementVisionWorkflowResult> {
     const input = event.payload;
-    const { elementId, imageUrl, filename } = input;
+    const { elementId, imageUrl, filename, sequenceId, token } = input;
 
     // Step 1: mark analyzing
     await step.do('mark-analyzing', async () => {
@@ -46,16 +46,9 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
       );
     });
 
-    // Step 2: load element so we know the current token (for auto-rename).
-    const element = await step.do('load-element', async () => {
-      const el = await scopedDb.sequenceElements.getById(elementId);
-      if (!el) throw new Error(`Element ${elementId} not found`);
-      return el;
-    });
-
-    // Step 3: vision call (also returns a vision-suggested token).
+    // Step 2: vision call (also returns a vision-suggested token).
     const vision = await step.do('describe-element', async () => {
-      const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
+      const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
       return await describeElementImage({
         imageUrl,
         filename,
@@ -85,7 +78,7 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
 
     const { description, consistencyTag, suggestedToken } = vision;
 
-    // Step 4: persist description + consistencyTag.
+    // Step 3: persist description + consistencyTag.
     await step.do('persist-vision', async () => {
       await scopedDb.sequenceElements.updateVisionResult(
         elementId,
@@ -94,28 +87,41 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
       );
     });
 
-    // Step 5: auto-rename to vision-suggested token if different. Uses
+    // Step 4: auto-rename to vision-suggested token if different. Uses
     // ensureUniqueToken (suffixes `_2` on collision) because the system is
     // choosing the name — failing the workflow on collision would strand the
-    // element with no usable name. Excluding the element's own row keeps a
-    // step retry idempotent: after a successful rename the replay gets the
-    // suggested token back un-suffixed, and — since the in-memory
-    // `element.token` still holds the pre-rename name, so neither early
-    // return fires — the cascade re-runs, atomically yielding zero deltas.
+    // element with no usable name.
+    //
+    // The rename is a compare-and-swap against the trigger-time token, which
+    // covers both the user racing us (their name wins, no cascade) and a step
+    // retry after a successful rename (the swap no longer matches, so the
+    // already-applied cascade is not re-run).
     const finalToken = await step.do('auto-rename', async () => {
-      if (suggestedToken === element.token) return element.token;
+      if (suggestedToken === token) return token;
       const unique = await scopedDb.sequenceElements.ensureUniqueToken(
-        element.sequenceId,
+        sequenceId,
         suggestedToken,
         elementId
       );
-      if (unique === element.token) return element.token;
+      if (unique === token) return token;
       const result = await scopedDb.sequenceElements.cascadeRename({
-        sequenceId: element.sequenceId,
+        sequenceId,
         elementId,
-        oldToken: element.token,
+        oldToken: token,
         newToken: unique,
+        expectedToken: token,
       });
+      if (!result.renamed) {
+        logger.info(
+          '[ElementVisionWorkflow:cf] Element token changed since trigger; keeping it and skipping the cascade',
+          {
+            elementId,
+            expectedToken: token,
+            currentToken: result.element.token,
+            suggestedToken: unique,
+          }
+        );
+      }
       return result.element.token;
     });
 
@@ -134,7 +140,7 @@ export class ElementVisionWorkflow extends OpenStoryWorkflowEntrypoint<ElementVi
   }: {
     event: Readonly<WorkflowEvent<ElementVisionWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const { elementId } = event.payload;
     logger.error('[ElementVisionWorkflow:cf] Failed:', {

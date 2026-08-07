@@ -26,7 +26,7 @@ import {
 import { extractStreamingStringField } from '@/lib/ai/stream-extract';
 import type { Microdollars } from '@/lib/billing/money';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { aiObservabilityMiddleware } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import {
@@ -163,7 +163,7 @@ export type DurableLLMCallContext = {
    */
   workflowRunId: string;
   /** Scoped DB context for resolving team API keys + deducting credits. */
-  scopedDb?: ScopedDb;
+  scopedDb?: WorkflowScopedDb;
 };
 
 export type DurableStreamingLLMCallContext = DurableLLMCallContext & {
@@ -174,17 +174,20 @@ export type DurableStreamingLLMCallContext = DurableLLMCallContext & {
   };
 };
 
+type LlmKeySource = 'team' | 'platform';
+
 /**
  * Resolve the key for the LLM call — the team's key via ScopedDb, or the
- * platform key for anonymous workflows. Resolved ONCE per helper invocation,
- * outside the steps, so the LLM call and the credit-deduction step attribute
- * billing to the same key (re-resolving inside the deduct step could diverge
- * if the key was marked invalid mid-run, and could throw after the LLM call
- * already succeeded). The per-scope row cache makes this at most one D1 read.
+ * platform key for anonymous workflows. MUST be awaited INSIDE the LLM
+ * `step.do`: it reads (and, via `decryptOrMarkInvalid`, writes) mutable D1
+ * state, so resolving between steps would re-execute on replay while the LLM
+ * step is cache-served, and the billing attribution could flip. The step
+ * returns the non-secret `source`/`via` so the deduction bills exactly the key
+ * the call was made with; the decrypted key never crosses a step boundary.
  */
 async function resolveCallKey(callContext: DurableLLMCallContext) {
   if (callContext.scopedDb) {
-    return callContext.scopedDb.apiKeys.resolveLlmKey();
+    return callContext.scopedDb.credentials.resolveLlmKey();
   }
   const platform = getPlatformLlmKey();
   if (!platform) {
@@ -233,14 +236,18 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
     return { messages };
   });
 
-  const llmKeyInfo = await resolveCallKey(callContext);
-
   // Step 2: Durable LLM call. JSON-stringifies the parsed object so CF's
   // Rpc.Serializable<T> check passes regardless of the Zod-inferred shape, and
-  // carries the provider-reported cost across the step boundary for deduction.
-  const { jsonText, costMicros } = await step.do(
+  // carries the provider-reported cost + resolved key source across the step
+  // boundary for deduction.
+  const { jsonText, costMicros, keySource } = await step.do(
     name,
-    async (): Promise<{ jsonText: string; costMicros: Microdollars }> => {
+    async (): Promise<{
+      jsonText: string;
+      costMicros: Microdollars;
+      keySource: LlmKeySource;
+    }> => {
+      const llmKeyInfo = await resolveCallKey(callContext);
       const adapter = createAdapter(modelId, llmKeyInfo);
 
       logger.info(`[LLM:${logName}:cf] Starting call`, {
@@ -332,6 +339,7 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
         return {
           jsonText: JSON.stringify(result),
           costMicros: llmCostFromUsage(capturedUsage, modelId),
+          keySource: llmKeyInfo.source,
         };
       } finally {
         clearTimeout(timeout);
@@ -345,7 +353,7 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
       await deductWorkflowCredits({
         scopedDb,
         costMicros,
-        usedOwnKey: llmKeyInfo.source === 'team',
+        usedOwnKey: keySource === 'team',
         description: `LLM analysis (${modelId})`,
         idempotencyKey: `${callContext.workflowRunId}:llm-${name}`,
         metadata: {
@@ -404,11 +412,14 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
     return { messages };
   });
 
-  const llmKeyInfo = await resolveCallKey(callContext);
-
-  const { jsonText, costMicros } = await step.do(
+  const { jsonText, costMicros, keySource } = await step.do(
     `${name}-stream`,
-    async (): Promise<{ jsonText: string; costMicros: Microdollars }> => {
+    async (): Promise<{
+      jsonText: string;
+      costMicros: Microdollars;
+      keySource: LlmKeySource;
+    }> => {
+      const llmKeyInfo = await resolveCallKey(callContext);
       const adapter = createAdapter(modelId, llmKeyInfo);
 
       logger.info(`[LLM:${logName}:cf] Starting streaming call`, {
@@ -550,6 +561,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         return {
           jsonText: structuredJson ?? accumulated,
           costMicros: llmCostFromUsage(capturedUsage, modelId),
+          keySource: llmKeyInfo.source,
         };
       } finally {
         clearTimeout(timeout);
@@ -563,7 +575,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
       await deductWorkflowCredits({
         scopedDb,
         costMicros,
-        usedOwnKey: llmKeyInfo.source === 'team',
+        usedOwnKey: keySource === 'team',
         description: `LLM analysis (${modelId})`,
         idempotencyKey: `${callContext.workflowRunId}:llm-${name}`,
         metadata: {

@@ -466,6 +466,65 @@ describe('frameVariants.select', () => {
   });
 });
 
+describe('frameVariants.selectIfPendingPromoteIs (#1070)', () => {
+  it('promotes and consumes the claim when the pending pointer still names the version', async () => {
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput({ url: 'https://cdn/a.png' }));
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: v.id })
+      .where(eq(frames.id, frameId));
+
+    const promoted = await m.selectIfPendingPromoteIs(frameId, v.id, {
+      actorId: null,
+    });
+
+    expect(promoted?.id).toBe(v.id);
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.selectedImageVersionId).toBe(v.id);
+    expect(frame?.pendingPromoteVersionId).toBeNull();
+  });
+
+  it('does not select when a newer kickoff moved the pending pointer', async () => {
+    const m = createFrameVariantsMethods(db);
+    const mine = await m.appendVersion(
+      variantInput({ url: 'https://cdn/mine.png' })
+    );
+    const newer = await m.appendVersion(
+      variantInput({ url: 'https://cdn/newer.png' })
+    );
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: newer.id })
+      .where(eq(frames.id, frameId));
+
+    const promoted = await m.selectIfPendingPromoteIs(frameId, mine.id, {
+      actorId: null,
+    });
+
+    expect(promoted).toBeNull();
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.selectedImageVersionId).toBeNull();
+    // The other run's claim survives — only a matching claim is consumed.
+    expect(frame?.pendingPromoteVersionId).toBe(newer.id);
+  });
+
+  it('does not select when no promote claim is held at all', async () => {
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput());
+
+    expect(
+      await m.selectIfPendingPromoteIs(frameId, v.id, { actorId: null })
+    ).toBeNull();
+  });
+});
+
 describe('frameVariants.discard / undiscard', () => {
   it('soft-hides then restores a version, with matching events, in atomic batches', async () => {
     const m = createFrameVariantsMethods(db);

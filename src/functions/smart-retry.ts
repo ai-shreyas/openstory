@@ -15,6 +15,10 @@ import {
   safeTextToImageModel,
 } from '@/lib/ai/models';
 import {
+  DEFAULT_ANALYSIS_MODEL,
+  getAnalysisModelById,
+} from '@/lib/ai/models.config';
+import {
   resolveImageModel,
   resolveVideoModel,
 } from '@/lib/ai/resolve-asset-models';
@@ -47,8 +51,9 @@ import {
 import type {
   ImageWorkflowInput,
   MotionWorkflowInput,
+  MusicPromptWorkflowInput,
   MusicWorkflowInput,
-  StoryboardWorkflowInput,
+  StoryboardTriggerInput,
 } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
@@ -186,7 +191,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       }
     );
 
-    const workflowInput: StoryboardWorkflowInput = {
+    const workflowInput: StoryboardTriggerInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
@@ -297,8 +302,8 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     let triggeredImages = 0;
     for (const shot of failedImageShots) {
       const scene = sceneOf(shot);
-      const prompt =
-        shot.imagePromptVersion?.text || scene?.originalScript.extract;
+      const promptVersion = shot.imagePromptVersion;
+      const prompt = promptVersion?.text || scene?.originalScript.extract;
 
       if (!prompt) continue;
 
@@ -316,6 +321,10 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         imageSize: aspectRatioToImageSize(sequence.aspectRatio),
         numImages: 1,
         shotId: shot.id,
+        // The anchor + the prompt version `prompt` came from, snapshotted here
+        // so the retry's variant is stamped with what it rendered (#1070).
+        frameId: shot.frame.id,
+        promptVersionId: promptVersion?.text ? promptVersion.id : null,
         sequenceId: sequence.id,
         referenceImages,
       };
@@ -343,8 +352,14 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         userId: user.id,
         teamId,
         shotId: shot.id,
+        sceneId: shot.sceneId,
         sequenceId: sequence.id,
         imageUrl,
+        // The versions this clip renders from, pinned here so the render
+        // manifest can't name rows a concurrent edit repointed to.
+        frameVersionId: shot.image?.id ?? null,
+        motionPromptVersionId: selectedMotion?.id ?? null,
+        sequenceTitle: sequence.title,
         prompt: resolveMotionPromptFromVersion(
           selectedMotion,
           {
@@ -411,15 +426,19 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     const totalDuration = sumShotDurationsSeconds(allShots);
 
     // Generate music prompt
-    await triggerWorkflow(
+    await triggerWorkflow<MusicPromptWorkflowInput>(
       '/music-prompt',
       {
         userId: user.id,
         teamId,
         sequenceId: sequence.id,
         sceneSummaries: scenes,
-        analysisModelId: sequence.analysisModel,
+        analysisModelId:
+          getAnalysisModelById(sequence.analysisModel)?.id ??
+          DEFAULT_ANALYSIS_MODEL,
         duration: totalDuration || 30,
+        // This branch only runs when the sequence has no music prompt at all.
+        promptSource: 'ai-generated',
       },
       { label: buildWorkflowLabel(sequence.id) }
     );

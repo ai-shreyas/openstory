@@ -12,6 +12,7 @@
 
 import {
   computeCharacterSheetInputHash,
+  computeLibraryLocationReferenceInputHash,
   computeShotImageInputHash,
   computeLocationSheetInputHash,
   computeTalentSheetInputHash,
@@ -32,6 +33,7 @@ import type {
   CharacterSheetWorkflowInput,
   ShotImageSceneSnapshot,
   ShotImagesWorkflowInput,
+  LibraryLocationSheetWorkflowInput,
   LibraryTalentSheetWorkflowInput,
   LocationSheetWorkflowInput,
 } from '@/lib/workflow/types';
@@ -44,12 +46,26 @@ import {
 export type { ShotImageSceneSnapshot } from '@/lib/workflow/types';
 
 /**
+ * The live reads the `*Current` divergence-recompute helpers make. Narrowed so
+ * a workflow hands over `scopedDb.liveRead`: recomputing an input hash from
+ * CURRENT state is the point of these functions — freezing the inputs would
+ * make divergence unrepresentable — and this type is what marks that at the
+ * boundary. The trigger-side `*FromDto` twins take no db at all.
+ */
+export type SheetSnapshotReadDb = {
+  characters: Pick<ScopedDb['characters'], 'getById'>;
+  talent: Pick<ScopedDb['talent'], 'getWithRelations'>;
+  locations: Pick<ScopedDb['locations'], 'getById'>;
+  sequenceLocations: Pick<ScopedDb['sequenceLocations'], 'getById'>;
+};
+
+/**
  * Resolve the upstream talent-sheet's `input_hash` for a sequence character.
  * Returns `null` when the character has no talent assignment, when the talent
  * has no sheets, or when the sheet predates hash tracking.
  */
-export async function resolveTalentSheetHash(
-  scopedDb: ScopedDb,
+async function resolveTalentSheetHash(
+  scopedDb: SheetSnapshotReadDb,
   characterDbId: string
 ): Promise<string | null> {
   const character = await scopedDb.characters.getById(characterDbId);
@@ -70,8 +86,8 @@ export async function resolveTalentSheetHash(
  * location. Returns `null` when the sequence location has no library
  * reference, or when the library row predates hash tracking.
  */
-export async function resolveLibraryLocationReferenceHash(
-  scopedDb: ScopedDb,
+async function resolveLibraryLocationReferenceHash(
+  scopedDb: SheetSnapshotReadDb,
   locationDbId: string
 ): Promise<string | null> {
   const sequenceLocation =
@@ -140,7 +156,7 @@ export async function computeCharacterSheetHashFromDto(
  */
 export async function computeCharacterSheetHashCurrent(
   input: CharacterSheetWorkflowInput,
-  scopedDb: ScopedDb
+  scopedDb: SheetSnapshotReadDb
 ): Promise<string> {
   const talentSheetInputHash = await resolveTalentSheetHash(
     scopedDb,
@@ -178,7 +194,7 @@ export async function computeLocationSheetHashFromDto(
 
 export async function computeLocationSheetHashCurrent(
   input: LocationSheetWorkflowInput,
-  scopedDb: ScopedDb
+  scopedDb: SheetSnapshotReadDb
 ): Promise<string> {
   const libraryLocationReferenceHash =
     await resolveLibraryLocationReferenceHash(scopedDb, input.locationDbId);
@@ -213,12 +229,15 @@ export async function computeLibraryTalentSheetHashFromDto(
 
 export async function computeLibraryTalentSheetHashCurrent(
   input: LibraryTalentSheetWorkflowInput,
-  scopedDb: ScopedDb
+  scopedDb: SheetSnapshotReadDb
 ): Promise<string> {
   const talent = await scopedDb.talent.getWithRelations(input.talentId);
-  // Fall back to the payload list when the talent row vanished mid-flight —
-  // the workflow will fail downstream on the missing record, but we shouldn't
-  // mask the divergence check with a noisy lookup error here.
+  // Fall back to the payload when the talent row vanished mid-flight — the
+  // workflow will fail downstream on the missing record, but we shouldn't mask
+  // the divergence check with a noisy lookup error here. Name/description are
+  // re-read for the same reason the URLs are: a mid-run rename changes the
+  // identity the sheet was generated for, and hashing the payload copy would
+  // make that divergence unrepresentable.
   const currentImageUrls =
     talent?.media
       .filter((m) => m.type === 'image')
@@ -228,7 +247,54 @@ export async function computeLibraryTalentSheetHashCurrent(
     [];
   return computeLibraryTalentSheetHashFromDto({
     ...input,
+    talentName: talent?.name ?? input.talentName,
+    // `talent.description` cleared to null must hash as cleared, not fall back
+    // to the payload — so the payload is only consulted when there's no row.
+    talentDescription: talent
+      ? (talent.description ?? undefined)
+      : input.talentDescription,
     referenceImageUrls: currentImageUrls,
+  });
+}
+
+/**
+ * Library location references are content-addressed the same way the talent
+ * twin is: the name/description the sheet was generated for, the inlined
+ * reference URLs, and the model.
+ */
+export async function computeLibraryLocationSheetHashFromDto(
+  input: LibraryLocationSheetWorkflowInput
+): Promise<string> {
+  return computeLibraryLocationReferenceInputHash({
+    locationBible: {
+      name: input.locationName,
+      description: input.locationDescription ?? null,
+    },
+    // No style config on the library sheet payload — library references are
+    // style-agnostic; the per-sequence location sheet applies the style.
+    styleConfigHash: await computeStyleConfigHash(null),
+    imageModel: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+    referenceMediaHashes: [...input.referenceImageUrls].sort(),
+  });
+}
+
+/**
+ * Recompute from live DB state. Only name/description are re-read: the
+ * reference URL set is the run's frozen input (the payload composes it from
+ * sheets + the prior reference), so re-deriving it here would manufacture
+ * permanent divergence rather than detect it.
+ */
+export async function computeLibraryLocationSheetHashCurrent(
+  input: LibraryLocationSheetWorkflowInput,
+  scopedDb: SheetSnapshotReadDb
+): Promise<string> {
+  const location = await scopedDb.locations.getById(input.locationDbId);
+  return computeLibraryLocationSheetHashFromDto({
+    ...input,
+    locationName: location?.name ?? input.locationName,
+    locationDescription: location
+      ? (location.description ?? undefined)
+      : input.locationDescription,
   });
 }
 
@@ -245,8 +311,8 @@ function sortedRefHashes(values: Array<string | null | undefined>): string[] {
  * input hash: character `sheetInputHash`, location `referenceInputHash`, and
  * element `imageUrl`.
  *
- * Single source of truth so the image-generation **stamp**
- * (`computeImageWorkflowHashCurrent`) and the staleness **verify**
+ * Single source of truth so the image-generation trigger **stamp**
+ * (`computeShotImageInputHash` via `prepareShotImageWorkflowInput`) and the staleness **verify**
  * (`buildRegenerateShotSnapshot`) cannot drift — drift on the element /
  * location sets (verify hard-coded them to `[]` and used a different location
  * matcher) made every element- or location-bearing shot report permanently

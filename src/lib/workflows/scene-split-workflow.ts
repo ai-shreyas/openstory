@@ -44,7 +44,7 @@ import {
 } from '@/lib/ai/scene-persistence';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import { dbSceneId, type NewShot } from '@/lib/db/schema';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type { ShotWithAnchorFrame } from '@/lib/db/scoped/shots';
 import { getChatPrompt } from '@/lib/prompts';
 import { buildPreviewPrompt } from '@/lib/prompts/poster-prompt';
@@ -81,7 +81,7 @@ const LOG_METADATA = { phase: PHASE.number, phaseName: PHASE.name };
  * to the same scene row; today every scene is still one shot at shotNumber 1.
  */
 async function persistStreamedSceneAndShot(
-  scopedDb: ScopedDb,
+  scopedDb: WorkflowScopedDb,
   sequenceId: string,
   scene: SceneSplittingScene,
   orderIndex: number
@@ -129,13 +129,19 @@ type StreamResult = {
   elementBible: SceneSplittingResult['elementBible'];
   /** Provider-reported cost for the LLM call, billed after reconciliation. */
   llmCostMicros: Microdollars;
+  /**
+   * Non-secret source of the key the streaming call actually used. Carried out
+   * of the step so the (much later) deduction bills the same resolution
+   * instead of re-reading mutable key state mid-run.
+   */
+  llmKeySource: 'team' | 'platform';
 };
 
 export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWorkflowInput> {
   protected override async runImpl(
     event: Readonly<WorkflowEvent<SceneSplitWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<SceneSplitWorkflowResult> {
     const input = event.payload;
     const {
@@ -181,7 +187,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           elements: elementsBlock,
         });
 
-        const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
+        const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
 
         logger.info(
           `[SceneSplitWorkflow:cf] [LLM:${LOG_NAME}] Starting streaming call`,
@@ -442,6 +448,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           locationBible: parsed.locationBible,
           elementBible: parsed.elementBible,
           llmCostMicros: llmCostFromUsage(capturedUsage, modelId),
+          llmKeySource: llmKeyInfo.source,
         };
         return JSON.stringify(streamResult);
       }
@@ -590,15 +597,17 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     }
 
     // Step 4: Reconcile element bible → update firstMention on existing rows.
+    // Addressed by the element ids snapshotted in the payload, not by a live
+    // token lookup: tokens are user-renameable mid-run, so a re-read could
+    // resolve the same token to a different row (or miss a renamed one).
     if (sequenceId && reconciled.elementBible.length > 0) {
+      const elementIdByToken = new Map(elements.map((el) => [el.token, el.id]));
       await step.do('reconcile-element-bible', async () => {
         for (const entry of reconciled.elementBible) {
-          const existing = await scopedDb.sequenceElements.getByToken(
-            sequenceId,
-            entry.token
-          );
-          if (!existing) continue;
-          await scopedDb.sequenceElements.updateFirstMention(existing.id, {
+          const elementId = elementIdByToken.get(entry.token);
+          // Absent id = the element was deleted (or the LLM invented a token).
+          if (!elementId) continue;
+          await scopedDb.sequenceElements.updateFirstMention(elementId, {
             sceneId: entry.firstMention.sceneId,
             text: entry.firstMention.text,
             lineNumber: entry.firstMention.lineNumber,
@@ -643,14 +652,6 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           sceneRows,
           reconciled.shotMapping
         );
-        if (unmappedShotIds.length > 0) {
-          logger.warn(
-            `[SceneSplitWorkflow:cf] persist-scenes: ${unmappedShotIds.length} shot(s) had no matching scene row`,
-            { sequenceId, unmappedShotIds }
-          );
-        }
-
-        const keptSceneIds = new Set(sceneRows.map((row) => row.id));
         const missingShotIds: string[] = [];
         for (const { shotId, sceneId, shotNumber } of links) {
           const updated = await scopedDb.shots.update(
@@ -667,17 +668,28 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           );
         }
 
-        // Re-analyze edge: fewer scenes than last run. A shot whose scene is
-        // about to go has nothing left to belong to — order, script and prompt
-        // context all resolve through the scene — so it goes too. Detaching it
-        // instead used to leave a row that every read fetched and no view
-        // rendered. The FK is RESTRICT, so shots must go first.
-        const allShots = await scopedDb.shots.listBySequence(sequenceId);
-        for (const shot of allShots) {
-          if (shot.sceneId && !keptSceneIds.has(dbSceneId(shot.sceneId))) {
-            await scopedDb.shots.delete(shot.id);
+        // Two disjoint sets of shots have to go, and neither is found by
+        // listing the sequence — a live listing also returns rows a concurrent
+        // run just created, and would delete them. First: shots THIS run
+        // mapped but could not place on any scene row.
+        if (unmappedShotIds.length > 0) {
+          logger.warn(
+            `[SceneSplitWorkflow:cf] persist-scenes: deleting ${unmappedShotIds.length} shot(s) with no matching scene row`,
+            { sequenceId, unmappedShotIds }
+          );
+          for (const shotId of unmappedShotIds) {
+            await scopedDb.shots.delete(shotId);
           }
         }
+        // Second, the re-analyze edge — fewer scenes than last run. A shot
+        // whose scene is about to go has nothing left to belong to (order,
+        // script and prompt context all resolve through the scene), so it goes
+        // too; detaching it instead left a row that every read fetched and no
+        // view rendered. The scenes FK is RESTRICT, so shots go first.
+        await scopedDb.shots.deleteByScenesFromOrderIndex(
+          sequenceId,
+          reconciled.scenes.length
+        );
         await scopedDb.scenes.deleteFromOrderIndex(
           sequenceId,
           reconciled.scenes.length
@@ -688,12 +700,11 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     }
 
     // Step 5: Deduct credits.
-    const llmCreditKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
     await step.do('deduct-llm-credits-scene-splitting', async () => {
       await deductWorkflowCredits({
         scopedDb,
         costMicros: streamResult.llmCostMicros,
-        usedOwnKey: llmCreditKeyInfo.source === 'team',
+        usedOwnKey: streamResult.llmKeySource === 'team',
         description: `LLM analysis (${modelId})`,
         idempotencyKey: `${event.instanceId}:llm-${STEP_NAME}`,
         metadata: {
@@ -717,7 +728,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
   }: {
     event: Readonly<WorkflowEvent<SceneSplitWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const { sequenceId } = event.payload;
     logger.error('[SceneSplitWorkflow:cf] Failure:', {

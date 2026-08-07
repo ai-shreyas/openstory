@@ -27,7 +27,7 @@ import {
 import { extractStreamingStringField } from '@/lib/ai/stream-extract';
 import type { Microdollars } from '@/lib/billing/money';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { aiObservabilityMiddleware } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import { getChatPrompt } from '@/lib/prompts';
@@ -40,7 +40,19 @@ import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 
 const logger = getLogger(['openstory', 'workflow', 'frame-prompt']);
 
-type FramePromptResult = { sceneId: string; visual: VisualPrompt };
+export type FramePromptResult = {
+  sceneId: string;
+  visual: VisualPrompt;
+  /**
+   * The version id that ended up live for this run (#1067) — the completed
+   * claim, or, on the unique-index collision path, the identical existing row
+   * the claim retired in favour of. Null when nothing was persisted (no shot,
+   * or the claim was cancelled mid-flight). Parents chain their render off
+   * THIS id rather than re-reading the frame's selection pointer, which a
+   * concurrent edit can move to a different prompt between the two steps.
+   */
+  finalVersionId: string | null;
+};
 
 const PHASE = { number: 3, name: 'Writing image prompts…' } as const;
 const STEP_NAME = 'visual-prompts';
@@ -52,7 +64,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
   protected override async runImpl(
     event: Readonly<WorkflowEvent<FramePromptWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<FramePromptResult> {
     const input = event.payload;
     const {
@@ -125,19 +137,23 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
     // `durableStreamingLLMCall`'s exactly so trace parity holds.
     const llmStepName = streamConfig ? `${STEP_NAME}-stream` : STEP_NAME;
 
-    // Resolved once, outside the steps, so the LLM call and the deduction
-    // step attribute billing to the same key (the per-scope row cache makes
-    // this at most one D1 read).
-    const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
-
     // VisualPromptResult is a Zod-inferred object that doesn't satisfy CF's
     // `Rpc.Serializable<T>` constraint structurally (the discriminated union
     // members confuse the check), but is JSON-safe at runtime. JSON-stringify
     // around the step boundary so the type round-trips through Serializable
     // cleanly.
-    const { resultJson, costMicros } = await step.do(
+    //
+    // The key is resolved INSIDE this step (it reads — and can write — mutable
+    // D1 state), and its non-secret `source` rides out on the step result so
+    // the deduction bills the key this call actually used even on replay.
+    const { resultJson, costMicros, keySource } = await step.do(
       llmStepName,
-      async (): Promise<{ resultJson: string; costMicros: Microdollars }> => {
+      async (): Promise<{
+        resultJson: string;
+        costMicros: Microdollars;
+        keySource: 'team' | 'platform';
+      }> => {
+        const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
         const adapter = createAdapter(analysisModelId, llmKeyInfo);
         let capturedUsage: TokenUsage | undefined;
         const captureUsage = [
@@ -226,6 +242,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
             return {
               resultJson: JSON.stringify(text),
               costMicros: llmCostFromUsage(capturedUsage, analysisModelId),
+              keySource: llmKeyInfo.source,
             };
           }
 
@@ -311,6 +328,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
               visualPromptResultSchema.parse(JSON.parse(accumulated))
             ),
             costMicros: llmCostFromUsage(capturedUsage, analysisModelId),
+            keySource: llmKeyInfo.source,
           };
         } finally {
           clearTimeout(timeout);
@@ -326,7 +344,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
       await deductWorkflowCredits({
         scopedDb,
         costMicros,
-        usedOwnKey: llmKeyInfo.source === 'team',
+        usedOwnKey: keySource === 'team',
         description: `LLM analysis (${analysisModelId})`,
         idempotencyKey: `${event.instanceId}:llm-${STEP_NAME}`,
         metadata: {
@@ -340,6 +358,11 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
       });
     });
 
+    // The version this run left live, returned to the parent so a chained
+    // render resolves its prompt by explicit id instead of re-reading the
+    // frame's selection pointer (#1067).
+    let finalVersionId: string | null = null;
+
     if (sequenceId && shotId) {
       if (!result.visual.fullPrompt) {
         throw new WorkflowValidationError(
@@ -351,74 +374,87 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
       // so the stored hash equals the verify-time recompute by construction.
       const inputHash = await computeVisualPromptInputHash(narrowed);
 
-      await step.do('save-visual-prompt-to-db', async () => {
-        // The anchor `frameId` is resolved by the parent and passed in (#991:
-        // workflows don't read the DB). It is mandatory whenever we have a shot to
-        // save to — every shot owns an anchor frame (materialized at shot
-        // creation), so a null here inside the `sequenceId && shotId` guard is an
-        // invariant violation (broken shotMapping / missing anchor), NOT an
-        // expected skip. Fail loud rather than silently drop the prompt: a soft
-        // warn would leave `frame.imagePrompt` null, disable staleness, and show
-        // an empty history sheet while the run still reports success.
-        if (!frameId) {
-          throw new WorkflowValidationError(
-            `Shot ${shotId} has no anchor frame id in shotMapping; cannot persist visual prompt for scene ${scene.sceneId}`
-          );
-        }
-        // The prompt is NOT written into `scene.metadata` any more (#713):
-        // the version write mirrors its text onto `frame.imagePrompt` and
-        // repoints `selectedImagePromptVersionId`, superseding any prior
-        // user-override automatically (the override stays in history and can
-        // be restored).
-        if (input.targetVersionId) {
-          // #1085: a pre-created pending claim row exists — complete it in
-          // place. Null result = the claim was cancelled mid-flight; the
-          // output is deliberately discarded (nothing mirrored, no event).
-          const completed =
-            await scopedDb.framePromptVersions.completePendingAiVersion({
-              versionId: input.targetVersionId,
+      finalVersionId = await step.do(
+        'save-visual-prompt-to-db',
+        async (): Promise<string | null> => {
+          let persistedVersionId: string | null = null;
+          // The anchor `frameId` is resolved by the parent and passed in (#991:
+          // workflows don't read the DB). It is mandatory whenever we have a shot to
+          // save to — every shot owns an anchor frame (materialized at shot
+          // creation), so a null here inside the `sequenceId && shotId` guard is an
+          // invariant violation (broken shotMapping / missing anchor), NOT an
+          // expected skip. Fail loud rather than silently drop the prompt: a soft
+          // warn would leave `frame.imagePrompt` null, disable staleness, and show
+          // an empty history sheet while the run still reports success.
+          if (!frameId) {
+            throw new WorkflowValidationError(
+              `Shot ${shotId} has no anchor frame id in shotMapping; cannot persist visual prompt for scene ${scene.sceneId}`
+            );
+          }
+          // The prompt is NOT written into `scene.metadata` any more (#713):
+          // the version write mirrors its text onto `frame.imagePrompt` and
+          // repoints `selectedImagePromptVersionId`, superseding any prior
+          // user-override automatically (the override stays in history and can
+          // be restored).
+          if (input.targetVersionId) {
+            // #1085: a pre-created pending claim row exists — complete it in
+            // place. Null result = the claim was cancelled mid-flight; the
+            // output is deliberately discarded (nothing mirrored, no event).
+            const completed =
+              await scopedDb.framePromptVersions.completePendingAiVersion({
+                versionId: input.targetVersionId,
+                frameId,
+                text: result.visual.fullPrompt,
+                components: result.visual.components,
+                inputHash,
+                analysisModel: analysisModelId,
+              });
+            if (!completed) {
+              logger.info(
+                `[FramePromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
+              );
+              return null;
+            }
+            // The claim itself when it completed; the identical existing row it
+            // retired in favour of on the unique-index collision path. Either
+            // way this is the version a chained render must consume.
+            persistedVersionId = completed.id;
+          } else {
+            const written = await scopedDb.framePromptVersions.writeAiVersion({
               frameId,
               text: result.visual.fullPrompt,
               components: result.visual.components,
               inputHash,
               analysisModel: analysisModelId,
             });
-          if (!completed) {
-            logger.info(
-              `[FramePromptWorkflow:cf] claim ${input.targetVersionId} was cancelled mid-run; output discarded`
-            );
-            return;
+            persistedVersionId = written.id;
           }
-        } else {
-          await scopedDb.framePromptVersions.writeAiVersion({
-            frameId,
-            text: result.visual.fullPrompt,
-            components: result.visual.components,
-            inputHash,
-            analysisModel: analysisModelId,
-          });
-        }
 
-        // The generated prompt now lives on `frame.imagePrompt` (mirror), not
-        // in `metadata`; carry the base scene so the client refreshes the shot
-        // (and re-projects `imagePrompt`) on this event.
-        await getGenerationChannel(sequenceId).emit('generation.shot:updated', {
-          shotId,
-          updateType: 'visual-prompt',
-          metadata: scene,
-        });
+          // The generated prompt now lives on `frame.imagePrompt` (mirror), not
+          // in `metadata`; carry the base scene so the client refreshes the shot
+          // (and re-projects `imagePrompt`) on this event.
+          await getGenerationChannel(sequenceId).emit(
+            'generation.shot:updated',
+            {
+              shotId,
+              updateType: 'visual-prompt',
+              metadata: scene,
+            }
+          );
 
-        // Signal end-of-stream to the per-shot channel so the UI can swap
-        // out the streamed-deltas buffer for the persisted prompt.
-        if (emitStreaming) {
-          await getShotPromptChannel(shotId).emit('shotPrompt.completed', {
-            promptType: 'visual',
-          });
+          // Signal end-of-stream to the per-shot channel so the UI can swap
+          // out the streamed-deltas buffer for the persisted prompt.
+          if (emitStreaming) {
+            await getShotPromptChannel(shotId).emit('shotPrompt.completed', {
+              promptType: 'visual',
+            });
+          }
+          return persistedVersionId;
         }
-      });
+      );
     }
 
-    return { sceneId: scene.sceneId, ...result };
+    return { sceneId: scene.sceneId, ...result, finalVersionId };
   }
 
   protected override async onFailure({
@@ -428,7 +464,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
   }: {
     event: Readonly<WorkflowEvent<FramePromptWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const payload = event.payload;
     logger.error('[FramePromptWorkflow:cf] Failed', {

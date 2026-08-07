@@ -36,12 +36,35 @@ export type MotionStorageResult = { url: string; path: string };
  * `PersistImageScopedDb`).
  */
 export type PersistMotionScopedDb = {
+  /**
+   * Existence guards on the shot and its render segment — deleted mid-flight is
+   * a stand-down. Nested under the same hatch name a workflow uses, so it can
+   * hand its `WorkflowScopedDb` over unchanged (see scoped-workflow.ts).
+   */
+  liveRead: {
+    shots: {
+      getById: (id: string) => Promise<{
+        id: string;
+        sequenceId: string;
+        renderSegmentId: string | null;
+      } | null>;
+    };
+    renderSegments: {
+      getById: (segmentId: string) => Promise<{
+        id: string;
+        pendingPromoteVersionId: string | null;
+      } | null>;
+    };
+  };
+  /** The run's OWN pending-promote claim, by explicit id. */
+  claims: {
+    videoVariants: {
+      getById: (
+        versionId: string
+      ) => Promise<{ id: string; workflowRunId: string | null } | null>;
+    };
+  };
   shots: {
-    getById: (id: string) => Promise<{
-      id: string;
-      sequenceId: string;
-      renderSegmentId: string | null;
-    } | null>;
     update: (
       id: string,
       data: Partial<NewShot>,
@@ -53,9 +76,6 @@ export type PersistMotionScopedDb = {
       versionId: string,
       data: Partial<NewVideoVariant>
     ) => Promise<{ id: string }>;
-    getById: (
-      versionId: string
-    ) => Promise<{ id: string; workflowRunId: string | null } | null>;
     select: (
       shotId: string,
       versionId: string,
@@ -68,10 +88,6 @@ export type PersistMotionScopedDb = {
     appendVersion: (data: NewVideoVariant) => Promise<{ id: string }>;
   };
   renderSegments: {
-    getById: (segmentId: string) => Promise<{
-      id: string;
-      pendingPromoteVersionId: string | null;
-    } | null>;
     setPendingPromoteVersionId: (
       segmentId: string,
       versionId: string | null
@@ -203,12 +219,12 @@ export async function persistMotionCompletion(opts: {
 
   // A primary render: promote only if this version still holds the pending
   // claim (#1070 last-kickoff + explicit select cancel).
-  const shot = await scopedDb.shots.getById(shotId);
+  const shot = await scopedDb.liveRead.shots.getById(shotId);
   if (!shot) return { status: 'shot-deleted' };
 
   const segmentId = shot.renderSegmentId;
   const segment = segmentId
-    ? await scopedDb.renderSegments.getById(segmentId)
+    ? await scopedDb.liveRead.renderSegments.getById(segmentId)
     : null;
   const shouldPromote = segment?.pendingPromoteVersionId === videoVersionId;
 
@@ -277,13 +293,15 @@ export async function persistMotionFailure(opts: {
 
   // Needed for the auto-promote drop below AND to append a terminal row if the
   // run failed before it had one, so fetch once regardless of `variantOnly`.
-  const shot = await scopedDb.shots.getById(shotId);
+  const shot = await scopedDb.liveRead.shots.getById(shotId);
 
   if (!variantOnly && shot?.renderSegmentId) {
     // Drop auto-promote if this run owned it (#1070).
-    const segment = await scopedDb.renderSegments.getById(shot.renderSegmentId);
+    const segment = await scopedDb.liveRead.renderSegments.getById(
+      shot.renderSegmentId
+    );
     if (segment?.pendingPromoteVersionId) {
-      const pending = await scopedDb.videoVariants.getById(
+      const pending = await scopedDb.claims.videoVariants.getById(
         segment.pendingPromoteVersionId
       );
       if (pending?.workflowRunId === workflowRunId) {

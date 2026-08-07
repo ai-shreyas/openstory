@@ -7,7 +7,7 @@ import type { Database } from '@/lib/db/client';
 import { frames, scenes, shots } from '@/lib/db/schema';
 import type { NewFrame, Shot, NewShot } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 
 /**
  * Every shot owns an anchor frame (orderIndex 0, role 'first') — the i2v anchor
@@ -228,6 +228,35 @@ export function createShotsMethods(db: Database) {
       const result = await db
         .delete(shots)
         .where(eq(shots.sequenceId, sequenceId));
+      // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime
+      return result.rowsAffected ?? 0;
+    },
+
+    /**
+     * Drop every shot attached to a scene at `orderIndex >= minOrderIndex`.
+     * The companion to `scenes.deleteFromOrderIndex`: `shots.scene_id` is a
+     * bare `REFERENCES scenes(id)` (RESTRICT), so the tail scenes cannot be
+     * trimmed while shots still point at them. A single predicate DELETE, so
+     * callers inside a workflow trim the tail without reading live rows first.
+     */
+    deleteByScenesFromOrderIndex: async (
+      sequenceId: string,
+      minOrderIndex: number
+    ): Promise<number> => {
+      const result = await db.delete(shots).where(
+        inArray(
+          shots.sceneId,
+          db
+            .select({ id: scenes.id })
+            .from(scenes)
+            .where(
+              and(
+                eq(scenes.sequenceId, sequenceId),
+                gte(scenes.orderIndex, minOrderIndex)
+              )
+            )
+        )
+      );
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- DB result may be undefined at runtime
       return result.rowsAffected ?? 0;
     },

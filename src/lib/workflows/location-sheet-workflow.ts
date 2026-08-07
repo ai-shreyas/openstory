@@ -20,7 +20,7 @@ import {
   extractImageCost,
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { generateId } from '@/lib/db/id';
 import {
   generateImageWithProvider,
@@ -53,7 +53,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
   protected override async runImpl(
     event: Readonly<WorkflowEvent<LocationSheetWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<LocationSheetWorkflowResult> {
     const input = event.payload;
     const workflowRunId = event.instanceId;
@@ -134,7 +134,9 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
         `[LocationSheetWorkflow:cf] Generating reference for ${input.locationName} with model ${generationParams.model}`
       );
 
-      return await generateImageWithProvider(generationParams, { scopedDb });
+      return await generateImageWithProvider(generationParams, {
+        scopedDb: scopedDb.credentials,
+      });
     });
 
     // Before the deduction guard — see recordFalUsageStep (#1069).
@@ -228,7 +230,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
           );
 
           const currentInputHash = snapshotInputHash
-            ? await computeLocationSheetHashCurrent(input, scopedDb)
+            ? await computeLocationSheetHashCurrent(input, scopedDb.liveRead)
             : null;
 
           const decision = decideSheetDivergence(
@@ -301,6 +303,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
           referenceImageUrl,
           referenceImagePath,
           locationDbId,
+          diverged: true,
         };
       }
     }
@@ -339,7 +342,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
   }: {
     event: Readonly<WorkflowEvent<LocationSheetWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

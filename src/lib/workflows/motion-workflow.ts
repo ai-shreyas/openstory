@@ -29,7 +29,7 @@ import {
   deductWorkflowCredits,
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
 import {
   calculateMotionMetadata,
@@ -104,7 +104,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MotionWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<MotionWorkflowResult> {
     const rawInput = event.payload;
     // Back-compat: accept shotId or shotId from in-flight instances serialized before #906
@@ -143,41 +143,49 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     // Step 0: Estimate cost and check the team can afford it. The estimate only
     // gates affordability — the exact charge is computed from fal's billed
     // units after the clip completes (see actualCost below).
-    const { duration } = await step.do('check-credits', async () => {
-      const { cost: estimatedCost, duration } = calculateMotionMetadata(
-        {
-          imageUrl: input.imageUrl,
-          prompt: input.prompt,
+    const { duration, usedOwnKey: gatedUsedOwnKey } = await step.do(
+      'check-credits',
+      async () => {
+        const { cost: estimatedCost, duration } = calculateMotionMetadata(
+          {
+            imageUrl: input.imageUrl,
+            prompt: input.prompt,
+            model,
+            duration: input.duration,
+            fps: input.fps,
+            motionBucket: input.motionBucket,
+            aspectRatio: input.aspectRatio,
+            generateAudio: input.generateAudio,
+          },
+          await getEffectiveFalPricing()
+        );
+        // No honest estimate → gate on the conservative floor (#1069).
+        const cost = gateEstimate(estimatedCost, {
           model,
-          duration: input.duration,
-          fps: input.fps,
-          motionBucket: input.motionBucket,
-          aspectRatio: input.aspectRatio,
-          generateAudio: input.generateAudio,
-        },
-        await getEffectiveFalPricing()
-      );
-      // No honest estimate → gate on the conservative floor (#1069).
-      const cost = gateEstimate(estimatedCost, {
-        model,
-        operation: 'motion-workflow',
-      });
+          operation: 'motion-workflow',
+        });
 
-      const falKeyInfo = await scopedDb.apiKeys.resolveKey('fal');
-      const usedOwnKey = falKeyInfo.source === 'team';
-      if (cost > 0 && !usedOwnKey) {
-        const canAfford = await scopedDb.billing.hasEnoughCredits(cost);
-        if (!canAfford) {
-          logger.warn(
-            `[MotionWorkflow:cf] Insufficient credits for team ${input.teamId} (cost: $${microsToUsd(cost).toFixed(4)}), skipping deduction`
-          );
-          throw new NonRetryableError(
-            `Insufficient credits for motion generation`
-          );
+        const falKeyInfo = await scopedDb.credentials.resolveKey('fal');
+        const usedOwnKey = falKeyInfo.source === 'team';
+        if (cost > 0 && !usedOwnKey) {
+          const canAfford =
+            await scopedDb.liveRead.billing.hasEnoughCredits(cost);
+          if (!canAfford) {
+            logger.warn(
+              `[MotionWorkflow:cf] Insufficient credits for team ${input.teamId} (cost: $${microsToUsd(cost).toFixed(4)}), skipping deduction`
+            );
+            throw new NonRetryableError(
+              `Insufficient credits for motion generation`
+            );
+          }
         }
+        // `usedOwnKey` rides the step result so the affordability gate above
+        // and the deduction below agree on one pinned read: a key added or
+        // removed mid-run must not let a charge land on a balance this gate
+        // never checked.
+        return { cost, duration, usedOwnKey };
       }
-      return { cost, duration };
-    });
+    );
 
     // Step 1: Set status to generating and store model being used
     const { shotDeleted, videoVersionId, sceneId } = await step.do(
@@ -191,7 +199,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           return { shotDeleted: false, videoVersionId: null, sceneId: null };
         }
 
-        const shot = await scopedDb.shots.getById(input.shotId);
+        const shot = await scopedDb.liveRead.shots.getById(input.shotId);
 
         if (!shot) {
           logger.info(
@@ -207,8 +215,11 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         // against concurrent append-only version writes and replay-unsafe —
         // this very write repoints the selection pointer. `components` /
         // `parameters` stay null on a free-text edit, as they did pre-#713.
+        // The written version is what this clip renders from, so its id — not
+        // the pointer the write just repointed — is what the manifest records.
+        let writtenMotionPromptVersionId: string | null = null;
         if (input.userEditProvenance) {
-          await scopedDb.shotPromptVersions.write({
+          const written = await scopedDb.shotPromptVersions.write({
             shotId: input.shotId,
             promptType: 'motion',
             text: input.prompt,
@@ -219,6 +230,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             analysisModel: input.userEditProvenance.analysisModel,
             createdBy: input.userId,
           });
+          writtenMotionPromptVersionId = written.id;
         }
 
         // Open an append-only `video_variants` *version* for this render (#990,
@@ -229,7 +241,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         // image versions (the references ARE the snapshot) + the value-snapshot
         // duration. The legacy `shots.video*` columns above stay the cached
         // mirror of whichever version the shot's selection points at.
-        const renderSceneId = shot.sceneId;
+        const renderSceneId = input.sceneId ?? shot.sceneId;
         let openedVideoVersionId: string | null = null;
         if (input.sequenceId) {
           if (!renderSceneId) {
@@ -245,12 +257,22 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             sequenceId: input.sequenceId,
             renderSegmentId: shot.renderSegmentId,
           });
-          const anchorFrame = await scopedDb.frames.getAnchorByShot(shot.id);
+          // Both version ids are pinned at the trigger. There is deliberately no
+          // live fallback for the frame: re-reading the anchor's pointer would
+          // name whatever is selected NOW, and a concurrent select/upscale makes
+          // that a different still than the one this clip rendered from (the
+          // render consumes `input.imageUrl`, snapshotted at the trigger). A
+          // payload without it records null provenance, as pre-#1067 rows do.
           const manifest = buildVideoManifest([
             {
               shotId: input.shotId,
-              motionPromptVersionId: shot.selectedMotionPromptVersionId ?? null,
-              frameVersionId: anchorFrame?.selectedImageVersionId ?? null,
+              // No selection-pointer fallback: a payload without the field
+              // records null provenance rather than whatever is selected now.
+              motionPromptVersionId:
+                writtenMotionPromptVersionId ??
+                input.motionPromptVersionId ??
+                null,
+              frameVersionId: input.frameVersionId ?? null,
               durationMs: duration * 1000,
             },
           ]);
@@ -381,7 +403,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             generateAudio: input.generateAudio,
             // Cast/element reference images (#873) — only Kling v3 Pro emits them.
             referenceImages: input.referenceImages,
-            scopedDb,
+            scopedDb: scopedDb.credentials,
           });
           return { ok: true as const, job };
         } catch (error) {
@@ -434,7 +456,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
                 pollResult = await pollMotionJob(
                   job.jobId,
                   job.modelKey,
-                  scopedDb
+                  scopedDb.credentials
                 );
               } catch (error) {
                 if (isContentRejectionError(error)) {
@@ -620,7 +642,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     // deductWorkflowCredits so insufficient balances warn-and-skip (with an
     // auto-top-up attempt) like every other workflow, instead of debiting
     // the balance negative.
-    if (actualCost > 0 && input.teamId && !job.usedOwnKey) {
+    if (actualCost > 0 && input.teamId && !gatedUsedOwnKey) {
       await step.do('deduct-credits', async () => {
         await deductWorkflowCredits({
           scopedDb,
@@ -643,18 +665,9 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     if (input.shotId) {
       const { shotId } = input;
 
-      // Step 3: Fetch the sequence title for the human-readable filename. The
-      // scene's title rides the payload (`input.sceneTitle`).
-      const shotData = await step.do('fetch-shot-data', async () => {
-        const shot = await scopedDb.shots.getWithSequence(shotId);
-        if (!shot) throw new Error('Shot not found');
-        return {
-          sequenceTitle: shot.sequence.title,
-          sceneTitle: input.sceneTitle,
-        };
-      });
-
-      // Step 4: Upload video to storage
+      // Step 3: Upload video to storage. Both filename titles ride the payload
+      // (`input.sequenceTitle` / `input.sceneTitle`); a payload without them
+      // gets the static slug rather than a live read of the sequence row.
       const storageResult = await step.do('upload-to-storage', async () => {
         if (!input.teamId || !input.sequenceId) {
           throw new Error('Missing teamId or sequenceId for storage upload');
@@ -665,8 +678,8 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           teamId: input.teamId,
           sequenceId: input.sequenceId,
           shotId,
-          sequenceTitle: shotData.sequenceTitle,
-          sceneTitle: shotData.sceneTitle,
+          sequenceTitle: input.sequenceTitle ?? 'sequence',
+          sceneTitle: input.sceneTitle,
         });
 
         if (!result.success) {
@@ -678,7 +691,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
 
       videoUrl = storageResult.url;
 
-      // Step 5: Finalize the render — flip the `video_variants` version to
+      // Step 4: Finalize the render — flip the `video_variants` version to
       // `completed` and (for a primary render) repoint the shot's selection,
       // mirroring `shots.video*` + the render segment's selection pointer (#990,
       // see motion-workflow-persist).
@@ -733,7 +746,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
   }: {
     event: Readonly<WorkflowEvent<MotionWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
     const model = input.model || DEFAULT_VIDEO_MODEL;
