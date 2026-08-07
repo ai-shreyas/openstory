@@ -17,7 +17,7 @@ import { simpleHash } from '@/lib/utils/hash';
 
 /**
  * Preview image spawned by SceneSplitWorkflow for a freshly upserted shot.
- * `shotId` is replay-stable (shots upsert on `(sequenceId, orderIndex)`);
+ * `shotId` is replay-stable (shots upsert on `(sceneId, shotNumber)`, #1067);
  * the parent-instance hash scopes per run so a re-split still gets fresh
  * previews while a step retry can't re-spawn paid image jobs.
  */

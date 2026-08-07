@@ -53,6 +53,7 @@ import { previewImageDedupId } from '@/lib/workflow/dedup-ids';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
+import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { handleLlmAuthFailure } from '@/lib/workflow/llm-auth-failure';
 import { sanitizeFailResponse } from '@/lib/workflow/sanitize-fail-response';
 import type {
@@ -508,16 +509,38 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
             }) satisfies NewShot
         );
 
+        // Correlate on the row's OWN scene link, never on array position:
+        // `bulkUpsert` builds its result from each chunk's `RETURNING`, whose
+        // row order SQLite does not guarantee (and `ON CONFLICT DO UPDATE`
+        // makes divergence likelier). A positional map would silently pair each
+        // shot with a neighbouring scene's script and prompts.
+        const analysisSceneIdByDbSceneId = new Map<string, string>();
+        for (const [index, scene] of scenes.entries()) {
+          const dbId = sceneIdByOrderIndex.get(index);
+          if (dbId) analysisSceneIdByDbSceneId.set(dbId, scene.sceneId);
+        }
+
         const reconciledShots = await scopedDb.shots.bulkUpsert(shotInserts);
-        // bulkUpsert preserves input order, and `shotInserts` was built by
-        // mapping `scenes` — so index i is scene i.
-        const reconciledMapping = reconciledShots.map((f, index) => ({
-          analysisSceneId: scenes[index]?.sceneId ?? '',
-          shotId: f.id,
-          // Anchor frame id captured from the same bulkUpsert write — the batch
-          // prompt workflow reads it from here instead of querying the DB (#991).
-          frameId: f.anchorFrameId,
-        }));
+        const reconciledMapping = reconciledShots.map((f) => {
+          const analysisSceneId = f.sceneId
+            ? analysisSceneIdByDbSceneId.get(dbSceneId(f.sceneId))
+            : undefined;
+          if (!analysisSceneId) {
+            // The shot came back without a resolvable scene link, so nothing
+            // downstream could address it. Fail loudly rather than emit a
+            // blank id that silently drops the shot from every later step.
+            throw new WorkflowValidationError(
+              `Shot ${f.id} has no resolvable analysis scene after reconcile (sceneId: ${f.sceneId ?? 'null'})`
+            );
+          }
+          return {
+            analysisSceneId,
+            shotId: f.id,
+            // Anchor frame id captured from the same bulkUpsert write — the batch
+            // prompt workflow reads it from here instead of querying the DB (#991).
+            frameId: f.anchorFrameId,
+          };
+        });
 
         // Ensure title and workflow are set (status stays 'processing'
         // until storyboard-workflow completes all phases).

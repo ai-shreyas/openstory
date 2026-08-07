@@ -63,20 +63,30 @@ export type WriteFramePromptVersionInput = WriteFramePromptVersionBase &
       }
   );
 
+// One bound param per frame id; 90 keeps each query under D1's 100-bound-
+// parameter ceiling. Unit tests run on libsql, which has no such cap — an
+// unchunked list passes CI and throws `too many SQL variables` on D1 (#1019).
+const SELECTED_PROMPTS_BY_FRAMES_BATCH = 90;
+
 async function getSelectedImagePromptsByFrameIds(
   db: Database,
   frameIds: string[]
 ): Promise<Map<string, FramePromptVersion>> {
   if (frameIds.length === 0) return new Map();
-  const rows = await db
-    .select({ frameId: frames.id, version: framePromptVersions })
-    .from(frames)
-    .innerJoin(
-      framePromptVersions,
-      eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
-    )
-    .where(inArray(frames.id, frameIds));
-  return new Map(rows.map((r) => [r.frameId, r.version]));
+  const byFrame = new Map<string, FramePromptVersion>();
+  for (let i = 0; i < frameIds.length; i += SELECTED_PROMPTS_BY_FRAMES_BATCH) {
+    const batch = frameIds.slice(i, i + SELECTED_PROMPTS_BY_FRAMES_BATCH);
+    const rows = await db
+      .select({ frameId: frames.id, version: framePromptVersions })
+      .from(frames)
+      .innerJoin(
+        framePromptVersions,
+        eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
+      )
+      .where(inArray(frames.id, batch));
+    for (const r of rows) byFrame.set(r.frameId, r.version);
+  }
+  return byFrame;
 }
 
 export function createFramePromptVersionsMethods(db: Database) {

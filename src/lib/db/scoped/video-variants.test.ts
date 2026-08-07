@@ -34,7 +34,10 @@ import {
   type NewVideoVariant,
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
-import { createVideoVariantsMethods } from './video-variants';
+import {
+  createVideoVariantsMethods,
+  getPrimaryVideoByShotIds,
+} from './video-variants';
 
 let client: Client;
 let db: Database;
@@ -530,6 +533,51 @@ describe('discard / undiscard', () => {
       'video.discarded',
       'video.undiscarded',
     ]);
+  });
+});
+
+// Both batch getters bind one param per shot id, so they chunk at 90 to stay
+// under D1's 100-bound-parameter ceiling (#1019). These tests run on libsql,
+// which has NO param cap — so they cannot reproduce the overflow itself. What
+// they pin is that the chunking loop reduces correctly across the boundary: a
+// loop that drops the trailing partial batch, or overwrites the accumulator
+// per chunk, silently loses videos for every shot past the first 90.
+describe('batch getters chunk past D1s parameter ceiling (#1019)', () => {
+  const OVER_ONE_CHUNK = 95;
+
+  it('returns every shot when the id list spans more than one chunk', async () => {
+    // All shots share the seeded segment — legitimate (a multi-shot segment is
+    // one render), and it makes one selected version cover every shot.
+    const extraShotIds = Array.from({ length: OVER_ONE_CHUNK - 1 }, () =>
+      generateId()
+    );
+    await db.insert(shots).values(
+      extraShotIds.map((id, i) => ({
+        id,
+        sequenceId,
+        sceneId,
+        shotNumber: i + 2,
+        renderSegmentId: segmentId,
+      }))
+    );
+    const allShotIds = [shotId, ...extraShotIds];
+    expect(allShotIds.length).toBeGreaterThan(90);
+    // The last id sits in the trailing partial batch — the one a loop that
+    // stops early, or reassigns instead of accumulating, would lose.
+    const pastBoundaryId = extraShotIds.at(-1);
+    if (!pastBoundaryId) throw new Error('test setup: no shots past chunk 1');
+
+    const version = await methods.appendVersion(versionInput());
+    await methods.select(shotId, version.id, { actorId: ACTOR });
+
+    const selected = await methods.getSelectedByShotIds(allShotIds);
+    expect(selected.size).toBe(OVER_ONE_CHUNK);
+    // Spot-check the far side of the boundary, not just the count.
+    expect(selected.get(pastBoundaryId)?.id).toBe(version.id);
+
+    const primary = await getPrimaryVideoByShotIds(db, allShotIds);
+    expect(primary.size).toBe(OVER_ONE_CHUNK);
+    expect(primary.get(pastBoundaryId)?.id).toBe(version.id);
   });
 });
 

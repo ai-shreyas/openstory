@@ -10,12 +10,14 @@
  *
  * - completion: flip the version to `completed`, then (for a primary, non
  *   `variantOnly` render) repoint the shot's selection via
- *   `videoVariants.select` — which mirrors `shots.video*` + repoints the render
- *   segment's `selectedVideoVersionId` pointer + logs a `video.selected` event,
- *   all atomically.
- * - failure: mark the in-flight version `failed` (by workflow run id) and, for a
- *   primary render, flip the legacy `shots.video*` status so the failure banner
- *   shows on refetch.
+ *   `videoVariants.select` — which repoints the render segment's
+ *   `selectedVideoVersionId` pointer + logs a `video.selected` event, atomically.
+ * - failure: mark the in-flight version `failed` (by workflow run id), or append
+ *   a terminal failed row if the run died before it had one.
+ *
+ * Nothing is written to `shots` — since #1067 phase 2d a shot owns no video
+ * columns and `toShotView` derives `videoStatus` from the newest primary
+ * version. The version row IS the record.
  *
  * Pulled out of the workflow body (mirroring `image-workflow-snapshot.ts`'s
  * `persistImageResult`) so the generating → completed → failed state machine is
@@ -35,9 +37,11 @@ export type MotionStorageResult = { url: string; path: string };
  */
 export type PersistMotionScopedDb = {
   shots: {
-    getById: (
-      id: string
-    ) => Promise<{ id: string; renderSegmentId: string | null } | null>;
+    getById: (id: string) => Promise<{
+      id: string;
+      sequenceId: string;
+      renderSegmentId: string | null;
+    } | null>;
     update: (
       id: string,
       data: Partial<NewShot>,
@@ -60,7 +64,8 @@ export type PersistMotionScopedDb = {
     markFailedByWorkflowRun: (
       workflowRunId: string,
       error: string
-    ) => Promise<void>;
+    ) => Promise<number>;
+    appendVersion: (data: NewVideoVariant) => Promise<{ id: string }>;
   };
   renderSegments: {
     getById: (segmentId: string) => Promise<{
@@ -247,8 +252,15 @@ export async function persistMotionCompletion(opts: {
  * `video_variants` version `failed` by workflow run id — which preserves a
  * previously-completed version's url (a re-run that fails before producing a new
  * video must not erase the last good one, since only the still-`generating` row
- * is touched). For a primary render it also flips the legacy `shots.video*`
- * status so the failure banner shows after a refetch.
+ * is touched).
+ *
+ * Since #1067 phase 2d the version row is the ONLY record of a shot's video
+ * lifecycle — nothing is written to `shots`, and `toShotView` derives
+ * `videoStatus` from the newest primary version. So a run that failed before
+ * `set-generating-status` appended its row has nothing to mark, and the shot
+ * would read 'pending' forever with the error visible only until the next
+ * refetch. When the mark matches nothing, a terminal `failed` row is appended
+ * so the failure survives.
  */
 export async function persistMotionFailure(opts: {
   scopedDb: PersistMotionScopedDb;
@@ -257,34 +269,53 @@ export async function persistMotionFailure(opts: {
   error: string;
   workflowRunId: string;
   emit: MotionEmit;
-  /** Variant-only (#547): never touch the legacy `shots.video*` columns. */
+  /** Variant-only (#547): an added-model render, not the shot's primary. */
   variantOnly?: boolean;
 }): Promise<void> {
   const { scopedDb, shotId, model, error, workflowRunId, emit, variantOnly } =
     opts;
 
-  if (!variantOnly) {
+  // Needed for the auto-promote drop below AND to append a terminal row if the
+  // run failed before it had one, so fetch once regardless of `variantOnly`.
+  const shot = await scopedDb.shots.getById(shotId);
+
+  if (!variantOnly && shot?.renderSegmentId) {
     // Drop auto-promote if this run owned it (#1070).
-    const shot = await scopedDb.shots.getById(shotId);
-    if (shot?.renderSegmentId) {
-      const segment = await scopedDb.renderSegments.getById(
-        shot.renderSegmentId
+    const segment = await scopedDb.renderSegments.getById(shot.renderSegmentId);
+    if (segment?.pendingPromoteVersionId) {
+      const pending = await scopedDb.videoVariants.getById(
+        segment.pendingPromoteVersionId
       );
-      if (segment?.pendingPromoteVersionId) {
-        const pending = await scopedDb.videoVariants.getById(
-          segment.pendingPromoteVersionId
+      if (pending?.workflowRunId === workflowRunId) {
+        await scopedDb.renderSegments.clearPendingPromoteVersionIdIf(
+          shot.renderSegmentId,
+          pending.id
         );
-        if (pending?.workflowRunId === workflowRunId) {
-          await scopedDb.renderSegments.clearPendingPromoteVersionIdIf(
-            shot.renderSegmentId,
-            pending.id
-          );
-        }
       }
     }
   }
 
-  await scopedDb.videoVariants.markFailedByWorkflowRun(workflowRunId, error);
+  const marked = await scopedDb.videoVariants.markFailedByWorkflowRun(
+    workflowRunId,
+    error
+  );
+
+  if (marked === 0 && shot?.renderSegmentId) {
+    // The run died before `set-generating-status` appended its version
+    // (insufficient credits, "shot has no scene"). Record the failure as its
+    // own terminal row so the shot doesn't silently revert to 'pending'.
+    // An empty manifest is honest: this render consumed no inputs.
+    await scopedDb.videoVariants.appendVersion({
+      renderSegmentId: shot.renderSegmentId,
+      sequenceId: shot.sequenceId,
+      model,
+      manifest: [],
+      status: 'failed',
+      error,
+      workflowRunId,
+      isPrimary: !variantOnly,
+    });
+  }
 
   await emit('generation.video:progress', {
     shotId,

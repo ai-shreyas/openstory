@@ -34,19 +34,22 @@ export type VideoVariantGroup = {
   model: string;
 };
 
-// One bound param per shot, so chunk below D1's 100-param ceiling — this runs
-// on the shots read path with every shot of a sequence (matches
-// SELECTED_MOTION_BY_SHOTS_BATCH).
-const PRIMARY_BY_SHOTS_BATCH = 90;
+// One bound param per shot, so chunk below D1's 100-param ceiling — both batch
+// getters below run on the shots read path with every shot of a sequence
+// (matches SELECTED_MOTION_BY_SHOTS_BATCH). Unit tests run on libsql, which has
+// no such cap, so an unchunked list passes CI and throws on D1 (#1019).
+const VIDEO_BY_SHOTS_BATCH = 90;
 
 export async function getPrimaryVideoByShotIds(
   db: Database,
   shotIds: string[]
 ): Promise<Map<string, VideoVariant>> {
   if (shotIds.length === 0) return new Map();
-  // asc by id (≈ time) → last write per shot wins.
+  // asc by id (≈ time) → last write per shot wins. Chunking is safe for this
+  // reduction: a shot's rows never span two batches (batches partition by shot
+  // id), so per-shot ordering is preserved.
   const byShot = new Map<string, VideoVariant>();
-  for (let i = 0; i < shotIds.length; i += PRIMARY_BY_SHOTS_BATCH) {
+  for (let i = 0; i < shotIds.length; i += VIDEO_BY_SHOTS_BATCH) {
     const rows = await db
       .select({ shotId: shots.id, version: videoVariants })
       .from(shots)
@@ -56,7 +59,7 @@ export async function getPrimaryVideoByShotIds(
       )
       .where(
         and(
-          inArray(shots.id, shotIds.slice(i, i + PRIMARY_BY_SHOTS_BATCH)),
+          inArray(shots.id, shotIds.slice(i, i + VIDEO_BY_SHOTS_BATCH)),
           eq(videoVariants.isPrimary, true)
         )
       )
@@ -121,8 +124,14 @@ export function createVideoVariantsMethods(db: Database) {
     markFailedByWorkflowRun: async (
       workflowRunId: string,
       error: string
-    ): Promise<void> => {
-      await db
+    ): Promise<number> => {
+      // Returns the number of rows marked. A run that failed BEFORE
+      // `set-generating-status` appended its row (insufficient credits, "shot
+      // has no scene") matches nothing — and since #1067 phase 2d the version
+      // row is the ONLY record of a shot's video lifecycle, a silent 0 would
+      // leave the shot reading 'pending' forever. The caller records a
+      // terminal row instead; see `persistMotionFailure`.
+      const rows = await db
         .update(videoVariants)
         .set({ status: 'failed', error, updatedAt: new Date() })
         .where(
@@ -130,7 +139,9 @@ export function createVideoVariantsMethods(db: Database) {
             eq(videoVariants.workflowRunId, workflowRunId),
             eq(videoVariants.status, 'generating')
           )
-        );
+        )
+        .returning({ id: videoVariants.id });
+      return rows.length;
     },
 
     /** Update generation tracking on an in-flight version (status/url/error/…). */
@@ -323,18 +334,29 @@ export function createVideoVariantsMethods(db: Database) {
       shotIds: string[]
     ): Promise<Map<string, VideoVariant>> => {
       if (shotIds.length === 0) return new Map();
-      const rows = await db
-        .select({ shotId: shots.id, version: videoVariants })
-        .from(shots)
-        .innerJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
-        .innerJoin(
-          videoVariants,
-          eq(videoVariants.id, renderSegments.selectedVideoVersionId)
-        )
-        .where(
-          and(inArray(shots.id, shotIds), isNull(videoVariants.discardedAt))
-        );
-      return new Map(rows.map((r) => [r.shotId, r.version]));
+      // Chunked for D1's 100-bound-parameter ceiling — see VIDEO_BY_SHOTS_BATCH.
+      const byShot = new Map<string, VideoVariant>();
+      for (let i = 0; i < shotIds.length; i += VIDEO_BY_SHOTS_BATCH) {
+        const rows = await db
+          .select({ shotId: shots.id, version: videoVariants })
+          .from(shots)
+          .innerJoin(
+            renderSegments,
+            eq(renderSegments.id, shots.renderSegmentId)
+          )
+          .innerJoin(
+            videoVariants,
+            eq(videoVariants.id, renderSegments.selectedVideoVersionId)
+          )
+          .where(
+            and(
+              inArray(shots.id, shotIds.slice(i, i + VIDEO_BY_SHOTS_BATCH)),
+              isNull(videoVariants.discardedAt)
+            )
+          );
+        for (const r of rows) byShot.set(r.shotId, r.version);
+      }
+      return byShot;
     },
 
     /**
