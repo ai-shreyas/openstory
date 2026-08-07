@@ -272,6 +272,9 @@ function createAuth() {
             );
 
             // First-time account only — drives #product-alerts via PostHog (#1088).
+            // personProperties set email/name on the PostHog person so Slack
+            // templates (`person.properties.email ?? distinct_id`) show email,
+            // not only the ULID (#1110).
             captureProductEvent({
               distinctId: user.id,
               event: 'user_signed_up',
@@ -279,6 +282,10 @@ function createAuth() {
                 email: user.email,
                 name: user.name,
                 team_id: team.id,
+              },
+              personProperties: {
+                email: user.email,
+                name: user.name,
               },
             });
           },

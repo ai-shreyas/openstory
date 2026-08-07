@@ -222,10 +222,12 @@ function specs(): DestinationSpec[] {
       type: 'destination',
       event: 'user_signed_up',
       channel: PRODUCT_CHANNEL,
-      text: 'New signup: {person.properties.email ?? event.distinct_id}',
+      // Prefer person email (set via identify/$set on signup, #1110); fall
+      // back to event property email, then distinct_id.
+      text: 'New signup: {person.properties.email ?? event.properties.email ?? event.distinct_id}',
       blocks: productBlocks(
         '🎉 New signup',
-        '*{person.properties.email ?? event.distinct_id}* just created an account'
+        '*{person.properties.email ?? event.properties.email ?? event.distinct_id}* just created an account'
       ),
     },
     {
@@ -233,10 +235,10 @@ function specs(): DestinationSpec[] {
       type: 'destination',
       event: 'user_signed_in',
       channel: PRODUCT_CHANNEL,
-      text: 'Sign-in: {person.properties.email ?? event.distinct_id}',
+      text: 'Sign-in: {person.properties.email ?? event.properties.email ?? event.distinct_id}',
       blocks: productBlocks(
         '👋 User signed in',
-        '*{person.properties.email ?? event.distinct_id}* signed in ({event.properties.path ?? "session"})'
+        '*{person.properties.email ?? event.properties.email ?? event.distinct_id}* signed in ({event.properties.path ?? "session"})'
       ),
     },
     {
@@ -244,10 +246,10 @@ function specs(): DestinationSpec[] {
       type: 'destination',
       event: 'sequence_generated',
       channel: PRODUCT_CHANNEL,
-      text: 'Film started: {person.properties.email ?? event.distinct_id}',
+      text: 'Film started: {person.properties.email ?? event.properties.email ?? event.distinct_id}',
       blocks: productBlocks(
         '🎬 Film / sequence created',
-        '*{person.properties.email ?? event.distinct_id}* created a sequence ({event.properties.source ?? "create"}, {event.properties.sequence_count ?? 1} seq, style `{event.properties.style_id}`)'
+        '*{person.properties.email ?? event.properties.email ?? event.distinct_id}* created a sequence ({event.properties.source ?? "create"}, {event.properties.sequence_count ?? 1} seq, style `{event.properties.style_id}`)'
       ),
     },
     {
