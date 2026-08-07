@@ -30,8 +30,12 @@ vi.doMock('./create-adapter', () => ({
 }));
 
 // Mock the PostHog OTel middleware factory — observability hints are
-// forwarded to it rather than to chat() metadata.
-const mockAIObservabilityMiddleware = vi.fn(() => []);
+// forwarded to it rather than to chat() metadata. It returns a SENTINEL rather
+// than `[]` so the assertions below can prove the result is actually spread
+// into `chat()`: with an empty array, dropping the spread entirely would leave
+// `middleware` identical and the test green.
+const otelSentinel = { name: 'otel-sentinel' };
+const mockAIObservabilityMiddleware = vi.fn(() => [otelSentinel]);
 vi.doMock('@/lib/observability/ai-otel', () => ({
   aiObservabilityMiddleware: mockAIObservabilityMiddleware,
 }));
@@ -141,9 +145,9 @@ describe('llm-client', () => {
       );
       const firstCall = mockChat.mock.calls[0];
       if (!firstCall) throw new Error('expected mockChat to have been called');
-      // The observability middleware (mocked to []) is spread into chat()'s
-      // middleware array alongside the usage-capturing onFinish middleware.
+      // The sentinel must come FIRST, ahead of the usage-capturing onFinish.
       expect(firstCall[0].middleware).toEqual([
+        otelSentinel,
         { onFinish: expect.any(Function) },
       ]);
     });

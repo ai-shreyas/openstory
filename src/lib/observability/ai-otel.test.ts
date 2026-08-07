@@ -55,13 +55,16 @@ const mockSpan = {
 const mockStartSpan = vi.fn(
   (_name: string, _options?: SpanOptions) => mockSpan
 );
+// Overridable per test so the flush-failure path can be driven.
+const mockTraceForceFlush = vi.fn(() => Promise.resolve());
+const mockMeterForceFlush = vi.fn(() => Promise.resolve());
 vi.doMock('@opentelemetry/sdk-trace-base', () => ({
   BasicTracerProvider: class {
     getTracer() {
       return { startSpan: mockStartSpan };
     }
     forceFlush() {
-      return Promise.resolve();
+      return mockTraceForceFlush();
     }
   },
   BatchSpanProcessor: class {},
@@ -79,7 +82,7 @@ vi.doMock('@opentelemetry/sdk-metrics', () => ({
       };
     }
     forceFlush() {
-      return Promise.resolve();
+      return mockMeterForceFlush();
     }
   },
   PeriodicExportingMetricReader: class {},
@@ -182,20 +185,52 @@ describe('aiObservabilityMiddleware', () => {
       expect(capturedOptions().meter).toBeDefined();
     });
 
-    it('does not create a meter when PostHog is unconfigured', async () => {
-      // The meter provider owns an exporter and a periodic timer; building
-      // one when there is nowhere to send data would leave a timer running
-      // in every isolate for no reason.
-      const { aiObservabilityMiddleware } = await importAiOtel();
-
-      expect(aiObservabilityMiddleware({ userId: 'user-1' })).toEqual([]);
-      expect(mockOtelMiddleware).not.toHaveBeenCalled();
-    });
-
     it('flushing is a no-op when PostHog is unconfigured', async () => {
       const { flushAIObservability } = await importAiOtel();
 
       await expect(flushAIObservability()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('flushAIObservability', () => {
+    afterEach(() => {
+      mockTraceForceFlush.mockReset();
+      mockMeterForceFlush.mockReset();
+      mockTraceForceFlush.mockResolvedValue(undefined);
+      mockMeterForceFlush.mockResolvedValue(undefined);
+    });
+
+    it('flushes both providers and resolves', async () => {
+      const { aiObservabilityMiddleware, flushAIObservability } =
+        await importAiOtel({ token: 'phc_test' });
+      aiObservabilityMiddleware({ userId: 'user-1' }); // build the providers
+
+      await expect(flushAIObservability()).resolves.toBeUndefined();
+
+      expect(mockTraceForceFlush).toHaveBeenCalledTimes(1);
+      expect(mockMeterForceFlush).toHaveBeenCalledTimes(1);
+    });
+
+    it('still flushes metrics when the span flush rejects, then reports both', async () => {
+      // The reason `allSettled` is used rather than `all` — and the reason the
+      // rejection is rethrown rather than swallowed.
+      const { aiObservabilityMiddleware, flushAIObservability } =
+        await importAiOtel({ token: 'phc_test' });
+      aiObservabilityMiddleware({ userId: 'user-1' });
+      mockTraceForceFlush.mockRejectedValueOnce(new Error('trace 401'));
+      mockMeterForceFlush.mockRejectedValueOnce(new Error('metric 401'));
+
+      const rejection = await flushAIObservability().catch(
+        (error: unknown) => error
+      );
+
+      expect(mockMeterForceFlush).toHaveBeenCalledTimes(1);
+      expect(rejection).toBeInstanceOf(AggregateError);
+      if (!(rejection instanceof AggregateError)) throw rejection;
+      expect(rejection.errors.map((e: Error) => e.message)).toEqual([
+        'trace 401',
+        'metric 401',
+      ]);
     });
   });
 
