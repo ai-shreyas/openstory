@@ -12,7 +12,7 @@
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { Style } from '@/lib/db/schema/libraries';
 import { ValidationError } from '@/lib/errors';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { Sequence } from '@/types/database';
 import { createSequenceLink } from './discovery';
 import { API_V1_BASE, getLink, type HalResource, withLinks } from './hal';
@@ -77,7 +77,7 @@ export function decodeCursor(raw: string): SequenceCursor {
 
 function buildListItem(
   sequence: Sequence,
-  shots: ShotWithImage[],
+  shots: ShotView[],
   style: Style | null,
   origin: string
 ): HalResource<SequenceListItem> {
@@ -117,12 +117,12 @@ export async function buildSequenceListPage(params: {
     scopedDb.styles.listByIds(sequences.map((s) => s.styleId)),
   ]);
 
-  // `listShotsByIds` already projects the image surface (anchor frame + its
-  // selected version), so these only need grouping by sequence. This used to
-  // re-fetch the anchors and re-project on top — a redundant round-trip that
+  // `listShotsByIds` already assembles each shot's view (anchor frame + its
+  // selected versions), so these only need grouping by sequence. This used to
+  // re-fetch the anchors and re-assemble on top — a redundant round-trip that
   // also silently DROPPED frameless shots, which the batch read deliberately
-  // keeps (`projectShotMissingFrame`).
-  const shotsById = new Map<string, ShotWithImage[]>();
+  // keeps (`shotViewMissingFrame`).
+  const shotsById = new Map<string, ShotView[]>();
   for (const shot of allShots) {
     const bucket = shotsById.get(shot.sequenceId);
     if (bucket) bucket.push(shot);

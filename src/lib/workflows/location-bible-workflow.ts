@@ -20,7 +20,7 @@
 
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import { generateId } from '@/lib/db/id';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type {
   NewSequenceLocation,
   SequenceLocationMinimal,
@@ -44,7 +44,7 @@ export class LocationBibleWorkflow extends OpenStoryWorkflowEntrypoint<LocationB
   protected override async runImpl(
     event: Readonly<WorkflowEvent<LocationBibleWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<SequenceLocationMinimal[]> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -249,7 +249,7 @@ export class LocationBibleWorkflow extends OpenStoryWorkflowEntrypoint<LocationB
   }: {
     event: Readonly<WorkflowEvent<LocationBibleWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     // QStash's `failureFunction` here just logged + returned a friendly
     // message — no DB writes (the inserted `sequence_locations` rows stay in

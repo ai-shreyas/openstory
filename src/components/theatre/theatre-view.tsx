@@ -39,8 +39,9 @@ export const TheatreView: React.FC<TheatreViewProps> = ({ sequence }) => {
   const scenes = useMemo(() => {
     if (!shots) return [];
     return shots
-      .filter((f): f is typeof f & { videoUrl: string } => Boolean(f.videoUrl))
-      .map((f) => ({ orderIndex: f.orderIndex, videoUrl: f.videoUrl }));
+      .map((f) => f.video?.url)
+      .filter((url): url is string => Boolean(url))
+      .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
   }, [shots]);
 
   const shareUrl = sequenceExport.latestExportUrl;

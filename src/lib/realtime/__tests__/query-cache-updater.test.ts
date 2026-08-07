@@ -13,12 +13,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { sceneKeys } from '@/hooks/use-scenes';
 import { shotKeys } from '@/hooks/use-shots';
-import type { Frame, Shot } from '@/lib/db/schema';
-import { selectedVersionFixture } from '@/lib/mocks/frame-fixtures';
+import type { Frame, Shot, VideoVariant } from '@/lib/db/schema';
 import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import {
+  type ShotView,
+  type ShotViewSources,
+  toShotView,
+} from '@/lib/shots/shot-view';
 import { updateQueryCacheFromEvent } from '@/lib/realtime/query-cache-updater';
 
 const SEQ = 'seq-1';
@@ -26,67 +31,57 @@ const OLD_THUMB = 'https://cdn/old-thumb.jpg';
 const OLD_VIDEO = 'https://cdn/old-video.mp4';
 const NEW_URL = 'https://cdn/added-model-output.mp4';
 
-// The shots-list cache holds `ShotWithImage` (#989): a Shot (no image columns)
-// plus the anchor frame's still surface projected back under the legacy
-// `thumbnail*` DTO names the realtime handlers read/write. Behaviour is
-// unchanged — only the type moved.
-function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
+const render = (overrides: Partial<VideoVariant> = {}) =>
+  videoVariantFixture({
+    renderSegmentId: 'seg-1',
+    sequenceId: SEQ,
+    model: 'veo3',
+    url: OLD_VIDEO,
+    ...overrides,
+  });
+
+// The shots-list cache holds `ShotView`: the shot plus the rows its still and
+// video actually live on.
+function makeShot(
+  params: {
+    frame?: Partial<Frame>;
+    sources?: Partial<ShotViewSources>;
+  } = {}
+): ShotView {
   const shot: Shot = {
     id: 'shot-1',
     sequenceId: SEQ,
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
-    description: 'A scene',
+    shotNumber: 1,
     durationMs: 3000,
-    videoUrl: OLD_VIDEO,
-    videoPath: null,
-    videoStatus: 'completed',
-    videoWorkflowRunId: null,
-    videoGeneratedAt: null,
-    videoError: null,
-    motionPrompt: null,
-    motionModel: 'veo3',
     selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    videoInputHash: null,
-    motionPromptInputHash: null,
-    metadata: null,
+    renderSegmentId: 'seg-1',
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const frame: Frame = {
-    id: 'shot-1',
-    shotId: 'shot-1',
+  const frame = frameFixture({
+    shotId: shot.id,
     sequenceId: SEQ,
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: null,
     imageStatus: 'completed',
-    imageWorkflowRunId: null,
-    imageError: null,
-    imagePrompt: null,
-    selectedImageVersionId: 'fv-1',
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    visualPromptInputHash: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  // The still is the selected version, not a frame column (#1067).
-  const selectedVersion = selectedVersionFixture({
-    frameId: frame.id,
-    sequenceId: SEQ,
-    url: OLD_THUMB,
+    ...params.frame,
   });
-  return {
-    ...projectShotWithImage(shot, frame, selectedVersion),
-    ...overrides,
-  };
+  const video = render();
+  return toShotView(shot, frame, {
+    image: frameVariantFixture({
+      frameId: frame.id,
+      sequenceId: SEQ,
+      url: OLD_THUMB,
+    }),
+    imagePromptVersion: null,
+    video,
+    // That same render is the segment's primary, so the shot reads `completed`.
+    primaryVideo: video,
+    ...params.sources,
+  });
 }
 
-function getCachedShot(qc: QueryClient): ShotWithImage | undefined {
-  return qc.getQueryData<ShotWithImage[]>(shotKeys.list(SEQ))?.[0];
+function getCachedShot(qc: QueryClient): ShotView | undefined {
+  return qc.getQueryData<ShotView[]>(shotKeys.list(SEQ))?.[0];
 }
 
 describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
@@ -117,8 +112,8 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
 
       // Primary shot is NOT repointed to the added model's output.
       const shot = getCachedShot(qc);
-      expect(shot?.thumbnailUrl).toBe(OLD_THUMB);
-      expect(shot?.thumbnailStatus).toBe('completed');
+      expect(shot?.image?.url).toBe(OLD_THUMB);
+      expect(shot?.frame.imageStatus).toBe('completed');
 
       // The per-model variant + model-list queries still refresh so the added
       // model appears in the dropdown (debounced — flush the timer).
@@ -139,13 +134,13 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       });
 
       const shot = getCachedShot(qc);
-      expect(shot?.thumbnailUrl).toBe(NEW_URL);
-      expect(shot?.thumbnailStatus).toBe('completed');
+      expect(shot?.image?.url).toBe(NEW_URL);
+      expect(shot?.frame.imageStatus).toBe('completed');
     });
 
-    it('primary failure writes the reason onto thumbnailError so the banner shows it live (#881)', () => {
+    it('primary failure writes the reason onto frame.imageError so the banner shows it live (#881)', () => {
       qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({ thumbnailStatus: 'generating', thumbnailError: null }),
+        makeShot({ frame: { imageStatus: 'generating', imageError: null } }),
       ]);
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
@@ -156,13 +151,13 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       });
 
       const shot = getCachedShot(qc);
-      expect(shot?.thumbnailStatus).toBe('failed');
-      expect(shot?.thumbnailError).toBe('Blocked by content filter');
+      expect(shot?.frame.imageStatus).toBe('failed');
+      expect(shot?.frame.imageError).toBe('Blocked by content filter');
     });
 
-    it('a fresh generating attempt clears a stale thumbnailError', () => {
+    it('a fresh generating attempt clears a stale frame.imageError', () => {
       qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({ thumbnailStatus: 'failed', thumbnailError: 'old error' }),
+        makeShot({ frame: { imageStatus: 'failed', imageError: 'old error' } }),
       ]);
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
@@ -171,7 +166,7 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
         model: 'nano_banana_2',
       });
 
-      expect(getCachedShot(qc)?.thumbnailError).toBeNull();
+      expect(getCachedShot(qc)?.frame.imageError).toBeNull();
     });
 
     it('variant-only failure refreshes the model/variant queries so the coverage marker leaves the spinner', () => {
@@ -186,8 +181,8 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
 
       // The failed alternate must not flip the primary thumbnail to failed.
       const shot = getCachedShot(qc);
-      expect(shot?.thumbnailUrl).toBe(OLD_THUMB);
-      expect(shot?.thumbnailStatus).toBe('completed');
+      expect(shot?.image?.url).toBe(OLD_THUMB);
+      expect(shot?.frame.imageStatus).toBe('completed');
 
       // ...but the per-model queries must refresh so the added model's marker
       // shows `failed` instead of spinning `generating` until staleTime lapses.
@@ -211,7 +206,7 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       });
 
       const shot = getCachedShot(qc);
-      expect(shot?.videoUrl).toBe(OLD_VIDEO);
+      expect(shot?.video?.url).toBe(OLD_VIDEO);
       expect(shot?.videoStatus).toBe('completed');
 
       vi.advanceTimersByTime(200);
@@ -225,7 +220,9 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
     it('primary completion refreshes segments so version chips leave the spinning state (#1076)', () => {
       const invalidate = vi.spyOn(qc, 'invalidateQueries');
       qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({ videoStatus: 'generating', videoError: null }),
+        makeShot({
+          sources: { primaryVideo: render({ status: 'generating' }) },
+        }),
       ]);
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.video:progress', {
@@ -255,7 +252,7 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
 
       const shot = getCachedShot(qc);
       expect(shot?.videoStatus).toBe('completed');
-      expect(shot?.videoUrl).toBe(OLD_VIDEO);
+      expect(shot?.video?.url).toBe(OLD_VIDEO);
     });
 
     it('primary completion (no variantOnly) still writes the video onto the shot', () => {
@@ -267,13 +264,15 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       });
 
       const shot = getCachedShot(qc);
-      expect(shot?.videoUrl).toBe(NEW_URL);
+      expect(shot?.video?.url).toBe(NEW_URL);
       expect(shot?.videoStatus).toBe('completed');
     });
 
-    it('primary failure writes the reason onto videoError so the banner shows it live (#881)', () => {
+    it('primary failure writes the reason onto primaryVideo.error so the banner shows it live (#881)', () => {
       qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({ videoStatus: 'generating', videoError: null }),
+        makeShot({
+          sources: { primaryVideo: render({ status: 'generating' }) },
+        }),
       ]);
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.video:progress', {
@@ -285,7 +284,7 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
 
       const shot = getCachedShot(qc);
       expect(shot?.videoStatus).toBe('failed');
-      expect(shot?.videoError).toBe(
+      expect(shot?.primaryVideo?.error).toBe(
         'Motion generation rejected by content filter'
       );
     });
@@ -326,20 +325,19 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(keys).toContainEqual(promptVariantKeys.shot('motion', 'shot-1'));
     });
 
-    it('a non-prompt updateType patches metadata in place without refetching the list', () => {
+    it('a non-prompt updateType refetches the scene spine, not the shots list', () => {
       const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.shot:updated', {
         shotId: 'shot-1',
         updateType: 'music-design',
-        metadata: { sceneId: 'sc-1', sceneNumber: 2 },
       });
 
-      // Music/audio design still travels in metadata — patched in place, no
-      // refetch.
-      expect(getCachedShot(qc)?.metadata?.sceneNumber).toBe(2);
+      // Music/audio design lives on the scene row (#1067), so the scene spine
+      // refetches while the shots list stays put.
       vi.advanceTimersByTime(200);
       const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(sceneKeys.list(SEQ));
       expect(keys).not.toContainEqual(shotKeys.list(SEQ));
       expect(keys).not.toContainEqual(
         promptVariantKeys.shot('visual', 'shot-1')
@@ -381,31 +379,15 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(keys).toContainEqual(shotKeys.list(SEQ));
     });
 
-    it('generation.scene:updated patches title and refetches scenes/shots', () => {
+    it('generation.scene:updated refetches scenes and shots', () => {
       const invalidate = vi.spyOn(qc, 'invalidateQueries');
-      qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({
-          metadata: {
-            sceneId: 'sc-1',
-            sceneNumber: 1,
-            metadata: {
-              title: 'Old',
-              durationSeconds: 3,
-              location: 'INT',
-              timeOfDay: 'day',
-              storyBeat: 'open',
-            },
-            originalScript: { extract: 'x', dialogue: [] },
-          },
-        }),
-      ]);
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.scene:updated', {
         sceneId: 'sc-1',
         title: 'New title',
       });
 
-      expect(getCachedShot(qc)?.metadata?.metadata?.title).toBe('New title');
+      // Titles render off the scenes query, so refetching it IS the update.
       vi.advanceTimersByTime(200);
       const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
       expect(keys).toContainEqual(sceneKeys.list(SEQ));

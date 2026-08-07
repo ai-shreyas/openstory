@@ -19,11 +19,12 @@ import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
-import { buildShotImageWorkflowInput } from '@/lib/image/build-shot-image-input';
 import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
+import { buildShotImageWorkflowInput } from '@/lib/image/build-shot-image-input';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import {
   motionPromptFromVersion,
   resolveMotionPrompt,
@@ -40,15 +41,15 @@ import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type {
   BatchMotionMusicWorkflowInput,
-  MusicSceneSummary,
   MusicWorkflowInput,
-  StoryboardWorkflowInput,
+  StoryboardTriggerInput,
 } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { authWithTeamMiddleware, sequenceAccessMiddleware } from './middleware';
 import { bumpStylePopularity } from '@/lib/style/bump-style-popularity';
+import { simpleHash } from '@/lib/utils/hash';
 import { getLogger } from '@/lib/observability/logger';
 import { createSequences } from '@/lib/sequences/create-sequences';
 
@@ -140,11 +141,13 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
 
     const previousStyleId = context.sequence.styleId;
 
+    // No eager 'processing' write: `triggerStoryboard` owns the status flip
+    // below, so a rejected trigger (mutex held, no script) leaves the sequence
+    // in its real state instead of a spinner that never resolves.
     const sequence = await context.scopedDb.sequences.update({
       id: sequenceId,
       aspectRatio: updateData.aspectRatio ?? DEFAULT_ASPECT_RATIO,
       ...updateData,
-      status: needsRegeneration ? 'processing' : undefined,
     });
 
     // sequences.styleId is `.notNull() + onDelete: 'set null'` — TS types it as
@@ -184,24 +187,24 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
         }
       );
 
-      await triggerWorkflow(
-        '/storyboard',
-        {
-          userId: context.user.id,
-          teamId: context.teamId,
-          sequenceId,
-          options: {
-            shotsPerScene: 3,
-            generateThumbnails: true,
-            generateDescriptions: true,
-            aiProvider: 'openrouter',
-            regenerateAll: true,
-          },
-          autoGenerateMotion: sequence.autoGenerateMotion,
-          autoGenerateMusic: sequence.autoGenerateMusic,
-        } satisfies StoryboardWorkflowInput,
-        { label: buildWorkflowLabel(sequence.id) }
-      );
+      // Owns the generation mutex, the 'processing' status write, the run-id
+      // persistence (#839), and the trigger-time content snapshot. Regeneration
+      // used to trigger `/storyboard` raw, so it both bypassed the mutex and
+      // left the workflow to re-derive the payload mid-run.
+      await triggerStoryboard(context.scopedDb, {
+        userId: context.user.id,
+        teamId: context.teamId,
+        sequenceId,
+        options: {
+          shotsPerScene: 3,
+          generateThumbnails: true,
+          generateDescriptions: true,
+          aiProvider: 'openrouter',
+          regenerateAll: true,
+        },
+        autoGenerateMotion: sequence.autoGenerateMotion,
+        autoGenerateMusic: sequence.autoGenerateMusic,
+      });
     }
 
     return sequence;
@@ -275,7 +278,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
       }
     );
 
-    const workflowInput: StoryboardWorkflowInput = {
+    const workflowInput: StoryboardTriggerInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
@@ -307,34 +310,6 @@ export const archiveSequenceFn = createServerFn({ method: 'POST' })
       .updateStatus('archived');
     return { success: true };
   });
-
-/** Build compact scene summaries from shots for music prompt generation */
-export function buildSceneSummaries(shots: Shot[]): MusicSceneSummary[] {
-  return shots.map((shot) => {
-    const md = shot.metadata?.musicDesign;
-    const legacyMusic = shot.metadata?.audioDesign?.music;
-    const meta = shot.metadata?.metadata;
-    const durationSeconds = shot.durationMs
-      ? shot.durationMs / 1000
-      : (meta?.durationSeconds ?? 10);
-
-    return {
-      sceneId: shot.id,
-      location: meta?.location || '',
-      timeOfDay: meta?.timeOfDay || '',
-      // Visual context for the music prompt: the scene description. The
-      // structured visual prompt components moved to `frame_prompt_versions`
-      // (#713), so the shot's own description is the summary source here.
-      visualSummary: shot.description || '',
-      title: meta?.title || 'Untitled Scene',
-      storyBeat: meta?.storyBeat || '',
-      durationSeconds,
-      musicStyle: md?.style || legacyMusic?.style || '',
-      musicMood: md?.mood || legacyMusic?.mood || '',
-      musicPresence: md?.presence || legacyMusic?.presence || 'none',
-    };
-  });
-}
 
 /**
  * Distinct audio models that have generated a track for this sequence (#546).
@@ -380,12 +355,10 @@ export function assertModelNotAlreadyAdded(
  * nothing to feed image-to-video.
  */
 export function selectEligibleVideoShots(
-  // The still-image surface moved onto the anchor frame (#989); callers project
-  // it back via `projectShotWithImage` so the thumbnail* reads here are stable.
-  shots: readonly ShotWithImage[]
-): ShotWithImage[] {
+  shots: readonly ShotView[]
+): ShotView[] {
   return shots.filter(
-    (f) => f.thumbnailStatus === 'completed' && Boolean(f.thumbnailUrl)
+    (f) => f.frame.imageStatus === 'completed' && Boolean(f.image?.url)
   );
 }
 
@@ -395,14 +368,12 @@ export function selectEligibleVideoShots(
  * paths; callers apply their own empty-sequence floor (`|| 30`).
  */
 export function sumShotDurationsSeconds(
-  shots: ReadonlyArray<Pick<Shot, 'durationMs' | 'metadata'>>
+  shots: ReadonlyArray<Pick<Shot, 'durationMs'>>
 ): number {
-  return shots.reduce((sum, shot) => {
-    const seconds = shot.durationMs
-      ? shot.durationMs / 1000
-      : (shot.metadata?.metadata?.durationSeconds ?? 10);
-    return sum + seconds;
-  }, 0);
+  return shots.reduce(
+    (sum, shot) => sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
+    0
+  );
 }
 
 /**
@@ -554,8 +525,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       const existing = await scopedDb.videoVariants.listBySequence(sequence.id);
       assertModelNotAlreadyAdded(existing, model, 'video');
       const allShots = await scopedDb.shots.listBySequence(sequence.id);
-      // Project each shot's anchor-frame image surface (#989) so eligibility and
-      // the per-shot `imageUrl` read below keep using the legacy field names.
+      // Eligibility and the per-shot `imageUrl` below read the anchor frame's
+      // selected still, so every shot needs its anchor first (#989).
       await scopedDb.shots.ensureAnchorFrames(allShots);
       const anchorsByShot = new Map(
         (await scopedDb.frames.listAnchorsBySequence(sequence.id)).map((fr) => [
@@ -563,23 +534,35 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           fr,
         ])
       );
-      const selectedByFrame =
-        await scopedDb.frameVariants.getSelectedByFrameIds(
+      const [
+        selectedByFrame,
+        selectedPromptByFrame,
+        selectedVideoByShot,
+        primaryVideoByShot,
+      ] = await Promise.all([
+        scopedDb.frameVariants.getSelectedByFrameIds(
           [...anchorsByShot.values()].map((fr) => fr.id)
-        );
-      const shotsWithImage = allShots.flatMap((shot) => {
+        ),
+        scopedDb.framePromptVersions.getSelectedByFrameIds(
+          [...anchorsByShot.values()].map((fr) => fr.id)
+        ),
+        scopedDb.videoVariants.getSelectedByShotIds(allShots.map((s) => s.id)),
+        scopedDb.videoVariants.getPrimaryByShotIds(allShots.map((s) => s.id)),
+      ]);
+      const shotViews = allShots.flatMap((shot) => {
         const frame = anchorsByShot.get(shot.id);
         return frame
           ? [
-              projectShotWithImage(
-                shot,
-                frame,
-                selectedByFrame.get(frame.id) ?? null
-              ),
+              toShotView(shot, frame, {
+                image: selectedByFrame.get(frame.id) ?? null,
+                imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+                video: selectedVideoByShot.get(shot.id) ?? null,
+                primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
+              }),
             ]
           : [];
       });
-      const eligible = selectEligibleVideoShots(shotsWithImage);
+      const eligible = selectEligibleVideoShots(shotViews);
       if (eligible.length === 0) {
         throw new Error('No shots have a completed image to animate yet');
       }
@@ -597,6 +580,13 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         ),
         { errorMessage: 'Insufficient credits to add this video model' }
       );
+
+      const sceneContext = await loadSceneContextBySequence(
+        scopedDb,
+        sequence.id
+      );
+      const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
+        resolveSceneForShot(s, sceneContext).scene;
 
       // No pre-seeded `video_variants` version here (mirrors the image branch
       // below, #990): each shot's motion child opens its own in-flight
@@ -622,31 +612,25 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         variantOnly: true,
         shots: eligible.map((f) => {
           const selectedMotion = selectedMotionByShot.get(f.id);
-          // Prefer the selected version's structured prompt; fall back to the
-          // `shot.motionPrompt` mirror for legacy shots with no version pointer
-          // (#713) so they still animate with their existing motion prompt.
           const motionPrompt = selectedMotion
             ? motionPromptFromVersion(selectedMotion)
-            : f.motionPrompt
-              ? { fullPrompt: f.motionPrompt, dialogue: null, audio: null }
-              : undefined;
+            : undefined;
           return {
             shotId: f.id,
-            imageUrl: f.thumbnailUrl ?? '',
+            imageUrl: f.image?.url ?? '',
             prompt: resolveMotionPrompt(
               {
                 motionPrompt: motionPrompt ?? null,
-                characterTags: f.metadata?.continuity?.characterTags,
-                description: f.description,
+                characterTags: sceneOf(f)?.continuity?.characterTags,
+                description: sceneOf(f)?.originalScript.extract ?? null,
               },
               model
             ),
             model,
             motionPrompt,
-            characterTags: f.metadata?.continuity?.characterTags,
-            duration: f.durationMs
-              ? f.durationMs / 1000
-              : (f.metadata?.metadata?.durationSeconds ?? 3),
+            sceneTitle: sceneOf(f)?.metadata?.title,
+            characterTags: sceneOf(f)?.continuity?.characterTags,
+            duration: f.durationMs ? f.durationMs / 1000 : 3,
             aspectRatio: sequence.aspectRatio,
           };
         }),
@@ -693,27 +677,36 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       throw new Error(`Image model "${model}" has already been added`);
     }
     const allShots = await scopedDb.shots.listBySequence(sequence.id);
-    // The image prompt lives on the anchor frame now (#989); load frames so each
-    // shot's stored prompt can seed its `/image` run.
     await scopedDb.shots.ensureAnchorFrames(allShots);
-    const imageFramesById = new Map(
-      (await scopedDb.frames.listBySequence(sequence.id)).map((fr) => [
-        fr.id,
-        fr,
-      ])
+    // Keyed by shotId: frame ids are NOT shot ids (#989), and the lookup below
+    // holds a shot.
+    const imageFrames = await scopedDb.frames.listBySequence(sequence.id);
+    const imageFramesByShotId = new Map(
+      imageFrames.map((fr) => [fr.shotId, fr])
     );
-    const [characters, locations, elements] = await Promise.all([
-      scopedDb.characters.listWithSheets(sequence.id),
-      scopedDb.sequenceLocations.listWithReferences(sequence.id),
-      scopedDb.sequenceElements.list(sequence.id),
-    ]);
+    const promptByFrameId =
+      await scopedDb.framePromptVersions.getSelectedByFrameIds(
+        imageFrames.map((fr) => fr.id)
+      );
+    const [characters, locations, elements, imageSceneContext] =
+      await Promise.all([
+        scopedDb.characters.listWithSheets(sequence.id),
+        scopedDb.sequenceLocations.listWithReferences(sequence.id),
+        scopedDb.sequenceElements.list(sequence.id),
+        loadSceneContextBySequence(scopedDb, sequence.id),
+      ]);
 
     const inputs: NonNullable<
       Awaited<ReturnType<typeof buildShotImageWorkflowInput>>
     >[] = [];
     for (const f of allShots) {
+      const anchorFrame = imageFramesByShotId.get(f.id);
+      const selectedPrompt = anchorFrame
+        ? promptByFrameId.get(anchorFrame.id)
+        : undefined;
       const input = await buildShotImageWorkflowInput({
         shot: f,
+        scene: resolveSceneForShot(f, imageSceneContext).scene,
         model,
         userId: user.id,
         teamId: sequence.teamId,
@@ -722,12 +715,20 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         characters,
         locations,
         elements,
-        imagePrompt: imageFramesById.get(f.id)?.imagePrompt ?? null,
+        imagePrompt: selectedPrompt?.text ?? null,
         // Adding a model never repoints the primary — it lands as an alternate
         // variant only. Promote later with "Set". (#547)
         variantOnly: true,
       });
-      if (input) inputs.push(input);
+      // The anchor + the prompt version this render is built from, snapshotted
+      // here so the workflow stamps the variant with the prompt it actually
+      // rendered rather than whatever the pointer says when it runs (#1070).
+      if (input)
+        inputs.push({
+          ...input,
+          frameId: anchorFrame?.id,
+          promptVersionId: selectedPrompt?.id ?? null,
+        });
     }
     if (inputs.length === 0) {
       throw new Error('No shots have a prompt to generate from');
@@ -835,34 +836,11 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
       if (latestByFrame.size === 0) {
         throw new Error('That model has not generated anything to set');
       }
-      // Resolve each frame's owning shot — frame ids are NOT shot ids (#989) —
-      // so the now-stale video reset targets the right shot row.
-      const shotIdByFrame = new Map(
-        (await scopedDb.frames.getByIds([...latestByFrame.keys()])).map((f) => [
-          f.id,
-          f.shotId,
-        ])
-      );
       let imageCount = 0;
       for (const [frameId, version] of latestByFrame) {
         await scopedDb.frameVariants.select(frameId, version.id, {
           actorId: user.id,
         });
-        const ownerShotId = shotIdByFrame.get(frameId);
-        if (ownerShotId) {
-          await scopedDb.shots.update(
-            ownerShotId,
-            {
-              videoUrl: null,
-              videoPath: null,
-              videoStatus: 'pending',
-              videoWorkflowRunId: null,
-              videoGeneratedAt: null,
-              videoError: null,
-            },
-            { throwOnMissing: false }
-          );
-        }
         imageCount++;
       }
       return { count: imageCount, variantType, model };
@@ -939,6 +917,34 @@ export const setSequenceModelFn = createServerFn({ method: 'POST' })
   });
 
 /**
+ * Deduplication id for a primary music run. CF instance ids are unique
+ * FOREVER, so a constant `music-<sequenceId>` would block every legitimate
+ * rerun; instead the id is the music slot's OBSERVED state (status + last
+ * generated-at) plus this request's inputs. Two rapid triggers read the same
+ * state and collapse onto one instance; a rerun after the slot completed,
+ * failed, or with changed inputs hashes differently and starts a fresh run.
+ */
+function musicRunDedupId(args: {
+  sequenceId: string;
+  musicStatus: string | null;
+  musicGeneratedAt: Date | null;
+  prompt: string;
+  tags: string;
+  duration: number;
+  model: string | undefined;
+}): string {
+  const state = JSON.stringify([
+    args.musicStatus,
+    args.musicGeneratedAt?.getTime() ?? null,
+    args.prompt,
+    args.tags,
+    args.duration,
+    args.model ?? null,
+  ]);
+  return `music-${simpleHash(state)}-${args.sequenceId}`;
+}
+
+/**
  * Trigger sequence-level music generation.
  * Uses pre-generated prompt/tags when available, otherwise builds from shot audio specs.
  */
@@ -1011,6 +1017,15 @@ export const generateMusicFn = createServerFn({ method: 'POST' })
     });
 
     await triggerWorkflow('/music', musicInput, {
+      deduplicationId: musicRunDedupId({
+        sequenceId: sequence.id,
+        musicStatus: sequence.musicStatus,
+        musicGeneratedAt: sequence.musicGeneratedAt,
+        prompt: effectivePrompt,
+        tags: effectiveTags,
+        duration: baseInput.duration,
+        model: baseInput.model,
+      }),
       label: buildWorkflowLabel(sequence.id),
     });
 

@@ -15,6 +15,7 @@ import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { RecastCharacterWorkflowInput } from '@/lib/workflow/types';
+import { buildRecastRegenerateSnapshots } from '@/lib/workflows/recast-snapshot';
 
 import { authWithTeamMiddleware, sequenceAccessMiddleware } from './middleware';
 
@@ -149,6 +150,20 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
       { characterId: data.characterId, status: 'generating' }
     );
 
+    // Freeze every regenerate-shots input here, at the trigger. The workflow
+    // used to rebuild this after its sheet child finished — eight live reads
+    // against state the user never authorised.
+    const imageModel = safeTextToImageModel(sequence.imageModel);
+    const { shotSnapshots, snapshotInputHash } =
+      await buildRecastRegenerateSnapshots({
+        scopedDb: context.scopedDb,
+        sequenceId: character.sequenceId,
+        shotIds: affectedShotIds,
+        imageModel,
+        aspectRatio: sequence.aspectRatio,
+        subject: { kind: 'character', character: updatedCharacter },
+      });
+
     const workflowInput: RecastCharacterWorkflowInput = {
       characterDbId: data.characterId,
       characterName: character.name,
@@ -168,9 +183,13 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
       // person + "look exactly like" trips OpenAI's likeness moderation.
       talentDescription:
         `This character must exactly match the person shown in the reference image. ${talentWithSheets.description ?? ''}`.trim(),
-      imageModel: safeTextToImageModel(sequence.imageModel),
-      affectedShotIds,
+      imageModel,
+      // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
+      talentSheetInputHash: defaultSheet?.inputHash ?? null,
       styleConfig,
+      aspectRatio: sequence.aspectRatio,
+      shotSnapshots,
+      snapshotInputHash,
     };
 
     const workflowRunId = await triggerWorkflow(
@@ -183,6 +202,8 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
       character: updatedCharacter,
       talentId: data.talentId,
       sheetWorkflowRunId: workflowRunId,
-      affectedShotIds,
+      // The shots actually queued — a shot with no selected image prompt is
+      // dropped by the snapshot builder rather than failing the recast.
+      affectedShotIds: shotSnapshots.map((s) => s.shotId),
     };
   });

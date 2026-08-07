@@ -9,14 +9,15 @@ import {
   DEFAULT_ASPECT_RATIO,
 } from '@/lib/constants/aspect-ratios';
 import type { Database } from '@/lib/db/client';
-import { frameVariants, frames, sequences, shots } from '@/lib/db/schema';
-import type { NewSequence, Sequence, Shot, Style } from '@/lib/db/schema';
-import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
 import {
-  projectShotMissingFrame,
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+  assembleShotViews,
+  selectShotViewRows,
+  shotHierarchicalOrder,
+} from './shot-view-query';
+import { sequences, shots } from '@/lib/db/schema';
+import type { NewSequence, Sequence } from '@/lib/db/schema';
+import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { ValidationError } from '@/lib/errors';
 import { and, asc, desc, eq, inArray, isNull, lt, not, or } from 'drizzle-orm';
 
@@ -27,11 +28,6 @@ export type MusicFieldsUpdate = {
   musicUrl?: string;
   musicPath?: string;
   musicGeneratedAt?: Date;
-};
-
-type SequenceWithShots = Sequence & {
-  shots: Shot[];
-  style: Style | null;
 };
 
 // D1 caps a single query at 100 bound parameters. `listShotsByIds` binds one
@@ -100,25 +96,6 @@ function createSequencesReadMethods(db: Database, teamId: string) {
       return result[0] ?? null;
     },
 
-    getWithShots: async (
-      sequenceId: string
-    ): Promise<SequenceWithShots | null> => {
-      const result = await db.query.sequences.findFirst({
-        where: { id: sequenceId, teamId },
-        with: {
-          shots: {
-            orderBy: { orderIndex: 'asc' },
-          },
-          style: true,
-        },
-      });
-      if (!result) return null;
-      return {
-        ...result,
-        style: result.style ?? null,
-      };
-    },
-
     getForUser: async (params: { sequenceId: string }): Promise<Sequence> => {
       const sequence = await db.query.sequences.findFirst({
         where: { id: params.sequenceId, teamId },
@@ -137,7 +114,7 @@ function createSequencesReadMethods(db: Database, teamId: string) {
      * applied via the join so caller-supplied ids from another team simply
      * return nothing rather than leak.
      */
-    listShotsByIds: async (sequenceIds: string[]): Promise<ShotWithImage[]> => {
+    listShotsByIds: async (sequenceIds: string[]): Promise<ShotView[]> => {
       if (sequenceIds.length === 0) return [];
       // Chunk the ids to stay under D1's bound-parameter ceiling. Each chunk
       // holds all of a sequence's shots (we split on sequence boundaries), so
@@ -149,45 +126,18 @@ function createSequencesReadMethods(db: Database, teamId: string) {
       }
       const results = await Promise.all(
         batches.map((batch) =>
-          db
-            .select()
-            .from(shots)
+          selectShotViewRows(db)
+            // teamId is filtered through the join, so caller-supplied ids from
+            // another team return nothing rather than leak.
             .innerJoin(sequences, eq(shots.sequenceId, sequences.id))
-            // Anchor frame holds the image surface (#989) — the shot's first
-            // frame (orderIndex 0), joined by shotId (NOT id-reuse).
-            .leftJoin(
-              frames,
-              and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
-            )
-            // The still itself lives on the SELECTED version (#1067). Joined
-            // here rather than fetched per row so the batch stays one query;
-            // `discardedAt` is in the JOIN condition (not the WHERE) so a frame
-            // whose selection was discarded still yields its shot, imageless.
-            .leftJoin(
-              frameVariants,
-              and(
-                eq(frameVariants.id, frames.selectedImageVersionId),
-                isNull(frameVariants.discardedAt)
-              )
-            )
             .where(
               and(
                 inArray(shots.sequenceId, batch),
                 eq(sequences.teamId, teamId)
               )
             )
-            .orderBy(asc(shots.sequenceId), asc(shots.orderIndex))
-            .then((rows) =>
-              rows.map((row) =>
-                row.frames
-                  ? projectShotWithImage(
-                      row.shots,
-                      row.frames,
-                      row.frame_variants
-                    )
-                  : projectShotMissingFrame(row.shots)
-              )
-            )
+            .orderBy(asc(shots.sequenceId), ...shotHierarchicalOrder)
+            .then((rows) => assembleShotViews(db, rows))
         )
       );
       return results.flat();

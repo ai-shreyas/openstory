@@ -14,7 +14,7 @@
  *      origin-relative `/r2/<key>` (#894).
  *   6. persist-result — flips the row to 'completed' with the outputs.
  *
- * BYOK follows the house pattern (`scopedDb.apiKeys.resolveKey('fal')`,
+ * BYOK follows the house pattern (`scopedDb.credentials.resolveKey('fal')`,
  * platform key fallback), applied to the `fal` singleton via `fal.config` —
  * the same singleton the base class routes through the e2e proxy. No credit
  * deduction happens here YET: the raw queue API doesn't surface
@@ -25,7 +25,7 @@
  */
 
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type {
   GeneratedAssetActivity,
   GeneratedAssetOutput,
@@ -187,8 +187,8 @@ export type AssetPersistScopedDb = {
  * @tanstack/ai-fal adapters make. Called inside every step that talks to fal,
  * since a replayed step may run in a fresh isolate.
  */
-async function configureFalForTeam(scopedDb: ScopedDb): Promise<void> {
-  const keyInfo = await scopedDb.apiKeys.resolveKey('fal');
+async function configureFalForTeam(scopedDb: WorkflowScopedDb): Promise<void> {
+  const keyInfo = await scopedDb.credentials.resolveKey('fal');
   fal.config({ credentials: keyInfo.key });
 }
 
@@ -196,7 +196,7 @@ export class AssetGenerationWorkflow extends OpenStoryWorkflowEntrypoint<AssetGe
   protected override async runImpl(
     event: Readonly<WorkflowEvent<AssetGenerationWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<{ assetId: string; outputs: GeneratedAssetOutput[] }> {
     const { assetId, endpointId, activity, input, teamId } = event.payload;
 
@@ -328,7 +328,7 @@ export class AssetGenerationWorkflow extends OpenStoryWorkflowEntrypoint<AssetGe
   }: {
     event: Readonly<WorkflowEvent<AssetGenerationWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     await persistAssetFailure({
       scopedDb,

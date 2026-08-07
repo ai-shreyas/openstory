@@ -19,18 +19,36 @@ import { createSceneScriptVersionsMethods } from '@/lib/db/scoped/scene-script-v
 import { createScenesMethods } from '@/lib/db/scoped/scenes';
 import type { ScopedDb } from '@/lib/db/scoped';
 
-export function overlaySceneScript(
-  scene: Scene,
-  script: Scene['originalScript'] | null | undefined
-): Scene {
-  if (!script) return scene;
-  return { ...scene, originalScript: script };
-}
+/** A scene row plus its selected script — everything a `Scene` composes from. */
+export type SceneContext = {
+  scene: SceneRow;
+  script: Scene['originalScript'] | null;
+};
 
-export function scriptExtract(
-  script: Scene['originalScript'] | null | undefined
-): string {
-  return script?.extract ?? '';
+/**
+ * Build the analysis `Scene` view from the rows that own it.
+ *
+ * Per-shot because `durationSeconds` is the one genuinely shot-scoped field: it
+ * derives from `shots.durationMs` rather than being stored twice.
+ */
+function composeSceneForShot(
+  shot: Pick<Shot, 'durationMs'>,
+  ctx: SceneContext
+): Scene {
+  const { scene, script } = ctx;
+  return {
+    sceneId: scene.id,
+    sceneNumber: scene.orderIndex + 1,
+    originalScript: script ?? { extract: '', dialogue: [] },
+    metadata: {
+      title: scene.title ?? '',
+      durationSeconds: (shot.durationMs ?? 3000) / 1000,
+      location: scene.location ?? '',
+      timeOfDay: scene.timeOfDay ?? '',
+      storyBeat: scene.storyBeat ?? '',
+    },
+    ...(scene.continuity ? { continuity: scene.continuity } : {}),
+  };
 }
 
 export function composeSequenceScript(
@@ -45,96 +63,70 @@ export function composeSequenceScript(
     .join('\n\n');
 }
 
-export function enrichShotWithSceneScript<
-  T extends Pick<Shot, 'sceneId' | 'metadata'>,
->(shot: T, scriptBySceneId: ReadonlyMap<string, Scene['originalScript']>): T {
-  if (!shot.sceneId || !shot.metadata) return shot;
-  const script = scriptBySceneId.get(shot.sceneId);
-  if (!script) return shot;
-  return {
-    ...shot,
-    metadata: overlaySceneScript(shot.metadata, script),
-  };
-}
-
-type SceneScriptSource =
-  | Scene['originalScript']
+type SceneContextSource =
+  | SceneContext
   | null
   | undefined
-  | ReadonlyMap<string, Scene['originalScript']>;
+  | ReadonlyMap<string, SceneContext>;
 
 /**
- * Resolve canonical scene metadata + script for a shot without mutating it.
- * Accepts either a single selected script or a preloaded per-sequence map.
+ * Resolve the scene a shot belongs to, composed from `scenes` + the selected
+ * script version. A shot with no `sceneId` — or pointing at a scene that is
+ * gone — resolves to null, which every caller already handles.
  */
 export function resolveSceneForShot<
-  T extends Pick<Shot, 'sceneId' | 'metadata'>,
+  T extends Pick<Shot, 'sceneId' | 'durationMs'>,
 >(
   shot: T,
-  scriptSource: SceneScriptSource
+  source: SceneContextSource
 ): { scene: Scene | null; script: Scene['originalScript'] | null } {
-  if (!shot.metadata) {
-    return { scene: null, script: null };
-  }
-  const script =
-    scriptSource instanceof Map
+  const ctx =
+    source instanceof Map
       ? shot.sceneId
-        ? (scriptSource.get(shot.sceneId) ?? null)
+        ? (source.get(shot.sceneId) ?? null)
         : null
-      : (scriptSource ?? null);
-  return {
-    scene: overlaySceneScript(shot.metadata, script ?? undefined),
-    script,
-  };
+      : (source ?? null);
+  if (!ctx) return { scene: null, script: null };
+  return { scene: composeSceneForShot(shot, ctx), script: ctx.script };
 }
 
 /** Db-backed variant for single-shot middleware and handlers. */
 export async function resolveSceneForShotFromDb(
-  shot: Pick<Shot, 'sceneId' | 'metadata'>,
-  scopedDb: Pick<ScopedDb, 'sceneScriptVersions'>
+  shot: Pick<Shot, 'sceneId' | 'durationMs'>,
+  scopedDb: Pick<ScopedDb, 'scenes' | 'sceneScriptVersions'>
 ): Promise<{ scene: Scene | null; script: Scene['originalScript'] | null }> {
-  if (!shot.metadata) {
-    return { scene: null, script: null };
-  }
-  let script: Scene['originalScript'] | null = null;
-  if (shot.sceneId) {
-    const selected = await scopedDb.sceneScriptVersions.getSelected(
-      dbSceneId(shot.sceneId)
-    );
-    script = selected?.content ?? null;
-  }
-  return resolveSceneForShot(shot, script);
+  if (!shot.sceneId) return { scene: null, script: null };
+  const sceneId = dbSceneId(shot.sceneId);
+  const [scene, selected] = await Promise.all([
+    scopedDb.scenes.getById(sceneId),
+    scopedDb.sceneScriptVersions.getSelected(sceneId),
+  ]);
+  if (!scene) return { scene: null, script: null };
+  return resolveSceneForShot(shot, {
+    scene,
+    script: selected?.content ?? null,
+  });
 }
 
-/** Project canonical script onto a shot for client API responses (UI reads metadata). */
-export function projectShotForClient<
-  T extends Pick<Shot, 'sceneId' | 'metadata'>,
->(shot: T, script: Scene['originalScript'] | null | undefined): T {
-  if (!script || !shot.sceneId) return shot;
-  return enrichShotWithSceneScript(shot, new Map([[shot.sceneId, script]]));
-}
-
-function buildScriptBySceneId(
+function buildSceneContext(
   sceneRows: ReadonlyArray<SceneRow>,
   versions: ReadonlyMap<DbSceneId, SceneScriptVersion>
-): Map<string, Scene['originalScript']> {
-  const map = new Map<string, Scene['originalScript']>();
+): Map<string, SceneContext> {
+  const map = new Map<string, SceneContext>();
   for (const scene of sceneRows) {
-    const version = versions.get(scene.id);
-    if (version) {
-      map.set(scene.id, version.content);
-    } else if (scene.originalScript) {
-      map.set(scene.id, scene.originalScript);
-    }
+    map.set(scene.id, {
+      scene,
+      script: versions.get(scene.id)?.content ?? null,
+    });
   }
   return map;
 }
 
-/** Load selected script content keyed by scene id for a sequence. */
-export async function loadSelectedScriptsBySequence(
+/** Load each scene of a sequence with its selected script, keyed by scene id. */
+export async function loadSceneContextBySequence(
   scopedDb: Pick<ScopedDb, 'scenes' | 'sceneScriptVersions'>,
   sequenceId: string
-): Promise<Map<string, Scene['originalScript']>> {
+): Promise<Map<string, SceneContext>> {
   const [sceneRows, selectedRows] = await Promise.all([
     scopedDb.scenes.listBySequence(sequenceId),
     scopedDb.sceneScriptVersions.listSelectedBySequence(sequenceId),
@@ -142,15 +134,15 @@ export async function loadSelectedScriptsBySequence(
   const versions = new Map(
     selectedRows.map((row) => [row.sceneId, row.version] as const)
   );
-  return buildScriptBySceneId(sceneRows, versions);
+  return buildSceneContext(sceneRows, versions);
 }
 
 /** Raw-db variant for scoped sub-modules that only hold a `Database` handle. */
-export async function loadSelectedScriptsBySequenceFromDb(
+export async function loadSceneContextBySequenceFromDb(
   db: Database,
   sequenceId: string
-): Promise<Map<string, Scene['originalScript']>> {
-  return loadSelectedScriptsBySequence(
+): Promise<Map<string, SceneContext>> {
+  return loadSceneContextBySequence(
     {
       scenes: createScenesMethods(db),
       sceneScriptVersions: createSceneScriptVersionsMethods(db),

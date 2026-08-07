@@ -72,7 +72,7 @@ async function seed() {
     .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0 })
+    .values({ sequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
@@ -117,8 +117,10 @@ describe('framePromptVersions.write', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('AI prompt v1');
-    expect(frame.visualPromptInputHash).toBe('hash-1');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('AI prompt v1');
+    expect(selected?.inputHash).toBe('hash-1');
     expect(frame.selectedImagePromptVersionId).toBe(version.id);
   });
 
@@ -142,7 +144,7 @@ describe('framePromptVersions.write', () => {
     expect(await m.listByFrame(frameId)).toHaveLength(1);
   });
 
-  it('force-regen at the same hash appends a null-hash row and keeps the cached hash tracking live context', async () => {
+  it('force-regen at the same hash appends a distinct row that keeps tracking live context', async () => {
     const m = createFramePromptVersionsMethods(db);
     const first = await m.write({
       frameId,
@@ -159,7 +161,8 @@ describe('framePromptVersions.write', () => {
       analysisModel: HAIKU,
     });
     expect(forced.id).not.toBe(first.id);
-    expect(forced.inputHash).toBeNull();
+    // Keeps the real hash: the row itself is what staleness compares against.
+    expect(forced.inputHash).toBe('hash-1');
     expect(forced.text).toBe('Fresh completion against same inputs');
 
     const [frame] = await db
@@ -167,19 +170,20 @@ describe('framePromptVersions.write', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Fresh completion against same inputs');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Fresh completion against same inputs');
     // Cached hash still tracks the live upstream so staleness doesn't fire.
-    expect(frame.visualPromptInputHash).toBe('hash-1');
+    expect(selected?.inputHash).toBe('hash-1');
     expect(frame.selectedImagePromptVersionId).toBe(forced.id);
   });
 
   it('user-edit whose hash collides with an existing row STILL records the edit (regression)', async () => {
     // The bug: a user-edit carries the live upstream hash captured at edit
     // time. When the text was edited but upstream context is unchanged, that
-    // hash matches the existing AI row, so the unique-index insert no-ops. The
-    // helper previously fell through to `version = existing` (the OLD row) while
-    // mirroring the NEW text onto the frame — the edit vanished from history and
-    // the pointer disagreed with the cached prompt. It must append instead.
+    // hash matched the existing AI row, so a dedupe keyed on hash alone
+    // returned the OLD row and the edit vanished from history. Dedupe matches
+    // text too, so new text always appends.
     const m = createFramePromptVersionsMethods(db);
     const ai = await m.write({
       frameId,
@@ -201,8 +205,8 @@ describe('framePromptVersions.write', () => {
     expect(edit.id).not.toBe(ai.id);
     expect(edit.source).toBe('user-edit');
     expect(edit.text).toBe('Hand-edited prompt');
-    // Bypasses the partial unique index via null input_hash.
-    expect(edit.inputHash).toBeNull();
+    // Keeps the hash captured at edit time, so staleness stays live.
+    expect(edit.inputHash).toBe('hash-1');
 
     const history = await m.listByFrame(frameId);
     expect(history).toHaveLength(2);
@@ -212,11 +216,13 @@ describe('framePromptVersions.write', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
     // The pointer references the row whose text is mirrored — no divergence.
-    expect(frame.imagePrompt).toBe('Hand-edited prompt');
+    expect(selected?.text).toBe('Hand-edited prompt');
     expect(frame.selectedImagePromptVersionId).toBe(edit.id);
     // Cached hash still tracks the live upstream context.
-    expect(frame.visualPromptInputHash).toBe('hash-1');
+    expect(selected?.inputHash).toBe('hash-1');
   });
 
   it('idempotent retry of the same text at the same hash de-dupes (no spurious null-hash row)', async () => {
@@ -259,8 +265,10 @@ describe('framePromptVersions.write', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Hand-typed prompt');
-    expect(frame.visualPromptInputHash).toBeNull();
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Hand-typed prompt');
+    expect(selected?.inputHash).toBeNull();
   });
 });
 
@@ -293,7 +301,9 @@ describe('framePromptVersions.select (restore)', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('AI prompt v1');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('AI prompt v1');
     expect(frame.selectedImagePromptVersionId).toBe(v1.id);
 
     const events = await db
@@ -377,8 +387,10 @@ describe('framePromptVersions.completePendingAiVersion', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Regenerated prompt');
-    expect(frame.visualPromptInputHash).toBe('live-hash');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Regenerated prompt');
+    expect(selected?.inputHash).toBe('live-hash');
     expect(frame.selectedImagePromptVersionId).toBe(claim.id);
   });
 
@@ -418,7 +430,9 @@ describe('framePromptVersions.completePendingAiVersion', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Post-click hand edit');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Post-click hand edit');
     expect(frame.selectedImagePromptVersionId).toBe(edit.id);
   });
 
@@ -452,7 +466,9 @@ describe('framePromptVersions.completePendingAiVersion', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Original');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Original');
     const [row] = await db
       .select()
       .from(framePromptVersions)
@@ -499,7 +515,7 @@ describe('framePromptVersions.completePendingAiVersion', () => {
     expect(frame.selectedImagePromptVersionId).toBe(existing.id);
   });
 
-  it('new text at a colliding hash completes with a null row-hash (index bypass)', async () => {
+  it('new text at a colliding hash completes as its own row keeping the real hash', async () => {
     const m = createFramePromptVersionsMethods(db);
     await m.write({
       frameId,
@@ -523,15 +539,16 @@ describe('framePromptVersions.completePendingAiVersion', () => {
     });
 
     expect(completed?.id).toBe(claim.id);
-    expect(completed?.inputHash).toBeNull();
-    // The frame's cached hash still tracks the real context.
+    expect(completed?.inputHash).toBe('hash-1');
     const [frame] = await db
       .select()
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Fresh different output');
-    expect(frame.visualPromptInputHash).toBe('hash-1');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Fresh different output');
+    expect(selected?.inputHash).toBe('hash-1');
   });
 
   it('throws for a claim that belongs to another frame (ownership guard)', async () => {
@@ -596,7 +613,9 @@ describe('framePromptVersions.completePendingAiVersion', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Original prompt');
+    const selected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(selected?.text).toBe('Original prompt');
     expect(frame.selectedImagePromptVersionId).toBe(original.id);
   });
 

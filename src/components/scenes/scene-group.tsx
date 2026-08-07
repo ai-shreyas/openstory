@@ -1,20 +1,21 @@
 import { Badge } from '@/components/ui/badge';
 import { videoModelDisplayName } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { SceneRow, ShotVariant } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import type { ShotVariant } from '@/lib/db/schema';
 import {
   groupShotsBySegment,
   type SequenceSegment,
 } from '@/lib/scenes/scene-segments';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Film } from 'lucide-react';
 import { Fragment, memo, useMemo, useState } from 'react';
 import { SceneListItem } from './scene-list-item';
 
 type SceneGroupProps = {
-  scene: SceneRow;
-  shots: ShotWithImage[];
+  scene: SceneWithScript;
+  shots: ShotView[];
   /** Render segments by id (#986) — bracket the shots that share one video. */
   segmentsById: ReadonlyMap<string, SequenceSegment>;
   isSceneSelected: boolean;
@@ -115,6 +116,7 @@ const SceneGroupComponent: React.FC<SceneGroupProps> = ({
                 <SceneListItem
                   key={shot.id}
                   shot={shot}
+                  scene={scene}
                   aspectRatio={aspectRatio}
                   isActive={shot.id === selectedShotId}
                   onSelect={() => onSelectShot(shot.id)}

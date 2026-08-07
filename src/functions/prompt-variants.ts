@@ -17,6 +17,10 @@ import {
   type SequenceMusicPromptVersion,
 } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { getFrameImageUrl } from '@/lib/shots/frame-image';
 import { simpleHash } from '@/lib/utils/hash';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -168,6 +172,12 @@ const shotRestoreInput = z.object({
   sequenceId: ulidSchema,
   shotId: ulidSchema,
   variantId: ulidSchema,
+  // Which store `variantId` lives in. Explicit rather than probed: the #1067
+  // backfills give a version row its parent's ULID, and #989 already made an
+  // anchor frame's id equal its shot's — so one id can name a row in BOTH
+  // `frame_prompt_versions` and `shot_prompt_versions`. Probing would restore
+  // whichever table was checked first.
+  promptType: promptTypeSchema,
 });
 
 export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
@@ -175,15 +185,17 @@ export const restoreShotPromptVariantFn = createServerFn({ method: 'POST' })
   .inputValidator(zodValidator(shotRestoreInput))
   .handler(async ({ context, data }) => {
     // Visual prompt history lives in frame_prompt_versions (#989); motion stays
-    // on shot_prompt_versions. ULIDs are globally unique, so a frame-store hit
-    // unambiguously identifies a visual restore. Use the resolved anchor frame
-    // id (never the shot id).
-    const frameChosen =
-      await context.scopedDb.framePromptVersions.getByIdForFrame(
-        data.variantId,
-        context.frame.id
-      );
-    if (frameChosen) {
+    // on shot_prompt_versions. The caller says which — see `promptType` above.
+    // Use the resolved anchor frame id (never the shot id).
+    if (data.promptType === 'visual') {
+      const frameChosen =
+        await context.scopedDb.framePromptVersions.getByIdForFrame(
+          data.variantId,
+          context.frame.id
+        );
+      if (!frameChosen) {
+        throw new Error('Prompt variant not found for this shot');
+      }
       if (frameChosen.status !== 'completed') {
         // In-flight/failed placeholders have no content to restore (#1085).
         throw new Error('Cannot restore a prompt version that never completed');
@@ -286,8 +298,15 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
     // No-op guard: don't append a `user-edit` identical to the live prompt —
     // mirrors `shouldRecordUserEdit` in the render workflows so a Save with no
     // actual change doesn't spawn a duplicate history row.
+    const selectedMotion =
+      data.promptType === 'motion'
+        ? await scopedDb.shotPromptVersions.getSelectedMotion(shot.id)
+        : null;
     const currentPrompt =
-      data.promptType === 'visual' ? frame.imagePrompt : shot.motionPrompt;
+      data.promptType === 'visual'
+        ? ((await scopedDb.framePromptVersions.getSelected(frame.id))?.text ??
+          null)
+        : (selectedMotion?.text ?? null);
     if (currentPrompt !== null && currentPrompt === text) {
       return { unchanged: true } as const;
     }
@@ -338,15 +357,12 @@ export const saveShotPromptFn = createServerFn({ method: 'POST' })
     // user-edit so audio-capable models keep their enrichment after a free-text
     // edit (mirrors the motion-workflow user-edit path). `components` /
     // `parameters` stay null on a hand edit.
-    const selected = await scopedDb.shotPromptVersions.getSelectedMotion(
-      shot.id
-    );
     const inserted = await scopedDb.shotPromptVersions.write({
       shotId: shot.id,
       promptType: 'motion',
       text,
-      dialogue: selected?.dialogue ?? null,
-      audio: selected?.audio ?? null,
+      dialogue: selectedMotion?.dialogue ?? null,
+      audio: selectedMotion?.audio ?? null,
       source: 'user-edit',
       inputHash,
       analysisModel,
@@ -511,8 +527,10 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
         : await computeMotionPromptInputHash(narrowed);
     const storedHash =
       data.promptType === 'visual'
-        ? frame.visualPromptInputHash
-        : shot.motionPromptInputHash;
+        ? ((await scopedDb.framePromptVersions.getSelected(frame.id))
+            ?.inputHash ?? null)
+        : ((await scopedDb.shotPromptVersions.getSelectedMotion(shot.id))
+            ?.inputHash ?? null);
     if (!data.force && isPromptUpToDate(storedHash, liveHash)) {
       return {
         workflowRunId: null,
@@ -627,8 +645,16 @@ export const regenerateShotPromptFn = createServerFn({ method: 'POST' })
         idx >= 0 && idx < shotsInSeq.length - 1
           ? shotsInSeq[idx + 1]
           : undefined;
-      sceneBefore = prevShot?.metadata ?? undefined;
-      sceneAfter = nextShot?.metadata ?? undefined;
+      const sceneContext = await loadSceneContextBySequence(
+        scopedDb,
+        sequence.id
+      );
+      sceneBefore = prevShot
+        ? (resolveSceneForShot(prevShot, sceneContext).scene ?? undefined)
+        : undefined;
+      sceneAfter = nextShot
+        ? (resolveSceneForShot(nextShot, sceneContext).scene ?? undefined)
+        : undefined;
     }
 
     let workflowRunId: string;
@@ -703,10 +729,13 @@ export const regenerateMusicPromptFn = createServerFn({ method: 'POST' })
   .handler(async ({ context }) => {
     const { sequence, scopedDb, user, teamId } = context;
 
-    const shots = await scopedDb.shots.listBySequence(sequence.id);
+    const [shots, sceneContext] = await Promise.all([
+      scopedDb.shots.listBySequence(sequence.id),
+      loadSceneContextBySequence(scopedDb, sequence.id),
+    ]);
     const scenes = shots
-      .map((f) => f.metadata)
-      .filter((m): m is NonNullable<typeof m> => m !== null);
+      .map((shot) => resolveSceneForShot(shot, sceneContext).scene)
+      .filter((scene): scene is Scene => scene !== null);
     if (scenes.length === 0) {
       throw new Error(
         'Sequence has no scenes to regenerate the music prompt from'
@@ -736,6 +765,9 @@ export const regenerateMusicPromptFn = createServerFn({ method: 'POST' })
         sequenceId: sequence.id,
         sceneSummaries,
         analysisModelId,
+        // Provenance snapshotted here: a prompt already on the sequence makes
+        // this a regeneration.
+        promptSource: sequence.musicPrompt ? 'regenerated' : 'ai-generated',
       },
       {
         // Dedup by the live input hash so a retry of the same upstream context
@@ -762,10 +794,13 @@ export const getMusicPromptStalenessFn = createServerFn({ method: 'GET' })
     }
 
     try {
-      const shots = await scopedDb.shots.listBySequence(sequence.id);
+      const [shots, sceneContext] = await Promise.all([
+        scopedDb.shots.listBySequence(sequence.id),
+        loadSceneContextBySequence(scopedDb, sequence.id),
+      ]);
       const scenes = shots
-        .map((f) => f.metadata)
-        .filter((m): m is NonNullable<typeof m> => m !== null);
+        .map((shot) => resolveSceneForShot(shot, sceneContext).scene)
+        .filter((scene): scene is Scene => scene !== null);
       if (scenes.length === 0) {
         return { musicPrompt: 'untracked' as const };
       }
@@ -860,7 +895,11 @@ export const getDivergentVariantPromptDiffFn = createServerFn({
         `Shot ${variant.shotId} missing for variant ${variant.id}`
       );
     }
-    const live = shotRow.motionPrompt;
+    const live = (
+      await context.scopedDb.shotPromptVersions.getSelectedMotion(
+        variant.shotId
+      )
+    )?.text;
     if (!live) return null;
     if (live === matched.text) return null;
 

@@ -32,7 +32,6 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
   return {
     id: 'shot-1',
     sceneId: 'scene-1',
-    metadata: scene,
     ...overrides,
   } as unknown as Shot;
 }
@@ -70,9 +69,9 @@ vi.doMock('@/lib/shots/shot-staleness', () => ({
   ),
 }));
 vi.doMock('@/lib/scenes/scene-script', () => ({
-  loadSelectedScriptsBySequence: vi.fn(() => Promise.resolve(new Map())),
+  loadSceneContextBySequence: vi.fn(() => Promise.resolve(new Map())),
   resolveSceneForShot: vi.fn((shot: Shot) => ({
-    scene: shot.metadata ?? null,
+    scene: shot.sceneId ? scene : null,
     script: null,
   })),
 }));
@@ -94,7 +93,17 @@ const realMusicSummaries =
   await import('@/lib/workflows/music-scene-summaries');
 vi.doMock('@/lib/workflows/music-scene-summaries', () => ({
   ...realMusicSummaries,
-  buildMusicSceneSummaries: vi.fn(() => []),
+  buildMusicSceneSummaries: vi.fn(() => [
+    {
+      sceneId: 'scene-1',
+      title: 'Scene 1',
+      storyBeat: 'beat',
+      durationSeconds: 10,
+      location: 'here',
+      timeOfDay: 'day',
+      visualSummary: 'summary',
+    },
+  ]),
 }));
 const realInputHash = await import('@/lib/ai/input-hash');
 vi.doMock('@/lib/ai/input-hash', () => ({
@@ -144,8 +153,12 @@ function buildScopedDb(
       getById: () =>
         Promise.resolve({
           id: 'seq-1',
+          teamId: 'team-1',
+          title: 'Sequence 1',
           aspectRatio: '16:9',
           styleId: 'st-1',
+          imageModel: 'nano_banana_2',
+          videoModel: 'kling_v3_pro',
           analysisModel: null,
           musicPromptInputHash: null,
           musicUrl: null,
@@ -170,6 +183,12 @@ function buildScopedDb(
               .map((f) => [f.id, makeSelectedImage(f)])
           )
         ),
+    },
+    framePromptVersions: {
+      getSelectedByFrameIds: () => Promise.resolve(new Map()),
+    },
+    shotPromptVersions: {
+      getSelectedMotionByShots: () => Promise.resolve(new Map()),
     },
     characters: { listWithSheets: () => Promise.resolve([]) },
     sequenceLocations: { listWithReferences: () => Promise.resolve([]) },
@@ -283,7 +302,7 @@ describe('computePlan — what gets regenerated', () => {
   });
 
   it('reports a shot still awaiting script analysis', async () => {
-    const result = await plan([makeShot({ metadata: null })], [makeFrame()]);
+    const result = await plan([makeShot({ sceneId: null })], [makeFrame()]);
     expect(result.skipped).toEqual([{ shotId: 'shot-1', reason: 'no-scene' }]);
   });
 });
@@ -418,14 +437,21 @@ describe("computePlan — depth 'music' (#1085)", () => {
       depth: 'music',
       db,
     });
-    expect(result.music).toEqual({ regenPrompt: true, regenTrack: true });
+    expect(result.music).toMatchObject({ regenPrompt: true, regenTrack: true });
+    // The children's inputs are frozen with the decision that hashed them.
+    expect(result.music?.sceneSummaries).toHaveLength(1);
+    expect(result.music?.promptSource).toBe('ai-generated');
+    expect(result.music?.durationSeconds).toBe(10);
   });
 
   it('never creates a first prompt or track (untracked / no music)', async () => {
     const untracked = await plan([makeShot()], [makeFrame()], {
       depth: 'music',
     });
-    expect(untracked.music).toEqual({ regenPrompt: false, regenTrack: false });
+    expect(untracked.music).toMatchObject({
+      regenPrompt: false,
+      regenTrack: false,
+    });
 
     const promptOnly = await plan([makeShot()], [makeFrame()], {
       depth: 'music',
@@ -433,7 +459,10 @@ describe("computePlan — depth 'music' (#1085)", () => {
         sequence: { musicPromptInputHash: 'old-music-hash', musicUrl: null },
       }),
     });
-    expect(promptOnly.music).toEqual({ regenPrompt: true, regenTrack: false });
+    expect(promptOnly.music).toMatchObject({
+      regenPrompt: true,
+      regenTrack: false,
+    });
   });
 
   it('leaves a fresh music prompt and its track alone', async () => {
@@ -448,7 +477,10 @@ describe("computePlan — depth 'music' (#1085)", () => {
       depth: 'music',
       db,
     });
-    expect(result.music).toEqual({ regenPrompt: false, regenTrack: false });
+    expect(result.music).toMatchObject({
+      regenPrompt: false,
+      regenTrack: false,
+    });
   });
 });
 
@@ -483,13 +515,17 @@ describe('claimTargets (#1085)', () => {
 
   function makeTarget(
     overrides: Partial<Parameters<typeof claimTargets>[0]['targets'][number]>
-  ) {
+  ): Parameters<typeof claimTargets>[0]['targets'][number] {
     return {
       shotId: 'shot-1',
       frameId: 'frame-1',
       beforeShotId: null,
       afterShotId: null,
       startingFrameImageUrl: null,
+      durationMs: null,
+      standingImageVariantId: null,
+      standingMotionVersionId: null,
+      visualPromptVersionId: null,
       regenVisual: false,
       regenMotion: false,
       regenImage: false,

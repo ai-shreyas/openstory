@@ -7,7 +7,7 @@ import {
 } from '@/lib/ai/models';
 import type { Microdollars } from '@/lib/billing/money';
 import { type AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { FalCredentialScopedDb } from '@/lib/db/scoped-workflow';
 import { MOTION_JSON_SCHEMAS } from '@/lib/motion/endpoint-map';
 import {
   getDurationValues,
@@ -18,7 +18,7 @@ import { generateVideo, getVideoJobStatus } from '@tanstack/ai';
 import { falVideo } from '@tanstack/ai-fal';
 
 export type GenerateMotionOptions = {
-  scopedDb?: ScopedDb; // scopedDb is used to resolve the API key for the motion generation with BYOK
+  scopedDb?: FalCredentialScopedDb; // scopedDb is used to resolve the API key for the motion generation with BYOK
   imageUrl: string;
   prompt: string;
   model?: ImageToVideoModel;
@@ -87,7 +87,7 @@ export async function submitMotionJob(
   // FAL_KEY) the platform key would be empty and the upload would fail with
   // "Authorization header is required" before submission (#924).
   const falApiKeyInfo = options.scopedDb
-    ? await options.scopedDb.apiKeys.resolveKey('fal')
+    ? await options.scopedDb.resolveKey('fal')
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
   // Locally-served /r2/ image URLs aren't reachable by real fal — swap them
@@ -176,13 +176,13 @@ export async function submitMotionJob(
 export async function pollMotionJob(
   jobId: string,
   modelKey: ImageToVideoModel,
-  scopedDb?: ScopedDb
+  scopedDb?: FalCredentialScopedDb
 ) {
   const modelConfig = IMAGE_TO_VIDEO_MODELS[modelKey];
 
   // Resolve the API key for the motion generation with BYOK if available
   const falApiKeyInfo = scopedDb
-    ? await scopedDb.apiKeys.resolveKey('fal')
+    ? await scopedDb.resolveKey('fal')
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
   // Create the Tanstack AI adapter and poll the job status

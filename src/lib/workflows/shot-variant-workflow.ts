@@ -18,7 +18,7 @@ import {
   DEFAULT_IMAGE_SIZE,
   getVariantGridConfig,
 } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import {
   generateImageWithProvider,
   type ImageGenerationParams,
@@ -47,7 +47,7 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ShotVariantWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<ShotVariantWorkflowResult> {
     const input = event.payload;
     const workflowRunId = event.instanceId;
@@ -107,14 +107,19 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
           referenceImageUrls: referenceUrls,
         };
 
-        // No frame to attach the sheet to (deleted mid-flight) → skip.
-        if (!input.shotId || !input.sequenceId) {
+        // No frame to attach the sheet to → generate the grid but skip the
+        // version write. `frameId` is absent only when the spawner had no shot
+        // to match (shot-images on a scene with no shot), which the `shotId`
+        // half of this guard already covers; resolving the anchor here instead
+        // would re-read a pointer the spawn never saw.
+        if (!input.shotId || !input.sequenceId || !input.frameId) {
           return { params, versionId: '' };
         }
-        const frame = await scopedDb.frames.getAnchorByShot(input.shotId);
+        // The trigger's frame (frame id ≠ shot id), checked for existence only.
+        const frame = await scopedDb.liveRead.frames.getById(input.frameId);
         if (!frame) {
           logger.info(
-            `[ShotVariantWorkflow] Shot ${input.shotId} has no anchor frame, skipping`
+            `[ShotVariantWorkflow] Frame ${input.frameId} was deleted, skipping the sheet write for shot ${input.shotId}`
           );
           return null;
         }
@@ -125,6 +130,9 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
           kind: 'framing',
           model,
           sourceVariantId: null,
+          // Provenance only — the sheet is never selected, but its tiles
+          // inherit which prompt the grid was generated from (#1070).
+          promptVersionId: input.promptVersionId ?? null,
           status: 'generating',
           workflowRunId,
         });
@@ -146,7 +154,9 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
       logger.info(
         `[ShotVariantWorkflow] Generating variant grid ${input.shotId} with model ${prep.params.model}`
       );
-      return generateImageWithProvider(prep.params, { scopedDb });
+      return generateImageWithProvider(prep.params, {
+        scopedDb: scopedDb.credentials,
+      });
     });
 
     // Before the deduction guard — see recordFalUsageStep (#1069).
@@ -232,7 +242,7 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
   }: {
     event: Readonly<WorkflowEvent<ShotVariantWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
     if (!input.shotId || !input.teamId) return;

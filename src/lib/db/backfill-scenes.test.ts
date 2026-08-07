@@ -8,11 +8,21 @@
  * verbatim from the shipped SQL file) and assert the result. Reading the real
  * SQL keeps the test honest: it exercises exactly what runs in prod.
  *
- * The staleness-compat test is the milestone's #1 QA risk: a freshly-backfilled
- * shot must still report isStale() === false.
+ * The last test guards the milestone's #1 QA risk: the backfill must write only
+ * sceneId + shotNumber and perturb nothing else on the shot. It asserted that
+ * through `shots.isStale`/`video_input_hash` until #1067 phase 2d dropped both.
+ *
+ * #1067 also dropped `shots.metadata`, the backfill's own input, and
+ * `scenes.original_script`, one of its outputs. The migrated DB therefore no
+ * longer has columns the shipped SQL names, so the harness re-adds whichever
+ * are missing — the migration file itself is history and stays verbatim.
  */
 
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import {
+  musicDesignSchema,
+  originalScriptSchema,
+  type Scene,
+} from '@/lib/ai/scene-analysis.schema';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
 import type { NewShot } from '@/lib/db/schema';
@@ -25,7 +35,6 @@ import {
   teams,
 } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
-import { createShotsMethods } from '@/lib/db/scoped/shots';
 import { type Client, createClient } from '@libsql/client';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
@@ -85,6 +94,29 @@ if (BACKFILL_STATEMENTS.length !== 2) {
   throw new Error(
     `test setup: expected 2 backfill statements (INSERT scenes + UPDATE shots), got ${BACKFILL_STATEMENTS.length} — migration SQL format likely changed`
   );
+}
+
+/** Raw read of the dropped `scenes.original_script` — drizzle no longer maps it. */
+async function readSceneOriginalScript(sceneId: string) {
+  const { rows } = await client.execute({
+    sql: 'SELECT `original_script` AS script FROM `scenes` WHERE `id` = ?',
+    args: [sceneId],
+  });
+  const value = rows[0]?.script;
+  return typeof value === 'string'
+    ? originalScriptSchema.parse(JSON.parse(value))
+    : null;
+}
+
+async function readSceneMusicDesign(sceneId: string) {
+  const { rows } = await client.execute({
+    sql: 'SELECT `music_design` AS design FROM `scenes` WHERE `id` = ?',
+    args: [sceneId],
+  });
+  const value = rows[0]?.design;
+  return typeof value === 'string'
+    ? musicDesignSchema.parse(JSON.parse(value))
+    : null;
 }
 
 async function runBackfill(): Promise<void> {
@@ -152,19 +184,43 @@ async function seedSequence(): Promise<void> {
   });
 }
 
-async function insertShot(data: Partial<NewShot> & { orderIndex: number }) {
+async function insertShot(
+  { orderIndex, ...data }: Partial<NewShot> & { orderIndex: number },
+  metadata: Scene | null = null
+) {
   const [shot] = await db
     .insert(shots)
     .values({ sequenceId, ...data } satisfies NewShot)
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
-  return shot;
+  await client.execute({
+    sql: 'UPDATE `shots` SET `metadata` = ?, `order_index` = ? WHERE `id` = ?',
+    args: [metadata ? JSON.stringify(metadata) : null, orderIndex, shot.id],
+  });
+  return { ...shot, orderIndex };
+}
+
+/** Re-add a column the shipped SQL names but the current schema dropped. */
+async function restoreDroppedColumn(
+  table: string,
+  column: string,
+  type: string
+): Promise<void> {
+  const info = await client.execute(`PRAGMA table_info(\`${table}\`)`);
+  if (info.rows.some((row) => row.name === column)) return;
+  await client.execute(
+    `ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${type}`
+  );
 }
 
 beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+  await restoreDroppedColumn('shots', 'metadata', 'text');
+  await restoreDroppedColumn('shots', 'order_index', 'integer');
+  await restoreDroppedColumn('scenes', 'original_script', 'text');
+  await restoreDroppedColumn('scenes', 'music_design', 'text');
 });
 
 afterAll(() => {
@@ -182,22 +238,26 @@ beforeEach(async () => {
 
 describe('backfill scenes migration', () => {
   it('creates one scene per shot, reusing the shot id, linked with shotNumber=1', async () => {
-    const a = await insertShot({ orderIndex: 0, metadata: sceneFixture() });
-    const b = await insertShot({
-      orderIndex: 1,
-      metadata: sceneFixture({ sceneId: 'scene-2', sceneNumber: 2 }),
-    });
+    const a = await insertShot({ orderIndex: 0 }, sceneFixture());
+    const b = await insertShot(
+      { orderIndex: 1 },
+      sceneFixture({ sceneId: 'scene-2', sceneNumber: 2 })
+    );
 
     await runBackfill();
 
     const allScenes = await db.select().from(scenes);
     expect(allScenes).toHaveLength(2);
 
-    for (const shot of await db.select().from(shots)) {
+    const rereadById = new Map(
+      (await db.select().from(shots)).map((s) => [s.id, s])
+    );
+    for (const shot of [a, b]) {
+      const reread = rereadById.get(shot.id);
       // The scene REUSES the shot's ULID — the 1:1 expand rule.
-      expect(shot.sceneId).toBe(shot.id);
-      expect(shot.shotNumber).toBe(1);
-      const scene = allScenes.find((s) => s.id === shot.sceneId);
+      expect(reread?.sceneId).toBe(shot.id);
+      expect(reread?.shotNumber).toBe(1);
+      const scene = allScenes.find((s) => s.id === shot.id);
       expect(scene?.orderIndex).toBe(shot.orderIndex);
     }
     // Explicit id-reuse assertion against the known shots.
@@ -205,7 +265,7 @@ describe('backfill scenes migration', () => {
   });
 
   it('splits scene-level fields out of the shot metadata onto the scene row', async () => {
-    const shot = await insertShot({ orderIndex: 3, metadata: sceneFixture() });
+    const shot = await insertShot({ orderIndex: 3 }, sceneFixture());
     await runBackfill();
 
     const [scene] = await db
@@ -222,16 +282,16 @@ describe('backfill scenes migration', () => {
     // JSON subtrees survive the json_extract round-trip with their shape intact.
     expect(scene?.continuity?.environmentTag).toBe('office');
     expect(scene?.continuity?.characterTags).toEqual(['sarah']);
-    expect(scene?.musicDesign?.presence).toBe('minimal');
-    expect(scene?.originalScript?.extract).toBe('INT. OFFICE - DAY');
-
-    // The shot's metadata is left intact (transitional duplicate).
-    const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.metadata?.metadata?.location).toBe('INT. OFFICE - DAY');
+    expect((await readSceneMusicDesign(shot.id))?.presence).toBe('minimal');
+    expect((await readSceneOriginalScript(shot.id))?.extract).toBe(
+      'INT. OFFICE - DAY'
+    );
+    // Dropped: the "shot metadata survives the backfill" assertion — #1067
+    // removed the column entirely.
   });
 
   it('backfills a null-metadata shot without crashing (null scene fields)', async () => {
-    const shot = await insertShot({ orderIndex: 0, metadata: null });
+    const shot = await insertShot({ orderIndex: 0 });
     await runBackfill();
 
     const [scene] = await db.select().from(scenes);
@@ -239,8 +299,8 @@ describe('backfill scenes migration', () => {
     expect(scene?.location).toBeNull();
     expect(scene?.title).toBeNull();
     expect(scene?.continuity).toBeNull();
-    expect(scene?.musicDesign).toBeNull();
-    expect(scene?.originalScript).toBeNull();
+    expect(await readSceneMusicDesign(shot.id)).toBeNull();
+    expect(await readSceneOriginalScript(shot.id)).toBeNull();
 
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
     expect(reread?.sceneId).toBe(shot.id);
@@ -248,11 +308,8 @@ describe('backfill scenes migration', () => {
   });
 
   it('is idempotent: a second run creates no duplicate scenes', async () => {
-    await insertShot({ orderIndex: 0, metadata: sceneFixture() });
-    await insertShot({
-      orderIndex: 1,
-      metadata: sceneFixture({ sceneId: 'scene-2' }),
-    });
+    await insertShot({ orderIndex: 0 }, sceneFixture());
+    await insertShot({ orderIndex: 1 }, sceneFixture({ sceneId: 'scene-2' }));
 
     await runBackfill();
     expect(await db.select().from(scenes)).toHaveLength(2);
@@ -265,30 +322,28 @@ describe('backfill scenes migration', () => {
     expect(allShots.every((s) => s.sceneId === s.id)).toBe(true);
   });
 
-  it('staleness compat: a freshly-backfilled shot is NOT stale', async () => {
-    // A shot whose video artifact has a recorded input hash — the real path
-    // where staleness matters. Backfill must not perturb it.
-    const knownHash = 'abc123-video-input-hash';
-    const shot = await insertShot({
-      orderIndex: 0,
-      metadata: sceneFixture(),
-      videoInputHash: knownHash,
-    });
+  it('leaves the shot’s other columns untouched', async () => {
+    // The backfill writes only sceneId + shotNumber. This pinned the video and
+    // motion-prompt mirrors until #1067 dropped them (video state derives from
+    // the segment's `video_variants`, the motion prompt from the selected
+    // `shot_prompt_versions` row); the surviving columns carry the same
+    // guarantee.
+    const selectedMotionPromptVersionId = generateId();
+    const shot = await insertShot(
+      {
+        orderIndex: 0,
+        durationMs: 4200,
+        selectedMotionPromptVersionId,
+      },
+      sceneFixture()
+    );
 
     await runBackfill();
 
-    const shotsMethods = createShotsMethods(db);
-    // Same hash → not stale. Backfill touched only sceneId + shotNumber, so the
-    // stored videoInputHash is unchanged.
-    expect(await shotsMethods.isStale(shot.id, 'video', knownHash)).toBe(false);
-
-    // Sanity: a different hash WOULD be stale, proving the check is live.
-    expect(await shotsMethods.isStale(shot.id, 'video', 'different')).toBe(
-      true
-    );
-
-    // And the stored hash itself survived the backfill untouched.
     const [reread] = await db.select().from(shots).where(eq(shots.id, shot.id));
-    expect(reread?.videoInputHash).toBe(knownHash);
+    expect(reread?.selectedMotionPromptVersionId).toBe(
+      selectedMotionPromptVersionId
+    );
+    expect(reread?.durationMs).toBe(4200);
   });
 });

@@ -12,7 +12,7 @@ import {
 import { Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { ShotVariant } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { VariantType } from '@/lib/db/schema/shot-variants';
 
 type DivergencePromptDiff = {
@@ -24,7 +24,7 @@ type DivergencePromptDiff = {
 type DivergenceCompareDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  shot: ShotWithImage;
+  shot: ShotView;
   variant: ShotVariant;
   onPromote: () => void;
   onDiscard: () => void;
@@ -43,14 +43,14 @@ const ARTIFACT_LABEL: Record<VariantType, string> = {
 };
 
 function liveAssetForVariant(
-  shot: ShotWithImage,
+  shot: ShotView,
   variantType: VariantType
 ): { url: string | null; kind: 'image' | 'video' | 'audio' } {
   switch (variantType) {
     case 'image':
-      return { url: shot.thumbnailUrl, kind: 'image' };
+      return { url: shot.image?.url ?? null, kind: 'image' };
     case 'video':
-      return { url: shot.videoUrl, kind: 'video' };
+      return { url: shot.video?.url ?? null, kind: 'video' };
     case 'audio':
       // Unreachable: nothing creates an audio `shot_variants` row, and per-shot
       // audio has no live column to compare against (#1067).

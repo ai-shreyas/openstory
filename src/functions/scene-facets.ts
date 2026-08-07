@@ -18,7 +18,11 @@
  */
 
 import { sequenceAccessMiddleware } from '@/functions/middleware';
-import { matchLocationsToShot } from '@/lib/db/scoped/sequence-locations';
+import { matchLocationsToScene } from '@/lib/workflows/scene-matching';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import {
   matchCharactersToScene,
   matchElementsToScene,
@@ -37,33 +41,35 @@ export const getSceneFacetMapsFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }): Promise<SceneFacetMaps> => {
     const { scopedDb, sequence } = context;
 
-    const [shots, locations, characters, elements] = await Promise.all([
-      scopedDb.shots.listBySequence(sequence.id),
-      scopedDb.sequenceLocations.list(sequence.id),
-      scopedDb.characters.listWithTalent(sequence.id),
-      scopedDb.sequenceElements.list(sequence.id),
-    ]);
+    const [shots, locations, characters, elements, sceneContext] =
+      await Promise.all([
+        scopedDb.shots.listBySequence(sequence.id),
+        scopedDb.sequenceLocations.list(sequence.id),
+        scopedDb.characters.listWithTalent(sequence.id),
+        scopedDb.sequenceElements.list(sequence.id),
+        loadSceneContextBySequence(scopedDb, sequence.id),
+      ]);
 
     const locationIdsByShot: Record<string, string[]> = {};
     const characterIdsByShot: Record<string, string[]> = {};
     const elementIdsByShot: Record<string, string[]> = {};
 
     for (const shot of shots) {
-      // Locations match on environment tag OR scene location — see
-      // `matchLocationsToShot`, which owns both keys.
-      locationIdsByShot[shot.id] = matchLocationsToShot(shot, locations).map(
-        (l) => l.id
-      );
+      const scene = resolveSceneForShot(shot, sceneContext).scene;
+      locationIdsByShot[shot.id] = matchLocationsToScene(
+        locations,
+        scene?.continuity?.environmentTag ?? '',
+        scene?.metadata?.location ?? ''
+      ).map((l) => l.id);
 
-      const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+      const characterTags = scene?.continuity?.characterTags ?? [];
       characterIdsByShot[shot.id] = matchCharactersToScene(
         characters,
         characterTags
       ).map((c) => c.id);
 
-      const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-      const sceneScript =
-        shot.metadata?.originalScript?.extract ?? shot.description ?? '';
+      const elementTags = scene?.continuity?.elementTags ?? [];
+      const sceneScript = scene?.originalScript.extract ?? '';
       elementIdsByShot[shot.id] = matchElementsToScene(
         elements,
         elementTags,

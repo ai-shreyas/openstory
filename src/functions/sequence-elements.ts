@@ -9,6 +9,10 @@ import { estimateLLMCost } from '@/lib/billing/cost-estimation';
 import { InsufficientCreditsError } from '@/lib/errors';
 import { DEFAULT_VIDEO_MODEL, safeImageToVideoModel } from '@/lib/ai/models';
 import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
+import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 import { generateId } from '@/lib/db/id';
 import { getGenerationChannel } from '@/lib/realtime';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -22,6 +26,7 @@ import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type {
   ElementVisionWorkflowInput,
+  ReplaceElementShotSnapshot,
   ReplaceElementWorkflowInput,
 } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
@@ -51,24 +56,19 @@ export function isValidElementStoragePath(
   return !rest.split('/').some((seg) => seg === '' || seg === '..');
 }
 
-async function triggerElementVision(
-  elementId: string,
-  sequenceId: string,
-  imageUrl: string,
-  filename: string,
-  teamId: string,
-  userId: string
-): Promise<void> {
-  const input: ElementVisionWorkflowInput = {
-    userId,
-    teamId,
-    sequenceId,
-    elementId,
-    imageUrl,
-    filename,
-  };
+async function triggerElementVision(params: {
+  elementId: string;
+  sequenceId: string;
+  imageUrl: string;
+  filename: string;
+  token: string;
+  teamId: string;
+  userId: string;
+}): Promise<void> {
+  const { teamId, userId, ...element } = params;
+  const input: ElementVisionWorkflowInput = { userId, teamId, ...element };
   await triggerWorkflow('/element-vision', input, {
-    label: buildWorkflowLabel(sequenceId),
+    label: buildWorkflowLabel(params.sequenceId),
   });
 }
 
@@ -226,14 +226,15 @@ export const finalizeElementUploadFn = createServerFn({ method: 'POST' })
     // If the QStash trigger fails, mark the row failed before re-throwing —
     // otherwise the element would poll forever in `pending`.
     try {
-      await triggerElementVision(
-        element.id,
-        element.sequenceId,
-        element.imageUrl,
-        element.uploadedFilename,
-        context.teamId,
-        context.user.id
-      );
+      await triggerElementVision({
+        elementId: element.id,
+        sequenceId: element.sequenceId,
+        imageUrl: element.imageUrl,
+        filename: element.uploadedFilename,
+        token: element.token,
+        teamId: context.teamId,
+        userId: context.user.id,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       await context.scopedDb.sequenceElements.updateVisionStatus(
@@ -410,31 +411,56 @@ export const replaceSequenceElementFn = createServerFn({ method: 'POST' })
         data.elementId
       );
 
-    // Resolve the per-shot motion prompts HERE, before the workflow starts —
-    // workflows must not read the DB (a versioned, append-only store is racy to
-    // read mid-flight and non-deterministic on replay). The video model matches
-    // what the workflow uses (sequence-level). #713/#991.
+    // Resolve the per-shot motion prompts AND source state HERE, before the
+    // workflow starts — workflows must not read the DB (a versioned,
+    // append-only store is racy to read mid-flight and non-deterministic on
+    // replay). This workflow's own children repoint the image/video selection
+    // pointers, so a re-read after partial fan-out would edit an
+    // already-edited still again. #713/#991.
     const affectedShots =
       await context.scopedDb.shots.getByIds(affectedShotIds);
     const videoModel = safeImageToVideoModel(
       context.sequence.videoModel,
       DEFAULT_VIDEO_MODEL
     );
-    const selectedMotionByShot =
-      await context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
-        affectedShotIds
+    const [selectedMotionByShot, sceneContext, anchorByShot, videoByShot] =
+      await Promise.all([
+        context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
+          affectedShotIds
+        ),
+        loadSceneContextBySequence(context.scopedDb, context.sequence.id),
+        context.scopedDb.frames.getAnchorsByShots(affectedShotIds),
+        context.scopedDb.videoVariants.getSelectedByShotIds(affectedShotIds),
+      ]);
+    const selectedImageByFrame =
+      await context.scopedDb.frameVariants.getSelectedByFrameIds(
+        [...anchorByShot.values()].map((f) => f.id)
       );
+
     const motionPromptByShotId: Record<string, string> = {};
+    const shotSnapshotByShotId: Record<string, ReplaceElementShotSnapshot> = {};
     for (const shot of affectedShots) {
+      const { scene } = resolveSceneForShot(shot, sceneContext);
       motionPromptByShotId[shot.id] = resolveMotionPromptFromVersion(
         selectedMotionByShot.get(shot.id),
         {
-          motionPromptMirror: shot.motionPrompt,
-          characterTags: shot.metadata?.continuity?.characterTags,
-          description: shot.description,
+          characterTags: scene?.continuity?.characterTags,
+          description: scene?.originalScript.extract ?? null,
         },
         videoModel
       );
+
+      const anchor = anchorByShot.get(shot.id);
+      const selectedImage = anchor
+        ? selectedImageByFrame.get(anchor.id)
+        : undefined;
+      shotSnapshotByShotId[shot.id] = {
+        frameId: anchor?.id ?? null,
+        sourceImageUrl: selectedImage?.url ?? null,
+        sourceModel: selectedImage?.model ?? null,
+        hasVideo: !!videoByShot.get(shot.id)?.url,
+        durationMs: shot.durationMs,
+      };
     }
 
     const workflowInput: ReplaceElementWorkflowInput = {
@@ -448,6 +474,9 @@ export const replaceSequenceElementFn = createServerFn({ method: 'POST' })
       newFilename: data.filename,
       affectedShotIds,
       motionPromptByShotId,
+      shotSnapshotByShotId,
+      aspectRatio: context.sequence.aspectRatio,
+      videoModel,
     };
 
     // If the trigger throws, the row is stranded in `analyzing` — restore

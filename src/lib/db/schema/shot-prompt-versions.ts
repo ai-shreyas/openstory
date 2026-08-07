@@ -1,16 +1,15 @@
 /**
  * Shot Prompt Versions Schema
  *
- * One row per revision of a shot's visual or motion prompt. The current
- * "active" prompt is mirrored on `shots.imagePrompt` / `shots.motionPrompt`
- * for read-path simplicity; this table stores the full revision history.
+ * One row per revision of a shot's motion prompt.
+ * `shots.selectedMotionPromptVersionId` points at the current one; these rows
+ * are the only source of the prompt text and its upstream-context hash.
  *
  * Renamed from `shot_prompt_variants` in the Scene→Shot→Frame redesign (#988):
  * a prompt is a single authored input revised over time (a *version* history),
- * not a set of parallel alternatives (*variants*). End-state role is the MOTION
- * prompt — the image/visual prompt migrates to `frame_prompt_versions` as the
- * image surface moves onto frames (later phases); the `promptType` column stays
- * dual-purpose meanwhile.
+ * not a set of parallel alternatives (*variants*). The image/visual prompt
+ * lives in `frame_prompt_versions` (#989); `promptType` stays for the legacy
+ * rows written before that move.
  *
  * See docs/architecture/workflow-snapshots-and-content-hash-staleness.md
  * § prompt versioning and docs/architecture/scene-shot-frame-redesign.md.
@@ -128,16 +127,13 @@ export const shotPromptVersions = snakeCase.table(
       table.promptType,
       table.createdAt
     ),
-    // Idempotency: a workflow retry that re-emits the same AI prompt for the
-    // same upstream context must not create a duplicate row. User-edits and
-    // legacy rows have null `input_hash` and are excluded; `source = 'restored'`
-    // is also excluded so a restore that carries forward an existing AI hash
-    // still appends an audit row to history.
-    uniqueIndex('uq_shot_prompt_variants_shot_type_hash_ai')
-      .on(table.shotId, table.promptType, table.inputHash)
-      .where(
-        sql`${table.inputHash} IS NOT NULL AND ${table.source} != 'restored'`
-      ),
+    // Retry idempotency is (shot, type, input_hash, text) — see the frame-side
+    // twin. This is just the lookup index.
+    index('idx_shot_prompt_versions_shot_type_hash').on(
+      table.shotId,
+      table.promptType,
+      table.inputHash
+    ),
     // At most ONE live claim per (shot, type, live-hash) (#1085) — see the
     // frame-side twin for the race this closes.
     uniqueIndex('uq_shot_prompt_versions_live_claim')

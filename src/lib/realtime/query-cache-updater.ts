@@ -8,8 +8,8 @@ import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
 import { sequenceKeys } from '@/hooks/use-sequences';
-import type { Shot, Sequence } from '@/types/database';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { Sequence } from '@/types/database';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { QueryClient } from '@tanstack/react-query';
 
 /**
@@ -27,23 +27,6 @@ function getOptionalString(
 ): string | undefined {
   const value = data[key];
   return typeof value === 'string' ? value : undefined;
-}
-
-/**
- * Type guard for Scene metadata from realtime events.
- * Performs minimal runtime validation since data is already Zod-validated upstream.
- */
-function isSceneMetadata(value: unknown): value is Shot['metadata'] {
-  if (value === null || value === undefined) return true;
-  if (typeof value !== 'object') return false;
-  // Check for required Scene fields using 'in' operator for type narrowing
-  return (
-    typeof value === 'object' &&
-    'sceneId' in value &&
-    typeof value.sceneId === 'string' &&
-    'sceneNumber' in value &&
-    typeof value.sceneNumber === 'number'
-  );
 }
 
 // Debounce invalidations per query key - multiple rapid events = one refetch
@@ -82,9 +65,9 @@ function isValidMusicStatus(
   );
 }
 
-function isValidShotStatus(
-  status: unknown
-): status is ShotWithImage['thumbnailStatus'] {
+// Narrows to the non-null union it actually tests, so it can guard the
+// non-nullable `videoStatus` as well as the nullable `frame.imageStatus`.
+function isValidShotStatus(status: unknown): status is ShotView['videoStatus'] {
   return (
     status === 'pending' ||
     status === 'generating' ||
@@ -129,23 +112,21 @@ export function updateQueryCacheFromEvent(
       break;
 
     case 'generation.shot:updated': {
-      // Patch the cached scene metadata (title, continuity, music/audio design)
-      // in place. The realtime schema validated it upstream.
-      const metadata = data.metadata;
-      if (isSceneMetadata(metadata)) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) => old?.map((f) => (f.id === shotId ? { ...f, metadata } : f))
-        );
-      }
+      // Scene metadata (title, continuity, music/audio design) lives on the
+      // `scenes` row now (#1067), not on the shot — there is nothing left to
+      // patch in place on the cached shot, so refresh the scene spine instead.
+      debouncedInvalidate(
+        queryClient,
+        sceneKeys.list(sequenceId),
+        `scenes:${sequenceId}`
+      );
       // Prompt regenerations no longer travel in `metadata` — the visual/motion
       // prompt now lives in `frame_prompt_versions` / `shot_prompt_versions`
-      // and is mirrored onto `frame.imagePrompt` / `shot.motionPrompt`, then
-      // projected into `ShotWithImage` server-side (#713). The in-place
-      // `setQueryData(metadata)` above can't re-run that projection, so refetch
-      // the shots list to pick up the new mirrored prompt + `motionPromptData`,
-      // and invalidate the matching version-history query so an open prompt
-      // history sheet shows the freshly appended version (#991).
+      // and is resolved into the `ShotView` server-side (#713). The in-place
+      // `setQueryData(metadata)` above can't re-run that resolution, so refetch
+      // the shots list to pick up the new prompt version + `motionPrompt`, and
+      // invalidate the matching version-history query so an open prompt history
+      // sheet shows the freshly appended version (#991).
       const updateType = getString(data, 'updateType');
       if (updateType === 'visual-prompt' || updateType === 'motion-prompt') {
         debouncedInvalidate(
@@ -181,32 +162,50 @@ export function updateQueryCacheFromEvent(
       // queries below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
       if (!variantOnly) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) =>
-              f.id === shotId
-                ? {
-                    ...f,
-                    thumbnailUrl: thumbnailUrl ?? f.thumbnailUrl,
-                    previewThumbnailUrl:
-                      previewThumbnailUrl ?? f.previewThumbnailUrl,
-                    thumbnailStatus: isValidShotStatus(status)
+        queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+          old?.map((f) =>
+            f.id === shotId
+              ? {
+                  ...f,
+                  // The still is a `frame_variants` row; only its url can be
+                  // patched in place, and only once the row is in cache. A
+                  // first render has no row yet — the invalidation below is
+                  // what lands it.
+                  image:
+                    thumbnailUrl && f.image
+                      ? { ...f.image, url: thumbnailUrl }
+                      : f.image,
+                  frame: {
+                    ...f.frame,
+                    previewImageUrl:
+                      previewThumbnailUrl ?? f.frame.previewImageUrl,
+                    imageStatus: isValidShotStatus(status)
                       ? status
-                      : f.thumbnailStatus,
+                      : f.frame.imageStatus,
                     // Surface the failure reason live (#881): set on `failed`,
                     // clear when a new attempt starts/succeeds, and leave
                     // untouched for status-less emits (e.g. preview-url).
-                    thumbnailError:
+                    imageError:
                       status === 'failed'
-                        ? (errorMessage ?? f.thumbnailError)
+                        ? (errorMessage ?? f.frame.imageError)
                         : isValidShotStatus(status)
                           ? null
-                          : f.thumbnailError,
-                  }
-                : f
-            )
+                          : f.frame.imageError,
+                  },
+                }
+              : f
+          )
         );
+        // A completed primary render appends a `frame_variants` row and
+        // repoints `frames.selectedImageVersionId` — neither of which the
+        // in-place patch above can synthesize, so refetch (#1067).
+        if (status === 'completed') {
+          debouncedInvalidate(
+            queryClient,
+            shotKeys.list(sequenceId),
+            `shots:${sequenceId}`
+          );
+        }
       }
       // Refresh variant data so model switcher and variant overlay stay current.
       // Refresh on `failed` too (#547): image-workflow.onFailure writes a `failed`
@@ -254,28 +253,48 @@ export function updateQueryCacheFromEvent(
       // below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
       if (!variantOnly) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) =>
-              f.id === shotId
-                ? {
-                    ...f,
-                    videoUrl: videoUrl ?? f.videoUrl,
-                    videoStatus: isValidShotStatus(status)
-                      ? status
-                      : f.videoStatus,
-                    // Surface the failure reason live (#881) — see image handler.
-                    videoError:
-                      status === 'failed'
-                        ? (errorMessage ?? f.videoError)
-                        : isValidShotStatus(status)
-                          ? null
-                          : f.videoError,
-                  }
-                : f
-            )
+        queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+          old?.map((f) =>
+            f.id === shotId
+              ? {
+                  ...f,
+                  // The video is a `video_variants` row; same in-place limits
+                  // as the still above — the completion refetch lands a first
+                  // render's row.
+                  video:
+                    videoUrl && f.video
+                      ? { ...f.video, url: videoUrl }
+                      : f.video,
+                  videoStatus: isValidShotStatus(status)
+                    ? status
+                    : f.videoStatus,
+                  // Surface the failure reason live (#881) — see image handler.
+                  primaryVideo: f.primaryVideo
+                    ? {
+                        ...f.primaryVideo,
+                        error:
+                          status === 'failed'
+                            ? (errorMessage ?? f.primaryVideo.error)
+                            : isValidShotStatus(status)
+                              ? null
+                              : f.primaryVideo.error,
+                      }
+                    : f.primaryVideo,
+                }
+              : f
+          )
         );
+        // A terminal primary render appends a `video_variants` row and repoints
+        // the segment's `selectedVideoVersionId`. Neither the new row nor a
+        // first failure's `error` can be synthesized in place, so refetch
+        // (#1067).
+        if (status === 'completed' || status === 'failed') {
+          debouncedInvalidate(
+            queryClient,
+            shotKeys.list(sequenceId),
+            `shots:${sequenceId}`
+          );
+        }
       }
       // Refresh video variant data so the model switcher and per-model overlay
       // stay current (#545). Unlike the image handler, refresh on `failed` too:
@@ -326,20 +345,20 @@ export function updateQueryCacheFromEvent(
     case 'generation.variant-image:progress': {
       const variantImageUrl = getOptionalString(data, 'variantImageUrl');
       const status = data.status;
-      queryClient.setQueryData<ShotWithImage[]>(
-        shotKeys.list(sequenceId),
-        (old) =>
-          old?.map((f) =>
-            f.id === shotId
-              ? {
-                  ...f,
-                  variantImageUrl: variantImageUrl ?? f.variantImageUrl,
-                  variantImageStatus: isValidShotStatus(status)
+      queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+        old?.map((f) =>
+          f.id === shotId
+            ? {
+                ...f,
+                gridSheet: {
+                  url: variantImageUrl ?? f.gridSheet?.url ?? null,
+                  status: isValidShotStatus(status)
                     ? status
-                    : f.variantImageStatus,
-                }
-              : f
-          )
+                    : (f.gridSheet?.status ?? null),
+                },
+              }
+            : f
+        )
       );
       break;
     }
@@ -541,44 +560,23 @@ export function updateQueryCacheFromEvent(
     case 'generation.error':
       // Update shot status if shotId present
       if (shotId) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) =>
-              f.id === shotId
-                ? { ...f, thumbnailStatus: 'failed', videoStatus: 'failed' }
-                : f
-            )
+        queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+          old?.map((f) =>
+            f.id === shotId
+              ? {
+                  ...f,
+                  frame: { ...f.frame, imageStatus: 'failed' },
+                  videoStatus: 'failed',
+                }
+              : f
+          )
         );
       }
       break;
 
     case 'generation.scene:updated': {
-      // Update shot metadata title in cache by matching analysis sceneId
-      const sceneId = getString(data, 'sceneId');
-      const title = getString(data, 'title');
-      if (sceneId && title) {
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) => {
-              if (f.metadata?.sceneId !== sceneId || !f.metadata.metadata)
-                return f;
-              return {
-                ...f,
-                metadata: {
-                  ...f.metadata,
-                  metadata: {
-                    ...f.metadata.metadata,
-                    title,
-                  },
-                },
-              };
-            })
-        );
-      }
-      // Stream also upserts the scenes row (title/location/…) — refetch the
-      // spine grouping source so scene headers stay in sync (#1072).
+      // Scene titles render off the scenes query now, so refetching it is the
+      // whole update (#1072).
       debouncedInvalidate(
         queryClient,
         sceneKeys.list(sequenceId),

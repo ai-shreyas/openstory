@@ -17,6 +17,8 @@ import {
   shots,
   locationLibrary,
   locationSheets,
+  renderSegments,
+  scenes,
   sequences,
   session,
   styles,
@@ -27,9 +29,10 @@ import {
   teams,
   user,
   verification,
+  videoVariants,
 } from '@/lib/db/schema';
 import { getDb } from '#db-client';
-import { and, desc, eq, isNull, like, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, sql } from 'drizzle-orm';
 
 export type CreatedTestUser = {
   id: string;
@@ -240,10 +243,13 @@ export async function createTestShot(
     variantImageStatus = 'pending',
   } = options;
 
+  // Shot order is hierarchical now (#1067): (scenes.orderIndex,
+  // shots.shotNumber). This helper makes a scene-less shot, so the caller's
+  // 0-based index lands on the 1-based shotNumber.
   await db.insert(shots).values({
     id: shotId,
     sequenceId,
-    orderIndex,
+    shotNumber: orderIndex + 1,
     createdAt: now,
     updatedAt: now,
   });
@@ -687,6 +693,7 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
   Array<{
     id: string;
     orderIndex: number;
+    shotNumber: number;
     thumbnailUrl: string | null;
     thumbnailStatus: string | null;
     videoUrl: string | null;
@@ -694,15 +701,41 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
   }>
 > {
   const db = getDb();
-  const rows = await db.query.shots.findMany({
-    where: { sequenceId },
-    columns: {
-      id: true,
-      orderIndex: true,
-      videoUrl: true,
-      videoStatus: true,
-    },
-  });
+  // Shot order is hierarchical now (#1067): (scenes.orderIndex,
+  // shots.shotNumber). The reported orderIndex is the owning scene's.
+  const rows = await db
+    .select({
+      id: shots.id,
+      sceneOrderIndex: scenes.orderIndex,
+      shotNumber: shots.shotNumber,
+    })
+    .from(shots)
+    .leftJoin(scenes, eq(scenes.id, shots.sceneId))
+    .where(eq(shots.sequenceId, sequenceId));
+  // The video lives on the version the shot's render segment points at (#1067
+  // phase 2d); project it back under the legacy videoUrl name.
+  const videoRows = await db
+    .select({ shotId: shots.id, videoUrl: videoVariants.url })
+    .from(shots)
+    .innerJoin(renderSegments, eq(renderSegments.id, shots.renderSegmentId))
+    .innerJoin(
+      videoVariants,
+      eq(videoVariants.id, renderSegments.selectedVideoVersionId)
+    )
+    .where(eq(shots.sequenceId, sequenceId));
+  const videoByShot = new Map(videoRows.map((v) => [v.shotId, v.videoUrl]));
+  const primaryRows = await db
+    .select({ shotId: shots.id, status: videoVariants.status })
+    .from(shots)
+    .innerJoin(
+      videoVariants,
+      eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+    )
+    .where(
+      and(eq(shots.sequenceId, sequenceId), eq(videoVariants.isPrimary, true))
+    )
+    .orderBy(asc(videoVariants.id));
+  const statusByShot = new Map(primaryRows.map((v) => [v.shotId, v.status]));
   // The still-image surface lives on each shot's anchor frame now (#989);
   // project it back under the legacy thumbnail* names — keyed by shotId
   // (orderIndex 0), never by id-reuse.
@@ -724,14 +757,15 @@ export async function getTestSequenceShots(sequenceId: string): Promise<
       const frame = framesByShot.get(row.id);
       return {
         id: row.id,
-        orderIndex: row.orderIndex,
+        orderIndex: row.sceneOrderIndex ?? 0,
+        shotNumber: row.shotNumber ?? 0,
         thumbnailUrl: frame?.imageUrl ?? null,
         thumbnailStatus: frame?.imageStatus ?? null,
-        videoUrl: row.videoUrl,
-        videoStatus: row.videoStatus,
+        videoUrl: videoByShot.get(row.id) ?? null,
+        videoStatus: statusByShot.get(row.id) ?? null,
       };
     })
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    .sort((a, b) => a.orderIndex - b.orderIndex || a.shotNumber - b.shotNumber);
 }
 
 /**

@@ -5,11 +5,18 @@
  * previous run is still in flight, two racing requests can't both win the
  * CAS claim, and the launcher owns the side effects (status write, run-id
  * persistence, deduplication id) so call sites can't drift apart.
+ *
+ * The launcher also owns the trigger-time content snapshot: the payload the
+ * workflow runs on is resolved HERE, from the same row the mutex read, so no
+ * step can re-derive it from a row the user edited in the meantime.
  */
 
 import { describe, expect, test, vi } from 'vitest';
+import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
+import { DEFAULT_ANALYSIS_MODEL } from '@/lib/ai/models.config';
 import type { ScopedDb } from '@/lib/db/scoped';
-import type { StoryboardWorkflowInput } from '@/lib/workflow/types';
+import type { StyleConfig } from '@/lib/db/schema';
+import type { StoryboardTriggerInput } from '@/lib/workflow/types';
 
 const triggerWorkflowMock = vi.fn();
 vi.doMock('@/lib/workflow/client', () => ({
@@ -29,7 +36,7 @@ const {
   GenerationStatusUnknownError,
 } = await import('./launchers');
 
-const INPUT: StoryboardWorkflowInput = {
+const INPUT: StoryboardTriggerInput = {
   userId: 'u1',
   teamId: 't1',
   sequenceId: 'seq_1',
@@ -42,9 +49,26 @@ const INPUT: StoryboardWorkflowInput = {
   },
 };
 
+const STYLE_CONFIG: StyleConfig = {
+  mood: 'tense and hopeful',
+  artStyle: 'photoreal cinematic',
+  lighting: 'hard key, deep shadows',
+  colorPalette: ['#101020', '#e0d0b0'],
+  cameraWork: 'handheld, tight lenses',
+  referenceFilms: ['Children of Men'],
+  colorGrading: 'cool shadows, warm highlights',
+};
+
 function makeScopedDb(opts: {
   workflowRunId: string | null;
   claimSucceeds?: boolean;
+  script?: string | null;
+  styleId?: string | null;
+  style?: { config: StyleConfig } | null;
+  elementIds?: string[];
+  talent?: Array<{ id: string; name: string; description: string | null }>;
+  locations?: Array<{ id: string; name: string; description: string | null }>;
+  musicPrompt?: string | null;
 }) {
   const updateStatus = vi.fn();
   const claimWorkflowSlot = vi.fn<
@@ -57,16 +81,46 @@ function makeScopedDb(opts: {
   const update = vi.fn();
   const getForUser = vi.fn(async () => ({
     id: 'seq_1',
+    title: 'The Long Walk',
+    script: opts.script === undefined ? 'INT. HALLWAY — NIGHT' : opts.script,
+    aspectRatio: '16:9',
+    styleId: opts.styleId === undefined ? 'style_1' : opts.styleId,
+    analysisModel: 'invalid-model-id',
+    imageModel: 'not-a-real-image-model',
+    videoModel: 'not-a-real-video-model',
     workflowRunId: opts.workflowRunId,
+    musicPrompt: opts.musicPrompt ?? null,
     status: 'failed',
   }));
+  const getStyleById = vi.fn(async () =>
+    opts.style === undefined ? { config: STYLE_CONFIG } : opts.style
+  );
+  const listElements = vi.fn(async () =>
+    (opts.elementIds ?? ['el_1', 'el_2']).map((id) => ({ id }))
+  );
+  const getTalentByIds = vi.fn(async () => opts.talent ?? []);
+  const getLocationsByIds = vi.fn(async () => opts.locations ?? []);
   const stub = {
     sequences: { getForUser, claimWorkflowSlot, update },
+    styles: { getById: getStyleById },
+    sequenceElements: { list: listElements },
+    talent: { getByIds: getTalentByIds },
+    locations: { getByIds: getLocationsByIds },
     sequence: () => ({ updateStatus }),
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only what the launcher touches
   const scopedDb = stub as unknown as ScopedDb;
-  return { scopedDb, updateStatus, claimWorkflowSlot, update, getForUser };
+  return {
+    scopedDb,
+    updateStatus,
+    claimWorkflowSlot,
+    update,
+    getForUser,
+    getStyleById,
+    listElements,
+    getTalentByIds,
+    getLocationsByIds,
+  };
 }
 
 describe('triggerStoryboard', () => {
@@ -115,10 +169,11 @@ describe('triggerStoryboard', () => {
     });
     expect(updateStatus).toHaveBeenCalledWith('processing');
     const claimId = claimWorkflowSlot.mock.calls[0]?.[0]?.claimId;
-    expect(triggerWorkflowMock).toHaveBeenCalledWith('/storyboard', INPUT, {
-      deduplicationId: claimId,
-      label: expect.any(String),
-    });
+    expect(triggerWorkflowMock).toHaveBeenCalledWith(
+      '/storyboard',
+      expect.objectContaining(INPUT),
+      { deduplicationId: claimId, label: expect.any(String) }
+    );
     expect(update).toHaveBeenCalledWith({
       id: 'seq_1',
       workflowRunId: 'openstory-so_storyboard_new-run',
@@ -126,6 +181,137 @@ describe('triggerStoryboard', () => {
     expect(result).toEqual({
       workflowRunId: 'openstory-so_storyboard_new-run',
     });
+  });
+
+  test('snapshots the sequence row onto the payload so no step re-derives it', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb, listElements } = makeScopedDb({
+      workflowRunId: null,
+      elementIds: ['el_1', 'el_2'],
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    expect(listElements).toHaveBeenCalledWith('seq_1');
+    expect(triggerWorkflowMock.mock.calls[0]?.[1]).toEqual({
+      ...INPUT,
+      title: 'The Long Walk',
+      script: 'INT. HALLWAY — NIGHT',
+      aspectRatio: '16:9',
+      styleConfig: STYLE_CONFIG,
+      // Unrecognised model ids on the row fall back to the defaults here, not
+      // mid-run.
+      analysisModelId: DEFAULT_ANALYSIS_MODEL,
+      imageModel: DEFAULT_IMAGE_MODEL,
+      videoModel: DEFAULT_VIDEO_MODEL,
+      elementIds: ['el_1', 'el_2'],
+      // No music prompt on the row yet, so whatever the pipeline writes is a
+      // first generation — resolved here, not by a lookup in the grandchild.
+      musicPromptSource: 'ai-generated',
+      // Casting identity is snapshotted here too; INPUT suggests neither.
+      suggestedTalent: [],
+      suggestedLocations: [],
+    });
+  });
+
+  test('a sequence that already has a music prompt snapshots promptSource=regenerated', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb } = makeScopedDb({
+      workflowRunId: null,
+      musicPrompt: 'warm analog synths, slow build',
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    expect(triggerWorkflowMock.mock.calls[0]?.[1]).toMatchObject({
+      musicPromptSource: 'regenerated',
+    });
+  });
+
+  test('snapshots suggested talent + location identity so matching never re-reads it', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb, getTalentByIds, getLocationsByIds } = makeScopedDb({
+      workflowRunId: null,
+      talent: [{ id: 'tal_1', name: 'Alice', description: 'Lead' }],
+      locations: [{ id: 'loc_1', name: 'Docks', description: null }],
+    });
+
+    await triggerStoryboard(scopedDb, {
+      ...INPUT,
+      suggestedTalentIds: ['tal_1'],
+      suggestedLocationIds: ['loc_1'],
+    });
+
+    expect(getTalentByIds).toHaveBeenCalledWith(['tal_1']);
+    expect(getLocationsByIds).toHaveBeenCalledWith(['loc_1']);
+    expect(triggerWorkflowMock.mock.calls[0]?.[1]).toMatchObject({
+      suggestedTalent: [
+        { talentId: 'tal_1', name: 'Alice', description: 'Lead' },
+      ],
+      suggestedLocations: [
+        { locationId: 'loc_1', name: 'Docks', description: null },
+      ],
+    });
+  });
+
+  test('skips the identity reads entirely when nothing is suggested', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb, getTalentByIds, getLocationsByIds } = makeScopedDb({
+      workflowRunId: null,
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    expect(getTalentByIds).not.toHaveBeenCalled();
+    expect(getLocationsByIds).not.toHaveBeenCalled();
+  });
+
+  test('sequence with no script → throws synchronously, nothing claimed or triggered', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    const { scopedDb, claimWorkflowSlot } = makeScopedDb({
+      workflowRunId: null,
+      script: '   ',
+    });
+
+    await expect(triggerStoryboard(scopedDb, INPUT)).rejects.toThrow(
+      'Sequence has no script'
+    );
+    expect(claimWorkflowSlot).not.toHaveBeenCalled();
+    expect(triggerWorkflowMock).not.toHaveBeenCalled();
+  });
+
+  test('sequence with no style → throws synchronously', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    const { scopedDb } = makeScopedDb({
+      workflowRunId: null,
+      styleId: null,
+    });
+
+    await expect(triggerStoryboard(scopedDb, INPUT)).rejects.toThrow(
+      'Sequence has no style selected'
+    );
+    expect(triggerWorkflowMock).not.toHaveBeenCalled();
+  });
+
+  test('style row deleted → throws synchronously', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    const { scopedDb } = makeScopedDb({ workflowRunId: null, style: null });
+
+    await expect(triggerStoryboard(scopedDb, INPUT)).rejects.toThrow(
+      'No style found'
+    );
+    expect(triggerWorkflowMock).not.toHaveBeenCalled();
   });
 
   test('no previous run (fresh sequence) → claims against null without a status lookup', async () => {

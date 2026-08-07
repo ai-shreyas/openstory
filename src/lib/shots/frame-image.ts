@@ -15,9 +15,19 @@
 
 import type { ScopedDb } from '@/lib/db/scoped';
 
+/**
+ * Only the two reads these helpers make, so a workflow can pass
+ * `scopedDb.liveRead` (its narrowed read surface) and a server fn its full
+ * `ScopedDb`.
+ */
+export type FrameImageReadDb = {
+  frames: Pick<ScopedDb['frames'], 'getAnchorByShot'>;
+  frameVariants: Pick<ScopedDb['frameVariants'], 'getSelected'>;
+};
+
 /** The selected still's URL for a frame, or null when it has none. */
 export async function getFrameImageUrl(
-  scopedDb: Pick<ScopedDb, 'frameVariants'>,
+  scopedDb: Pick<FrameImageReadDb, 'frameVariants'>,
   frameId: string
 ): Promise<string | null> {
   const selected = await scopedDb.frameVariants.getSelected(frameId);
@@ -30,7 +40,7 @@ export async function getFrameImageUrl(
  * equality. Null when the shot has no anchor frame or no selected still.
  */
 export async function getAnchorImageUrl(
-  scopedDb: Pick<ScopedDb, 'frames' | 'frameVariants'>,
+  scopedDb: FrameImageReadDb,
   shotId: string
 ): Promise<string | null> {
   const anchor = await scopedDb.frames.getAnchorByShot(shotId);

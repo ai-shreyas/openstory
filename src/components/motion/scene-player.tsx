@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useShotDownloadUrl } from '@/hooks/use-shot-download-url';
 import {
   type AspectRatio,
@@ -16,7 +17,7 @@ import {
   getAspectRatioClassName,
 } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { AppImage } from '@/components/ui/app-image';
 import {
   AlertCircle,
@@ -32,7 +33,9 @@ import { VideoPlayer } from './video-player';
 import { VideoStateOverlay } from './video-state-overlay';
 
 type ScenePlayerProps = {
-  shots?: ShotWithImage[];
+  shots?: ShotView[];
+  /** Scenes the shots belong to — the source of the displayed scene's title. */
+  scenes?: readonly SceneWithScript[];
   selectedShotId?: string;
   aspectRatio: AspectRatio;
   /**
@@ -81,6 +84,7 @@ type ScenePlayerProps = {
 
 export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   shots,
+  scenes,
   className,
   wrapperClassName,
   selectedShotId,
@@ -114,45 +118,43 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
       ? shots.find(
           (shot, index) =>
             shot.videoStatus === 'completed' &&
-            shot.videoUrl &&
+            shot.video?.url &&
             index > currentShotIndex
         )
       : undefined;
 
   const handleCopyImageUrl = useCallback(async () => {
-    if (!currentShot?.thumbnailUrl) return;
+    if (!currentShot?.image?.url) return;
     try {
       // Stored media URLs are origin-relative (#894) — absolutize against the
       // current origin so the copied link is usable when pasted elsewhere. The
       // worker's public /r2 route serves it (redirecting to the CDN in prod).
-      const absoluteUrl = new URL(
-        currentShot.thumbnailUrl,
-        window.location.origin
-      ).href;
+      const absoluteUrl = new URL(currentShot.image.url, window.location.origin)
+        .href;
       await navigator.clipboard.writeText(absoluteUrl);
       toast.success('Start frame URL copied');
     } catch {
       toast.error('Failed to copy URL');
     }
-  }, [currentShot?.thumbnailUrl]);
+  }, [currentShot?.image?.url]);
 
   const handleCopyVideoUrl = useCallback(async () => {
-    if (!currentShot?.videoUrl) return;
+    if (!currentShot?.video?.url) return;
     try {
-      const absoluteUrl = new URL(currentShot.videoUrl, window.location.origin)
+      const absoluteUrl = new URL(currentShot.video.url, window.location.origin)
         .href;
       await navigator.clipboard.writeText(absoluteUrl);
       toast.success('Segment URL copied');
     } catch {
       toast.error('Failed to copy URL');
     }
-  }, [currentShot?.videoUrl]);
+  }, [currentShot?.video?.url]);
 
   // Check video status
   const hasCompletedVideo =
     currentShot &&
     currentShot.videoStatus === 'completed' &&
-    currentShot.videoUrl;
+    currentShot.video?.url;
   const hasFailedVideo = currentShot && currentShot.videoStatus === 'failed';
 
   // Fetch signed download URL with Content-Disposition header (forces browser download)
@@ -271,24 +273,29 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   }
 
   // Get scene title for alt text — match scene-list-item fallback
-  const sceneNumber =
-    currentShot.metadata?.sceneNumber ??
-    (currentShotIndex >= 0 ? currentShotIndex + 1 : undefined);
+  const currentScene = currentShot.sceneId
+    ? scenes?.find((s) => s.id === currentShot.sceneId)
+    : undefined;
+  const sceneNumber = currentScene
+    ? currentScene.orderIndex + 1
+    : currentShotIndex >= 0
+      ? currentShotIndex + 1
+      : undefined;
   const title =
-    currentShot.metadata?.metadata?.title ??
+    currentScene?.title?.trim() ||
     (sceneNumber ? `Scene ${sceneNumber}` : undefined);
 
   // Best available image: override (variant preview) → final thumbnail → fast preview → sequence poster
   const displayImage =
     overrideImageUrl ??
-    currentShot.thumbnailUrl ??
-    currentShot.previewThumbnailUrl ??
+    currentShot.image?.url ??
+    currentShot.frame.previewImageUrl ??
     posterUrl ??
     null;
   const isPreviewImage =
-    !!currentShot.previewThumbnailUrl && !currentShot.thumbnailUrl;
+    !!currentShot.frame.previewImageUrl && !currentShot.image?.url;
   const isVariantPreview =
-    !!overrideImageUrl && overrideImageUrl !== currentShot.thumbnailUrl;
+    !!overrideImageUrl && overrideImageUrl !== currentShot.image?.url;
 
   // The image-focused tabs (the still image + the shot-variant grid) keep
   // showing the image; every other tab (script, motion, cast, location,
@@ -301,10 +308,10 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   const isVariantVideoPreview =
     !!overrideVideoUrl &&
     !showsStillImage &&
-    overrideVideoUrl !== currentShot.videoUrl;
+    overrideVideoUrl !== currentShot.video?.url;
   const playbackVideoUrl = showsStillImage
     ? ''
-    : (overrideVideoUrl ?? currentShot.videoUrl ?? '');
+    : (overrideVideoUrl ?? currentShot.video?.url ?? '');
 
   return (
     <div className={cn('relative flex w-full flex-col', wrapperClassName)}>
@@ -321,7 +328,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           {/* Show best available image as background */}
           {displayImage && (
             <a
-              href={currentShot.thumbnailUrl ?? displayImage}
+              href={currentShot.image?.url ?? displayImage}
               target="_blank"
               rel="noopener noreferrer"
               className="block w-full h-full"
@@ -337,7 +344,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           )}
 
           {/* Share dropdown */}
-          {currentShot.thumbnailUrl && (
+          {currentShot.image?.url && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -382,7 +389,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           )}
         >
           {/* Share dropdown */}
-          {(currentShot.thumbnailUrl || currentShot.videoUrl) && (
+          {(currentShot.image?.url || currentShot.video?.url) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -395,13 +402,13 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {currentShot.thumbnailUrl && (
+                {currentShot.image?.url && (
                   <DropdownMenuItem onClick={() => void handleCopyImageUrl()}>
                     <Link className="h-4 w-4" />
                     Copy start frame URL
                   </DropdownMenuItem>
                 )}
-                {currentShot.videoUrl && (
+                {currentShot.video?.url && (
                   <DropdownMenuItem onClick={() => void handleCopyVideoUrl()}>
                     <VideoIcon className="h-4 w-4" />
                     Copy segment URL
@@ -448,9 +455,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           <VideoStateOverlay
             thumbnailUrl={displayImage}
             videoStatus={
-              isVariantVideoPreview
-                ? 'completed'
-                : (currentShot.videoStatus ?? null)
+              isVariantVideoPreview ? 'completed' : currentShot.videoStatus
             }
             progressMessage={progressMessage}
             retry={retry}
@@ -498,12 +503,12 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
         Fast preview — may not match the final image.
       </p>
       {/* Preload next video in background if it's completed */}
-      {nextShot?.videoUrl && nextShot.videoStatus === 'completed' && (
+      {nextShot?.video?.url && nextShot.videoStatus === 'completed' && (
         <div className="hidden">
           {/* eslint-disable-next-line jsx-a11y/media-has-caption -- preload only, not user-facing */}
           <video
-            key={nextShot.videoUrl}
-            src={nextShot.videoUrl}
+            key={nextShot.video.url}
+            src={nextShot.video.url}
             preload="auto"
           />
         </div>

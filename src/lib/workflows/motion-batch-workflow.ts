@@ -22,7 +22,7 @@
  *     so a single bad shot doesn't kill the rest of the batch. */
 
 import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { assembleMotionPrompt } from '@/lib/motion/assemble-motion-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -52,7 +52,7 @@ export class MotionBatchWorkflow extends OpenStoryWorkflowEntrypoint<BatchMotion
     // Fan-out uses workflow bindings, not direct DB access; the merge steps
     // that read shots were removed (browser-side merge). Kept for signature
     // parity with the abstract runImpl.
-    _scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<MotionBatchWorkflowResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -97,7 +97,11 @@ export class MotionBatchWorkflow extends OpenStoryWorkflowEntrypoint<BatchMotion
         teamId: input.teamId,
         shotId: shot.shotId,
         sequenceId,
+        // Pinned at the trigger — passed through untouched, never re-derived.
+        sceneId: shot.sceneId,
         imageUrl: shot.imageUrl,
+        frameVersionId: shot.frameVersionId,
+        motionPromptVersionId: shot.motionPromptVersionId,
         prompt,
         model,
         duration: shot.duration,
@@ -105,7 +109,9 @@ export class MotionBatchWorkflow extends OpenStoryWorkflowEntrypoint<BatchMotion
         motionBucket: shot.motionBucket,
         aspectRatio: shot.aspectRatio,
         generateAudio: shot.generateAudio,
-        userEditedPrompt: shot.userEditedPrompt,
+        userEditProvenance: shot.userEditProvenance,
+        sceneTitle: shot.sceneTitle,
+        sequenceTitle: shot.sequenceTitle,
         priorMotion: shot.priorMotion,
         // Cast/element reference images (#873) — only Kling v3 Pro emits them.
         referenceImages: shot.referenceImages,
@@ -232,7 +238,7 @@ export class MotionBatchWorkflow extends OpenStoryWorkflowEntrypoint<BatchMotion
   }: {
     event: Readonly<WorkflowEvent<BatchMotionMusicWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

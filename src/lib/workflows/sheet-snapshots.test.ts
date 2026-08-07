@@ -15,6 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   CharacterSheetWorkflowInput,
+  LibraryLocationSheetWorkflowInput,
   LibraryTalentSheetWorkflowInput,
   LocationSheetWorkflowInput,
 } from '@/lib/workflow/types';
@@ -23,6 +24,8 @@ import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import {
   computeCharacterSheetHashCurrent,
   computeCharacterSheetHashFromDto,
+  computeLibraryLocationSheetHashCurrent,
+  computeLibraryLocationSheetHashFromDto,
   computeLibraryTalentSheetHashCurrent,
   computeLibraryTalentSheetHashFromDto,
   computeLocationSheetHashCurrent,
@@ -45,6 +48,10 @@ type LocationStub = {
 
 type TalentStub = {
   talent: { getWithRelations: (id: string) => Promise<unknown> };
+};
+
+type LibraryLocationStub = {
+  locations: { getById: (id: string) => Promise<unknown> };
 };
 
 function asScopedDb<T>(stub: T): ScopedDb {
@@ -214,6 +221,8 @@ describe('library-talent-sheet hash', () => {
       talent: {
         getWithRelations: async () => ({
           id: 'tal1',
+          name: 'Alice',
+          description: 'Lead actress',
           media: [
             { type: 'image', url: 'https://r2/b.png' },
             { type: 'image', url: 'https://r2/a.png' },
@@ -263,6 +272,8 @@ describe('library-talent-sheet hash', () => {
       talent: {
         getWithRelations: async () => ({
           id: 'tal1',
+          name: 'Alice',
+          description: 'Lead actress',
           media: [
             { type: 'image', url: 'https://r2/a.png' },
             { type: 'image', url: 'https://r2/b.png' },
@@ -276,5 +287,152 @@ describe('library-talent-sheet hash', () => {
       asScopedDb(stub)
     );
     expect(dtoHash).toBe(currentHash);
+  });
+
+  it('diverges when the talent was renamed mid-run', async () => {
+    const dtoHash = await computeLibraryTalentSheetHashFromDto(baseInput);
+    const stub: TalentStub = {
+      talent: {
+        getWithRelations: async () => ({
+          id: 'tal1',
+          name: 'Alicia',
+          description: 'Lead actress',
+          media: [
+            { type: 'image', url: 'https://r2/a.png' },
+            { type: 'image', url: 'https://r2/b.png' },
+          ],
+        }),
+      },
+    };
+    const currentHash = await computeLibraryTalentSheetHashCurrent(
+      baseInput,
+      asScopedDb(stub)
+    );
+    expect(dtoHash).not.toBe(currentHash);
+  });
+
+  it('diverges when the talent description was cleared mid-run', async () => {
+    const dtoHash = await computeLibraryTalentSheetHashFromDto(baseInput);
+    const stub: TalentStub = {
+      talent: {
+        getWithRelations: async () => ({
+          id: 'tal1',
+          name: 'Alice',
+          description: null,
+          media: [
+            { type: 'image', url: 'https://r2/a.png' },
+            { type: 'image', url: 'https://r2/b.png' },
+          ],
+        }),
+      },
+    };
+    const currentHash = await computeLibraryTalentSheetHashCurrent(
+      baseInput,
+      asScopedDb(stub)
+    );
+    expect(dtoHash).not.toBe(currentHash);
+  });
+
+  it('falls back to the payload identity when the talent row vanished', async () => {
+    const dtoHash = await computeLibraryTalentSheetHashFromDto(baseInput);
+    const stub: TalentStub = {
+      talent: { getWithRelations: async () => null },
+    };
+    const currentHash = await computeLibraryTalentSheetHashCurrent(
+      baseInput,
+      asScopedDb(stub)
+    );
+    expect(dtoHash).toBe(currentHash);
+  });
+});
+
+describe('library-location-sheet hash', () => {
+  const baseInput: LibraryLocationSheetWorkflowInput = {
+    userId: 'u1',
+    teamId: 't1',
+    sequenceId: 'library',
+    locationDbId: 'loc1',
+    locationName: 'Rooftop Bar',
+    locationDescription: 'Neon-lit, overlooking the harbour',
+    referenceImageUrls: ['https://r2/a.png', 'https://r2/b.png'],
+    imageModel: 'nano_banana_2',
+  };
+
+  it('FromDto matches Current when the live row still matches the payload', async () => {
+    const dtoHash = await computeLibraryLocationSheetHashFromDto(baseInput);
+    const stub: LibraryLocationStub = {
+      locations: {
+        getById: async () => ({
+          id: 'loc1',
+          name: 'Rooftop Bar',
+          description: 'Neon-lit, overlooking the harbour',
+        }),
+      },
+    };
+    const currentHash = await computeLibraryLocationSheetHashCurrent(
+      baseInput,
+      asScopedDb(stub)
+    );
+    expect(dtoHash).toBe(currentHash);
+  });
+
+  it('is insensitive to inlined URL order', async () => {
+    const a = await computeLibraryLocationSheetHashFromDto({
+      ...baseInput,
+      referenceImageUrls: ['x', 'y', 'z'],
+    });
+    const b = await computeLibraryLocationSheetHashFromDto({
+      ...baseInput,
+      referenceImageUrls: ['z', 'y', 'x'],
+    });
+    expect(a).toBe(b);
+  });
+
+  it('diverges when the location was renamed mid-run', async () => {
+    const dtoHash = await computeLibraryLocationSheetHashFromDto(baseInput);
+    const stub: LibraryLocationStub = {
+      locations: {
+        getById: async () => ({
+          id: 'loc1',
+          name: 'Harbour Rooftop',
+          description: 'Neon-lit, overlooking the harbour',
+        }),
+      },
+    };
+    const currentHash = await computeLibraryLocationSheetHashCurrent(
+      baseInput,
+      asScopedDb(stub)
+    );
+    expect(dtoHash).not.toBe(currentHash);
+  });
+
+  it('diverges when the description was cleared mid-run', async () => {
+    const dtoHash = await computeLibraryLocationSheetHashFromDto(baseInput);
+    const stub: LibraryLocationStub = {
+      locations: {
+        getById: async () => ({
+          id: 'loc1',
+          name: 'Rooftop Bar',
+          description: null,
+        }),
+      },
+    };
+    const currentHash = await computeLibraryLocationSheetHashCurrent(
+      baseInput,
+      asScopedDb(stub)
+    );
+    expect(dtoHash).not.toBe(currentHash);
+  });
+
+  it('treats a missing imageModel as DEFAULT_IMAGE_MODEL', async () => {
+    const omitted = await computeLibraryLocationSheetHashFromDto({
+      ...baseInput,
+      imageModel: undefined,
+    });
+    const explicit = await computeLibraryLocationSheetHashFromDto({
+      ...baseInput,
+      imageModel: DEFAULT_IMAGE_MODEL,
+    });
+    expect(omitted).toBe(explicit);
   });
 });

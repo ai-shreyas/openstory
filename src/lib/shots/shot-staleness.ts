@@ -108,7 +108,6 @@ export async function computeShotStaleness(args: {
   refs?: ShotStalenessRefs;
 }): Promise<ShotStalenessResult> {
   const { scopedDb, sequence, shot, frame, selectedImage, scene, refs } = args;
-  const shotForHash = scene ? { ...shot, metadata: scene } : shot;
 
   const liveHashes: ShotLiveHashes = {
     thumbnail: null,
@@ -116,11 +115,10 @@ export async function computeShotStaleness(args: {
     motionPrompt: null,
   };
   let thumbnail: ArtifactStaleness = 'untracked';
-  // The visual prompt lives solely on the anchor frame's `imagePrompt` mirror
-  // now (#989/#713): the visual-prompt workflow writes a `frame_prompt_versions`
-  // row that mirrors onto `frame.imagePrompt`, so AI-generated and regenerated
-  // shots both populate it — the old `metadata.prompts.visual` fallback is gone.
-  const effectivePrompt = frame.imagePrompt;
+  const selectedPrompt = await scopedDb.framePromptVersions.getSelected(
+    frame.id
+  );
+  const effectivePrompt = selectedPrompt?.text ?? null;
   if (effectivePrompt) {
     // Distinguish "stored hash absent" from "stored hash matches". No selected
     // version, or a version with a null hash (the image predates hash tracking,
@@ -141,8 +139,10 @@ export async function computeShotStaleness(args: {
             ]);
 
         const snapshot = await buildRegenerateShotSnapshot({
-          shot: shotForHash,
-          imagePrompt: frame.imagePrompt,
+          shot,
+          scene,
+          frameId: frame.id,
+          imagePrompt: effectivePrompt,
           characters,
           locations,
           elements,
@@ -175,18 +175,16 @@ export async function computeShotStaleness(args: {
   let visualPrompt: ArtifactStaleness = 'untracked';
   let motionPrompt: ArtifactStaleness = 'untracked';
 
-  // Reference hash resolution: prefer the cached column on `shots`, but
-  // fall back to the most recent variant with a non-null `inputHash` for
-  // shots whose cached column was nulled by a pre-fix user-edit. Without
-  // the fallback, those shots are stuck at `'untracked'` permanently.
+  // Reference hash resolution: prefer the SELECTED version's `inputHash`, but
+  // fall back to the most recent version with a non-null one for prompts whose
+  // selected row carries a null hash (a pre-fix user-edit, or the force-regen
+  // path). Without the fallback, those are stuck at `'untracked'` permanently.
   if (scene) {
     // The fallback read is inside the try: it is exactly the transient-D1 case
     // the catch exists for, and outside it one bad read rejects the caller's
     // whole batch.
     try {
-      // Visual prompt history moved to `frame_prompt_versions` (#989); the
-      // cached hash mirror lives on the anchor frame.
-      let referenceHash = frame.visualPromptInputHash;
+      let referenceHash = selectedPrompt?.inputHash ?? null;
       if (!referenceHash) {
         const fallback =
           await scopedDb.framePromptVersions.getLatestWithInputHash(frame.id);
@@ -217,7 +215,9 @@ export async function computeShotStaleness(args: {
 
   if (scene) {
     try {
-      let referenceHash = shot.motionPromptInputHash;
+      let referenceHash =
+        (await scopedDb.shotPromptVersions.getSelectedMotion(shot.id))
+          ?.inputHash ?? null;
       if (!referenceHash) {
         const fallback =
           await scopedDb.shotPromptVersions.getLatestWithInputHash(

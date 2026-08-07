@@ -9,7 +9,7 @@ import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import { getWorkflowRunOutcome } from '@/lib/workflow/run-outcome';
 import { workflowNameFromRunId } from '@/lib/workflow/trigger-bindings';
-import type { ShotVariant, NewShot } from '@/lib/db/schema';
+import type { NewShot } from '@/lib/db/schema';
 import {
   computeShotStaleness,
   UNTRACKED_STALENESS,
@@ -20,12 +20,12 @@ import {
   DEFAULT_UPDATE_STALE_DEPTH,
   UPDATE_STALE_DEPTHS,
 } from '@/lib/shots/update-stale-depth';
+import { computePlan } from '@/lib/shots/update-stale-plan';
 import {
-  projectShotWithImage,
-  projectShotMissingFrame,
+  toShotView,
+  shotViewMissingFrame,
   type ShotGridSheet,
-} from '@/lib/shots/shot-with-image';
-import { getGenerationChannel } from '@/lib/realtime';
+} from '@/lib/shots/shot-view';
 import { getVideoDownloadUrl } from '@/lib/motion/video-storage';
 import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import { projectVideoVariants } from '@/lib/motion/video-variant-projection';
@@ -34,12 +34,11 @@ import {
   singleShotSchema,
   updateShotSchema,
 } from '@/lib/schemas/shot.schemas';
+import { dbSceneId } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { typedFromEntries } from '@/lib/utils/typed-object';
 import {
-  enrichShotWithSceneScript,
-  loadSelectedScriptsBySequence,
-  projectShotForClient,
+  loadSceneContextBySequence,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
@@ -69,29 +68,37 @@ export const getShotsFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const { scopedDb, sequence } = context;
     const shotRows = await scopedDb.shots.listBySequence(sequence.id);
-    // Guarantee every shot has its anchor frame, then project the image surface
-    // (#989) back under the legacy thumbnail*/image* names so the UI is unchanged.
+    // Guarantee every shot has its anchor frame before assembling its view.
     await scopedDb.shots.ensureAnchorFrames(shotRows);
-    const [anchorRows, gridSheets, motionByShot, scriptBySceneId] =
-      await Promise.all([
-        scopedDb.frames.listAnchorsBySequence(sequence.id),
-        scopedDb.frameVariants.listLatestGridSheetsBySequence(sequence.id),
-        scopedDb.shotPromptVersions.getSelectedMotionByShots(
-          shotRows.map((s) => s.id)
-        ),
-        loadSelectedScriptsBySequence(scopedDb, sequence.id),
-      ]);
-    // The still lives on the selected `frame_variants` row (#1067) — one batch
-    // read keyed by frame id, so projecting the sequence stays O(1) queries.
-    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
-      anchorRows.map((f) => f.id)
-    );
+    const [anchorRows, gridSheets, motionByShot] = await Promise.all([
+      scopedDb.frames.listAnchorsBySequence(sequence.id),
+      scopedDb.frameVariants.listLatestGridSheetsBySequence(sequence.id),
+      scopedDb.shotPromptVersions.getSelectedMotionByShots(
+        shotRows.map((s) => s.id)
+      ),
+    ]);
+    // The still lives on the selected `frame_variants` row and the video on the
+    // segment's selected `video_variants` row (#1067) — one batch read each, so
+    // assembling the sequence stays O(1) queries.
+    const shotIds = shotRows.map((s) => s.id);
+    const [
+      selectedByFrame,
+      selectedPromptByFrame,
+      selectedVideoByShot,
+      primaryVideoByShot,
+    ] = await Promise.all([
+      scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+      scopedDb.framePromptVersions.getSelectedByFrameIds(
+        anchorRows.map((f) => f.id)
+      ),
+      scopedDb.videoVariants.getSelectedByShotIds(shotIds),
+      scopedDb.videoVariants.getPrimaryByShotIds(shotIds),
+    ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
-    return shotRows.map((rawShot) => {
-      const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
+    return shotRows.map((shot) => {
       const frame = anchorsByShot.get(shot.id);
       const selectedMotion = motionByShot.get(shot.id);
-      const motionPromptData = selectedMotion
+      const motionPrompt = selectedMotion
         ? motionPromptFromVersion(selectedMotion)
         : null;
       // `ensureAnchorFrames` above guarantees an anchor for every shot, so this
@@ -102,20 +109,27 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         logger.error(
           `getShotsFn: shot ${shot.id} has no anchor frame after ensureAnchorFrames`
         );
-        return projectShotMissingFrame(shot);
+        return shotViewMissingFrame(shot, {
+          video: selectedVideoByShot.get(shot.id) ?? null,
+          primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
+          // Motion lives on the shot, not the frame — a frameless shot still
+          // has one. The sibling reads in sequences/admin already pass it.
+          motionPrompt,
+        });
       }
       // Grid sheets are keyed by frame id (#989), resolved from the anchor.
       const sheet = gridSheets.get(frame.id);
       const gridSheet: ShotGridSheet | null = sheet
         ? { url: sheet.url, status: sheet.status }
         : null;
-      return projectShotWithImage(
-        shot,
-        frame,
-        selectedByFrame.get(frame.id) ?? null,
+      return toShotView(shot, frame, {
+        image: selectedByFrame.get(frame.id) ?? null,
+        imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+        video: selectedVideoByShot.get(shot.id) ?? null,
+        primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
         gridSheet,
-        motionPromptData
-      );
+        motionPrompt,
+      });
     });
   });
 
@@ -149,19 +163,31 @@ export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
 export const getShotFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .handler(async ({ context }) => {
-    const [sheet, selectedMotion, selectedImage] = await Promise.all([
+    const [
+      sheet,
+      selectedMotion,
+      image,
+      imagePromptVersion,
+      video,
+      primaryVideo,
+    ] = await Promise.all([
       context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
       context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
       context.scopedDb.frameVariants.getSelected(context.frame.id),
+      context.scopedDb.framePromptVersions.getSelected(context.frame.id),
+      context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
+      context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
     ]);
-    const shot = projectShotForClient(context.shot, context.script);
-    return projectShotWithImage(
-      shot,
-      context.frame,
-      selectedImage,
-      sheet ? { url: sheet.url, status: sheet.status } : null,
-      selectedMotion ? motionPromptFromVersion(selectedMotion) : null
-    );
+    return toShotView(context.shot, context.frame, {
+      image,
+      imagePromptVersion,
+      video,
+      primaryVideo,
+      gridSheet: sheet ? { url: sheet.url, status: sheet.status } : null,
+      motionPrompt: selectedMotion
+        ? motionPromptFromVersion(selectedMotion)
+        : null,
+    });
   });
 
 export const getSequenceImageModelsFn = createServerFn({ method: 'GET' })
@@ -197,59 +223,22 @@ export const getDivergentVariantsFn = createServerFn({ method: 'GET' })
     );
   });
 
-type PromoteProgressEvent = 'video:progress';
-type PromoteProgressUrlField = 'videoUrl';
-
 /**
- * Build the per-variantType `shots` update payload and matching realtime
- * progress event metadata for a promote-variant operation. Exported (and
- * pure) for unit testing — the server-fn handler wraps this in auth +
- * persistence.
+ * Promote a divergent `shot_variants` alternate to the live primary.
  *
- * Image promotion is retired (#989): image variants live in `frame_variants`
- * and selection is a pointer repoint via `setImageFromVariantFn` /
- * `frameVariants.select`, not a divergent-alternate promote. Per-shot audio
- * was never built (#1067) — music is sequence-level on `sequences.music*` — so
- * video is the only promotable variant type.
- */
-export function buildPromoteUpdate(variant: ShotVariant): {
-  update: Partial<NewShot>;
-  progressEvent: PromoteProgressEvent;
-  progressUrlField: PromoteProgressUrlField;
-} {
-  const update: Partial<NewShot> = {};
-
-  switch (variant.variantType) {
-    case 'image':
-      throw new Error(
-        'Image variants are not promoted — select via frameVariants.select (#989)'
-      );
-    case 'audio':
-      throw new Error(
-        'Audio variants are not promoted — per-shot audio does not exist (#1067)'
-      );
-    case 'video':
-      update.videoUrl = variant.url;
-      update.videoPath = variant.storagePath;
-      update.videoStatus = 'completed';
-      update.videoError = null;
-      update.videoInputHash = variant.inputHash;
-      break;
-  }
-
-  return {
-    update,
-    progressEvent: 'video:progress',
-    progressUrlField: 'videoUrl',
-  };
-}
-
-/**
- * Promote a divergent alternate to be the live primary for its variant type.
- * Copies the variant's url/path into the matching shots column, updates the
- * matching `*_input_hash` so the live row reflects the alternate's inputs,
- * soft-deletes the variant, and emits a synthetic `*:progress` event so any
- * listeners refresh.
+ * Every variant type this once served has since moved off `shot_variants`, so
+ * there is nothing left to promote:
+ * - image → `frame_variants`, selected by pointer (#989)
+ * - video → `video_variants`, selected by the segment pointer (#990); #1067
+ *   phase 2d then dropped the `shots.video*` columns this wrote into, so the
+ *   copy-onto-the-shot model has no target at all
+ * - audio → never existed per-shot; music is sequence-level (#1067)
+ *
+ * Divergence itself is retired with them: `projectVideoVariants` hardcodes
+ * `divergedAt: null`, so `listDivergentBySequence` can only ever surface rows
+ * written before those cutovers. Deleting the remaining `shot_variants` surface
+ * is explicitly out of scope for #1067, so the endpoint stays (the client still
+ * imports it) and fails loudly rather than silently doing nothing.
  */
 export const promoteVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
@@ -262,47 +251,10 @@ export const promoteVariantFn = createServerFn({ method: 'POST' })
       })
     )
   )
-  .handler(async ({ data, context }) => {
-    const { shot, scopedDb } = context;
-    const variant = await scopedDb.shotVariants.getById(data.variantId);
-    if (!variant || variant.shotId !== shot.id) {
-      throw new Error('Variant not found for this shot');
-    }
-    if (variant.divergedAt === null || variant.discardedAt !== null) {
-      throw new Error('Variant is not a live divergent alternate');
-    }
-    if (!variant.url) {
-      throw new Error('Variant has no asset to promote');
-    }
-
-    const { update, progressEvent, progressUrlField } =
-      buildPromoteUpdate(variant);
-
-    // Atomic: a partial failure can't leave the live primary updated with the
-    // variant still appearing in the divergent list (or vice versa).
-    const { shot: updatedShot } = await scopedDb.shotVariants.promoteAtomically(
-      shot.id,
-      update,
-      variant.id
+  .handler(async () => {
+    throw new Error(
+      'Promoting a divergent alternate is retired — pick a version from the shot’s video history instead (selectSegmentVideoVersionFn), or a model via setVideoFromVariantFn.'
     );
-
-    // Realtime emit is purely cache-busting — TanStack Query refetches on the
-    // mutation onSuccess invalidation regardless. A failed emit must not
-    // surface to the user as "promote failed" when the DB already committed.
-    const channel = getGenerationChannel(data.sequenceId);
-    try {
-      const url = updatedShot[progressUrlField] ?? variant.url;
-      await channel.emit(`generation.${progressEvent}`, {
-        shotId: shot.id,
-        status: 'completed',
-        videoUrl: url,
-        model: variant.model,
-      });
-    } catch (error) {
-      logger.error('realtime emit failed', { err: error });
-    }
-
-    return { shot: updatedShot, variantId: variant.id };
   });
 
 export const discardVariantFn = createServerFn({ method: 'POST' })
@@ -442,30 +394,29 @@ export const updateShotFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequenceId, shotId, ...updateData } = data;
 
-    // Scene-script edits route through `updateSceneScriptFn` (#1030). Reject
-    // legacy metadata.originalScript writes so the shot copy stays write-only.
-    if (updateData.metadata?.originalScript?.extract !== undefined) {
-      throw new Error(
-        'Scene script edits must use updateSceneScriptFn (#1030)'
-      );
-    }
-
     // When a user edits a prompt, auto-link any element/cast/location tags
-    // they mentioned by additively merging them into shot.metadata.continuity
+    // they mentioned by additively merging them into the scene's continuity
     // so the next generation pulls those references in (#683). Skip when the
     // prompt value hasn't actually changed, so plain saves stay a single
     // UPDATE with no extra reads.
+    const selectedImagePrompt =
+      updateData.imagePrompt === undefined
+        ? null
+        : await context.scopedDb.framePromptVersions.getSelected(
+            context.frame.id
+          );
     const imagePromptChanged =
       updateData.imagePrompt !== undefined &&
-      updateData.imagePrompt !== context.frame.imagePrompt;
+      updateData.imagePrompt !== (selectedImagePrompt?.text ?? null);
+    const selectedMotion =
+      updateData.motionPrompt === undefined
+        ? null
+        : await context.scopedDb.shotPromptVersions.getSelectedMotion(shotId);
     const motionPromptChanged =
       updateData.motionPrompt !== undefined &&
-      updateData.motionPrompt !== context.shot.motionPrompt;
-    const shotMetadata = context.shot.metadata;
-    if (
-      (imagePromptChanged || motionPromptChanged) &&
-      shotMetadata?.continuity
-    ) {
+      updateData.motionPrompt !== (selectedMotion?.text ?? null);
+    const sceneContinuity = context.scene?.continuity;
+    if ((imagePromptChanged || motionPromptChanged) && sceneContinuity) {
       const promptText = [
         imagePromptChanged ? updateData.imagePrompt : null,
         motionPromptChanged ? updateData.motionPrompt : null,
@@ -476,23 +427,30 @@ export const updateShotFn = createServerFn({ method: 'POST' })
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
         sequenceId,
-        existing: shotMetadata.continuity,
+        existing: sceneContinuity,
         promptText,
       });
 
-      if (rescan.changed) {
-        updateData.metadata = {
-          ...shotMetadata,
-          continuity: rescan.continuity,
-        };
+      // Continuity is scene-scoped: auto-linking script tokens describes the
+      // scene, not one of its shots.
+      if (rescan.changed && context.shot.sceneId) {
+        await context.scopedDb.scenes.update(
+          dbSceneId(context.shot.sceneId),
+          { continuity: rescan.continuity },
+          { throwOnMissing: false }
+        );
       }
     }
 
-    // The image prompt lives on the anchor frame (#989), not a `shots` column.
-    // Persist a changed prompt as a user-edit `frame_prompt_versions` row (which
-    // mirrors it onto `frame.imagePrompt` + repoints the pointer), then drop it
-    // from the shots UPDATE.
-    const { imagePrompt: editedImagePrompt, ...shotUpdate } = updateData;
+    // Neither prompt is a `shots` column: the image prompt lives on the anchor
+    // frame (#989) and the motion prompt on its selected `shot_prompt_versions`
+    // row (#713). Persist each changed prompt as a user-edit version (which
+    // mirrors + repoints the pointer), then drop both from the shots UPDATE.
+    const {
+      imagePrompt: editedImagePrompt,
+      motionPrompt: editedMotionPrompt,
+      ...shotUpdate
+    } = updateData;
     if (
       imagePromptChanged &&
       typeof editedImagePrompt === 'string' &&
@@ -501,6 +459,23 @@ export const updateShotFn = createServerFn({ method: 'POST' })
       await context.scopedDb.framePromptVersions.write({
         frameId: context.frame.id,
         text: editedImagePrompt,
+        source: 'user-edit',
+        inputHash: null,
+        analysisModel: null,
+        createdBy: context.user.id,
+      });
+    }
+    if (
+      motionPromptChanged &&
+      typeof editedMotionPrompt === 'string' &&
+      editedMotionPrompt.length > 0
+    ) {
+      await context.scopedDb.shotPromptVersions.write({
+        shotId,
+        promptType: 'motion',
+        text: editedMotionPrompt,
+        dialogue: selectedMotion?.dialogue ?? null,
+        audio: selectedMotion?.audio ?? null,
         source: 'user-edit',
         inputHash: null,
         analysisModel: null,
@@ -528,35 +503,16 @@ const updateShotDurationSchema = z.object({
  *
  * A scene has no duration of its own — its duration is the sum of its shots'
  * (`tileSceneIntoSegments` reads exactly these values against the model cap).
- * The `metadata.metadata.durationSeconds` write is the legacy mirror kept in
- * step so the `resolveShotDuration` fallback can't read a stale value.
  */
 export const updateShotDurationFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(updateShotDurationSchema))
   .handler(async ({ data, context }) => {
-    const { shot, scene, script, scopedDb } = context;
-
-    const patch: Parameters<typeof scopedDb.shots.update>[1] = {
+    const { shot, scopedDb } = context;
+    const updated = await scopedDb.shots.update(shot.id, {
       durationMs: Math.round(data.durationSeconds * 1000),
-    };
-    if (scene) {
-      patch.metadata = {
-        ...scene,
-        metadata: {
-          ...(scene.metadata ?? {
-            title: '',
-            location: '',
-            timeOfDay: '',
-            storyBeat: '',
-          }),
-          durationSeconds: data.durationSeconds,
-        },
-      };
-    }
-
-    const updated = (await scopedDb.shots.update(shot.id, patch)) ?? shot;
-    return projectShotForClient(updated, script);
+    });
+    return updated ?? shot;
   });
 
 export const deleteShotFn = createServerFn({ method: 'POST' })
@@ -571,27 +527,6 @@ export const deleteShotsBySequenceFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
     await context.scopedDb.shots.deleteBySequence(context.sequence.id);
-    return { success: true };
-  });
-
-export const reorderShotsFn = createServerFn({ method: 'POST' })
-  .middleware([sequenceAccessMiddleware])
-  .inputValidator(
-    zodValidator(
-      z.object({
-        sequenceId: ulidSchema,
-        shotOrders: z
-          .array(z.object({ id: ulidSchema, orderIndex: z.number().int() }))
-          .min(1),
-      })
-    )
-  )
-  .handler(async ({ data, context }) => {
-    const shotOrders = data.shotOrders.map((f) => ({
-      id: f.id,
-      order_index: f.orderIndex,
-    }));
-    await context.scopedDb.shots.reorder(data.sequenceId, shotOrders);
     return { success: true };
   });
 
@@ -664,7 +599,7 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
       style,
     ] = await Promise.all([
       scopedDb.frames.listAnchorsBySequence(sequence.id),
-      loadSelectedScriptsBySequence(scopedDb, sequence.id),
+      loadSceneContextBySequence(scopedDb, sequence.id),
       scopedDb.characters.listWithSheets(sequence.id),
       scopedDb.sequenceLocations.listWithReferences(sequence.id),
       scopedDb.sequenceElements.list(sequence.id),
@@ -725,14 +660,21 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
   });
 
 /**
- * "Update all" (#1077, depth picker #1085): enqueue the durable
- * `UpdateStaleShotsWorkflow` for a shot / scene / the whole sequence. The
- * workflow recomputes staleness server-side and regenerates what reads stale
- * up to the chosen `depth` cascade — at 'images' and above a regenerated
- * prompt cascades into its still; at 'video'/'music' existing videos and
- * music re-render behind their regenerated upstreams (never a FIRST render).
- * Returns the run id; progress surfaces through the staleness indicators as
- * artifacts land.
+ * "Update all" (#1077, depth picker #1085): compute the regeneration plan and
+ * enqueue the durable `UpdateStaleShotsWorkflow` to execute it, for a shot /
+ * scene / the whole sequence. Staleness is recomputed server-side (never from
+ * the client's cache) and everything reading stale up to the chosen `depth`
+ * cascade is planned — at 'images' and above a regenerated prompt cascades
+ * into its still; at 'video'/'music' existing videos and music re-render
+ * behind their regenerated upstreams (never a FIRST render). Returns the run
+ * id; progress surfaces through the staleness indicators as artifacts land.
+ *
+ * The plan is computed HERE rather than at run start so the run is bound to
+ * the state the user clicked on. A queued run can start minutes later; by then
+ * the sequence may have moved, and a plan computed then would bill for work
+ * nobody asked for. Drift between this point and execution is already handled
+ * downstream — every stage re-checks its claim hash / in-flight status before
+ * spending.
  *
  * Preflights credits before enqueuing. Inside the workflow an out-of-credits
  * failure can only land in the run result, where it reads as "nothing
@@ -754,10 +696,11 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user, scopedDb } = context;
     const depth = data.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
-    // The plan isn't known yet, so this can't be the exact cost — it's a
-    // floor: a run that can't afford even one artifact of its most expensive
-    // level should never start. 'prompts' has no render cost; LLM spend is
-    // deducted inside the workflow as always.
+    // Deliberately before the plan: this is a floor, not a quote — a run that
+    // can't afford even one artifact of its most expensive level should never
+    // start, and there's no point planning a whole sequence to tell the user
+    // that. 'prompts' has no render cost; LLM spend is deducted inside the
+    // workflow as always.
     if (depth !== 'prompts') {
       const model = safeTextToImageModel(
         sequence.imageModel,
@@ -774,15 +717,20 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
         { errorMessage: 'Insufficient credits to update out-of-date shots' }
       );
     }
+    const plan = await computePlan({
+      scopedDb,
+      sequenceId: sequence.id,
+      sceneId: data.sceneId,
+      shotId: data.shotId,
+      depth,
+    });
     const workflowRunId = await triggerWorkflow<UpdateStaleShotsWorkflowInput>(
       '/update-stale-shots',
       {
         userId: user.id,
         teamId,
         sequenceId: sequence.id,
-        sceneId: data.sceneId,
-        shotId: data.shotId,
-        depth,
+        plan,
       },
       {
         label: buildWorkflowLabel(sequence.id),
@@ -867,20 +815,22 @@ export const getShotDownloadUrlFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
-    const { shot } = context;
+    const { shot, scopedDb } = context;
 
-    if (!shot.videoPath) {
+    // The downloadable file is whichever version the shot's segment points at
+    // (#1067 phase 2d) — `shots.videoPath` is gone.
+    const selectedVideo = await scopedDb.videoVariants.getSelectedByShot(
+      shot.id
+    );
+    const storagePath = selectedVideo?.storagePath;
+    if (!storagePath) {
       throw new Error('Shot does not have a video');
     }
 
     const filename =
-      shot.videoPath.split('/').pop() || `scene-${shot.id}_openstory.mp4`;
+      storagePath.split('/').pop() || `scene-${shot.id}_openstory.mp4`;
 
-    const downloadUrl = await getVideoDownloadUrl(
-      shot.videoPath,
-      filename,
-      3600
-    );
+    const downloadUrl = await getVideoDownloadUrl(storagePath, filename, 3600);
 
     return { downloadUrl, filename };
   });

@@ -1,12 +1,8 @@
-import { computeMotionPromptInputHash } from '@/lib/ai/input-hash';
-import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
-import type { Scene } from '@/lib/ai/scene-analysis.schema';
-import type { ScopedDb } from '@/lib/db/scoped';
-import { dbSceneId, type DbSceneId } from '@/lib/db/schema';
+import { dbSceneId } from '@/lib/db/schema';
 import { NotFoundError } from '@/lib/errors';
 import {
   composeSequenceScriptFromDb,
-  overlaySceneScript,
+  loadSceneContextBySequence,
 } from '@/lib/scenes/scene-script';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { createServerFn } from '@tanstack/react-start';
@@ -14,15 +10,18 @@ import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { sequenceAccessMiddleware } from './middleware';
 
-import { getLogger } from '@/lib/observability/logger';
-
-const logger = getLogger(['openstory', 'serverFn', 'scenes']);
-
 /** Ordered scenes for a sequence (#909 — the editor groups shots under these). */
 export const getScenesFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    return context.scopedDb.scenes.listBySequence(context.sequence.id);
+    // Each scene carries its SELECTED script — the only place a script lives.
+    const ctx = await loadSceneContextBySequence(
+      context.scopedDb,
+      context.sequence.id
+    );
+    return [...ctx.values()]
+      .map(({ scene, script }) => ({ ...scene, script }))
+      .sort((a, b) => a.orderIndex - b.orderIndex);
   });
 
 // NOTE: there is no `updateSceneModelFn` (#1066). A scene has no model of its
@@ -76,7 +75,7 @@ export const updateSceneScriptFn = createServerFn({ method: 'POST' })
     }
 
     const selected = await scopedDb.sceneScriptVersions.getSelected(sceneId);
-    const currentScript = selected?.content ?? sceneRow.originalScript;
+    const currentScript = selected?.content;
     if (!currentScript) {
       throw new Error('Scene has no script to edit');
     }
@@ -93,15 +92,6 @@ export const updateSceneScriptFn = createServerFn({ method: 'POST' })
         source: 'edit',
         createdBy: user.id,
       });
-
-      await bootstrapMotionHashesForScene({
-        scopedDb,
-        sequence,
-        sceneId,
-        // Hash the PRE-edit scene, so the next read compares the new script
-        // against it and flips to 'stale' (#684 parity).
-        preEditScript: currentScript,
-      });
     }
 
     const refreshedScript =
@@ -110,66 +100,3 @@ export const updateSceneScriptFn = createServerFn({ method: 'POST' })
 
     return { sceneId: data.sceneId, script: refreshedScript };
   });
-
-/**
- * Give every shot in the scene a motion-prompt input hash if it is missing one,
- * computed from the scene as it read BEFORE this edit. Without the bootstrap a
- * hand-written motion prompt has nothing to compare against and its staleness
- * stays untracked forever. Per-shot failures are logged, never thrown — a
- * missing hash degrades staleness reporting; it must not fail the user's save.
- */
-async function bootstrapMotionHashesForScene({
-  scopedDb,
-  sequence,
-  sceneId,
-  preEditScript,
-}: {
-  scopedDb: ScopedDb;
-  sequence: Parameters<typeof loadNarrowShotPromptContext>[0]['sequence'];
-  sceneId: DbSceneId;
-  preEditScript: Scene['originalScript'];
-}): Promise<void> {
-  const shots = (await scopedDb.shots.listBySequence(sequence.id)).filter(
-    (shot) =>
-      shot.sceneId === sceneId &&
-      shot.motionPrompt &&
-      !shot.motionPromptInputHash
-  );
-  if (shots.length === 0) return;
-
-  const anchorByShot = await scopedDb.frames.getAnchorsByShots(
-    shots.map((shot) => shot.id)
-  );
-  // The i2v still lives on each anchor's SELECTED version (#1067).
-  const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
-    [...anchorByShot.values()].map((frame) => frame.id)
-  );
-
-  for (const shot of shots) {
-    if (!shot.metadata) continue;
-    try {
-      const ctx = await loadNarrowShotPromptContext({
-        scopedDb,
-        sequence: {
-          id: sequence.id,
-          styleId: sequence.styleId,
-          aspectRatio: sequence.aspectRatio,
-          analysisModel: sequence.analysisModel,
-        },
-        scene: overlaySceneScript(shot.metadata, preEditScript),
-        startingFrameImageUrl: (() => {
-          const anchor = anchorByShot.get(shot.id);
-          return anchor ? (selectedByFrame.get(anchor.id)?.url ?? null) : null;
-        })(),
-      });
-      await scopedDb.shots.update(shot.id, {
-        motionPromptInputHash: await computeMotionPromptInputHash(ctx),
-      });
-    } catch (err) {
-      logger.warn(
-        `Could not bootstrap motion hash for shot ${shot.id}; staleness will remain untracked for this prompt`,
-        { err }
-      );
-    }
-  }
-}

@@ -15,7 +15,6 @@ import {
 const mockSequencesList = vi.fn();
 const mockSequencesCreate = vi.fn();
 const mockSequencesGetById = vi.fn();
-const mockSequencesGetWithShots = vi.fn();
 const mockSequencesUpdate = vi.fn();
 const mockSequencesDelete = vi.fn();
 const mockSequencesGetForUser = vi.fn();
@@ -31,14 +30,12 @@ vi.doMock('@/lib/db/scoped/sequences', () => ({
   createSequencesReadMethods: vi.fn(() => ({
     list: mockSequencesList,
     getById: mockSequencesGetById,
-    getWithShots: mockSequencesGetWithShots,
     getForUser: mockSequencesGetForUser,
   })),
   createSequencesMethods: vi.fn(() => ({
     list: mockSequencesList,
     create: mockSequencesCreate,
     getById: mockSequencesGetById,
-    getWithShots: mockSequencesGetWithShots,
     update: mockSequencesUpdate,
     delete: mockSequencesDelete,
     getForUser: mockSequencesGetForUser,
@@ -318,7 +315,6 @@ describe('createScopedDb', () => {
       mockSequencesList,
       mockSequencesCreate,
       mockSequencesGetById,
-      mockSequencesGetWithShots,
       mockUpdateStatus,
       mockUpdateMusicFields,
       mockGetMusicStatus,
@@ -440,17 +436,6 @@ describe('createScopedDb', () => {
       const result = await db.sequences.getById('seq_1');
 
       expect(mockSequencesGetById).toHaveBeenCalledWith('seq_1');
-      expect(result).toEqual(sentinel);
-    });
-
-    it('getWithShots() delegates to sub-module', async () => {
-      const sentinel = { id: 'seq_1', shots: [] };
-      mockSequencesGetWithShots.mockResolvedValue(sentinel);
-
-      const db = createScopedDb(TEAM_ID, USER_ID);
-      const result = await db.sequences.getWithShots('seq_1');
-
-      expect(mockSequencesGetWithShots).toHaveBeenCalledWith('seq_1');
       expect(result).toEqual(sentinel);
     });
   });

@@ -2,8 +2,8 @@
  * Frame Prompt Versions Schema
  *
  * Version history of a frame's visual (image) prompt — one row per revision.
- * The current value is mirrored on `frames.imagePrompt` with a
- * `frames.selectedImagePromptVersionId` pointer; this table is the full history.
+ * `frames.selectedImagePromptVersionId` points at the current one; these rows
+ * are the only source of the prompt text and its upstream-context hash.
  *
  * "Versions" (not "variants"): a prompt is a single authored input revised over
  * time — the linear-history sibling of the parallel-alternative `frame_variants`
@@ -99,15 +99,15 @@ export const framePromptVersions = snakeCase.table(
       table.frameId,
       table.createdAt
     ),
-    // Idempotency: a workflow retry that re-emits the same AI prompt for the
-    // same upstream context must not create a duplicate row. User-edits and
-    // legacy rows have null input_hash and are excluded; source = 'restored'
-    // is also excluded so a restore still appends an audit row to history.
-    uniqueIndex('uq_frame_prompt_versions_frame_hash_ai')
-      .on(table.frameId, table.inputHash)
-      .where(
-        sql`${table.inputHash} IS NOT NULL AND ${table.source} != 'restored'`
-      ),
+    // Retry idempotency is (frame, input_hash, text) — same context AND same
+    // output. As a UNIQUE index on (frame_id, input_hash) it forced a
+    // force-regen (same context, new text) to insert with a null input_hash to
+    // escape it, discarding the alignment fact staleness compares against.
+    // `write` matches on all three instead; this is just the lookup index.
+    index('idx_frame_prompt_versions_frame_hash').on(
+      table.frameId,
+      table.inputHash
+    ),
     // At most ONE live claim per (frame, live-hash) (#1085): two concurrent
     // enqueues race their check-then-insert; the loser errors here and
     // reports already-in-flight instead of double-spending.

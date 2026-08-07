@@ -1,23 +1,15 @@
 import { z } from 'zod';
 import { createInsertSchema, createUpdateSchema } from 'drizzle-orm/zod';
-import { shots, SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
+import { shots } from '@/lib/db/schema/shots';
 import { IMAGE_MODELS, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
-import { sceneSchema } from '@/lib/ai/scene-analysis.schema';
 
 /**
  * Shared Zod schemas for shot operations
  * Generated from Drizzle schema with custom refinements
- *
- * Note: Shot metadata field should contain ShotMetadata structure (see src/lib/ai/shot.schema.ts)
- * which includes complete Scene data from script analysis. The schemas below validate structure
- * but do not enforce ShotMetadata typing to maintain flexibility.
  */
 
 const createShotSchema = createInsertSchema(shots, {
-  description: (schema) => schema.min(1).max(5000),
   durationMs: (schema) => schema.min(1),
-  metadata: () => sceneSchema.nullable().optional(),
-  videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 }).omit({
   id: true,
   createdAt: true,
@@ -25,10 +17,7 @@ const createShotSchema = createInsertSchema(shots, {
 });
 
 export const updateShotSchema = createUpdateSchema(shots, {
-  description: (schema) => schema.min(1).max(5000),
   durationMs: (schema) => schema.min(1),
-  metadata: () => sceneSchema.nullable().optional(),
-  videoStatus: () => z.enum(SHOT_GENERATION_STATUSES).nullable().optional(),
 })
   .omit({
     id: true,
@@ -36,10 +25,15 @@ export const updateShotSchema = createUpdateSchema(shots, {
     createdAt: true,
     updatedAt: true,
   })
-  // The image prompt lives on the anchor frame since #989 (not a `shots`
-  // column). Accept it here as an explicit field; `updateShotFn` routes it to
-  // `frame_prompt_versions` rather than the shots UPDATE.
-  .extend({ imagePrompt: z.string().nullable().optional() });
+  // Neither prompt is a `shots` column any more — the image prompt lives on the
+  // anchor frame (#989) and the motion prompt on its selected version (#713).
+  // Accept both here as explicit fields; `updateShotFn` routes them to
+  // `frame_prompt_versions` / `shot_prompt_versions` rather than the shots
+  // UPDATE.
+  .extend({
+    imagePrompt: z.string().nullable().optional(),
+    motionPrompt: z.string().nullable().optional(),
+  });
 
 export const regenerateShotSchema = z.object({
   regenerateDescription: z.boolean().optional(),

@@ -7,7 +7,6 @@ export type ResolveShotDurationInput = {
   /** Shot's stored duration in milliseconds. `0` / `null` / `undefined` are treated as unset. */
   durationMs?: number | null;
   /** Fallback from scene metadata for legacy shots where `durationMs` was never populated. */
-  metadataSeconds?: number | null;
   /** Motion model whose JSON Schema defines the valid duration set to snap to. */
   model: ImageToVideoModel;
 };
@@ -18,10 +17,8 @@ export type ResolveShotDurationInput = {
 export function resolveShotDuration({
   explicit,
   durationMs,
-  metadataSeconds,
   model,
 }: ResolveShotDurationInput): number {
   const fromMs = durationMs && durationMs > 0 ? durationMs / 1000 : undefined;
-  const requested = explicit ?? fromMs ?? metadataSeconds ?? undefined;
-  return snapDuration(requested, model);
+  return snapDuration(explicit ?? fromMs, model);
 }

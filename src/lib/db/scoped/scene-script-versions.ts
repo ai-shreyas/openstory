@@ -13,7 +13,6 @@ import type { Database } from '@/lib/db/client';
 import { sceneScriptVersions, scenes } from '@/lib/db/schema';
 import type {
   DbSceneId,
-  SceneRow,
   SceneScriptSource,
   SceneScriptVersion,
 } from '@/lib/db/schema';
@@ -29,6 +28,13 @@ type WriteSceneScriptVersionInput = {
    * id for the initial row) and by split seeding when callers mint one up front.
    */
   id?: string;
+};
+
+/** One scene's initial `split` version — id, script, and the scene's own createdAt. */
+type SeedSplitVersionInput = {
+  sceneId: DbSceneId;
+  content: Scene['originalScript'];
+  createdAt: Date;
 };
 
 export function createSceneScriptVersionsMethods(db: Database) {
@@ -175,32 +181,25 @@ export function createSceneScriptVersionsMethods(db: Database) {
     },
 
     /**
-     * Bulk-seed initial `split` script versions from freshly inserted scene
-     * rows (#1030). Reuses each scene id as the version id (same rule as the
-     * SQL backfill) and repoints `selectedScriptVersionId` in batched writes.
-     * Idempotent: skips scenes that already have a version row.
+     * Bulk-seed initial `split` script versions for freshly upserted scene
+     * rows (#1030). The script comes from the analysis `Scene` the caller just
+     * persisted — the scene row itself holds no script. Reuses each scene id as
+     * the version id (same rule as the SQL backfill) and repoints
+     * `selectedScriptVersionId` in batched writes. Idempotent: skips scenes
+     * that already have a version row.
      */
-    seedSplitFromSceneRows: async (
-      sceneRows: ReadonlyArray<
-        Pick<SceneRow, 'id' | 'originalScript' | 'createdAt'>
-      >
+    seedSplitVersions: async (
+      seeds: ReadonlyArray<SeedSplitVersionInput>
     ): Promise<number> => {
-      const candidates = sceneRows.filter(
-        (
-          row
-        ): row is Pick<SceneRow, 'id' | 'originalScript' | 'createdAt'> & {
-          originalScript: NonNullable<SceneRow['originalScript']>;
-        } => row.originalScript != null
-      );
-      if (candidates.length === 0) return 0;
+      if (seeds.length === 0) return 0;
 
-      const sceneIds = candidates.map((row) => row.id);
+      const sceneIds = seeds.map((seed) => seed.sceneId);
       const existing = await db
         .select({ sceneId: sceneScriptVersions.sceneId })
         .from(sceneScriptVersions)
         .where(inArray(sceneScriptVersions.sceneId, sceneIds));
       const existingIds = new Set(existing.map((row) => row.sceneId));
-      const toSeed = candidates.filter((row) => !existingIds.has(row.id));
+      const toSeed = seeds.filter((seed) => !existingIds.has(seed.sceneId));
       if (toSeed.length === 0) return 0;
 
       const BATCH_SIZE = 5;
@@ -211,12 +210,12 @@ export function createSceneScriptVersionsMethods(db: Database) {
         const batchResults = await db
           .insert(sceneScriptVersions)
           .values(
-            batch.map((row) => ({
-              id: row.id,
-              sceneId: row.id,
-              content: row.originalScript,
+            batch.map((seed) => ({
+              id: seed.sceneId,
+              sceneId: seed.sceneId,
+              content: seed.content,
               source: 'split' as const,
-              createdAt: row.createdAt,
+              createdAt: seed.createdAt,
               createdBy: null,
             }))
           )
@@ -225,11 +224,11 @@ export function createSceneScriptVersionsMethods(db: Database) {
 
         if (batchResults.length !== batch.length) {
           throw new Error(
-            `seedSplitFromSceneRows inserted ${batchResults.length}/${batch.length} versions`
+            `seedSplitVersions inserted ${batchResults.length}/${batch.length} versions`
           );
         }
 
-        const batchIds = batch.map((row) => row.id);
+        const batchIds = batch.map((seed) => seed.sceneId);
         const now = new Date();
         await db
           .update(scenes)

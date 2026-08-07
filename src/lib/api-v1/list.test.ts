@@ -1,7 +1,16 @@
-import type { Frame } from '@/lib/db/schema';
+import type { Shot, VideoVariant } from '@/lib/db/schema';
 import type { Style } from '@/lib/db/schema/libraries';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import {
+  type ShotView,
+  type ShotViewSources,
+  toShotView,
+} from '@/lib/shots/shot-view';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Stub the logger so the deliberate missing-style case below doesn't print an
@@ -70,69 +79,56 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   };
 }
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// `buildSequenceListPage` projects `ShotWithImage` from each shot + its frame
-// (batched via `frames.getAnchorsByShots`), so the fixture keeps the legacy
-// projected names AND mirrors them onto a concrete anchor `frame` whose id is
-// DISTINCT from the shot id (only `shotId` links them — never id-reuse).
-function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
-  const base: Omit<ShotWithImage, 'frame'> = {
+// The anchor frame's id is DISTINCT from the shot's — only `shotId` links them
+// (#989) — but deterministic so a fixture can name a still's frame.
+const frameIdFor = (shotId: string) => `frame-${shotId}`;
+
+/** The selected `frame_variants` row carrying a shot's still. */
+const still = (shotId: string, url: string) =>
+  frameVariantFixture({
+    frameId: frameIdFor(shotId),
+    sequenceId: 'seq-1',
+    url,
+  });
+
+/** A `video_variants` render of the shot's segment. */
+const render = (overrides: Partial<VideoVariant> = {}) =>
+  videoVariantFixture({
+    renderSegmentId: 'seg-1',
+    sequenceId: 'seq-1',
+    ...overrides,
+  });
+
+function makeShot(
+  params: {
+    shot?: Partial<Shot>;
+    sources?: Partial<ShotViewSources>;
+  } = {}
+): ShotView {
+  const shot: Shot = {
     id: 'shot-1',
     sequenceId: 'seq-1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
-    description: 'A scene',
+    shotNumber: 1,
     durationMs: 3000,
-    thumbnailUrl: null,
-    thumbnailPath: null,
-    thumbnailStatus: 'pending',
-    thumbnailWorkflowRunId: null,
-    thumbnailError: null,
-    imageModel: null,
-    imagePrompt: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    videoUrl: null,
-    videoPath: null,
-    videoStatus: 'pending',
-    videoWorkflowRunId: null,
-    videoGeneratedAt: null,
-    videoError: null,
-    motionPrompt: null,
-    motionModel: null,
-    motionPromptData: null,
-    thumbnailInputHash: null,
-    videoInputHash: null,
-    visualPromptInputHash: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    previewThumbnailUrl: null,
-    metadata: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides,
+    ...params.shot,
   };
-  const frame: Frame = {
-    id: `frame-${base.id}`,
-    shotId: base.id,
-    sequenceId: base.sequenceId,
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: base.previewThumbnailUrl,
-    imageStatus: base.thumbnailStatus,
-    imageWorkflowRunId: base.thumbnailWorkflowRunId,
-    imageError: base.thumbnailError,
-    imagePrompt: base.imagePrompt,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    visualPromptInputHash: base.visualPromptInputHash,
-    createdAt: base.createdAt,
-    updatedAt: base.updatedAt,
-  };
-  return { ...base, frame };
+  const frame = frameFixture({
+    id: frameIdFor(shot.id),
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+  });
+  return toShotView(shot, frame, {
+    image: null,
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+    ...params.sources,
+  });
 }
 
 function makeStyle(overrides: Partial<Style> = {}): Style {
@@ -174,18 +170,11 @@ function makeStyle(overrides: Partial<Style> = {}): Style {
  * A scopedDb stub exposing the batched shot + style fetches the builder uses.
  * `styles` defaults to a single 'style-1' row matching the default sequence.
  */
-function depsWithShots(
-  shots: ShotWithImage[],
-  styles: Style[] = [makeStyle()]
-) {
+function depsWithShots(shots: ShotView[], styles: Style[] = [makeStyle()]) {
   return {
+    // `listShotsByIds` hands back assembled views, so the page builder only
+    // groups them by sequence.
     sequences: { listShotsByIds: async () => shots },
-    // The image surface lives on each shot's anchor frame now (#989); the source
-    // batch-loads frames to project `ShotWithImage`.
-    frames: {
-      getAnchorsByShots: async () =>
-        new Map(shots.map((s) => [s.frame.shotId, s.frame])),
-    },
     styles: { listByIds: async () => styles },
   };
 }
@@ -240,9 +229,18 @@ describe('buildSequenceListPage', () => {
       musicUrl: 'https://cdn/music.mp3',
     });
     const shots = [
-      makeShot({ id: 'f1', thumbnailUrl: 'https://cdn/f1.png' }),
-      makeShot({ id: 'f2', videoStatus: 'completed' }),
-      makeShot({ id: 'f3', videoStatus: 'failed' }),
+      makeShot({
+        shot: { id: 'f1' },
+        sources: { image: still('f1', 'https://cdn/f1.png') },
+      }),
+      makeShot({
+        shot: { id: 'f2' },
+        sources: { video: render({ url: 'https://cdn/f2.mp4' }) },
+      }),
+      makeShot({
+        shot: { id: 'f3' },
+        sources: { primaryVideo: render({ status: 'failed' }) },
+      }),
     ];
 
     const page = await buildSequenceListPage({
@@ -280,9 +278,12 @@ describe('buildSequenceListPage', () => {
     const a = makeSequence({ id: 'seq-a' });
     const b = makeSequence({ id: 'seq-b' });
     const shots = [
-      makeShot({ id: 'fa1', sequenceId: 'seq-a', videoStatus: 'completed' }),
-      makeShot({ id: 'fb1', sequenceId: 'seq-b' }),
-      makeShot({ id: 'fb2', sequenceId: 'seq-b' }),
+      makeShot({
+        shot: { id: 'fa1', sequenceId: 'seq-a' },
+        sources: { video: render({ url: 'https://cdn/fa1.mp4' }) },
+      }),
+      makeShot({ shot: { id: 'fb1', sequenceId: 'seq-b' } }),
+      makeShot({ shot: { id: 'fb2', sequenceId: 'seq-b' } }),
     ];
 
     const page = await buildSequenceListPage({

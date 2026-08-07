@@ -65,9 +65,11 @@ export async function buildShotImageWorkflowInput(opts: {
   characters: CharacterMinimal[];
   locations: SequenceLocation[];
   elements: SequenceElement[];
+  /** The shot's scene, composed from `scenes` + its selected script version. */
+  scene: Scene | null;
   /**
-   * Continuity to match references against. Defaults to the shot's stored
-   * continuity; callers that just edited a prompt pass a rescanned one.
+   * Continuity to match references against. Defaults to the scene's; callers
+   * that just edited a prompt pass a rescanned one.
    */
   continuity?: Scene['continuity'];
   /** Prompt override (e.g. a user edit). Defaults to the shot's prompt chain. */
@@ -78,7 +80,6 @@ export async function buildShotImageWorkflowInput(opts: {
    * `frame.imagePrompt`.
    */
   imagePrompt?: string | null;
-  userEditedPrompt?: boolean;
   /**
    * Variant-only (#547): the resulting `/image` run writes only this model's
    * `shot_variants` row, never the primary columns. Set by the add-model path.
@@ -100,10 +101,11 @@ export async function buildShotImageWorkflowInput(opts: {
   // Priority: provided > stored frame mirror > description. The frame's
   // `imagePrompt` is the single source of truth (#713/#989) — the old
   // `metadata.prompts.visual` fallback is gone (that field was removed).
-  const prompt = opts.prompt || opts.imagePrompt || shot.description;
+  const scriptExtract = opts.scene?.originalScript.extract ?? '';
+  const prompt = opts.prompt || opts.imagePrompt || scriptExtract;
   if (!prompt) return null;
 
-  const continuity = opts.continuity ?? shot.metadata?.continuity;
+  const continuity = opts.continuity ?? opts.scene?.continuity;
 
   const matchedCharacters = matchCharactersToScene(
     characters,
@@ -112,7 +114,7 @@ export async function buildShotImageWorkflowInput(opts: {
   const characterReferences = buildCharacterReferenceImages(matchedCharacters);
 
   const environmentTag = continuity?.environmentTag ?? '';
-  const sceneLocation = shot.metadata?.metadata?.location ?? '';
+  const sceneLocation = opts.scene?.metadata?.location ?? '';
   const matchedLocations = matchLocationsToScene(
     locations,
     environmentTag,
@@ -127,12 +129,12 @@ export async function buildShotImageWorkflowInput(opts: {
   const matchedElements = matchElementsToScene(
     elements,
     continuity?.elementTags ?? [],
-    shot.metadata?.originalScript.extract ?? ''
+    scriptExtract
   );
   const elementReferences = buildElementReferenceImages(matchedElements);
 
   const sceneSnapshot: ShotImageSceneSnapshot = {
-    sceneId: shot.metadata?.sceneId ?? shot.id,
+    sceneId: opts.scene?.sceneId ?? shot.id,
     visualPrompt: prompt,
     characterSheetHashes: sortedHashes(
       matchedCharacters.map((c) => c.sheetInputHash)
@@ -167,7 +169,8 @@ export async function buildShotImageWorkflowInput(opts: {
       ...locationReferences,
       ...elementReferences,
     ],
-    userEditedPrompt: opts.userEditedPrompt ?? false,
+    // No `userEditProvenance`: this builder serves the add-model path, which is
+    // never a user edit.
     variantOnly: opts.variantOnly ?? false,
   };
 }

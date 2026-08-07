@@ -16,16 +16,15 @@
  *      retains a stale-flagged version without repointing the primary.
  */
 
-import { computeVisualPromptInputHash } from '@/lib/ai/input-hash';
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from '@/lib/ai/models';
-import { loadNarrowShotPromptContext } from '@/lib/ai/prompt-context';
 import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { DEFAULT_IMAGE_SIZE } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
+import type { Frame } from '@/lib/db/schema';
 import {
   CONTENT_REJECTION_EVENT,
   isContentRejectionError,
@@ -43,7 +42,6 @@ import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { ImageWorkflowInput } from '@/lib/workflow/types';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { computeImageWorkflowHashFromDto } from '@/lib/workflows/image-workflow-snapshot';
-import { shouldRecordUserEdit } from '@/lib/workflows/user-edit-predicate';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'image']);
@@ -70,10 +68,26 @@ type PrepResult = {
 };
 
 export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInput> {
+  /**
+   * The frame this run writes to: the trigger's `frameId`, re-read only to
+   * confirm it still exists (deleted mid-run is a stand-down). Every spawner
+   * threads `frameId` alongside `shotId`; a payload without it is a stale
+   * in-flight instance from a previous build — stand down rather than
+   * resolve the anchor by shot, which could land on a DIFFERENT frame than
+   * a sibling step resolved.
+   */
+  private resolveFrame(
+    scopedDb: WorkflowScopedDb,
+    input: Pick<ImageWorkflowInput, 'frameId' | 'shotId'>
+  ): Promise<Frame | null> {
+    if (!input.frameId) return Promise.resolve(null);
+    return scopedDb.liveRead.frames.getById(input.frameId);
+  }
+
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ImageWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<ImageWorkflowResult> {
     const input = event.payload;
     const workflowRunId = event.instanceId;
@@ -134,7 +148,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           return { params, versionId: '' };
         }
 
-        const frame = await scopedDb.frames.getAnchorByShot(input.shotId);
+        const frame = await this.resolveFrame(scopedDb, input);
         if (!frame) {
           logger.info(
             `[ImageWorkflow] Shot ${input.shotId} has no anchor frame (deleted?), skipping`
@@ -142,61 +156,30 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           return null;
         }
 
-        if (
-          shouldRecordUserEdit({
-            userEditedPrompt: input.userEditedPrompt,
-            prompt: input.prompt,
-            currentPrompt: frame.imagePrompt,
-          })
-        ) {
-          let userEditInputHash: string | null = null;
-          let userEditAnalysisModel: string | null = null;
-          try {
-            const shot = await scopedDb.shots.getById(input.shotId);
-            if (shot?.metadata) {
-              const sequence = await scopedDb.sequences.getById(
-                input.sequenceId
-              );
-              if (sequence) {
-                const ctx = await loadNarrowShotPromptContext({
-                  scopedDb,
-                  sequence: {
-                    id: sequence.id,
-                    styleId: sequence.styleId,
-                    aspectRatio: sequence.aspectRatio,
-                    analysisModel: sequence.analysisModel,
-                  },
-                  scene: shot.metadata,
-                });
-                userEditInputHash = await computeVisualPromptInputHash(ctx);
-                userEditAnalysisModel = ctx.analysisModel;
-              }
-            }
-          } catch (err) {
-            logger.warn(
-              `[ImageWorkflow] Could not compute upstream hash for user-edit on frame ${input.shotId}; recording with null hash`,
-              { err }
-            );
-          }
+        // The trigger decided this is a real edit and snapshotted what it was
+        // authored against — see UserEditProvenance.
+        const editedVersion = input.userEditProvenance
+          ? await scopedDb.framePromptVersions.write({
+              frameId: frame.id,
+              text: input.prompt,
+              source: 'user-edit',
+              inputHash: input.userEditProvenance.inputHash,
+              analysisModel: input.userEditProvenance.analysisModel,
+              createdBy: input.userId,
+            })
+          : null;
 
-          await scopedDb.framePromptVersions.write({
-            frameId: frame.id,
-            text: input.prompt,
-            source: 'user-edit',
-            inputHash: userEditInputHash,
-            analysisModel: userEditAnalysisModel,
-            createdBy: input.userId,
-          });
-        }
-
-        // Re-read after any prompt write so we stamp the prompt version that
-        // is actually selected for this gen (#1070). Selecting this still later
-        // restores that prompt so still + text stay paired.
-        const frameForStamp = await scopedDb.frames.getById(frame.id);
+        // The version this run's prompt text came from (#1070): the edit we
+        // just wrote, else the trigger's snapshot — including an explicit null
+        // ("this prompt came from no version"). Only un-migrated triggers, which
+        // omit the field entirely, fall back to a live read — that read is what
+        // paired a still with a prompt it was never rendered from.
         const promptVersionId =
-          frameForStamp?.selectedImagePromptVersionId ??
-          frame.selectedImagePromptVersionId ??
-          null;
+          editedVersion?.id ??
+          (input.promptVersionId !== undefined
+            ? input.promptVersionId
+            : ((await scopedDb.liveRead.frames.getById(frame.id))
+                ?.selectedImagePromptVersionId ?? null));
         let version;
         if (input.targetVariantId) {
           // #1085: a pre-created claim row exists — transition IT rather than
@@ -311,7 +294,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         );
       }
       return generateImageWithProvider(prep.params, {
-        scopedDb,
+        scopedDb: scopedDb.credentials,
         observability: {
           observationName: 'shot-image',
           tags: ['image'],
@@ -368,9 +351,9 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           const { model } = prep.params;
           const versionId = prep.versionId;
 
-          // Resolve the anchor frame (frame id ≠ shot id, #989) for the event
-          // target + selection repoint below.
-          const frame = await scopedDb.frames.getAnchorByShot(shotId);
+          // The same frame `set-generating-status` claimed on — re-read only to
+          // confirm it survived the render.
+          const frame = await this.resolveFrame(scopedDb, input);
           if (!frame) {
             logger.info(
               `[ImageWorkflow] Shot ${shotId} lost its anchor frame before select; skipping`
@@ -402,7 +385,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
             // Settle the primary frame the prep step flipped to 'generating' —
             // without this the shot keeps a perpetual spinner (#1095 review).
             if (!input.variantOnly) {
-              const frameNow = await scopedDb.frames.getById(frame.id);
+              const frameNow = await scopedDb.liveRead.frames.getById(frame.id);
               await scopedDb.frames.setImageGenerationStatus(
                 frame.id,
                 {
@@ -446,31 +429,20 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
             return { imageUrl: upload.url };
           }
 
-          // Re-read pending claim: last kickoff / explicit history select may have
-          // moved it since this run started (#1070).
-          const frameNow = await scopedDb.frames.getById(frame.id);
-          const shouldPromote = frameNow?.pendingPromoteVersionId === versionId;
-
-          if (shouldPromote) {
-            // Promote even if the prompt/refs drifted mid-flight — the still is
-            // stamped with its own inputHash and will surface as stale if the
-            // live prompt moved. Explicit selection is what cancels promote.
-            await scopedDb.frameVariants.select(frame.id, versionId, {
-              actorId: input.userId,
-            });
-            // A new still invalidates the shot's downstream video.
-            await scopedDb.shots.update(
-              shotId,
-              {
-                videoUrl: null,
-                videoPath: null,
-                videoStatus: 'pending',
-                videoWorkflowRunId: null,
-                videoGeneratedAt: null,
-                videoError: null,
-              },
-              { throwOnMissing: false }
+          // Claim the promote in ONE conditional write: last kickoff / explicit
+          // history select may have moved the pending pointer since this run
+          // started (#1070), and a read-then-select loses that race.
+          // Promote even if the prompt/refs drifted mid-flight — the still is
+          // stamped with its own inputHash and will surface as stale if the
+          // live prompt moved. Explicit selection is what cancels promote.
+          const promoted =
+            await scopedDb.frameVariants.selectIfPendingPromoteIs(
+              frame.id,
+              versionId,
+              { actorId: input.userId }
             );
+
+          if (promoted) {
             await channel.emit('generation.image:progress', {
               shotId,
               status: 'completed',
@@ -483,7 +455,8 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
 
           // Not the promote target — finalize into history only. Reset in-flight
           // frame status so we don't leave a perpetual generating spinner.
-          const settleStatus = frameNow?.selectedImageVersionId
+          const settled = await scopedDb.liveRead.frames.getById(frame.id);
+          const settleStatus = settled?.selectedImageVersionId
             ? 'completed'
             : 'pending';
           await scopedDb.frames.setImageGenerationStatus(
@@ -518,7 +491,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
       }
     } else if (imageUrl && shotId && input.skipStorage) {
       await step.do('store-preview-url', async () => {
-        const anchor = await scopedDb.frames.getAnchorByShot(shotId);
+        const anchor = await this.resolveFrame(scopedDb, input);
         const updatedFrame = anchor
           ? await scopedDb.frames.setImageGenerationStatus(
               anchor.id,
@@ -553,7 +526,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
   }: {
     event: Readonly<WorkflowEvent<ImageWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
     if (input.skipStorage) return;
@@ -562,7 +535,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
     // Variant-only: leave the primary frame untouched on failure too — only
     // this model's in-flight version flips to 'failed' below.
     if (!input.variantOnly) {
-      const anchor = await scopedDb.frames.getAnchorByShot(input.shotId);
+      const anchor = await this.resolveFrame(scopedDb, input);
       if (anchor) {
         await scopedDb.frames.setImageGenerationStatus(
           anchor.id,
@@ -571,7 +544,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         );
         // Drop auto-promote if this run owned it (#1070).
         if (anchor.pendingPromoteVersionId) {
-          const pending = await scopedDb.frameVariants.getById(
+          const pending = await scopedDb.claims.frameVariants.getById(
             anchor.pendingPromoteVersionId
           );
           if (pending?.workflowRunId === event.instanceId) {

@@ -28,20 +28,19 @@ import {
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
 import {
   DEFAULT_IMAGE_MODEL,
-  DEFAULT_VIDEO_MODEL,
-  safeImageToVideoModel,
   safeTextToImageModel,
   supportsReferenceImages,
 } from '@/lib/ai/models';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
-import type { ScopedDb } from '@/lib/db/scoped';
-import type { ElementVisionStatus, Shot } from '@/lib/db/schema';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
+import type { ElementVisionStatus } from '@/lib/db/schema';
 import { getGenerationChannel } from '@/lib/realtime';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type {
   ImageWorkflowInput,
   MotionWorkflowInput,
+  ReplaceElementShotSnapshot,
   ReplaceElementWorkflowInput,
   ReplaceElementWorkflowResult,
 } from '@/lib/workflow/types';
@@ -95,6 +94,37 @@ export function decideBatchOutcome(results: ShotResult[]): BatchOutcome {
     return { kind: 'fail', sampleReason, total: results.length };
   }
   return { kind: 'complete', successCount, failedCount };
+}
+
+/**
+ * Pure split of the trigger-time shot ids into the ones that still exist and
+ * the ones deleted mid-flight. Order comes from the payload (not the DB row
+ * order) so every replay indexes the same shot at the same child step name.
+ */
+export function partitionShotIds(
+  affectedShotIds: string[],
+  survivingShotIds: string[]
+): { liveShotIds: string[]; skippedDeletedShotIds: string[] } {
+  const surviving = new Set(survivingShotIds);
+  return {
+    liveShotIds: affectedShotIds.filter((id) => surviving.has(id)),
+    skippedDeletedShotIds: affectedShotIds.filter((id) => !surviving.has(id)),
+  };
+}
+
+/**
+ * Pure decision: which shots get a video re-render. "Had a video" is read from
+ * the trigger-time snapshot, never re-queried — the motion children spawned
+ * here repoint the very selection pointer that answer comes from.
+ */
+export function selectVideoRegenShotIds(
+  liveShotIds: string[],
+  snapshots: Record<string, ReplaceElementShotSnapshot>,
+  editedShotIds: ReadonlySet<string>
+): string[] {
+  return liveShotIds.filter(
+    (id) => !!snapshots[id]?.hasVideo && editedShotIds.has(id)
+  );
 }
 
 /**
@@ -192,7 +222,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ReplaceElementWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<ReplaceElementWorkflowResult> {
     const input = event.payload;
     const { sequenceId, elementId, affectedShotIds, newImageUrl } = input;
@@ -218,7 +248,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
         elementId,
         'analyzing'
       );
-      const llmKeyInfo = await scopedDb.apiKeys.resolveLlmKey();
+      const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
       const result = await describeElementImage({
         imageUrl: newImageUrl,
         filename: input.newFilename,
@@ -296,37 +326,22 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
       };
     }
 
-    const sequence = await step.do('load-sequence', () =>
-      scopedDb.sequences.getById(sequenceId)
-    );
-    if (!sequence) {
-      throw new NonRetryableError(
-        `[ReplaceElementWorkflow:cf] Sequence ${sequenceId} not found`,
-        'WorkflowValidationError'
-      );
-    }
-
-    const aspectRatio = sequence.aspectRatio;
+    const aspectRatio = input.aspectRatio;
     const imageModel = input.imageModel ?? DEFAULT_IMAGE_MODEL;
+    const snapshots = input.shotSnapshotByShotId;
 
     // Shots captured at trigger time may have been deleted mid-flight. Treat
-    // missing shots as skipped rather than aborting the whole batch.
-    const liveShots = await step.do('load-shots', () =>
-      scopedDb.shots.getByIds(affectedShotIds)
-    );
-    const liveShotIds = new Set(liveShots.map((f) => f.id));
-    const skippedDeletedShotIds = affectedShotIds.filter(
-      (id) => !liveShotIds.has(id)
-    );
-    // The still image surface lives on each shot's anchor frame now (#989) —
-    // keyed by shotId (NOT id-reuse).
-    // Stills live on each anchor's SELECTED version (#1067) — resolved once
-    // here, keyed by frame id, for both the mark-generating and spawn loops.
-    const liveFramesByShot = await scopedDb.frames.getAnchorsByShots(
-      liveShots.map((s) => s.id)
-    );
-    const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
-      [...liveFramesByShot.values()].map((f) => f.id)
+    // missing shots as skipped rather than aborting the whole batch. Only the
+    // ids are consumed — every field the fan-out needs comes from the
+    // trigger-time snapshot, because this workflow's own children repoint the
+    // image/video selection pointers a re-read would follow.
+    const survivingShotIds = await step.do('load-shots', async () => {
+      const rows = await scopedDb.liveRead.shots.getByIds(affectedShotIds);
+      return rows.map((s) => s.id);
+    });
+    const { liveShotIds, skippedDeletedShotIds } = partitionShotIds(
+      affectedShotIds,
+      survivingShotIds
     );
 
     // Flip every affected shot to `generating` and emit progress events
@@ -337,30 +352,26 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     // prior video will be regenerated, so its video tile should already read
     // as in-flight.
     await step.do('mark-shots-generating', async () => {
-      for (const shot of liveShots) {
-        const frame = liveFramesByShot.get(shot.id);
-        if (frame && selectedByFrame.get(frame.id)?.url) {
+      for (const shotId of liveShotIds) {
+        const snapshot = snapshots[shotId];
+        if (!snapshot) continue;
+        if (snapshot.frameId && snapshot.sourceImageUrl) {
           await scopedDb.frames.setImageGenerationStatus(
-            frame.id,
+            snapshot.frameId,
             { imageStatus: 'generating', imageError: null },
             { throwOnMissing: false }
           );
-          await safeEmit(sequenceId, `image-progress:${shot.id}`, () =>
+          await safeEmit(sequenceId, `image-progress:${shotId}`, () =>
             getGenerationChannel(sequenceId).emit('generation.image:progress', {
-              shotId: shot.id,
+              shotId,
               status: 'generating',
             })
           );
         }
-        if (shot.videoUrl) {
-          await scopedDb.shots.update(
-            shot.id,
-            { videoStatus: 'generating', videoError: null },
-            { throwOnMissing: false }
-          );
-          await safeEmit(sequenceId, `video-progress:${shot.id}`, () =>
+        if (snapshot.hasVideo) {
+          await safeEmit(sequenceId, `video-progress:${shotId}`, () =>
             getGenerationChannel(sequenceId).emit('generation.video:progress', {
-              shotId: shot.id,
+              shotId,
               status: 'generating',
             })
           );
@@ -384,17 +395,16 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     // Parallel fan-out — per-child retries handle backpressure.
     // `allSettled` so a per-shot throw (e.g. timed-out child) doesn't abort
     // sibling shots.
-    const imageSpawnPromises = liveShots.map(
-      async (shot, index): Promise<ShotResult> => {
-        const frame = liveFramesByShot.get(shot.id);
-        const selected = frame ? selectedByFrame.get(frame.id) : undefined;
-        const sourceImageUrl = selected?.url;
+    const imageSpawnPromises = liveShotIds.map(
+      async (shotId, index): Promise<ShotResult> => {
+        const snapshot = snapshots[shotId];
+        const sourceImageUrl = snapshot?.sourceImageUrl;
         if (!sourceImageUrl) {
           // Replacement is only meaningful when a primary still exists;
           // text-to-image regeneration would silently invent a shot from
           // prose alone.
           return {
-            shotId: shot.id,
+            shotId,
             success: false,
             error: 'no source thumbnail to edit',
           };
@@ -404,7 +414,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
         // reads as a continuation of the original render. Fall back to the
         // workflow's edit-capable default otherwise.
         const shotModel = safeTextToImageModel(
-          selected?.model,
+          snapshot.sourceModel,
           DEFAULT_IMAGE_MODEL
         );
         const model = supportsReferenceImages(shotModel)
@@ -415,7 +425,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
           userId: input.userId,
           teamId: input.teamId,
           sequenceId,
-          shotId: shot.id,
+          shotId,
           prompt: editPrompt,
           model,
           imageSize: aspectRatioToImageSize(aspectRatio),
@@ -442,7 +452,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
             binding: imageBinding,
             parentBindingName: PARENT_BINDING_NAME,
             parentInstanceId: event.instanceId,
-            childId: `image:${sequenceId}:${shot.id}`,
+            childId: `image:${sequenceId}:${shotId}`,
             childPayload,
             spawnStepName: `spawn-image-${index}`,
             awaitStepName: `await-image-${index}`,
@@ -451,27 +461,27 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
 
           if (!childResult.imageUrl) {
             logger.error(
-              `[ReplaceElementWorkflow:cf] Image edit returned empty url shot=${shot.id}`
+              `[ReplaceElementWorkflow:cf] Image edit returned empty url shot=${shotId}`
             );
             return {
-              shotId: shot.id,
+              shotId,
               success: false,
               error: 'Image edit no imageUrl',
             };
           }
 
           return {
-            shotId: shot.id,
+            shotId,
             success: true,
             imageUrl: childResult.imageUrl,
           };
         } catch (e) {
           const reason = rejectionReasonMessage(e);
           logger.error(
-            `[ReplaceElementWorkflow:cf] Image edit failed shot=${shot.id} reason=${reason}`
+            `[ReplaceElementWorkflow:cf] Image edit failed shot=${shotId} reason=${reason}`
           );
           return {
-            shotId: shot.id,
+            shotId,
             success: false,
             error: `Image edit failed: ${reason}`,
           };
@@ -484,11 +494,11 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     const results: ShotResult[] = settled.map((s, i) => {
       if (s.status === 'rejected') {
         logger.error('[ReplaceElementWorkflow:cf] Per-shot promise rejected', {
-          shotId: liveShots[i]?.id ?? 'unknown',
+          shotId: liveShotIds[i] ?? 'unknown',
           reason: s.reason,
         });
       }
-      return settledToResult(s, liveShots[i]?.id);
+      return settledToResult(s, liveShotIds[i]);
     });
 
     const outcome = decideBatchOutcome(results);
@@ -506,19 +516,19 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     for (const r of results) {
       if (r.success) successByShotId.set(r.shotId, r.imageUrl);
     }
-    const videoModel = safeImageToVideoModel(
-      sequence.videoModel,
-      DEFAULT_VIDEO_MODEL
-    );
-    const shotsNeedingVideoRegen: Shot[] = liveShots.filter(
-      (f) => !!f.videoUrl && successByShotId.has(f.id)
+    // Same model the caller assembled every motion prompt for.
+    const videoModel = input.videoModel;
+    const shotIdsNeedingVideoRegen = selectVideoRegenShotIds(
+      liveShotIds,
+      snapshots,
+      new Set(successByShotId.keys())
     );
 
     let videoSuccessCount = 0;
     let videoFailedCount = 0;
-    if (shotsNeedingVideoRegen.length > 0) {
+    if (shotIdsNeedingVideoRegen.length > 0) {
       logger.info(
-        `[ReplaceElementWorkflow:cf] Regenerating video for ${shotsNeedingVideoRegen.length} shot(s) tied to element ${token}`
+        `[ReplaceElementWorkflow:cf] Regenerating video for ${shotIdsNeedingVideoRegen.length} shot(s) tied to element ${token}`
       );
 
       const motionBinding = this.env.MOTION_WORKFLOW;
@@ -528,41 +538,37 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
       // resolve them (#713/#991: racy + replay-unsafe). Keyed by shotId.
       const motionPromptByShotId = input.motionPromptByShotId;
 
-      const motionSpawnPromises = shotsNeedingVideoRegen.map(
-        async (shot, index) => {
-          const newThumbnailUrl = successByShotId.get(shot.id);
+      const motionSpawnPromises = shotIdsNeedingVideoRegen.map(
+        async (shotId, index) => {
+          const newThumbnailUrl = successByShotId.get(shotId);
           if (!newThumbnailUrl) {
-            return { shotId: shot.id, success: false };
+            return { shotId, success: false };
           }
 
           // The caller resolves a motion prompt for every shot it asks to
           // re-render. A missing key is an invariant violation (the resolved map
-          // fell out of sync with `shotsNeedingVideoRegen`), NOT a legitimate
+          // fell out of sync with `shotIdsNeedingVideoRegen`), NOT a legitimate
           // empty prompt — fail loud rather than silently re-render with no motion
           // guidance. `''` is a valid resolved value and passes through.
-          const motionPrompt = motionPromptByShotId[shot.id];
+          const motionPrompt = motionPromptByShotId[shotId];
           if (motionPrompt === undefined) {
             throw new NonRetryableError(
-              `No resolved motion prompt for shot ${shot.id} in replace-element re-render`,
+              `No resolved motion prompt for shot ${shotId} in replace-element re-render`,
               'WorkflowValidationError'
             );
           }
 
-          await scopedDb.shots.update(shot.id, {
-            videoStatus: 'generating',
-            videoError: null,
-          });
-
+          const durationMs = snapshots[shotId]?.durationMs;
           const childPayload: MotionWorkflowInput = {
             userId: input.userId,
             teamId: input.teamId,
             sequenceId,
-            shotId: shot.id,
+            shotId,
             imageUrl: newThumbnailUrl,
             prompt: motionPrompt,
             model: videoModel,
             aspectRatio,
-            duration: shot.durationMs ? shot.durationMs / 1000 : undefined,
+            duration: durationMs ? durationMs / 1000 : undefined,
           };
 
           try {
@@ -572,19 +578,19 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
                 binding: motionBinding,
                 parentBindingName: PARENT_BINDING_NAME,
                 parentInstanceId: event.instanceId,
-                childId: `motion:${sequenceId}:${shot.id}`,
+                childId: `motion:${sequenceId}:${shotId}`,
                 childPayload,
                 spawnStepName: `spawn-motion-${index}`,
                 awaitStepName: `await-motion-${index}`,
                 timeout: '30 minutes',
               }
             );
-            return { shotId: shot.id, success: true };
+            return { shotId, success: true };
           } catch (e) {
             logger.error('[ReplaceElementWorkflow:cf] motion child failed:', {
               err: rejectionReasonMessage(e),
             });
-            return { shotId: shot.id, success: false };
+            return { shotId, success: false };
           }
         }
       );
@@ -641,7 +647,7 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
   }: {
     event: Readonly<WorkflowEvent<ReplaceElementWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 
@@ -655,7 +661,9 @@ export class ReplaceElementWorkflow extends OpenStoryWorkflowEntrypoint<ReplaceE
     // in `analyzing` forever (the whole point of this recovery).
     let shouldDowngrade = true;
     try {
-      const current = await scopedDb.sequenceElements.getById(input.elementId);
+      const current = await scopedDb.liveRead.sequenceElements.getById(
+        input.elementId
+      );
       if (current) {
         shouldDowngrade = shouldDowngradeVisionOnFailure(current.visionStatus);
       }

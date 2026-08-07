@@ -66,7 +66,7 @@ async function seed() {
     .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0 })
+    .values({ sequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
@@ -108,7 +108,7 @@ describe('buildEventInsert', () => {
   it('composes into a caller batch so the mutation and its event are atomic', async () => {
     const m = createSequenceEventsMethods(db);
     await db.batch([
-      db.update(shots).set({ orderIndex: 5 }).where(eq(shots.id, shotId)),
+      db.update(shots).set({ shotNumber: 5 }).where(eq(shots.id, shotId)),
       buildEventInsert(db, {
         sequenceId,
         actorId: null,
@@ -121,7 +121,7 @@ describe('buildEventInsert', () => {
 
     const [shot] = await db.select().from(shots).where(eq(shots.id, shotId));
     if (!shot) throw new Error('test setup: refresh failed');
-    expect(shot.orderIndex).toBe(5);
+    expect(shot.shotNumber).toBe(5);
     const events = await m.listByTarget('shot', shotId);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('shots.reordered');

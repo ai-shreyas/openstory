@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EvalSceneCell } from './eval-scene-cell';
 import type { DialogTab } from './eval-cell-dialog';
+import { useScenesBySequence, type SceneWithScript } from '@/hooks/use-scenes';
 import type { SequenceWithShots } from '@/hooks/use-sequences-with-shots';
 import type { ViewMode } from './eval-view';
 import { getAspectRatioData } from '@/lib/constants/aspect-ratios';
@@ -155,6 +156,12 @@ const MobileReelRow: React.FC<MobileReelRowProps> = ({
   onNavigateToCell,
 }) => {
   const aspectRatio = sequence.aspectRatio;
+  const { data: scenes } = useScenesBySequence(sequence.id);
+  const scenesById = useMemo(() => {
+    const map = new Map<string, SceneWithScript>();
+    for (const scene of scenes ?? []) map.set(scene.id, scene);
+    return map;
+  }, [scenes]);
   const ratioData = getAspectRatioData(aspectRatio);
   const cellWidth = ratioData
     ? (STRIP_HEIGHT * ratioData.width) / ratioData.height
@@ -239,6 +246,9 @@ const MobileReelRow: React.FC<MobileReelRowProps> = ({
                 >
                   <EvalSceneCell
                     shot={shot}
+                    scene={
+                      shot.sceneId ? scenesById.get(shot.sceneId) : undefined
+                    }
                     viewMode={viewMode}
                     sceneNumber={sceneIndex + 1}
                     sequenceTitle={sequence.title}
@@ -331,7 +341,7 @@ const SequencePosterCell: React.FC<SequencePosterCellProps> = ({
     'aria-label': `Open ${sequence.title || 'sequence'}`,
   } as const;
 
-  const previewUrl = sequence.shots[0]?.thumbnailUrl ?? sequence.posterUrl;
+  const previewUrl = sequence.shots[0]?.image?.url ?? sequence.posterUrl;
 
   if (previewUrl) {
     return (

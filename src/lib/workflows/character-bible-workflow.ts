@@ -18,7 +18,7 @@
 
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
 import { generateId } from '@/lib/db/id';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type { CharacterMinimal, NewCharacter } from '@/lib/db/schema';
 import { buildCastingAttributes } from '@/lib/prompts/character-prompt';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
@@ -41,7 +41,7 @@ export class CharacterBibleWorkflow extends OpenStoryWorkflowEntrypoint<Characte
   protected override async runImpl(
     event: Readonly<WorkflowEvent<CharacterBibleWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<CharacterMinimal[]> {
     const input = event.payload;
     const { talentMatches = [] } = input;
@@ -242,7 +242,7 @@ export class CharacterBibleWorkflow extends OpenStoryWorkflowEntrypoint<Characte
   }: {
     event: Readonly<WorkflowEvent<CharacterBibleWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     logger.error(
       `[CharacterBibleWorkflow:cf] Character sheet generation failed: ${error}`

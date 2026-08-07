@@ -22,14 +22,9 @@ let teamId = '';
 let sequenceId = '';
 let sceneId = dbSceneId('');
 
-async function seedScene(orderIndex = 0, extract = 'Scene one.') {
+async function seedScene(orderIndex = 0) {
   sceneId = dbSceneId(generateId());
-  await db.insert(scenes).values({
-    id: sceneId,
-    sequenceId,
-    orderIndex,
-    originalScript: { extract, dialogue: [] },
-  });
+  await db.insert(scenes).values({ id: sceneId, sequenceId, orderIndex });
 }
 
 beforeAll(async () => {
@@ -109,12 +104,7 @@ describe('sceneScriptVersions.write', () => {
 
   it('lists selected scripts in sequence order', async () => {
     const scene2Id = dbSceneId(generateId());
-    await db.insert(scenes).values({
-      id: scene2Id,
-      sequenceId,
-      orderIndex: 1,
-      originalScript: { extract: 'Scene two.', dialogue: [] },
-    });
+    await db.insert(scenes).values({ id: scene2Id, sequenceId, orderIndex: 1 });
 
     const methods = createSceneScriptVersionsMethods(db);
     await methods.write({
@@ -136,38 +126,42 @@ describe('sceneScriptVersions.write', () => {
   });
 });
 
-describe('sceneScriptVersions.seedSplitFromSceneRows', () => {
+describe('sceneScriptVersions.seedSplitVersions', () => {
   it('bulk-seeds split versions and repoints selection using scene row ids', async () => {
     const scene2Id = dbSceneId(generateId());
-    await db.insert(scenes).values({
-      id: scene2Id,
-      sequenceId,
-      orderIndex: 1,
-      originalScript: { extract: 'Scene two.', dialogue: [] },
-    });
+    await db.insert(scenes).values({ id: scene2Id, sequenceId, orderIndex: 1 });
 
     const methods = createSceneScriptVersionsMethods(db);
-    const sceneRows = await db
-      .select()
-      .from(scenes)
-      .where(eq(scenes.sequenceId, sequenceId));
+    const createdAt = new Date();
+    const seeds = [
+      {
+        sceneId,
+        content: { extract: 'Scene one.', dialogue: [] },
+        createdAt,
+      },
+      {
+        sceneId: scene2Id,
+        content: { extract: 'Scene two.', dialogue: [] },
+        createdAt,
+      },
+    ];
 
-    const inserted = await methods.seedSplitFromSceneRows(sceneRows);
+    const inserted = await methods.seedSplitVersions(seeds);
     expect(inserted).toBe(2);
 
-    for (const row of sceneRows) {
+    for (const seed of seeds) {
       const [scene] = await db
         .select()
         .from(scenes)
-        .where(eq(scenes.id, row.id));
-      expect(scene?.selectedScriptVersionId).toBe(row.id);
+        .where(eq(scenes.id, seed.sceneId));
+      expect(scene?.selectedScriptVersionId).toBe(seed.sceneId);
 
       const [version] = await db
         .select()
         .from(sceneScriptVersions)
-        .where(eq(sceneScriptVersions.id, row.id));
+        .where(eq(sceneScriptVersions.id, seed.sceneId));
       expect(version?.source).toBe('split');
-      expect(version?.content.extract).toBe(row.originalScript?.extract);
+      expect(version?.content.extract).toBe(seed.content.extract);
     }
 
     const listed = await methods.listSelectedBySequence(sequenceId);
@@ -177,23 +171,18 @@ describe('sceneScriptVersions.seedSplitFromSceneRows', () => {
     ]);
   });
 
-  it('skips rows without originalScript and is idempotent on replay', async () => {
-    const noScriptId = dbSceneId(generateId());
-    await db.insert(scenes).values({
-      id: noScriptId,
-      sequenceId,
-      orderIndex: 1,
-      originalScript: null,
-    });
-
+  it('is idempotent on replay', async () => {
     const methods = createSceneScriptVersionsMethods(db);
-    const sceneRows = await db
-      .select()
-      .from(scenes)
-      .where(eq(scenes.sequenceId, sequenceId));
+    const seeds = [
+      {
+        sceneId,
+        content: { extract: 'Scene one.', dialogue: [] },
+        createdAt: new Date(),
+      },
+    ];
 
-    expect(await methods.seedSplitFromSceneRows(sceneRows)).toBe(1);
-    expect(await methods.seedSplitFromSceneRows(sceneRows)).toBe(0);
+    expect(await methods.seedSplitVersions(seeds)).toBe(1);
+    expect(await methods.seedSplitVersions(seeds)).toBe(0);
 
     const versions = await db
       .select()

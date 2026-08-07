@@ -29,6 +29,7 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createFramePromptVersionsMethods } from './frame-prompt-versions';
 import { createFrameVariantsMethods } from './frame-variants';
 
 let client: Client;
@@ -73,7 +74,7 @@ async function seed() {
     .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0 })
+    .values({ sequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
@@ -103,7 +104,7 @@ async function seedSecondSequence() {
   });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId: otherSequenceId, orderIndex: 0 })
+    .values({ sequenceId: otherSequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   const [frame] = await db
@@ -289,11 +290,7 @@ describe('frameVariants.select', () => {
     // Live frame currently points at the newer prompt.
     await db
       .update(frames)
-      .set({
-        imagePrompt: newPrompt.text,
-        visualPromptInputHash: newPrompt.inputHash,
-        selectedImagePromptVersionId: newPrompt.id,
-      })
+      .set({ selectedImagePromptVersionId: newPrompt.id })
       .where(eq(frames.id, frameId));
 
     // An older still that was generated from the old prompt.
@@ -325,8 +322,10 @@ describe('frameVariants.select', () => {
     expect(frame.selectedImageVersionId).toBe(olderStill.id);
     expect((await m.getSelected(frameId))?.url).toBe('https://cdn/old.png');
     expect(frame.selectedImagePromptVersionId).toBe(oldPrompt.id);
-    expect(frame.imagePrompt).toBe('Wide shot of the moon base');
-    expect(frame.visualPromptInputHash).toBe('prompt-hash-old');
+    const restoredPrompt =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(restoredPrompt?.text).toBe('Wide shot of the moon base');
+    expect(restoredPrompt?.inputHash).toBe('prompt-hash-old');
 
     const promptEvents = await db
       .select()
@@ -387,13 +386,20 @@ describe('frameVariants.select', () => {
 
   it('selects without touching the prompt when promptVersionId is null (legacy)', async () => {
     const m = createFrameVariantsMethods(db);
+    const [kept] = await db
+      .insert(framePromptVersions)
+      .values({
+        frameId,
+        text: 'Keep me',
+        source: 'ai-generated',
+        inputHash: 'keep-hash',
+        analysisModel: 'claude',
+      })
+      .returning();
+    if (!kept) throw new Error('test setup: prompt insert failed');
     await db
       .update(frames)
-      .set({
-        imagePrompt: 'Keep me',
-        visualPromptInputHash: 'keep-hash',
-        selectedImagePromptVersionId: null,
-      })
+      .set({ selectedImagePromptVersionId: kept.id })
       .where(eq(frames.id, frameId));
 
     const v = await m.appendVersion(
@@ -406,8 +412,11 @@ describe('frameVariants.select', () => {
       .from(frames)
       .where(eq(frames.id, frameId));
     if (!frame) throw new Error('test setup: refresh failed');
-    expect(frame.imagePrompt).toBe('Keep me');
-    expect(frame.visualPromptInputHash).toBe('keep-hash');
+    expect(frame.selectedImagePromptVersionId).toBe(kept.id);
+    const stillSelected =
+      await createFramePromptVersionsMethods(db).getSelected(frameId);
+    expect(stillSelected?.text).toBe('Keep me');
+    expect(stillSelected?.inputHash).toBe('keep-hash');
     expect(
       await db
         .select()
@@ -454,6 +463,65 @@ describe('frameVariants.select', () => {
     await expect(
       m.select(frameId, siblingVersion.id, { actorId: null })
     ).rejects.toThrow(/not found for frame/);
+  });
+});
+
+describe('frameVariants.selectIfPendingPromoteIs (#1070)', () => {
+  it('promotes and consumes the claim when the pending pointer still names the version', async () => {
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput({ url: 'https://cdn/a.png' }));
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: v.id })
+      .where(eq(frames.id, frameId));
+
+    const promoted = await m.selectIfPendingPromoteIs(frameId, v.id, {
+      actorId: null,
+    });
+
+    expect(promoted?.id).toBe(v.id);
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.selectedImageVersionId).toBe(v.id);
+    expect(frame?.pendingPromoteVersionId).toBeNull();
+  });
+
+  it('does not select when a newer kickoff moved the pending pointer', async () => {
+    const m = createFrameVariantsMethods(db);
+    const mine = await m.appendVersion(
+      variantInput({ url: 'https://cdn/mine.png' })
+    );
+    const newer = await m.appendVersion(
+      variantInput({ url: 'https://cdn/newer.png' })
+    );
+    await db
+      .update(frames)
+      .set({ pendingPromoteVersionId: newer.id })
+      .where(eq(frames.id, frameId));
+
+    const promoted = await m.selectIfPendingPromoteIs(frameId, mine.id, {
+      actorId: null,
+    });
+
+    expect(promoted).toBeNull();
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.selectedImageVersionId).toBeNull();
+    // The other run's claim survives — only a matching claim is consumed.
+    expect(frame?.pendingPromoteVersionId).toBe(newer.id);
+  });
+
+  it('does not select when no promote claim is held at all', async () => {
+    const m = createFrameVariantsMethods(db);
+    const v = await m.appendVersion(variantInput());
+
+    expect(
+      await m.selectIfPendingPromoteIs(frameId, v.id, { actorId: null })
+    ).toBeNull();
   });
 });
 

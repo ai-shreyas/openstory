@@ -20,7 +20,8 @@ import { HighlightedPrompt } from '@/components/text-editor/mention/highlighted-
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import { useSequenceElements } from '@/hooks/use-sequence-elements';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
 import { Clapperboard, FileTextIcon, ImageIcon, TextIcon } from 'lucide-react';
@@ -48,7 +49,8 @@ function isDialogTab(value: string): value is DialogTab {
 type EvalCellDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  shot: ShotWithImage;
+  shot: ShotView;
+  scene?: SceneWithScript | undefined;
   sceneNumber: number;
   sequenceTitle: string;
   aspectRatio: AspectRatio;
@@ -63,6 +65,7 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
   open,
   onOpenChange,
   shot,
+  scene,
   sceneNumber,
   sequenceTitle,
   aspectRatio,
@@ -74,7 +77,7 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
 }) => {
   const prompt = getVisualPrompt(shot);
   const motionPrompt = getMotionPrompt(shot);
-  const script = getSceneScript(shot);
+  const script = getSceneScript(scene);
   const [selectedTab, setSelectedTab] = useState<DialogTab>(initialTab);
 
   // Mention pills for the prompt text. Gated on `open` so the lists are only
@@ -263,14 +266,14 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
           </TabsContent>
 
           <TabsContent value="images" className="flex-1 min-h-0 mt-0">
-            {!shot.thumbnailUrl ? (
+            {!shot.image?.url ? (
               <div className="flex items-center justify-center h-full text-muted-foreground">
                 No image available
               </div>
             ) : (
               <div className="flex justify-center items-center h-full">
                 <AppImage
-                  src={shot.thumbnailUrl}
+                  src={shot.image.url}
                   alt={`Scene ${sceneNumber}`}
                   className="max-w-full max-h-full object-contain rounded-lg"
                   width={1000}
@@ -281,12 +284,12 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
           </TabsContent>
 
           <TabsContent value="motion" className="flex-1 min-h-0 mt-0">
-            {!shot.videoUrl ? (
-              shot.thumbnailUrl ? (
+            {!shot.video?.url ? (
+              shot.image?.url ? (
                 <div className="flex justify-center items-center h-full w-full">
                   <div className="relative w-full max-w-4xl">
                     <AppImage
-                      src={shot.thumbnailUrl}
+                      src={shot.image.url}
                       alt={`Scene ${sceneNumber} preview`}
                       className="w-full h-auto object-contain rounded-lg opacity-60"
                       width={1920}
@@ -310,8 +313,8 @@ export const EvalCellDialog: React.FC<EvalCellDialogProps> = ({
               <div className="flex justify-center items-center h-full w-full">
                 <div className="w-full max-w-4xl">
                   <VideoPlayer
-                    src={shot.videoUrl}
-                    posterSrc={shot.thumbnailUrl}
+                    src={shot.video.url}
+                    posterSrc={shot.image?.url}
                     aspectRatio={aspectRatio}
                     className="rounded-lg"
                   />

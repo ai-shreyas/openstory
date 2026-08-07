@@ -26,7 +26,7 @@ import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useSceneSelection } from '@/hooks/use-scene-selection';
 import { useSequenceSegments } from '@/hooks/use-segments';
-import { useScenesBySequence } from '@/hooks/use-scenes';
+import { useScenesBySequence, type SceneWithScript } from '@/hooks/use-scenes';
 import {
   shotIsStale,
   useSceneShotStaleness,
@@ -70,8 +70,8 @@ import {
   resolveVideoModel,
 } from '@/lib/ai/resolve-asset-models';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
-import type { FrameVariant, SceneRow, ShotVariant } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
@@ -142,7 +142,7 @@ function facetToTab(facet?: SceneFacet): TabValue {
 
 const CompareWithPromptDiff: React.FC<{
   sequenceId: string;
-  shot: ShotWithImage;
+  shot: ShotView;
   variant: ShotVariant;
   onClose: () => void;
   onPromote: () => void;
@@ -261,7 +261,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     refetchInterval: (query) => {
       const seq = query.state.data;
       if (!seq) return false;
-      const cachedShots = queryClient.getQueryData<ShotWithImage[]>(
+      const cachedShots = queryClient.getQueryData<ShotView[]>(
         shotKeys.list(sequenceId)
       );
       return cachedShots?.some((f) => f.videoStatus === 'generating')
@@ -323,7 +323,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // first images as they arrive. No effect, no state: pure derivation.
   const canvasReady =
     !isProcessing ||
-    (shots?.some((s) => s.thumbnailUrl || s.previewThumbnailUrl) ?? false);
+    (shots?.some((s) => s.image?.url || s.frame.previewImageUrl) ?? false);
   const effectiveView = canvasReady ? view : 'script';
 
   // Escape progressive zoom-out (#986):
@@ -580,9 +580,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   );
   const selectedSegmentSpanLabel = useMemo(() => {
     if (!selectedSegment || !shots) return undefined;
-    const numberById = new Map(
-      shots.map((f) => [f.id, f.shotNumber ?? f.orderIndex + 1])
-    );
+    const numberById = new Map(shots.map((f) => [f.id, f.shotNumber]));
     const numbers = selectedSegment.shotIds
       .map((id) => numberById.get(id))
       .filter((n): n is number => n != null);
@@ -614,7 +612,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // identity lives on the selected frame_variants / video_variants row.
   const { data: scenes, error: scenesError } = useScenesBySequence(sequenceId);
   const scenesById = useMemo(() => {
-    const map = new Map<string, SceneRow>();
+    const map = new Map<string, SceneWithScript>();
     for (const scene of scenes ?? []) map.set(scene.id, scene);
     return map;
   }, [scenes]);
@@ -628,7 +626,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     if (scope === 'scenes') {
       return selection.sceneIds
         .map((id) => scenesById.get(id))
-        .filter((s): s is SceneRow => s != null);
+        .filter((s): s is SceneWithScript => s != null);
     }
     return [];
   }, [scope, selectedShot, selection.sceneIds, scenesById]);
@@ -639,17 +637,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // silently writing to whichever scene happened to be first.
   const scriptScene =
     selectedScenes.length === 1 ? selectedScenes[0] : undefined;
-  // Canonical text is the SELECTED script version, which `getShotsFn` already
-  // overlays onto each shot's metadata (#1030). Falls back to the scene row's
-  // analysis-time script for a scene whose shots haven't loaded yet.
-  const scriptText = useMemo(() => {
-    if (!scriptScene) return undefined;
-    const sceneShot = shots?.find((s) => s.sceneId === scriptScene.id);
-    return (
-      sceneShot?.metadata?.originalScript.extract ??
-      scriptScene.originalScript?.extract
-    );
-  }, [scriptScene, shots]);
 
   // Batched staleness for the in-focus scene's shots (#1077): feeds the scene
   // panel's stale-shot summary, the left-rail dots and the canvas chip, and
@@ -900,7 +887,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
 
       if (effectiveTab === 'image-prompt') {
         const currentImageModel = safeTextToImageModel(
-          selectedShot.imageModel,
+          selectedShot.image?.model,
           DEFAULT_IMAGE_MODEL
         );
         // Same rule as the inspector Set Image button: only when the dropdown
@@ -929,7 +916,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
 
       if (effectiveTab === 'motion-prompt') {
         const currentVideoModel = safeImageToVideoModel(
-          selectedShot.motionModel,
+          selectedShot.video?.model,
           DEFAULT_VIDEO_MODEL
         );
         if (
@@ -993,7 +980,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               v.status === 'completed' &&
               v.url
           );
-        if (iv?.url) next = { ...next, thumbnailUrl: iv.url };
+        if (iv?.url) next = { ...next, image: iv };
       }
       if (pinVideo) {
         // Video: show only the pinned model's output (no fallback — a missing
@@ -1009,10 +996,16 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         next = vv
           ? {
               ...next,
-              videoUrl: vv.status === 'completed' ? vv.url : null,
+              // The pinned model's clip rides on the shot's own version row —
+              // `shot_variants` is a different table, so there is no
+              // `video_variants` row to point at.
+              video:
+                vv.status === 'completed' && next.video
+                  ? { ...next.video, url: vv.url, model: vv.model }
+                  : null,
               videoStatus: vv.status,
             }
-          : { ...next, videoUrl: null, videoStatus: 'pending' as const };
+          : { ...next, video: null, videoStatus: 'pending' as const };
       }
       return next;
     });
@@ -1059,14 +1052,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     for (const shot of shots) {
       if (
         regeneratingImages.has(shot.id) &&
-        isTerminalStatus(shot.thumbnailStatus)
+        isTerminalStatus(shot.frame.imageStatus)
       )
         handleRegenerateEnd(shot.id, 'image');
       if (regeneratingMotion.has(shot.id) && isTerminalStatus(shot.videoStatus))
         handleRegenerateEnd(shot.id, 'motion');
       if (
         regeneratingSceneVariants.has(shot.id) &&
-        isTerminalStatus(shot.variantImageStatus)
+        isTerminalStatus(shot.gridSheet?.status ?? null)
       )
         handleRegenerateEnd(shot.id, 'scene-variants');
     }
@@ -1099,8 +1092,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const [isRetrying, setIsRetrying] = useState(false);
 
   const failureSummary = useMemo(
-    () => (sequence ? analyzeFailures(shots ?? [], sequence) : null),
-    [shots, sequence]
+    () =>
+      sequence ? analyzeFailures(shots ?? [], sequence, scenesById) : null,
+    [shots, sequence, scenesById]
   );
 
   const handleFullRetry = useCallback(() => {
@@ -1143,7 +1137,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       const eligibleShotIds = (shots ?? [])
         .filter(
           (f) =>
-            f.thumbnailStatus === 'completed' &&
+            f.frame.imageStatus === 'completed' &&
             (f.videoStatus === 'pending' || f.videoStatus === 'failed')
         )
         .map((f) => f.id);
@@ -1154,14 +1148,12 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       // derived banner state shows the banner immediately — no separate state.
       const eligibleSet = new Set(eligibleShotIds);
       const now = new Date();
-      queryClient.setQueryData<ShotWithImage[]>(
-        shotKeys.list(sequenceId),
-        (old) =>
-          old?.map((f) =>
-            eligibleSet.has(f.id)
-              ? { ...f, videoStatus: 'generating', updatedAt: now }
-              : f
-          )
+      queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+        old?.map((f) =>
+          eligibleSet.has(f.id)
+            ? { ...f, videoStatus: 'generating', updatedAt: now }
+            : f
+        )
       );
       if (includeMusic) {
         queryClient.setQueryData<Sequence>(
@@ -1200,12 +1192,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           removeAllFromSet(prev, eligibleShotIds)
         );
         // Roll back optimistic cache updates
-        queryClient.setQueryData<ShotWithImage[]>(
-          shotKeys.list(sequenceId),
-          (old) =>
-            old?.map((f) =>
-              eligibleSet.has(f.id) ? { ...f, videoStatus: 'pending' } : f
-            )
+        queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+          old?.map((f) =>
+            eligibleSet.has(f.id) ? { ...f, videoStatus: 'pending' } : f
+          )
         );
         if (includeMusic) {
           void queryClient.invalidateQueries({
@@ -1308,6 +1298,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         <div className="md:hidden">
           <MobileSceneDrawer
             shots={shots}
+            scenes={scenes}
             selectedShotId={curSelectedShotId}
             aspectRatio={aspectRatio}
             onSelectShot={handleSelectShot}
@@ -1338,7 +1329,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               <SceneScriptDocument
                 sequenceId={sequenceId}
                 scenes={scenes}
-                shots={shots}
                 selectedSceneIds={selectedScenes.map((s) => s.id)}
                 onSelectScene={handleFocusScene}
               />
@@ -1346,6 +1336,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               <SceneCanvas
                 selection={selection}
                 shots={shots}
+                scenes={scenes}
                 loadError={shotsError}
                 playerShots={playerShots}
                 sequence={sequence}
@@ -1436,8 +1427,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   onCompareDivergent={(variant) => setCompareVariant(variant)}
                   facetShotIds={facetShotIds}
                   musicEditable={scope === 'sequence'}
-                  scriptSceneId={scriptScene?.id}
-                  scriptText={scriptText}
+                  scene={scriptScene}
                   scopeShots={scopeShots}
                   scopeStaleness={scopeStaleness}
                   scopeStalenessFailed={scopeStalenessFailed}
@@ -1491,8 +1481,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 onCompareDivergent={(variant) => setCompareVariant(variant)}
                 facetShotIds={facetShotIds}
                 musicEditable={scope === 'sequence'}
-                scriptSceneId={scriptScene?.id}
-                scriptText={scriptText}
+                scene={scriptScene}
                 scopeShots={scopeShots}
                 scopeStaleness={scopeStaleness}
                 scopeStalenessFailed={scopeStalenessFailed}

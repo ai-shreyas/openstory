@@ -64,10 +64,9 @@ export function useSequenceExport(sequence: Sequence): SequenceExportState {
         throw new Error('This sequence has no shots yet.');
       }
       const scenes = shots
-        .filter((f): f is typeof f & { videoUrl: string } =>
-          Boolean(f.videoUrl)
-        )
-        .map((f) => ({ orderIndex: f.orderIndex, videoUrl: f.videoUrl }));
+        .map((f) => f.video?.url)
+        .filter((url): url is string => Boolean(url))
+        .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
       if (scenes.length === 0) {
         throw new Error('No scene videos are ready yet.');
       }

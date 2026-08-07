@@ -15,6 +15,7 @@ import {
   type ShotImageHashInput,
 } from '@/lib/ai/input-hash';
 import type { TextToImageModel } from '@/lib/ai/models';
+import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type {
   Character,
@@ -36,13 +37,23 @@ import { resolveSceneShotImageReferences } from './sheet-snapshots';
  * time and (with current-state inputs) at write time for divergence checks.
  */
 export async function buildRegenerateShotSnapshot(params: {
-  shot: Pick<Shot, 'id' | 'metadata'>;
+  shot: Pick<Shot, 'id'>;
+  /**
+   * The shot's scene, composed from `scenes` + its selected script version
+   * (#1067). Callers resolve it via `resolveSceneForShot`; null degrades to the
+   * no-references path, as an absent `shot.metadata` did.
+   */
+  scene: Scene | null;
   /**
    * The frame's current image prompt (mirror of the selected prompt version).
    * Moved off `shots` onto the anchor frame in #989; callers pass
    * `frame.imagePrompt`.
    */
   imagePrompt: string | null;
+  /** The prompt version `imagePrompt` came from, when the caller resolved one. */
+  imagePromptVersionId?: string | null;
+  /** The shot's anchor frame, when the caller already resolved it. */
+  frameId?: string;
   characters: Character[];
   locations: SequenceLocation[];
   elements: SequenceElement[];
@@ -51,7 +62,10 @@ export async function buildRegenerateShotSnapshot(params: {
 }): Promise<RegenerateShotSnapshot> {
   const {
     shot,
+    scene,
     imagePrompt,
+    imagePromptVersionId,
+    frameId,
     characters,
     locations,
     elements,
@@ -73,12 +87,12 @@ export async function buildRegenerateShotSnapshot(params: {
   }
 
   // Resolve the scene's character / location / element references exactly the
-  // way image generation does (`computeImageWorkflowHashCurrent`) — same
+  // way the image-generation trigger snapshot does — same
   // matchers, same reference-hash sets — so this verify-time hash equals the
   // thumbnail hash stamped at generation. Omitting the element/location sets
   // here made every product-/location-bearing shot report stale. See #867.
   const refs = resolveSceneShotImageReferences({
-    scene: shot.metadata,
+    scene,
     characters,
     locations,
     elements,
@@ -102,6 +116,8 @@ export async function buildRegenerateShotSnapshot(params: {
   return {
     shotId: shot.id,
     imagePrompt: effectivePrompt,
+    imagePromptVersionId: imagePromptVersionId ?? null,
+    frameId: frameId ?? null,
     characterSheetHashes: refs.characterSheetHashes,
     locationSheetHashes: refs.locationSheetHashes,
     elementReferenceHashes: refs.elementReferenceHashes,

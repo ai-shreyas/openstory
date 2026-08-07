@@ -7,22 +7,25 @@
  *
  *   - completed: flip the version to `completed`, log `video.rendered`, and (for
  *     a primary render) repoint the shot's selection via `videoVariants.select`
- *     (which mirrors `shots.video*` + the render segment's selection pointer). A `variantOnly`
+ *     (which repoints the render segment's selection pointer). A `variantOnly`
  *     render skips the select. Shot-deleted mid-flight skips the select too.
- *   - failed: mark the version failed by workflow run id and (primary only) flip
- *     the legacy `shots.video*` status.
+ *   - failed: mark the version failed by workflow run id — the shot's video
+ *     status derives from that row since #1067 phase 2d, so nothing is written
+ *     to `shots`.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { NewShot, NewVideoVariant } from '@/lib/db/schema';
 import type { RecordEventInput } from '@/lib/db/scoped/sequence-events';
 import {
-  buildMotionGeneratingShotWrite,
   type MotionVideoProgressPayload,
   persistMotionCompletion,
   persistMotionFailure,
   type PersistMotionScopedDb,
 } from './motion-workflow-persist';
+
+// `buildMotionGeneratingShotWrite` is gone: the in-flight state is the appended
+// `video_variants` row, covered by `persistMotionFailure` + shot-view.
 
 const upload = {
   url: 'https://r2/seq/shot-veo.mp4',
@@ -30,22 +33,11 @@ const upload = {
 };
 const NOW = new Date('2026-06-02T00:00:00Z');
 
-describe('buildMotionGeneratingShotWrite', () => {
-  it('stamps the legacy columns with the model + run id', () => {
-    expect(
-      buildMotionGeneratingShotWrite({ model: 'veo3', workflowRunId: 'run-1' })
-    ).toEqual({
-      videoStatus: 'generating',
-      videoWorkflowRunId: 'run-1',
-      motionModel: 'veo3',
-    });
-  });
-});
-
 type CallName =
   | 'videoVariants.update'
   | 'videoVariants.select'
   | 'videoVariants.markFailedByWorkflowRun'
+  | 'videoVariants.appendVersion'
   | 'videoVariants.getById'
   | 'renderSegments.getById'
   | 'renderSegments.clearPending'
@@ -59,12 +51,18 @@ function buildScopedDbSpy(
     /** When set, completion promotes only if videoVersionId matches. */
     pendingPromoteVersionId?: string | null;
     segmentId?: string;
+    /**
+     * Rows `markFailedByWorkflowRun` matches. 0 models a run that died before
+     * `set-generating-status` appended its version.
+     */
+    markFailedRows?: number;
   } = {}
 ): {
   scopedDb: PersistMotionScopedDb;
   versionUpdates: Array<{ id: string; data: Partial<NewVideoVariant> }>;
   selects: Array<{ shotId: string; versionId: string; actorId: string | null }>;
   markFailed: Array<{ runId: string; error: string }>;
+  appended: NewVideoVariant[];
   events: RecordEventInput[];
   shotUpdates: Array<{ shotId: string; data: Partial<NewShot> }>;
   callOrder: CallName[];
@@ -78,6 +76,7 @@ function buildScopedDbSpy(
     actorId: string | null;
   }> = [];
   const markFailed: Array<{ runId: string; error: string }> = [];
+  const appended: NewVideoVariant[] = [];
   const events: RecordEventInput[] = [];
   const shotUpdates: Array<{ shotId: string; data: Partial<NewShot> }> = [];
   const callOrder: CallName[] = [];
@@ -90,11 +89,31 @@ function buildScopedDbSpy(
       : opts.pendingPromoteVersionId;
 
   const scopedDb: PersistMotionScopedDb = {
-    shots: {
-      getById: async (id) => {
-        callOrder.push('shots.getById');
-        return opts.shotMissing ? null : { id, renderSegmentId: segmentId };
+    liveRead: {
+      shots: {
+        getById: async (id) => {
+          callOrder.push('shots.getById');
+          return opts.shotMissing
+            ? null
+            : { id, sequenceId: 'seq1', renderSegmentId: segmentId };
+        },
       },
+      renderSegments: {
+        getById: async (id) => {
+          callOrder.push('renderSegments.getById');
+          return { id, pendingPromoteVersionId: pending };
+        },
+      },
+    },
+    claims: {
+      videoVariants: {
+        getById: async (versionId) => {
+          callOrder.push('videoVariants.getById');
+          return { id: versionId, workflowRunId: 'run-1' };
+        },
+      },
+    },
+    shots: {
       update: async (shotId, data) => {
         callOrder.push('shots.update');
         shotUpdates.push({ shotId, data });
@@ -107,10 +126,6 @@ function buildScopedDbSpy(
         versionUpdates.push({ id: versionId, data });
         return { id: versionId };
       },
-      getById: async (versionId) => {
-        callOrder.push('videoVariants.getById');
-        return { id: versionId, workflowRunId: 'run-1' };
-      },
       select: async (shotId, versionId, selectOpts) => {
         callOrder.push('videoVariants.select');
         selects.push({ shotId, versionId, actorId: selectOpts.actorId });
@@ -119,16 +134,15 @@ function buildScopedDbSpy(
       markFailedByWorkflowRun: async (runId, error) => {
         callOrder.push('videoVariants.markFailedByWorkflowRun');
         markFailed.push({ runId, error });
+        return opts.markFailedRows ?? 1;
+      },
+      appendVersion: async (data) => {
+        callOrder.push('videoVariants.appendVersion');
+        appended.push(data);
+        return { id: 'vv-appended' };
       },
     },
     renderSegments: {
-      getById: async (id) => {
-        callOrder.push('renderSegments.getById');
-        return {
-          id,
-          pendingPromoteVersionId: pending,
-        };
-      },
       setPendingPromoteVersionId: async (_segmentId, versionId) => {
         pending = versionId;
       },
@@ -152,6 +166,7 @@ function buildScopedDbSpy(
     versionUpdates,
     selects,
     markFailed,
+    appended,
     events,
     shotUpdates,
     callOrder,
@@ -307,7 +322,7 @@ describe('persistMotionCompletion', () => {
 });
 
 describe('persistMotionFailure', () => {
-  it('primary: flips the legacy shot status + marks the version failed, emits with the reason', async () => {
+  it('primary: marks the version failed (no shot write) and emits with the reason', async () => {
     const spy = buildScopedDbSpy();
     const emits: Array<{ event: string; payload: MotionVideoProgressPayload }> =
       [];
@@ -324,17 +339,15 @@ describe('persistMotionFailure', () => {
     });
 
     expect(spy.callOrder).toEqual([
-      'shots.update',
       'shots.getById',
       'renderSegments.getById',
       'videoVariants.getById',
       // pending row's run id is 'run-1' in the spy, not 'run-9' — no clear
       'videoVariants.markFailedByWorkflowRun',
     ]);
-    expect(spy.shotUpdates[0]?.data).toEqual({
-      videoStatus: 'failed',
-      videoError: 'fal 500',
-    });
+    // The failure lives on the version row only — the shot has no video columns
+    // to flip since #1067 phase 2d, so `videoStatus`/`videoError` derive from it.
+    expect(spy.shotUpdates).toEqual([]);
     expect(spy.markFailed).toEqual([{ runId: 'run-9', error: 'fal 500' }]);
     expect(emits).toEqual([
       {
@@ -347,9 +360,60 @@ describe('persistMotionFailure', () => {
         },
       },
     ]);
+    // Nothing to append — the in-flight row existed and was marked.
+    expect(spy.appended).toEqual([]);
   });
 
-  it('variant-only: marks the version failed only, never touches the legacy columns', async () => {
+  // A run that dies before `set-generating-status` (insufficient credits, "shot
+  // has no scene") has no version row to mark. Since the version row is the only
+  // record of video lifecycle since #1067 phase 2d, a silent no-op would let the
+  // shot revert to 'pending' on the next refetch — erasing the failure the user
+  // just saw.
+  it('appends a terminal failed version when the run never opened one', async () => {
+    const spy = buildScopedDbSpy({ markFailedRows: 0 });
+
+    await persistMotionFailure({
+      scopedDb: spy.scopedDb,
+      shotId: 'f1',
+      model: 'veo3',
+      error: 'Insufficient credits for motion generation',
+      workflowRunId: 'run-9',
+      emit: async () => {},
+    });
+
+    expect(spy.appended).toEqual([
+      {
+        renderSegmentId: 'seg-1',
+        sequenceId: 'seq1',
+        model: 'veo3',
+        manifest: [],
+        status: 'failed',
+        error: 'Insufficient credits for motion generation',
+        workflowRunId: 'run-9',
+        isPrimary: true,
+      },
+    ]);
+    expect(spy.shotUpdates).toEqual([]);
+  });
+
+  it('appends the fallback row as non-primary for a variant-only run', async () => {
+    const spy = buildScopedDbSpy({ markFailedRows: 0 });
+
+    await persistMotionFailure({
+      scopedDb: spy.scopedDb,
+      shotId: 'f1',
+      model: 'kling',
+      error: 'Insufficient credits for motion generation',
+      workflowRunId: 'run-9',
+      emit: async () => {},
+      variantOnly: true,
+    });
+
+    // isPrimary false, so this failure never becomes the shot's video status.
+    expect(spy.appended[0]?.isPrimary).toBe(false);
+  });
+
+  it('variant-only: marks the version failed without resolving the primary slot', async () => {
     const spy = buildScopedDbSpy();
 
     await persistMotionFailure({
@@ -363,7 +427,14 @@ describe('persistMotionFailure', () => {
     });
 
     expect(spy.shotUpdates).toEqual([]);
-    expect(spy.callOrder).toEqual(['videoVariants.markFailedByWorkflowRun']);
+    // The shot is read (it carries the segment id the fallback append needs),
+    // but the primary slot is never resolved: no renderSegments.getById, no
+    // pending-promote clear.
+    expect(spy.callOrder).toEqual([
+      'shots.getById',
+      'videoVariants.markFailedByWorkflowRun',
+    ]);
     expect(spy.markFailed).toEqual([{ runId: 'run-9', error: 'fal 500' }]);
+    expect(spy.appended).toEqual([]);
   });
 });

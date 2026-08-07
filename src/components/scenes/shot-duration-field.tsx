@@ -52,12 +52,15 @@ type ShotDurationFieldProps = {
   sequenceId: string;
   /** Drives the legal duration set — the model this shot renders through. */
   motionModel: ImageToVideoModel;
+  /** The scene's script — what the Estimate button reads. */
+  scriptExtract?: string;
 };
 
 export const ShotDurationField: React.FC<ShotDurationFieldProps> = ({
   shot,
   sequenceId,
   motionModel,
+  scriptExtract = '',
 }) => {
   // `undefined` = no draft (the Select mirrors the saved value). Mount this
   // component with `key={shot.id}` so switching shots drops the draft.
@@ -69,7 +72,7 @@ export const ShotDurationField: React.FC<ShotDurationFieldProps> = ({
   const savedSeconds =
     shot?.durationMs && shot.durationMs > 0
       ? shot.durationMs / 1000
-      : shot?.metadata?.metadata?.durationSeconds;
+      : undefined;
 
   const durationOptions = getDurationValues(
     MOTION_JSON_SCHEMAS[IMAGE_TO_VIDEO_MODELS[motionModel].id]
@@ -116,10 +119,6 @@ export const ShotDurationField: React.FC<ShotDurationFieldProps> = ({
     },
   });
 
-  // Estimated from the scene's saved script (the selected version, overlaid
-  // onto metadata by `getShotsFn`) — the estimate reads the script, it doesn't
-  // belong next to it.
-  const scriptExtract = shot?.metadata?.originalScript.extract ?? '';
   const estimateMutation = useMutation({
     mutationFn: async () => {
       if (!shot?.id) throw new Error('shot required');

@@ -17,7 +17,11 @@
  */
 
 import { configureFalProxyFromEnv } from '@/lib/ai/fal-config';
-import { createScopedDb, type ScopedDb } from '@/lib/db/scoped';
+import { createScopedDb } from '@/lib/db/scoped';
+import {
+  toWorkflowScopedDb,
+  type WorkflowScopedDb,
+} from '@/lib/db/scoped-workflow';
 import {
   isEngineAbortError,
   isRecipientInFiniteStateError,
@@ -65,7 +69,7 @@ function extractParentHint(payload: unknown): ParentNotifyHint | undefined {
 export type OpenStoryFailureContext<T extends UserWorkflowContext> = {
   event: Readonly<WorkflowEvent<T>>;
   error: string;
-  scopedDb: ScopedDb;
+  scopedDb: WorkflowScopedDb;
 };
 
 export abstract class OpenStoryWorkflowEntrypoint<
@@ -73,13 +77,15 @@ export abstract class OpenStoryWorkflowEntrypoint<
 > extends WorkflowEntrypoint<CloudflareEnv, T> {
   /**
    * Subclasses implement workflow logic here. Receives the same `event` /
-   * `step` the engine hands to `run()`, plus a `ScopedDb` bound to the
-   * payload's `(teamId, userId)`.
+   * `step` the engine hands to `run()`, plus a `WorkflowScopedDb` bound to the
+   * payload's `(teamId, userId)` — the full write surface, but reads only via
+   * the enumerated `liveRead` escape hatch. Everything else must be
+   * snapshotted onto the payload by the server fn that triggered the run.
    */
   protected abstract runImpl(
     event: Readonly<WorkflowEvent<T>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<unknown>;
 
   /**
@@ -103,7 +109,9 @@ export abstract class OpenStoryWorkflowEntrypoint<
       );
     }
 
-    const scopedDb = createScopedDb(event.payload.teamId, event.payload.userId);
+    const scopedDb = toWorkflowScopedDb(
+      createScopedDb(event.payload.teamId, event.payload.userId)
+    );
 
     // Install the fal→proxy middleware on the global `fal` singleton before any
     // step runs a fal adapter. In E2E this routes fal.run / queue.fal.run to the

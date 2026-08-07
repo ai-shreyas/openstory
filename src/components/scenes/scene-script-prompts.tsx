@@ -45,7 +45,7 @@ import {
   shotStalenessUnknown,
   useShotStaleness,
 } from '@/hooks/use-shot-staleness';
-import { useSaveSceneScript } from '@/hooks/use-scenes';
+import { useSaveSceneScript, type SceneWithScript } from '@/hooks/use-scenes';
 import { useSaveShotPrompt } from '@/hooks/use-prompt-variants';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import {
@@ -83,7 +83,7 @@ import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import { typedEntries } from '@/lib/utils/typed-object';
 import type { AssemblableMotionPrompt } from '@/lib/ai/scene-analysis.schema';
 import { useShotPromptStream } from '@/lib/realtime/use-shot-prompt-stream';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CopyIcon, History, Loader2, Minimize2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -266,7 +266,7 @@ const ModelRequestPreviews: React.FC<{
 };
 
 type SceneScriptPromptsProps = {
-  shot?: ShotWithImage | undefined;
+  shot?: ShotView | undefined;
   sequenceId: string;
   selectedTab: TabValue;
   /** Tabs to render for the current selection scope (#986). */
@@ -318,20 +318,19 @@ type SceneScriptPromptsProps = {
   /** Music facet editable only at sequence scope. */
   musicEditable?: boolean;
   /**
-   * The scene the Script facet edits — the selected shot's scene at shot scope,
-   * the selected scene at scene scope. Undefined when the selection spans
-   * several scenes (or none), which renders the facet read-only rather than
-   * picking a target for the user.
+   * The scene in focus — the selected shot's scene at shot scope, the selected
+   * scene at scene scope. Undefined when the selection spans several scenes (or
+   * none), which renders the Script facet read-only rather than picking a target
+   * for the user. Carries the selected script version (#1030) plus the
+   * continuity/location the prompt previews resolve references against.
    */
-  scriptSceneId?: string;
-  /** That scene's current script extract (selected version, #1030). */
-  scriptText?: string;
+  scene?: SceneWithScript;
   /**
    * The in-scope shots + their batched staleness (#1077) — the selected
    * scene's at scene scope, every shot at sequence scope. Drives the
    * stale-shot summary above the tabs.
    */
-  scopeShots?: ShotWithImage[];
+  scopeShots?: ShotView[];
   scopeStaleness?: Record<string, ShotStaleness>;
   /** The batched staleness request failed — surfaced instead of "all clear". */
   scopeStalenessFailed?: boolean;
@@ -367,13 +366,14 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   onCompareDivergent,
   facetShotIds = null,
   musicEditable = false,
-  scriptSceneId,
-  scriptText,
+  scene,
   scopeShots,
   scopeStaleness,
   scopeStalenessFailed,
   onSelectShot,
 }) => {
+  const scriptSceneId = scene?.id;
+  const scriptText = scene?.script?.extract;
   const divergentImageVariant = useMemo(
     () => shotDivergentVariants?.find((v) => v.variantType === 'image'),
     [shotDivergentVariants]
@@ -739,7 +739,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   );
 
   const imageModel = safeTextToImageModel(
-    shot?.imageModel,
+    shot?.image?.model,
     DEFAULT_IMAGE_MODEL
   );
   // Model identity lives on the version that produced the asset (#1066): the
@@ -760,7 +760,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       ? DEFAULT_VIDEO_MODEL
       : aspectCompatibleMotion;
   const regenMotionModel = effectiveMotionModel;
-  const imagePrompt = shot?.imagePrompt ?? undefined;
+  const imagePrompt = shot?.imagePromptVersion?.text ?? undefined;
 
   const variantIsCompleted =
     variantForSelectedModel?.status === 'completed' &&
@@ -772,7 +772,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // Image, and a newer unselected re-roll looked "not current" (#1070).
   const variantAlreadySet =
     variantIsCompleted &&
-    !!shot?.thumbnailUrl &&
+    !!shot?.image?.url &&
     effectiveImageModel === imageModel;
 
   // Has the selected image model produced an image for this scene — drives
@@ -781,7 +781,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // thumbnail but no variant row.
   const imageModelGenerated =
     !!variantForSelectedModel ||
-    (!!shot?.thumbnailUrl && effectiveImageModel === imageModel);
+    (!!shot?.image?.url && effectiveImageModel === imageModel);
 
   const handleSetImageFromVariant = useCallback(async () => {
     if (!shot?.id || !shot.sequenceId) return;
@@ -809,12 +809,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // Same rule as image: Set Video only when the dropdown model isn't the one
   // that produced the current primary clip (not URL equality to latest).
   const currentVideoModel = safeImageToVideoModel(
-    shot?.motionModel,
+    shot?.video?.model,
     DEFAULT_VIDEO_MODEL
   );
   const videoVariantAlreadySet =
     videoVariantIsCompleted &&
-    !!shot?.videoUrl &&
+    !!shot?.video?.url &&
     effectiveMotionModel === currentVideoModel;
 
   const handleSetVideoFromVariant = useCallback(async () => {
@@ -877,7 +877,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     onRegenerateStart(shot.id, 'image');
 
     // Optimistic update for shot list query
-    queryClient.setQueryData<ShotWithImage[]>(
+    queryClient.setQueryData<ShotView[]>(
       shotKeys.list(shot.sequenceId),
       (oldShots) => {
         if (!oldShots) return oldShots;
@@ -885,9 +885,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           f.id === shot.id
             ? {
                 ...f,
-                thumbnailStatus: 'generating' as const,
-                imagePrompt: promptOverride ?? f.imagePrompt,
-                imageModel: regenImageModel,
+                frame: { ...f.frame, imageStatus: 'generating' as const },
+                imagePromptVersion:
+                  promptOverride && f.imagePromptVersion
+                    ? { ...f.imagePromptVersion, text: promptOverride }
+                    : f.imagePromptVersion,
+                image: f.image ? { ...f.image, model: regenImageModel } : null,
               }
             : f
         );
@@ -895,18 +898,20 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     );
 
     // Optimistic update for individual shot query
-    queryClient.setQueryData<ShotWithImage>(
-      shotKeys.detail(shot.id),
-      (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          thumbnailStatus: 'generating' as const,
-          imagePrompt: promptOverride ?? oldShot.imagePrompt,
-          imageModel: regenImageModel,
-        };
-      }
-    );
+    queryClient.setQueryData<ShotView>(shotKeys.detail(shot.id), (oldShot) => {
+      if (!oldShot) return oldShot;
+      return {
+        ...oldShot,
+        frame: { ...oldShot.frame, imageStatus: 'generating' as const },
+        imagePromptVersion:
+          promptOverride && oldShot.imagePromptVersion
+            ? { ...oldShot.imagePromptVersion, text: promptOverride }
+            : oldShot.imagePromptVersion,
+        image: oldShot.image
+          ? { ...oldShot.image, model: regenImageModel }
+          : null,
+      };
+    });
 
     try {
       await generateShotImageFn({
@@ -955,8 +960,19 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
     onRegenerateStart(shot.id, 'motion');
 
+    const withEditedPrompt = (
+      current: AssemblableMotionPrompt | null
+    ): AssemblableMotionPrompt | null =>
+      editedMotionPrompt
+        ? {
+            dialogue: current?.dialogue ?? null,
+            audio: current?.audio ?? null,
+            fullPrompt: editedMotionPrompt,
+          }
+        : current;
+
     // Optimistic update for shot list query
-    queryClient.setQueryData<ShotWithImage[]>(
+    queryClient.setQueryData<ShotView[]>(
       shotKeys.list(shot.sequenceId),
       (oldShots) => {
         if (!oldShots) return oldShots;
@@ -965,8 +981,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             ? {
                 ...f,
                 videoStatus: 'generating' as const,
-                motionPrompt: editedMotionPrompt || f.motionPrompt,
-                motionModel: regenMotionModel,
+                motionPrompt: withEditedPrompt(f.motionPrompt),
+                video: f.video ? { ...f.video, model: regenMotionModel } : null,
               }
             : f
         );
@@ -974,18 +990,17 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     );
 
     // Optimistic update for individual shot query
-    queryClient.setQueryData<ShotWithImage>(
-      shotKeys.detail(shot.id),
-      (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          videoStatus: 'generating' as const,
-          motionPrompt: editedMotionPrompt || oldShot.motionPrompt,
-          motionModel: regenMotionModel,
-        };
-      }
-    );
+    queryClient.setQueryData<ShotView>(shotKeys.detail(shot.id), (oldShot) => {
+      if (!oldShot) return oldShot;
+      return {
+        ...oldShot,
+        videoStatus: 'generating' as const,
+        motionPrompt: withEditedPrompt(oldShot.motionPrompt),
+        video: oldShot.video
+          ? { ...oldShot.video, model: regenMotionModel }
+          : null,
+      };
+    });
 
     const motionModelForCall = regenMotionModel;
     const supportsAudio = videoModelSupportsAudio(motionModelForCall);
@@ -1034,22 +1049,35 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   // The shot's selected motion prompt, projected from its version row (#713) —
   // metadata.prompts.motion no longer exists.
-  const motionPromptData = shot?.motionPromptData ?? null;
-  const characterTags = shot?.metadata?.continuity?.characterTags;
+  const shotMotionPrompt = shot?.motionPrompt ?? null;
+  const characterTags = scene?.continuity?.characterTags;
+  // The scene shape the reference resolvers read (continuity tags, script text,
+  // location) — the client mirror of what the workflows match against.
+  const sceneReference = useMemo(
+    () =>
+      scene
+        ? {
+            continuity: scene.continuity,
+            originalScript: scene.script,
+            metadata: { location: scene.location ?? '' },
+          }
+        : null,
+    [scene]
+  );
+  const sceneDescription = scene?.script?.extract ?? null;
 
   // Raw prompt for editing (just motion direction, no dialogue/audio)
-  const rawMotionPrompt =
-    shot?.motionPrompt || motionPromptData?.fullPrompt || '';
+  const rawMotionPrompt = shotMotionPrompt?.fullPrompt || '';
 
   // Assembled preview: exactly what resolveMotionPrompt produces on the server.
   // Overlay any unsaved edit onto the structured prompt so the dialogue/audio
   // sections still appear for audio-capable models.
   const assembledPrompt = useMemo(() => {
     const overrideText = editedMotionPrompt || rawMotionPrompt;
-    const mp: AssemblableMotionPrompt | null = motionPromptData
+    const mp: AssemblableMotionPrompt | null = shotMotionPrompt
       ? {
-          ...motionPromptData,
-          fullPrompt: overrideText || motionPromptData.fullPrompt,
+          ...shotMotionPrompt,
+          fullPrompt: overrideText || shotMotionPrompt.fullPrompt,
         }
       : overrideText
         ? { fullPrompt: overrideText, dialogue: null, audio: null }
@@ -1058,16 +1086,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       {
         motionPrompt: mp,
         characterTags,
-        description: shot?.description ?? null,
+        description: sceneDescription,
       },
       effectiveMotionModel
     );
   }, [
     editedMotionPrompt,
     rawMotionPrompt,
-    motionPromptData,
+    shotMotionPrompt,
     characterTags,
-    shot?.description,
+    sceneDescription,
     effectiveMotionModel,
   ]);
 
@@ -1104,7 +1132,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const motionRequestPreviews = useMemo((): ModelRequestPreview[] => {
     if (!shot) return [];
     const referenceImages = buildMotionReferenceImages({
-      scene: shot.metadata ?? null,
+      scene: sceneReference,
       characters: mentionCharacters ?? [],
       elements: mentionElements ?? [],
     }).map((ref) => ({
@@ -1112,10 +1140,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       referenceImageUrl: absolutizeUrl(ref.referenceImageUrl),
     }));
     const overrideText = editedMotionPrompt || rawMotionPrompt;
-    const mp: AssemblableMotionPrompt | null = motionPromptData
+    const mp: AssemblableMotionPrompt | null = shotMotionPrompt
       ? {
-          ...motionPromptData,
-          fullPrompt: overrideText || motionPromptData.fullPrompt,
+          ...shotMotionPrompt,
+          fullPrompt: overrideText || shotMotionPrompt.fullPrompt,
         }
       : overrideText
         ? { fullPrompt: overrideText, dialogue: null, audio: null }
@@ -1126,7 +1154,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           {
             motionPrompt: mp,
             characterTags,
-            description: shot.description ?? null,
+            description: sceneDescription,
           },
           modelKey
         );
@@ -1134,11 +1162,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         const request = buildMotionRequest(
           {
             prompt: modelPrompt,
-            imageUrl: absolutizeUrl(shot.thumbnailUrl ?? ''),
+            imageUrl: absolutizeUrl(shot.image?.url ?? ''),
             duration: resolveShotDuration({
               explicit: undefined,
               durationMs: shot.durationMs,
-              metadataSeconds: shot.metadata?.metadata?.durationSeconds,
               model: modelKey,
             }),
             aspectRatio,
@@ -1165,11 +1192,13 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     });
   }, [
     shot,
+    sceneReference,
+    sceneDescription,
     mentionCharacters,
     mentionElements,
     editedMotionPrompt,
     rawMotionPrompt,
-    motionPromptData,
+    shotMotionPrompt,
     characterTags,
     aspectRatio,
     generateAudio,
@@ -1185,7 +1214,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     const basePrompt = (editedImagePrompt || imagePrompt || '').trim();
     if (!basePrompt || !shot) return [];
     const referenceImages = buildShotImageReferenceImages({
-      scene: shot.metadata ?? null,
+      scene: sceneReference,
       characters: mentionCharacters ?? [],
       locations: mentionLocations ?? [],
       elements: mentionElements ?? [],
@@ -1229,6 +1258,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     editedImagePrompt,
     imagePrompt,
     shot,
+    sceneReference,
     mentionCharacters,
     mentionElements,
     mentionLocations,
@@ -1243,9 +1273,9 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   // video but no variant row.
   const videoModelGenerated =
     !!videoVariantForSelectedModel ||
-    (!!shot?.videoUrl &&
+    (!!shot?.video?.url &&
       effectiveMotionModel ===
-        safeImageToVideoModel(shot.motionModel, DEFAULT_VIDEO_MODEL));
+        safeImageToVideoModel(shot.video.model, DEFAULT_VIDEO_MODEL));
 
   // Sync local state when props change (prev-value refs avoid extra re-renders)
   if (shot?.id !== prevPromptShotIdRef.current) {
@@ -1299,7 +1329,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   // Check if image is currently generating
   const isGenerating =
-    shot?.thumbnailStatus === 'generating' ||
+    shot?.frame.imageStatus === 'generating' ||
     (shot?.id ? regeneratingImages.has(shot.id) : false);
 
   // Check if motion is currently generating
@@ -1731,6 +1761,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
             shot={shot}
             sequenceId={sequenceId}
             motionModel={effectiveMotionModel}
+            scriptExtract={scriptText}
           />
 
           {/* Thinking bar while the model reasons, before the regenerated

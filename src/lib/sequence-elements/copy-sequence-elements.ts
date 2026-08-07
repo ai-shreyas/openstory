@@ -65,6 +65,7 @@ export async function copySequenceElements(params: {
         elementId: element.id,
         imageUrl: element.imageUrl,
         filename: element.uploadedFilename,
+        token: element.token,
       };
       await triggerWorkflow('/element-vision', input, {
         label: buildWorkflowLabel(targetSequenceId),

@@ -20,8 +20,11 @@ import { drizzle } from 'drizzle-orm/libsql';
 import { migrate } from 'drizzle-orm/libsql/migrator';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
-import type { Shot } from '@/lib/db/schema';
 import {
+  dbSceneId,
+  sceneScriptVersions,
+  scenes,
+  shotPromptVersions,
   shots,
   sequenceElements,
   sequences,
@@ -38,6 +41,7 @@ let sequenceId = '';
 
 async function seed() {
   await db.delete(shots);
+  await db.delete(scenes);
   await db.delete(sequenceElements);
   await db.delete(sequences);
   await db.delete(styles);
@@ -85,24 +89,75 @@ beforeEach(async () => {
   await seed();
 });
 
-function shotMetadata(args: {
-  sceneId: string;
+/**
+ * Continuity lives on `scenes` (#1067) and the script in the scene's SELECTED
+ * `scene_script_versions` row (#1030); shots point at the scene.
+ */
+async function insertSceneWithShot(args: {
+  orderIndex: number;
   elementTags: string[];
   extract: string;
-}): NonNullable<Shot['metadata']> {
-  return {
-    sceneId: args.sceneId,
-    sceneNumber: 1,
-    originalScript: { extract: args.extract, dialogue: [] },
-    continuity: {
-      environmentTag: '',
-      characterTags: [],
-      elementTags: args.elementTags,
-      colorPalette: '',
-      lightingSetup: '',
-      styleTag: '',
-    },
-  };
+  motionPrompt?: string;
+}) {
+  const [scene] = await db
+    .insert(scenes)
+    .values({
+      id: dbSceneId(generateId()),
+      sequenceId,
+      orderIndex: args.orderIndex,
+      continuity: {
+        environmentTag: '',
+        characterTags: [],
+        elementTags: args.elementTags,
+        colorPalette: '',
+        lightingSetup: '',
+        styleTag: '',
+      },
+    })
+    .returning();
+  if (!scene) throw new Error('test setup: scene insert returned nothing');
+  const [scriptVersion] = await db
+    .insert(sceneScriptVersions)
+    .values({
+      sceneId: scene.id,
+      content: { extract: args.extract, dialogue: [] },
+      source: 'split',
+    })
+    .returning();
+  if (!scriptVersion)
+    throw new Error('test setup: script version insert returned nothing');
+  await db
+    .update(scenes)
+    .set({ selectedScriptVersionId: scriptVersion.id })
+    .where(eq(scenes.id, scene.id));
+  const [shot] = await db
+    .insert(shots)
+    .values({
+      sequenceId,
+      sceneId: scene.id,
+      shotNumber: 1,
+    })
+    .returning();
+  if (!shot) throw new Error('test setup: shot insert returned nothing');
+  // The motion prompt IS the shot's selected `shot_prompt_versions` row (#713).
+  if (args.motionPrompt) {
+    const [version] = await db
+      .insert(shotPromptVersions)
+      .values({
+        shotId: shot.id,
+        promptType: 'motion',
+        text: args.motionPrompt,
+        source: 'ai-generated',
+      })
+      .returning();
+    if (!version)
+      throw new Error('test setup: version insert returned nothing');
+    await db
+      .update(shots)
+      .set({ selectedMotionPromptVersionId: version.id })
+      .where(eq(shots.id, shot.id));
+  }
+  return scene;
 }
 
 describe('getShotCountsByElement', () => {
@@ -170,25 +225,17 @@ describe('getShotCountsByElement', () => {
     }
 
     // Shot referencing both LOGO and BOTTLE via continuity.elementTags.
-    await db.insert(shots).values({
-      sequenceId,
+    await insertSceneWithShot({
       orderIndex: 0,
-      metadata: shotMetadata({
-        sceneId: 's1',
-        elementTags: ['LOGO', 'BOTTLE'],
-        extract: 'scene script',
-      }),
+      elementTags: ['LOGO', 'BOTTLE'],
+      extract: 'scene script',
     });
 
     // Shot referencing only LOGO via script-text fallback (no elementTags).
-    await db.insert(shots).values({
-      sequenceId,
+    await insertSceneWithShot({
       orderIndex: 1,
-      metadata: shotMetadata({
-        sceneId: 's2',
-        elementTags: [],
-        extract: 'The LOGO appears on screen.',
-      }),
+      elementTags: [],
+      extract: 'The LOGO appears on screen.',
     });
 
     const result = await methods.getShotCountsByElement(sequenceId);
@@ -249,23 +296,16 @@ describe('cascadeRename', () => {
       .set({ script: 'The LOGO appears. Pan across the LOGO.' })
       .where(eq(sequences.id, sequenceId));
 
-    await db.insert(shots).values({
-      sequenceId,
+    const taggedScene = await insertSceneWithShot({
       orderIndex: 0,
-      metadata: shotMetadata({
-        sceneId: 's1',
-        elementTags: ['LOGO'],
-        extract: 'The LOGO appears on screen.',
-      }),
+      elementTags: ['LOGO'],
+      extract: 'The LOGO appears on screen.',
+      motionPrompt: 'Push in on the LOGO.',
     });
-    await db.insert(shots).values({
-      sequenceId,
+    await insertSceneWithShot({
       orderIndex: 1,
-      metadata: shotMetadata({
-        sceneId: 's2',
-        elementTags: [],
-        extract: 'No element here.',
-      }),
+      elementTags: [],
+      extract: 'No element here.',
     });
 
     const first = await methods.cascadeRename({
@@ -283,6 +323,22 @@ describe('cascadeRename', () => {
       .from(sequences)
       .where(eq(sequences.id, sequenceId));
     expect(seq?.script).toBe('The BRAND appears. Pan across the BRAND.');
+
+    const [renamedScene] = await db
+      .select({ continuity: scenes.continuity })
+      .from(scenes)
+      .where(eq(scenes.id, taggedScene.id));
+    expect(renamedScene?.continuity?.elementTags).toEqual(['BRAND']);
+
+    const [renamedVersion] = await db
+      .select({ text: shotPromptVersions.text })
+      .from(shots)
+      .innerJoin(
+        shotPromptVersions,
+        eq(shots.selectedMotionPromptVersionId, shotPromptVersions.id)
+      )
+      .where(eq(shots.sceneId, taggedScene.id));
+    expect(renamedVersion?.text).toBe('Push in on the BRAND.');
 
     // Workflow-step replay: the cached pre-rename token is the oldToken.
     // Everything already carries BRAND, so the cascade must be a no-op.
@@ -310,5 +366,82 @@ describe('cascadeRename', () => {
     expect(result.element.token).toBe('LOGO');
     expect(result.shotsUpdated).toBe(0);
     expect(result.scriptUpdated).toBe(false);
+  });
+
+  describe('expectedToken (compare-and-swap)', () => {
+    it('applies the rename and cascade while the element still carries it', async () => {
+      const methods = createSequenceElementsMethods(db);
+      const element = await insertElement('LOGO');
+      await db
+        .update(sequences)
+        .set({ script: 'The LOGO appears.' })
+        .where(eq(sequences.id, sequenceId));
+
+      const result = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+
+      expect(result.renamed).toBe(true);
+      expect(result.element.token).toBe('BRAND');
+      expect(result.scriptUpdated).toBe(true);
+    });
+
+    it('keeps a concurrent user rename and leaves the script alone', async () => {
+      const methods = createSequenceElementsMethods(db);
+      const element = await insertElement('LOGO');
+      await db
+        .update(sequences)
+        .set({ script: 'The HERO_LOGO appears.' })
+        .where(eq(sequences.id, sequenceId));
+      // The user renamed LOGO → HERO_LOGO (rewriting the script with it) while
+      // vision was running; vision's swap must now find nothing to swap.
+      await methods.update(element.id, { token: 'HERO_LOGO' });
+
+      const result = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+
+      expect(result.renamed).toBe(false);
+      expect(result.element.token).toBe('HERO_LOGO');
+      expect(result.scriptUpdated).toBe(false);
+
+      const [seq] = await db
+        .select({ script: sequences.script })
+        .from(sequences)
+        .where(eq(sequences.id, sequenceId));
+      expect(seq?.script).toBe('The HERO_LOGO appears.');
+    });
+
+    it('skips a replay of an already-applied rename', async () => {
+      const methods = createSequenceElementsMethods(db);
+      const element = await insertElement('LOGO');
+
+      const first = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+      expect(first.renamed).toBe(true);
+
+      const replay = await methods.cascadeRename({
+        sequenceId,
+        elementId: element.id,
+        oldToken: 'LOGO',
+        newToken: 'BRAND',
+        expectedToken: 'LOGO',
+      });
+      expect(replay.renamed).toBe(false);
+      expect(replay.element.token).toBe('BRAND');
+    });
   });
 });

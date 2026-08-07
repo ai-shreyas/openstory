@@ -8,6 +8,17 @@ import type { Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { InsufficientCreditsError } from '@/lib/errors';
 
+/**
+ * The two live checks a preflight makes: whether the team can pay, and whether
+ * it has its own key (in which case it doesn't need to). Narrowed so a
+ * workflow passes `scopedDb.liveRead` — a balance read at charge time is one
+ * of the sanctioned live reads.
+ */
+export type PreflightScopedDb = {
+  apiKeys: Pick<ScopedDb['apiKeys'], 'hasUsableKey'>;
+  billing: Pick<ScopedDb['billing'], 'hasEnoughCredits'>;
+};
+
 type Provider = 'fal' | 'openrouter';
 
 /**
@@ -22,7 +33,7 @@ type Provider = 'fal' | 'openrouter';
  * @throws InsufficientCreditsError if team lacks credits and has no BYOK keys
  */
 export async function requireCredits(
-  scopedDb: ScopedDb,
+  scopedDb: PreflightScopedDb,
   estimatedCostMicros: Microdollars,
   opts: {
     providers?: Provider[];

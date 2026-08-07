@@ -258,6 +258,8 @@ export type LibraryLocationReferenceHashInput = {
   locationBible: LocationBibleHashFields;
   styleConfigHash: string;
   imageModel: string;
+  /** Unordered set of user-uploaded reference image URLs. */
+  referenceMediaHashes?: readonly string[];
 };
 
 export function computeLibraryLocationReferenceInputHash(
@@ -269,6 +271,7 @@ export function computeLibraryLocationReferenceInputHash(
       name: trim(input.locationBible.name),
       description: trim(input.locationBible.description),
     },
+    referenceMediaHashes: sortedRefs(input.referenceMediaHashes),
     styleConfigHash: input.styleConfigHash,
     imageModel: input.imageModel,
   });
@@ -361,7 +364,8 @@ export type PromptSceneContextHashInput = {
  */
 function sceneInputContext(scene: Scene) {
   return {
-    sceneId: scene.sceneId,
+    // No `sceneId`: identity is not content. Hashing it made a prompt stale
+    // when a scene was re-analysed under a new id without its text changing.
     sceneNumber: scene.sceneNumber,
     originalScript: scene.originalScript,
     metadata: scene.metadata

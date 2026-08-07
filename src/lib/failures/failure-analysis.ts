@@ -3,9 +3,13 @@
  * Analyzes shots + sequence to determine what failed and whether smart retry is possible.
  */
 
+import type { SceneRow } from '@/lib/db/schema/scenes';
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
+
+/** Scene titles keyed by scene id — the label source for each failed shot. */
+type ScenesById = ReadonlyMap<string, Pick<SceneRow, 'title' | 'orderIndex'>>;
 
 type FailureCategory =
   | 'image'
@@ -16,7 +20,7 @@ type FailureCategory =
 
 type ShotFailure = {
   shotId: string;
-  orderIndex: number;
+  sceneNumber: number;
   sceneTitle: string;
   error: string | null;
 };
@@ -37,8 +41,14 @@ export type FailureSummary = {
   error?: string | null;
 };
 
-function getSceneTitle(shot: Shot): string {
-  return shot.metadata?.metadata?.title || `Scene ${shot.orderIndex + 1}`;
+function sceneNumberOf(shot: Shot, scenesById: ScenesById): number {
+  const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
+  return (scene?.orderIndex ?? 0) + 1;
+}
+
+function getSceneTitle(shot: Shot, scenesById: ScenesById): string {
+  const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
+  return scene?.title || `Scene ${sceneNumberOf(shot, scenesById)}`;
 }
 
 function buildHeadline(
@@ -83,11 +93,11 @@ function buildHeadline(
 }
 
 export function analyzeFailures(
-  // The image surface (thumbnailStatus/thumbnailUrl/thumbnailError) moved onto
-  // the anchor frame in #989; callers project it back via `projectShotWithImage`
-  // so the failure heuristics here read the same legacy field names.
-  shots: ShotWithImage[],
-  sequence: Sequence
+  // The still's lifecycle lives on the anchor frame (#989) and the video's on
+  // the segment's primary render (#1067).
+  shots: ShotView[],
+  sequence: Sequence,
+  scenesById: ScenesById
 ): FailureSummary {
   const groups: FailureGroup[] = [];
   let requiresFullRetry = false;
@@ -105,23 +115,26 @@ export function analyzeFailures(
   }
 
   // Failed images
-  const failedImageShots = shots.filter((f) => f.thumbnailStatus === 'failed');
+  const failedImageShots = shots.filter(
+    (f) => f.frame.imageStatus === 'failed'
+  );
   if (failedImageShots.length > 0) {
     groups.push({
       category: 'image',
       label: `${failedImageShots.length} of ${shots.length} images failed`,
       shots: failedImageShots.map((f) => ({
         shotId: f.id,
-        orderIndex: f.orderIndex,
-        sceneTitle: getSceneTitle(f),
-        error: f.thumbnailError,
+        sceneNumber: sceneNumberOf(f, scenesById),
+        sceneTitle: getSceneTitle(f, scenesById),
+        error: f.frame.imageError,
       })),
     });
   }
 
-  // Failed motion (only shots with thumbnails AND motionPrompt)
+  // Failed motion (only shots with thumbnails AND a motion prompt)
   const failedMotionShots = shots.filter(
-    (f) => f.videoStatus === 'failed' && f.thumbnailUrl && f.motionPrompt
+    (f) =>
+      f.videoStatus === 'failed' && f.image?.url && f.motionPrompt?.fullPrompt
   );
   if (failedMotionShots.length > 0) {
     groups.push({
@@ -129,16 +142,16 @@ export function analyzeFailures(
       label: `${failedMotionShots.length} of ${shots.length} motion videos failed`,
       shots: failedMotionShots.map((f) => ({
         shotId: f.id,
-        orderIndex: f.orderIndex,
-        sceneTitle: getSceneTitle(f),
-        error: f.videoError,
+        sceneNumber: sceneNumberOf(f, scenesById),
+        sceneTitle: getSceneTitle(f, scenesById),
+        error: f.primaryVideo?.error ?? null,
       })),
     });
   }
 
-  // Detect missing motion prompts (images completed but no motionPrompt)
+  // Detect missing motion prompts (images completed but no motion prompt)
   const shotsWithImageButNoMotionPrompt = shots.filter(
-    (f) => f.thumbnailStatus === 'completed' && !f.motionPrompt
+    (f) => f.frame.imageStatus === 'completed' && !f.motionPrompt?.fullPrompt
   );
   if (
     shotsWithImageButNoMotionPrompt.length > 0 &&
@@ -150,8 +163,8 @@ export function analyzeFailures(
       label: 'Motion prompts were not generated',
       shots: shotsWithImageButNoMotionPrompt.map((f) => ({
         shotId: f.id,
-        orderIndex: f.orderIndex,
-        sceneTitle: getSceneTitle(f),
+        sceneNumber: sceneNumberOf(f, scenesById),
+        sceneTitle: getSceneTitle(f, scenesById),
         error: null,
       })),
     });

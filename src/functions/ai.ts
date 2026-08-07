@@ -242,7 +242,7 @@ export const estimateSceneDurationFn = createServerFn({ method: 'POST' })
       { model: analysisModel, shotId: context.shot.id }
     );
 
-    const sceneMetadata = context.shot.metadata?.metadata;
+    const sceneMetadata = context.scene?.metadata;
     const userPrompt = [
       sceneMetadata?.title && `Title: ${sceneMetadata.title}`,
       sceneMetadata?.location && `Location: ${sceneMetadata.location}`,

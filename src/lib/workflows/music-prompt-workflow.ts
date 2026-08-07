@@ -20,7 +20,7 @@
 
 import { computeMusicPromptInputHash } from '@/lib/ai/input-hash';
 import { musicDesignResultSchema } from '@/lib/ai/response-schemas';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { reinforceInstrumentalTags } from '@/lib/prompts/music-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -38,7 +38,7 @@ export class MusicPromptWorkflow extends OpenStoryWorkflowEntrypoint<MusicPrompt
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MusicPromptWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<MusicPromptWorkflowResult> {
     const input = event.payload;
     const { sceneSummaries, analysisModelId, sequenceId } = input;
@@ -84,9 +84,10 @@ export class MusicPromptWorkflow extends OpenStoryWorkflowEntrypoint<MusicPrompt
           musicDesignResult.tags
         );
 
-        const previous =
-          await scopedDb.sequenceMusicPromptVersions.getLatest(sequenceId);
-        const source = previous ? 'regenerated' : 'ai-generated';
+        // Trigger-time snapshot. Deriving it here from the version history
+        // would be racy — a concurrent write flips the label on retry — so a
+        // payload without it is labelled as the first generation.
+        const source = input.promptSource ?? 'ai-generated';
 
         await scopedDb.sequenceMusicPromptVersions.write({
           sequenceId,
@@ -110,7 +111,7 @@ export class MusicPromptWorkflow extends OpenStoryWorkflowEntrypoint<MusicPrompt
   }: {
     event: Readonly<WorkflowEvent<MusicPromptWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
     if (input.sequenceId) {

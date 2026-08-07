@@ -18,7 +18,7 @@ import {
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import {
   generateImageWithProvider,
   type ImageGenerationParams,
@@ -35,6 +35,11 @@ import type {
   LibraryLocationSheetWorkflowInput,
   LibraryLocationSheetWorkflowResult,
 } from '@/lib/workflow/types';
+import {
+  decideSheetDivergence,
+  saveDivergentLocationSheet,
+} from '@/lib/workflows/sheet-divergence';
+import { computeLibraryLocationSheetHashCurrent } from '@/lib/workflows/sheet-snapshots';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { getLogger } from '@/lib/observability/logger';
 
@@ -44,7 +49,7 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
   protected override async runImpl(
     event: Readonly<WorkflowEvent<LibraryLocationSheetWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<LibraryLocationSheetWorkflowResult> {
     const input = event.payload;
 
@@ -93,7 +98,9 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         `[LibraryLocationSheetWorkflow:cf] Generating 3x3 grid sheet for ${input.locationName} with model ${generationParams.model}`
       );
 
-      return generateImageWithProvider(generationParams, { scopedDb });
+      return generateImageWithProvider(generationParams, {
+        scopedDb: scopedDb.credentials,
+      });
     });
 
     // Before the deduction guard — see recordFalUsageStep (#1069).
@@ -158,20 +165,13 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       };
     });
 
-    // Step 4: Update database with the generated sheet
-    await step.do('update-database', async () => {
-      logger.info(
-        `[LibraryLocationSheetWorkflow:cf] Updating database for ${input.locationName}`
-      );
+    // The 3x3 grid is an intermediate artifact, NOT a usable reference: it was
+    // published to `referenceImageUrl` here and replaced by the preview ~30-60s
+    // later, which is long enough for a concurrent sequence's location matching
+    // to cast against a contact sheet. The location's live reference is written
+    // once, at the preview step below.
 
-      await scopedDb.locations.updateReference(
-        input.locationDbId,
-        storageResult.url,
-        storageResult.path
-      );
-    });
-
-    // Step 5: Generate preview establishing shot for card thumbnail
+    // Step 4: Generate preview establishing shot for card thumbnail
     const hasReferenceImages = input.referenceImageUrls.length > 0;
     const previewResult = await step.do('generate-preview-image', async () => {
       const model = input.imageModel ?? DEFAULT_IMAGE_MODEL;
@@ -196,7 +196,9 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         previewParams.referenceImageUrls = input.referenceImageUrls;
       }
 
-      return generateImageWithProvider(previewParams, { scopedDb });
+      return generateImageWithProvider(previewParams, {
+        scopedDb: scopedDb.credentials,
+      });
     });
 
     // Before the deduction guard — see recordFalUsageStep (#1069).
@@ -229,7 +231,7 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       throw new Error('No preview URL returned from generation');
     }
 
-    // Step 6: Upload preview to R2 storage
+    // Step 5: Upload preview to R2 storage
     const previewStorageResult = await step.do(
       'upload-preview-to-storage',
       async () => {
@@ -260,20 +262,58 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
       }
     );
 
-    // Step 7: Update location with preview as the referenceImageUrl
-    await step.do('update-location-preview', async () => {
-      logger.info(
-        `[LibraryLocationSheetWorkflow:cf] Updating location with preview image`
-      );
+    // Step 6: Publish the preview as the location's reference — the single
+    // write that opens `waitForLocationReferences`' gate. Gated on divergence:
+    // if the location was renamed/re-described while this run was in flight the
+    // artifact is parked as a variant and the live reference is left alone.
+    const snapshotHash = input.snapshotInputHash ?? null;
+    const { diverged } = await step.do(
+      'update-location-preview',
+      async (): Promise<{ diverged: boolean }> => {
+        const currentHash = snapshotHash
+          ? await computeLibraryLocationSheetHashCurrent(
+              input,
+              scopedDb.liveRead
+            )
+          : null;
+        const decision = decideSheetDivergence(snapshotHash, currentHash);
 
-      await scopedDb.locations.updateReference(
-        input.locationDbId,
-        previewStorageResult.url,
-        previewStorageResult.path
-      );
-    });
+        if (decision.kind === 'divergent') {
+          logger.warn('[LibraryLocationSheetWorkflow:cf] divergence detected', {
+            locationDbId: input.locationDbId,
+            snapshotInputHash: decision.snapshotInputHash,
+            currentInputHash: decision.currentInputHash,
+            storagePath: previewStorageResult.path,
+          });
+          await saveDivergentLocationSheet({
+            scopedDb,
+            parent: { type: 'library_location', id: input.locationDbId },
+            model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+            url: previewStorageResult.url,
+            storagePath: previewStorageResult.path,
+            workflowRunId: event.instanceId,
+            snapshotInputHash: decision.snapshotInputHash,
+          });
+          return { diverged: true };
+        }
 
-    // Emit completed status
+        logger.info(
+          `[LibraryLocationSheetWorkflow:cf] Updating location with preview image`
+        );
+        await scopedDb.locations.updateReference(
+          input.locationDbId,
+          previewStorageResult.url,
+          previewStorageResult.path,
+          snapshotHash ?? undefined
+        );
+        return { diverged: false };
+      }
+    );
+
+    // Emit completed status. On divergence the URL is omitted so a subscriber
+    // reading the payload directly can't mistake the parked variant for the
+    // location's live reference; the terminal status still clears the UI's
+    // "generating" spinner.
     await step.do('emit-completed', async () => {
       logger.info(
         `[LibraryLocationSheetWorkflow:cf] Library location sheet workflow completed for ${input.locationName}`
@@ -284,7 +324,7 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         {
           locationId: input.locationDbId,
           status: 'completed',
-          sheetImageUrl: storageResult.url,
+          ...(diverged ? {} : { sheetImageUrl: storageResult.url }),
         }
       );
     });
@@ -306,7 +346,7 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
   }: {
     event: Readonly<WorkflowEvent<LibraryLocationSheetWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

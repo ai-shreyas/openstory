@@ -1,71 +1,69 @@
 import { describe, expect, test } from 'vitest';
 import { analyzeFailures } from './failure-analysis';
-import type { Frame } from '@/lib/db/schema';
+import type { Frame, SceneRow, Shot, VideoVariant } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import {
+  type ShotView,
+  type ShotViewSources,
+  toShotView,
+} from '@/lib/shots/shot-view';
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// the API/client shape `ShotWithImage` preserves the legacy `thumbnail*` /
-// `image*` field names that `analyzeFailures` reads, so the fixture keeps them
-// (plus the raw anchor `frame`).
-function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
-  const frame: Frame = {
-    id: 'shot-1',
-    shotId: 'shot-1',
+const render = (overrides: Partial<VideoVariant> = {}) =>
+  videoVariantFixture({
+    renderSegmentId: 'seg-1',
     sequenceId: 'seq-1',
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: null,
-    imageStatus: 'completed',
-    imageWorkflowRunId: null,
-    imageError: null,
-    imagePrompt: null,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    visualPromptInputHash: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  return {
+    url: 'https://example.com/video.mp4',
+    ...overrides,
+  });
+
+/** A fully-generated shot: still, video and motion prompt all present. */
+function makeShot(
+  params: {
+    shot?: Partial<Shot>;
+    frame?: Partial<Frame>;
+    sources?: Partial<ShotViewSources>;
+  } = {}
+): ShotView {
+  const shot: Shot = {
     id: 'shot-1',
     sequenceId: 'seq-1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
-    description: 'A scene',
+    shotNumber: 1,
     durationMs: 3000,
-    thumbnailUrl: 'https://example.com/thumb.jpg',
-    thumbnailPath: null,
-    thumbnailStatus: 'completed',
-    thumbnailWorkflowRunId: null,
-    thumbnailError: null,
-    imageModel: null,
-    imagePrompt: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    videoUrl: 'https://example.com/video.mp4',
-    videoPath: null,
-    videoStatus: 'completed',
-    videoWorkflowRunId: null,
-    videoGeneratedAt: null,
-    videoError: null,
-    motionPrompt: 'Camera pan left',
-    motionModel: null,
-    motionPromptData: null,
-    videoInputHash: null,
-    thumbnailInputHash: null,
-    visualPromptInputHash: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
-    renderSegmentId: null,
-    previewThumbnailUrl: null,
-    metadata: null,
+    renderSegmentId: 'seg-1',
     createdAt: new Date(),
     updatedAt: new Date(),
-    frame,
-    ...overrides,
+    ...params.shot,
   };
+  const frame = frameFixture({
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+    imageStatus: 'completed',
+    ...params.frame,
+  });
+  const video = render();
+  return toShotView(shot, frame, {
+    image: frameVariantFixture({
+      frameId: frame.id,
+      sequenceId: shot.sequenceId,
+      url: 'https://example.com/thumb.jpg',
+    }),
+    imagePromptVersion: null,
+    video,
+    primaryVideo: video,
+    motionPrompt: {
+      fullPrompt: 'Camera pan left',
+      dialogue: null,
+      audio: null,
+    },
+    ...params.sources,
+  });
 }
 
 function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
@@ -107,12 +105,49 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   };
 }
 
+// Shot labels come from the `scenes` row a shot points at (#1067); an untitled
+// scene falls back to "Scene <sceneOrderIndex + 1>".
+const SCENES = new Map<string, Pick<SceneRow, 'title' | 'orderIndex'>>([
+  ['scene-1', { title: 'The Reveal', orderIndex: 0 }],
+  ['scene-2', { title: null, orderIndex: 1 }],
+  ['scene-3', { title: null, orderIndex: 2 }],
+]);
+
 describe('analyzeFailures', () => {
+  test('labels a failed shot with its scene title, else its scene number', () => {
+    const shots = [
+      makeShot({
+        shot: { sceneId: 'scene-1' },
+        frame: { imageStatus: 'failed' },
+        sources: { image: null },
+      }),
+      makeShot({
+        shot: { id: 'shot-2', sceneId: 'scene-2' },
+        frame: { imageStatus: 'failed' },
+        sources: { image: null },
+      }),
+      makeShot({
+        shot: { id: 'shot-3', sceneId: 'scene-3' },
+        frame: { imageStatus: 'failed' },
+        sources: { image: null },
+      }),
+    ];
+
+    const result = analyzeFailures(shots, makeSequence(), SCENES);
+
+    const imageGroup = result.groups.find((g) => g.category === 'image');
+    expect(imageGroup?.shots.map((s) => s.sceneTitle)).toEqual([
+      'The Reveal',
+      'Scene 2',
+      'Scene 3',
+    ]);
+  });
+
   test('no failures returns empty summary', () => {
-    const shots = [makeShot(), makeShot({ id: 'shot-2', orderIndex: 1 })];
+    const shots = [makeShot(), makeShot({ shot: { id: 'shot-2' } })];
     const sequence = makeSequence();
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(false);
     expect(result.requiresFullRetry).toBe(false);
@@ -123,7 +158,7 @@ describe('analyzeFailures', () => {
   test('script analysis failure (no shots) requires full retry', () => {
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures([], sequence);
+    const result = analyzeFailures([], sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.requiresFullRetry).toBe(true);
@@ -133,15 +168,14 @@ describe('analyzeFailures', () => {
   test('image-only failures', () => {
     const shots = [
       makeShot({
-        thumbnailStatus: 'failed',
-        thumbnailUrl: null,
-        thumbnailError: 'Model timeout',
+        frame: { imageStatus: 'failed', imageError: 'Model timeout' },
+        sources: { image: null },
       }),
-      makeShot({ id: 'shot-2', orderIndex: 1 }),
+      makeShot({ shot: { id: 'shot-2' } }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.requiresFullRetry).toBe(false);
@@ -159,15 +193,20 @@ describe('analyzeFailures', () => {
   test('motion-only failures', () => {
     const shots = [
       makeShot({
-        videoStatus: 'failed',
-        videoUrl: null,
-        videoError: 'Generation timeout',
+        sources: {
+          video: null,
+          primaryVideo: render({
+            status: 'failed',
+            url: null,
+            error: 'Generation timeout',
+          }),
+        },
       }),
-      makeShot({ id: 'shot-2', orderIndex: 1 }),
+      makeShot({ shot: { id: 'shot-2' } }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.requiresFullRetry).toBe(false);
@@ -186,7 +225,7 @@ describe('analyzeFailures', () => {
       musicPrompt: 'Epic music',
     });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     const musicGroup = result.groups.find((g) => g.category === 'music');
@@ -198,20 +237,19 @@ describe('analyzeFailures', () => {
   test('mixed failures (image + motion)', () => {
     const shots = [
       makeShot({
-        thumbnailStatus: 'failed',
-        thumbnailUrl: null,
-        thumbnailError: 'Image error',
+        frame: { imageStatus: 'failed', imageError: 'Image error' },
+        sources: { image: null },
       }),
       makeShot({
-        id: 'shot-2',
-        orderIndex: 1,
-        videoStatus: 'failed',
-        videoError: 'Motion error',
+        shot: { id: 'shot-2' },
+        sources: {
+          primaryVideo: render({ status: 'failed', error: 'Motion error' }),
+        },
       }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(true);
     expect(result.groups.length).toBeGreaterThanOrEqual(2);
@@ -222,15 +260,17 @@ describe('analyzeFailures', () => {
   test('motion failed but no thumbnail skips motion retry', () => {
     const shots = [
       makeShot({
-        thumbnailUrl: null,
-        thumbnailStatus: 'failed',
-        videoStatus: 'failed',
-        videoUrl: null,
+        frame: { imageStatus: 'failed' },
+        sources: {
+          image: null,
+          video: null,
+          primaryVideo: render({ status: 'failed', url: null }),
+        },
       }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     const motionGroup = result.groups.find((g) => g.category === 'motion');
     expect(motionGroup).toBeUndefined();
@@ -241,14 +281,16 @@ describe('analyzeFailures', () => {
   test('missing motion prompts requires full retry', () => {
     const shots = [
       makeShot({
-        thumbnailStatus: 'completed',
-        motionPrompt: null,
-        videoStatus: 'pending',
+        sources: {
+          motionPrompt: null,
+          video: null,
+          primaryVideo: render({ status: 'pending', url: null }),
+        },
       }),
     ];
     const sequence = makeSequence({ status: 'failed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.requiresFullRetry).toBe(true);
     const promptGroup = result.groups.find(
@@ -267,7 +309,7 @@ describe('analyzeFailures', () => {
       musicStatus: 'pending',
     });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.requiresFullRetry).toBe(false);
     const promptGroup = result.groups.find(
@@ -280,7 +322,15 @@ describe('analyzeFailures', () => {
   test('pipeline statusError with only missing prompts forces full retry (#1072)', () => {
     // Scene-split crashed after streaming shots; motion/music phases never
     // ran. Do not claim "music prompt generation failed" or offer smart-retry.
-    const shots = [makeShot({ motionPrompt: null, videoStatus: 'pending' })];
+    const shots = [
+      makeShot({
+        sources: {
+          motionPrompt: null,
+          video: null,
+          primaryVideo: render({ status: 'pending', url: null }),
+        },
+      }),
+    ];
     const sequence = makeSequence({
       status: 'failed',
       musicPrompt: null,
@@ -290,7 +340,7 @@ describe('analyzeFailures', () => {
         'Child workflow scene-split failed: Failed query: delete from "scenes"',
     });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.requiresFullRetry).toBe(true);
     expect(result.groups).toHaveLength(0);
@@ -302,7 +352,7 @@ describe('analyzeFailures', () => {
     const shots = [makeShot()];
     const sequence = makeSequence({ status: 'completed' });
 
-    const result = analyzeFailures(shots, sequence);
+    const result = analyzeFailures(shots, sequence, SCENES);
 
     expect(result.hasFailed).toBe(false);
     expect(result.requiresFullRetry).toBe(false);

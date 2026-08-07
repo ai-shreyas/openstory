@@ -3,12 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useSequences } from './use-sequences';
 import { getShotsForSequencesFn } from '@/functions/shots';
 import type { Sequence } from '@/types/database';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 
 export type SequenceWithShots = Sequence & {
-  // The image surface lives on the anchor frame now (#989); the batch read path
-  // projects it back under the legacy thumbnail*/image* names (ShotWithImage).
-  shots: ShotWithImage[];
+  shots: ShotView[];
   // Present only when fetched via the admin/support endpoint. Optional on the
   // base type so components render a single CreatorIdentity regardless of source.
   creatorName?: string | null;
@@ -41,12 +39,12 @@ export function useSequencesWithShots() {
     error: shotsError,
   } = useQuery({
     queryKey: ['shots', 'by-sequences', [...sequenceIds].sort()],
-    queryFn: async (): Promise<Map<string, ShotWithImage[]>> => {
+    queryFn: async (): Promise<Map<string, ShotView[]>> => {
       if (sequenceIds.length === 0) return new Map();
       const allShots = await getShotsForSequencesFn({
         data: { sequenceIds },
       });
-      const map = new Map<string, ShotWithImage[]>();
+      const map = new Map<string, ShotView[]>();
       for (const shot of allShots) {
         const existing = map.get(shot.sequenceId) ?? [];
         existing.push(shot);

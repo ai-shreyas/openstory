@@ -20,7 +20,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { UserWorkflowContext } from '@/lib/workflow/types';
 
@@ -93,7 +93,7 @@ function makeWorkflow(impl: () => Promise<unknown>) {
     protected override onFailure(failure: {
       event: Readonly<WorkflowEvent<TestPayload>>;
       error: string;
-      scopedDb: ScopedDb;
+      scopedDb: WorkflowScopedDb;
     }): void {
       onFailure(failure);
     }

@@ -17,6 +17,7 @@ import { getExtensionFromUrl } from '@/lib/utils/file';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { LibraryLocationSheetWorkflowInput } from '@/lib/workflow/types';
+import { computeLibraryLocationSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 
 const logger = getLogger(['openstory', 'locations', 'create-library-location']);
 
@@ -102,6 +103,8 @@ export async function createLibraryLocation(
     teamId: ctx.teamId,
     sequenceId: 'library',
   };
+  workflowInput.snapshotInputHash =
+    await computeLibraryLocationSheetHashFromDto(workflowInput);
 
   void triggerWorkflow('/library-location-sheet', workflowInput, {
     label: buildWorkflowLabel(newLocation.id),

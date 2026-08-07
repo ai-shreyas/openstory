@@ -20,6 +20,7 @@ import {
   generateVariantSchema,
   regenerateShotSchema,
 } from '@/lib/schemas/shot.schemas';
+import { dbSceneId } from '@/lib/db/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { rescanContinuityFromPrompt } from '@/lib/scenes/rescan-continuity-from-prompt';
 import {
@@ -30,7 +31,7 @@ import { triggerWorkflow } from '@/lib/workflow/client';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type {
-  StoryboardWorkflowInput,
+  StoryboardTriggerInput,
   ShotVariantWorkflowInput,
   UpscaleShotVariantWorkflowInput,
 } from '@/lib/workflow/types';
@@ -68,7 +69,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
       }
     );
 
-    const workflowInput: StoryboardWorkflowInput = {
+    const workflowInput: StoryboardTriggerInput = {
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
@@ -119,26 +120,30 @@ export const generateShotImageFn = createServerFn({ method: 'POST' })
     // updateShotFn does the same rescan, but the UI never calls it — the
     // regenerate buttons are the only persistence path for prompts today.
     const userEditedPrompt = data.prompt !== undefined;
-    let shotForInput = shot;
-    const baseContinuity = shot.metadata?.continuity;
-    if (userEditedPrompt && data.prompt && shot.metadata && baseContinuity) {
+    let sceneForInput = resolvedScene;
+    const baseContinuity = resolvedScene?.continuity;
+    if (userEditedPrompt && data.prompt && resolvedScene && baseContinuity) {
       const rescan = await rescanContinuityFromPrompt({
         scopedDb: context.scopedDb,
         sequenceId: sequence.id,
         existing: baseContinuity,
         promptText: data.prompt,
       });
-      if (rescan.changed) {
-        const metadata = { ...shot.metadata, continuity: rescan.continuity };
-        await context.scopedDb.shots.update(shot.id, { metadata });
-        shotForInput = { ...shot, metadata };
+      if (rescan.changed && shot.sceneId) {
+        sceneForInput = { ...resolvedScene, continuity: rescan.continuity };
+        await context.scopedDb.scenes.update(
+          dbSceneId(shot.sceneId),
+          { continuity: rescan.continuity },
+          { throwOnMissing: false }
+        );
       }
     }
 
     const workflowInput = await prepareShotImageWorkflowInput({
       scopedDb: context.scopedDb,
       sequence,
-      shot: shotForInput,
+      shot,
+      scene: sceneForInput,
       frame,
       scriptExtract:
         script?.extract ?? resolvedScene?.originalScript.extract ?? '',
@@ -230,7 +235,7 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(generateVariantsInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, frame, sequence, user } = context;
+    const { shot, frame, sequence, user, scene } = context;
 
     const thumbnailUrl = await getFrameImageUrl(context.scopedDb, frame.id);
     if (!thumbnailUrl) {
@@ -240,7 +245,7 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
     const allCharacters = await context.scopedDb.characters.listWithSheets(
       sequence.id
     );
-    const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+    const characterTags = scene?.continuity?.characterTags ?? [];
     const characterReferences = buildCharacterReferenceImages(
       matchCharactersToScene(allCharacters, characterTags)
     );
@@ -249,8 +254,8 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
       await context.scopedDb.sequenceLocations.listWithReferences(sequence.id);
     const locationReferences = getSceneLocationReferenceImages(
       allLocations,
-      shot.metadata?.continuity?.environmentTag ?? '',
-      shot.metadata?.metadata?.location ?? ''
+      scene?.continuity?.environmentTag ?? '',
+      scene?.metadata?.location ?? ''
     );
 
     const numImages = data.numImages ?? 1;
@@ -274,13 +279,18 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
 
     const gridConfig = getVariantGridConfig(sequence.aspectRatio);
 
+    const selectedPrompt =
+      await context.scopedDb.framePromptVersions.getSelected(frame.id);
+
     const workflowInput: ShotVariantWorkflowInput = {
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
+      frameId: frame.id,
       thumbnailUrl,
-      scenePrompt: frame.imagePrompt ?? undefined,
+      scenePrompt: selectedPrompt?.text ?? undefined,
+      promptVersionId: selectedPrompt?.id ?? null,
       model: data.model,
       aspectRatio: sequence.aspectRatio,
       imageSize: data.imageSize || gridConfig.imageSize,
@@ -327,7 +337,7 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
   .inputValidator(zodValidator(selectVariantInputSchema))
   .handler(async ({ context, data }) => {
-    const { shot, frame, sequence, user } = context;
+    const { shot, frame, sequence, user, scene } = context;
 
     // The 3×3 grid sheet is the latest `kind:'framing'` `frame_variants` version
     // (#989). Selecting a tile spawns a new framing version (the upscaled tile)
@@ -365,7 +375,7 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
     const allCharacters = await context.scopedDb.characters.listWithSheets(
       sequence.id
     );
-    const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+    const characterTags = scene?.continuity?.characterTags ?? [];
     const characterReferences = buildCharacterReferenceImages(
       matchCharactersToScene(allCharacters, characterTags)
     );
@@ -374,8 +384,8 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       await context.scopedDb.sequenceLocations.listWithReferences(sequence.id);
     const locationReferences = getSceneLocationReferenceImages(
       allLocations,
-      shot.metadata?.continuity?.environmentTag ?? '',
-      shot.metadata?.metadata?.location ?? ''
+      scene?.continuity?.environmentTag ?? '',
+      scene?.metadata?.location ?? ''
     );
 
     // Price the model that will actually render the upscale (#1066) — the same
@@ -403,6 +413,11 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
+      frameId: frame.id,
+      // The prompt selected when the tile was picked: the upscale BECOMES the
+      // frame's selection, so the version it writes must carry the prompt it
+      // was rendered against (#1070).
+      promptVersionId: frame.selectedImagePromptVersionId,
       croppedTileUrl: cropResult.url,
       croppedTilePath: '',
       aspectRatio: sequence.aspectRatio,
@@ -472,16 +487,6 @@ export const setImageFromVariantFn = createServerFn({ method: 'POST' })
       actorId: context.user.id,
     });
 
-    // A new still invalidates downstream video (still on `shots` until Phase 3).
-    await context.scopedDb.shots.update(shot.id, {
-      videoUrl: null,
-      videoPath: null,
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoGeneratedAt: null,
-      videoError: null,
-    });
-
     return { shotId: shot.id, thumbnailUrl: latest.url };
   });
 
@@ -494,11 +499,10 @@ const setVideoFromVariantInputSchema = z.object({
 /**
  * Repoint a shot's primary video to a model's latest render (#545, re-routed to
  * `video_variants` in #990) — the motion analog of `setImageFromVariantFn`.
- * Selection is a pointer now: `videoVariants.select` mirrors the version onto
- * `shots.video*` (so the player and exports use it), repoints the render
- * segment's `selectedVideoVersionId` pointer, and logs a `video.selected` event
- * — atomically and non-destructively (the version is retained, so the viewer
- * can switch back).
+ * Selection is a pointer now: `videoVariants.select` repoints the render
+ * segment's `selectedVideoVersionId` and logs a `video.selected` event —
+ * atomically and non-destructively (the version is retained, so the viewer can
+ * switch back).
  */
 export const setVideoFromVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
@@ -539,8 +543,8 @@ const selectSegmentVideoVersionInputSchema = z.object({
  * Repoint a render segment's selection at a SPECIFIC version (#986) — the
  * version-switcher analog of `setVideoFromVariantFn` (which only picks the
  * latest for a model). `videoVariants.select` validates the version belongs to
- * the shot's segment and is completed, repoints `selectedVideoVersionId`,
- * mirrors the shot's `video*` columns, and logs `video.selected` — atomically.
+ * the shot's segment and is completed, repoints `selectedVideoVersionId`, and
+ * logs `video.selected` — atomically.
  */
 export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
@@ -675,16 +679,6 @@ export const selectFrameImageVersionFn = createServerFn({ method: 'POST' })
       data.versionId,
       { actorId: scopedDb.userId }
     );
-
-    // A new still invalidates downstream video (same as setImageFromVariantFn).
-    await scopedDb.shots.update(shot.id, {
-      videoUrl: null,
-      videoPath: null,
-      videoStatus: 'pending',
-      videoWorkflowRunId: null,
-      videoGeneratedAt: null,
-      videoError: null,
-    });
 
     return { shotId: shot.id, thumbnailUrl: version.url };
   });

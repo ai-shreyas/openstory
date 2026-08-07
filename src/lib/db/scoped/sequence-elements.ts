@@ -11,25 +11,28 @@ import type {
   SequenceElement,
 } from '@/lib/db/schema';
 import {
+  framePromptVersions,
   frames,
+  renderSegments,
   scenes,
   sceneScriptVersions,
   shots,
   shotPromptVersions,
   sequenceElements,
   sequences,
+  videoVariants,
 } from '@/lib/db/schema';
 import {
   buildShotRenameDeltas,
   replaceTokenInText,
+  renameTokenInContinuity,
 } from '@/lib/sequence-elements/cascade-rename';
 import {
-  enrichShotWithSceneScript,
-  loadSelectedScriptsBySequenceFromDb,
-  scriptExtract,
+  loadSceneContextBySequenceFromDb,
+  resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import { matchElementsToScene } from '@/lib/workflows/scene-matching';
-import { and, eq, inArray, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 
 export function createSequenceElementsMethods(db: Database) {
   const update = async (
@@ -50,6 +53,14 @@ export function createSequenceElementsMethods(db: Database) {
     return element;
   };
 
+  const getById = async (id: string): Promise<SequenceElement | null> => {
+    const result = await db
+      .select()
+      .from(sequenceElements)
+      .where(eq(sequenceElements.id, id));
+    return result[0] ?? null;
+  };
+
   const getByToken = async (
     sequenceId: string,
     token: string
@@ -67,13 +78,7 @@ export function createSequenceElementsMethods(db: Database) {
   };
 
   return {
-    getById: async (id: string): Promise<SequenceElement | null> => {
-      const result = await db
-        .select()
-        .from(sequenceElements)
-        .where(eq(sequenceElements.id, id));
-      return result[0] ?? null;
-    },
+    getById,
 
     getByToken,
 
@@ -215,9 +220,9 @@ export function createSequenceElementsMethods(db: Database) {
 
     /**
      * Rename an element's token and rewrite every reference to the old token
-     * across the sequence: `sequences.script`, per-shot `metadata` (continuity
-     * tags, originalScript extract, prompt strings) and the user-edit
-     * `imagePrompt`/`motionPrompt` overrides on `shots`.
+     * across the sequence: `sequences.script`, `scenes.continuity` +
+     * the selected `scene_script_versions` extract, the anchor frame's
+     * `imagePrompt` and the selected `shot_prompt_versions` motion text.
      *
      * All writes (element row, script, shot deltas) run in a single
      * `db.batch()` — one transaction — so a mid-cascade failure can't leave
@@ -228,29 +233,65 @@ export function createSequenceElementsMethods(db: Database) {
      * ("Renamed LOGO → BRAND across 5 shots + script"). The caller is
      * expected to have already validated uniqueness of `newToken` within the
      * sequence — this method does not check collisions.
+     *
+     * `expectedToken` turns the rename into a compare-and-swap for
+     * system-driven renames (the vision auto-rename): the element row is only
+     * updated `WHERE token = expectedToken`, and the cascade is skipped
+     * entirely when the row no longer carries it. Callers get `renamed: false`
+     * plus the live row, so a user rename that landed mid-flight wins and the
+     * script is never rewritten against a token the user renamed away from.
      */
     cascadeRename: async (args: {
       sequenceId: string;
       elementId: string;
       oldToken: string;
       newToken: string;
+      expectedToken?: string;
     }): Promise<{
       element: SequenceElement;
       shotsUpdated: number;
       scriptUpdated: boolean;
+      renamed: boolean;
     }> => {
-      const { sequenceId, elementId, oldToken, newToken } = args;
+      const { sequenceId, elementId, oldToken, newToken, expectedToken } = args;
+
+      if (expectedToken !== undefined) {
+        const current = await getById(elementId);
+        if (!current) {
+          throw new Error(`SequenceElement ${elementId} not found`);
+        }
+        if (current.token !== expectedToken) {
+          return {
+            element: current,
+            shotsUpdated: 0,
+            scriptUpdated: false,
+            renamed: false,
+          };
+        }
+      }
 
       if (oldToken === newToken) {
         const element = await update(elementId, { token: newToken });
-        return { element, shotsUpdated: 0, scriptUpdated: false };
+        return {
+          element,
+          shotsUpdated: 0,
+          scriptUpdated: false,
+          renamed: true,
+        };
       }
 
       const now = new Date();
       const elementUpdate = db
         .update(sequenceElements)
         .set({ token: newToken, updatedAt: now })
-        .where(eq(sequenceElements.id, elementId))
+        .where(
+          expectedToken === undefined
+            ? eq(sequenceElements.id, elementId)
+            : and(
+                eq(sequenceElements.id, elementId),
+                eq(sequenceElements.token, expectedToken)
+              )
+        )
         .returning();
 
       const [sequenceRow] = await db
@@ -279,44 +320,64 @@ export function createSequenceElementsMethods(db: Database) {
                 .where(eq(sequences.id, sequenceId)),
             ];
 
-      const [allShotsRaw, scriptBySceneId] = await Promise.all([
-        db
-          .select()
-          .from(shots)
-          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
-      ]);
-      const allShots = allShotsRaw.map((shot) =>
-        enrichShotWithSceneScript(shot, scriptBySceneId)
-      );
+      const allShots = (await db
+        .select()
+        .from(shots)
+        .where(eq(shots.sequenceId, sequenceId))) as Shot[];
       // The image prompt lives on each shot's anchor frame now (#989) — keyed
       // by shotId (orderIndex 0), never by id-reuse.
       const frameRows = await db
-        .select({ shotId: frames.shotId, imagePrompt: frames.imagePrompt })
+        .select({
+          id: frames.id,
+          shotId: frames.shotId,
+          imagePrompt: framePromptVersions.text,
+          promptVersionId: framePromptVersions.id,
+        })
         .from(frames)
+        .leftJoin(
+          framePromptVersions,
+          eq(framePromptVersions.id, frames.selectedImagePromptVersionId)
+        )
         .where(
           and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0))
         );
       const imagePromptByShot = new Map(
         frameRows.map((f) => [f.shotId, f.imagePrompt])
       );
-      const shotsWithImagePrompt = allShots.map((s) => ({
+      const promptVersionIdByShot = new Map(
+        frameRows.flatMap((f) =>
+          f.promptVersionId ? [[f.shotId, f.promptVersionId]] : []
+        )
+      );
+      // The motion prompt is the *selected* `shot_prompt_versions` row (#713):
+      // both the token scan and the rewrite target that row.
+      const selectedMotionRows = await db
+        .select({
+          shotId: shots.id,
+          versionId: shotPromptVersions.id,
+          text: shotPromptVersions.text,
+        })
+        .from(shots)
+        .innerJoin(
+          shotPromptVersions,
+          eq(shots.selectedMotionPromptVersionId, shotPromptVersions.id)
+        )
+        .where(eq(shots.sequenceId, sequenceId));
+      const motionPromptByShot = new Map(
+        selectedMotionRows.map((r) => [r.shotId, r.text])
+      );
+      const selectedMotionVersionByShot = new Map(
+        selectedMotionRows.map((r) => [r.shotId, r.versionId])
+      );
+      const shotsWithPrompts = allShots.map((s) => ({
         ...s,
         imagePrompt: imagePromptByShot.get(s.id) ?? null,
+        motionPrompt: motionPromptByShot.get(s.id) ?? null,
       }));
       const deltas = buildShotRenameDeltas(
-        shotsWithImagePrompt,
+        shotsWithPrompts,
         oldToken,
         newToken
-      );
-      // metadata/motionPrompt → shots; imagePrompt mirror → the anchor frame.
-      // The motion prompt is resolved from the *selected* `shot_prompt_versions`
-      // row now (#713), so a rename must rewrite that row's text too — updating
-      // only the `shot.motionPrompt` mirror would leave the render reading the
-      // un-renamed version. (Image resolution reads the `frame.imagePrompt`
-      // mirror directly, so the frame update below suffices there.)
-      const selectedMotionVersionByShot = new Map(
-        allShots.map((s) => [s.id, s.selectedMotionPromptVersionId])
       );
       const selectedScriptRows = await db
         .select({ version: sceneScriptVersions })
@@ -326,6 +387,28 @@ export function createSequenceElementsMethods(db: Database) {
           eq(scenes.selectedScriptVersionId, sceneScriptVersions.id)
         )
         .where(eq(scenes.sequenceId, sequenceId));
+      // Element tags live on the scene's continuity now, so the token rewrite
+      // targets `scenes.continuity` rather than a per-shot copy.
+      const sceneRows = await db
+        .select()
+        .from(scenes)
+        .where(eq(scenes.sequenceId, sequenceId));
+      const sceneContinuityStatements = sceneRows.flatMap((scene) => {
+        if (!scene.continuity) return [];
+        const rewritten = renameTokenInContinuity(
+          scene.continuity,
+          oldToken,
+          newToken
+        );
+        if (!rewritten) return [];
+        return [
+          db
+            .update(scenes)
+            .set({ continuity: rewritten, updatedAt: now })
+            .where(eq(scenes.id, scene.id)),
+        ];
+      });
+
       const sceneScriptStatements = selectedScriptRows.flatMap(
         ({ version }) => {
           const extract = version.content.extract;
@@ -344,17 +427,11 @@ export function createSequenceElementsMethods(db: Database) {
       );
 
       const shotStatements = deltas.flatMap((delta) => {
-        const set: Record<string, unknown> = { updatedAt: now };
-        if (delta.metadata !== undefined) set.metadata = delta.metadata;
-        if (delta.motionPrompt !== undefined)
-          set.motionPrompt = delta.motionPrompt;
         const selectedMotionVersionId = selectedMotionVersionByShot.get(
           delta.shotId
         );
+        const selectedPromptVersionId = promptVersionIdByShot.get(delta.shotId);
         return [
-          ...(Object.keys(set).length > 1
-            ? [db.update(shots).set(set).where(eq(shots.id, delta.shotId))]
-            : []),
           ...(delta.motionPrompt !== undefined && selectedMotionVersionId
             ? [
                 db
@@ -363,12 +440,12 @@ export function createSequenceElementsMethods(db: Database) {
                   .where(eq(shotPromptVersions.id, selectedMotionVersionId)),
               ]
             : []),
-          ...(delta.imagePrompt !== undefined
+          ...(delta.imagePrompt !== undefined && selectedPromptVersionId
             ? [
                 db
-                  .update(frames)
-                  .set({ imagePrompt: delta.imagePrompt, updatedAt: now })
-                  .where(eq(frames.id, delta.shotId)),
+                  .update(framePromptVersions)
+                  .set({ text: delta.imagePrompt })
+                  .where(eq(framePromptVersions.id, selectedPromptVersionId)),
               ]
             : []),
         ];
@@ -377,15 +454,37 @@ export function createSequenceElementsMethods(db: Database) {
       const [elementRows] = await db.batch([
         elementUpdate,
         ...scriptStatements,
+        ...sceneContinuityStatements,
         ...sceneScriptStatements,
         ...shotStatements,
       ]);
       const element = elementRows[0];
       if (!element) {
+        // Only reachable under `expectedToken` — a rename that landed between
+        // the pre-check above and this batch. D1 has no interactive
+        // transactions, so that microsecond window is the residual: report the
+        // swap as lost and let the caller keep the live row.
+        if (expectedToken !== undefined) {
+          const current = await getById(elementId);
+          if (!current) {
+            throw new Error(`SequenceElement ${elementId} not found`);
+          }
+          return {
+            element: current,
+            shotsUpdated: deltas.length,
+            scriptUpdated,
+            renamed: false,
+          };
+        }
         throw new Error(`SequenceElement ${elementId} not found`);
       }
 
-      return { element, shotsUpdated: deltas.length, scriptUpdated };
+      return {
+        element,
+        shotsUpdated: deltas.length,
+        scriptUpdated,
+        renamed: true,
+      };
     },
 
     delete: async (id: string): Promise<boolean> => {
@@ -410,19 +509,19 @@ export function createSequenceElementsMethods(db: Database) {
         return [];
       }
 
-      const [allShotsRaw, scriptBySceneId] = await Promise.all([
+      const [allShots, sceneContext] = await Promise.all([
         db
           .select()
           .from(shots)
           .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+        loadSceneContextBySequenceFromDb(db, sequenceId),
       ]);
 
-      return allShotsRaw
-        .map((shot) => enrichShotWithSceneScript(shot, scriptBySceneId))
+      return allShots
         .filter((shot) => {
-          const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-          const sceneScript = scriptExtract(shot.metadata?.originalScript);
+          const scene = resolveSceneForShot(shot, sceneContext).scene;
+          const elementTags = scene?.continuity?.elementTags ?? [];
+          const sceneScript = scene?.originalScript.extract ?? '';
           return (
             matchElementsToScene([element], elementTags, sceneScript).length > 0
           );
@@ -452,24 +551,42 @@ export function createSequenceElementsMethods(db: Database) {
       }
       if (allElements.length === 0) return counts;
 
-      const [allShotsRaw, scriptBySceneId] = await Promise.all([
+      const [allShots, sceneContext, shotIdsWithVideo] = await Promise.all([
         db
           .select()
           .from(shots)
           .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSelectedScriptsBySequenceFromDb(db, sequenceId),
+        loadSceneContextBySequenceFromDb(db, sequenceId),
+        // A shot "has video" when its render segment points at a live version
+        // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
+        db
+          .select({ shotId: shots.id })
+          .from(shots)
+          .innerJoin(
+            renderSegments,
+            eq(renderSegments.id, shots.renderSegmentId)
+          )
+          .innerJoin(
+            videoVariants,
+            and(
+              eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+              isNull(videoVariants.discardedAt)
+            )
+          )
+          .where(eq(shots.sequenceId, sequenceId))
+          .then((rows) => new Set(rows.map((r) => r.shotId))),
       ]);
 
-      for (const rawShot of allShotsRaw) {
-        const shot = enrichShotWithSceneScript(rawShot, scriptBySceneId);
-        const elementTags = shot.metadata?.continuity?.elementTags ?? [];
-        const sceneScript = scriptExtract(shot.metadata?.originalScript);
+      for (const shot of allShots) {
+        const scene = resolveSceneForShot(shot, sceneContext).scene;
+        const elementTags = scene?.continuity?.elementTags ?? [];
+        const sceneScript = scene?.originalScript.extract ?? '';
         const matched = matchElementsToScene(
           allElements,
           elementTags,
           sceneScript
         );
-        const hasVideo = !!shot.videoUrl;
+        const hasVideo = shotIdsWithVideo.has(shot.id);
         for (const el of matched) {
           const entry = counts[el.id];
           if (!entry) continue;

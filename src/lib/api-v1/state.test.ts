@@ -1,7 +1,23 @@
+import {
+  dbSceneId,
+  type Frame,
+  type SceneRow,
+  type Shot,
+  type VideoVariant,
+} from '@/lib/db/schema';
 import type { Style } from '@/lib/db/schema/libraries';
+import type { FramePromptVersion } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
-import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import {
+  type ShotView,
+  type ShotViewSources,
+  toShotView,
+} from '@/lib/shots/shot-view';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Stub the logger so the "style failed to resolve" anomaly path is observable
@@ -46,56 +62,59 @@ const build = (
   origin = TEST_ORIGIN
 ) => buildSequenceStateRaw(deps, sequence, origin);
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// `buildSequenceState` projects `ShotWithImage` from each shot + its frame, so
-// the fixture keeps the legacy projected names (`thumbnail*`/`image*`) AND
-// mirrors them onto a concrete anchor `frame` whose id is DISTINCT from the
-// shot id (only `shotId` links them — never id-reuse).
-function makeShot(overrides: Partial<ShotWithImage> = {}): ShotWithImage {
-  const base: Omit<ShotWithImage, 'frame'> = {
+// The anchor frame's id is DISTINCT from the shot's — only `shotId` links them
+// (#989) — but deterministic so a fixture can name a still's frame.
+const frameIdFor = (shotId: string) => `frame-${shotId}`;
+
+/** The selected `frame_variants` row carrying a shot's still. */
+const still = (shotId: string, url: string) =>
+  frameVariantFixture({
+    frameId: frameIdFor(shotId),
+    sequenceId: 'seq-1',
+    url,
+  });
+
+/** A `video_variants` render of the shot's segment. */
+const render = (overrides: Partial<VideoVariant> = {}) =>
+  videoVariantFixture({
+    renderSegmentId: 'seg-1',
+    sequenceId: 'seq-1',
+    ...overrides,
+  });
+
+function makeShot(
+  params: {
+    shot?: Partial<Shot>;
+    frame?: Partial<Frame>;
+    sources?: Partial<ShotViewSources>;
+  } = {}
+): ShotView {
+  const shot: Shot = {
     id: 'shot-1',
     sequenceId: 'seq-1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
-    description: 'A scene',
+    shotNumber: 1,
     durationMs: 3000,
-    thumbnailUrl: null,
-    thumbnailPath: null,
-    thumbnailStatus: 'pending',
-    thumbnailWorkflowRunId: null,
-    thumbnailError: null,
-    imageModel: null,
-    imagePrompt: null,
-    variantImageUrl: null,
-    variantImageStatus: 'pending',
-    videoUrl: null,
-    videoPath: null,
-    videoStatus: 'pending',
-    videoWorkflowRunId: null,
-    videoGeneratedAt: null,
-    videoError: null,
-    motionPrompt: null,
-    motionModel: null,
-    motionPromptData: null,
-    thumbnailInputHash: null,
-    videoInputHash: null,
-    visualPromptInputHash: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    previewThumbnailUrl: null,
-    metadata: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides,
+    ...params.shot,
   };
-  return { ...base, frame: anchorFixture(base).frame };
+  const frame = frameFixture({
+    id: frameIdFor(shot.id),
+    shotId: shot.id,
+    sequenceId: shot.sequenceId,
+    ...params.frame,
+  });
+  return toShotView(shot, frame, {
+    image: null,
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+    ...params.sources,
+  });
 }
-
-/** The two DB rows `buildSequenceState` projects a shot's image surface from. */
-const anchorFixture = (shot: Omit<ShotWithImage, 'frame'>) =>
-  frameFixtureFor(shot, `frame-${shot.id}`);
 
 function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
   return {
@@ -171,26 +190,50 @@ function makeStyle(overrides: Partial<Style> = {}): Style {
   };
 }
 
+function makeScene(overrides: Partial<SceneRow> = {}): SceneRow {
+  return {
+    id: dbSceneId('scene-1'),
+    sequenceId: 'seq-1',
+    orderIndex: 0,
+    location: null,
+    timeOfDay: null,
+    storyBeat: null,
+    title: null,
+    continuity: null,
+    selectedScriptVersionId: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+// `buildSequenceState` re-assembles each view from the four reads below, so the
+// deps just hand back the rows the fixture views already carry.
 function depsWithShots(
-  shots: ShotWithImage[],
-  style: Style | null = makeStyle()
+  shots: ShotView[],
+  style: Style | null = makeStyle(),
+  scenes: SceneRow[] = []
 ) {
-  // The image surface lives on each shot's anchor frame now (#989), and the
-  // still itself on that frame's SELECTED version (#1067); the source projects
-  // `ShotWithImage` from all three.
-  const anchors = shots.map((s) => anchorFixture(s));
   return {
     shots: { listBySequence: async () => shots },
-    frames: { listAnchorsBySequence: async () => anchors.map((a) => a.frame) },
+    frames: { listAnchorsBySequence: async () => shots.map((s) => s.frame) },
+    framePromptVersions: {
+      getSelectedByFrameIds: async () => new Map<string, FramePromptVersion>(),
+    },
     frameVariants: {
       getSelectedByFrameIds: async () =>
+        new Map(shots.flatMap((s) => (s.image ? [[s.frame.id, s.image]] : []))),
+    },
+    videoVariants: {
+      getSelectedByShotIds: async () =>
+        new Map(shots.flatMap((s) => (s.video ? [[s.id, s.video]] : []))),
+      getPrimaryByShotIds: async () =>
         new Map(
-          anchors.flatMap((a) =>
-            a.selectedVersion ? [[a.frame.id, a.selectedVersion]] : []
-          )
+          shots.flatMap((s) => (s.primaryVideo ? [[s.id, s.primaryVideo]] : []))
         ),
     },
     styles: { getById: async () => style },
+    scenes: { listBySequence: async () => scenes },
   };
 }
 
@@ -253,23 +296,20 @@ describe('buildSequenceState', () => {
     expect(state.music.status).toBe('pending');
   });
 
-  it('derives per-shot image/video status and counts, ordered by index', async () => {
+  it('derives per-shot image/video status and counts, in read-path order', async () => {
+    // The read path hands shots over already in hierarchical order.
     const shots = [
       makeShot({
-        id: 'f2',
-        orderIndex: 1,
-        videoUrl: 'https://cdn/v2.mp4',
-        videoStatus: 'completed',
+        shot: { id: 'f1' },
+        sources: { image: still('f1', 'https://cdn/t1.png') },
       }),
       makeShot({
-        id: 'f1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://cdn/t1.png',
+        shot: { id: 'f2', shotNumber: 2 },
+        sources: { video: render({ url: 'https://cdn/v2.mp4' }) },
       }),
     ];
     const state = await build(depsWithShots(shots), makeSequence());
 
-    // ordered by orderIndex
     expect(state.shots.map((f) => f.id)).toEqual(['f1', 'f2']);
 
     const [first, second] = state.shots;
@@ -283,7 +323,7 @@ describe('buildSequenceState', () => {
       image: { status: 'pending', url: null },
       video: { status: 'completed', url: 'https://cdn/v2.mp4' },
     });
-    // No scene metadata set → title falls back to null.
+    // No scene → title falls back to null.
     expect(first?.title).toBeNull();
 
     expect(state.counts).toEqual({
@@ -294,13 +334,26 @@ describe('buildSequenceState', () => {
     });
   });
 
+  it('titles a shot from the scene it belongs to', async () => {
+    const scene = makeScene({ title: 'The Reveal' });
+    const state = await build(
+      depsWithShots(
+        [
+          makeShot({ shot: { sceneId: scene.id } }),
+          makeShot({ shot: { id: 'f2', shotNumber: 2 } }),
+        ],
+        makeStyle(),
+        [scene]
+      ),
+      makeSequence()
+    );
+    expect(state.shots.map((s) => s.title)).toEqual(['The Reveal', null]);
+  });
+
   it('treats a preview thumbnail as an available image', async () => {
     const state = await build(
       depsWithShots([
-        makeShot({
-          thumbnailUrl: null,
-          previewThumbnailUrl: 'https://cdn/p.png',
-        }),
+        makeShot({ frame: { previewImageUrl: 'https://cdn/p.png' } }),
       ]),
       makeSequence()
     );
@@ -313,12 +366,13 @@ describe('buildSequenceState', () => {
   it('counts failed videos so a terminal-but-partial result is legible', async () => {
     const state = await build(
       depsWithShots([
-        makeShot({ id: 'f1', videoStatus: 'failed' }),
         makeShot({
-          id: 'f2',
-          orderIndex: 1,
-          videoStatus: 'completed',
-          videoUrl: 'https://cdn/v.mp4',
+          shot: { id: 'f1' },
+          sources: { primaryVideo: render({ status: 'failed' }) },
+        }),
+        makeShot({
+          shot: { id: 'f2', shotNumber: 2 },
+          sources: { video: render({ url: 'https://cdn/v.mp4' }) },
         }),
       ]),
       makeSequence()
@@ -338,10 +392,11 @@ describe('buildSequenceState', () => {
     const state = await build(
       depsWithShots([
         makeShot({
-          id: 'f1',
-          thumbnailUrl: '/r2/thumbnails/team/t1.png',
-          videoStatus: 'completed',
-          videoUrl: '/r2/videos/team/v1.mp4',
+          shot: { id: 'f1' },
+          sources: {
+            image: still('f1', '/r2/thumbnails/team/t1.png'),
+            video: render({ url: '/r2/videos/team/v1.mp4' }),
+          },
         }),
       ]),
       makeSequence({
@@ -369,8 +424,9 @@ describe('buildSequenceState', () => {
     const state = await build(
       depsWithShots([
         makeShot({
-          videoStatus: 'completed',
-          videoUrl: 'https://v3.fal.media/files/b/abc/out.mp4',
+          sources: {
+            video: render({ url: 'https://v3.fal.media/files/b/abc/out.mp4' }),
+          },
         }),
       ]),
       makeSequence({ posterUrl: 'https://storage.openstory.so/old/poster.png' })
@@ -443,23 +499,32 @@ describe('sequenceStateCursor', () => {
     );
     // an image becomes ready
     expect(
-      await cursorFor([makeShot({ thumbnailUrl: 'https://cdn/t.png' })], {})
+      await cursorFor(
+        [
+          makeShot({
+            sources: { image: still('shot-1', 'https://cdn/t.png') },
+          }),
+        ],
+        {}
+      )
     ).not.toBe(baseline);
     // a video becomes ready
     expect(
       await cursorFor(
         [
           makeShot({
-            videoStatus: 'completed',
-            videoUrl: 'https://cdn/v.mp4',
+            sources: { video: render({ url: 'https://cdn/v.mp4' }) },
           }),
         ],
         {}
       )
     ).not.toBe(baseline);
     // a video fails — must wake the poll, not stall it until the deadline
-    expect(await cursorFor([makeShot({ videoStatus: 'failed' })], {})).not.toBe(
-      baseline
-    );
+    expect(
+      await cursorFor(
+        [makeShot({ sources: { primaryVideo: render({ status: 'failed' }) } })],
+        {}
+      )
+    ).not.toBe(baseline);
   });
 });

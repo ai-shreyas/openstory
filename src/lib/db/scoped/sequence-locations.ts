@@ -12,6 +12,10 @@ import type {
   SequenceLocation,
 } from '@/lib/db/schema';
 import { shots, sequenceLocations, sequences } from '@/lib/db/schema';
+import {
+  loadSceneContextBySequenceFromDb,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
 
 // ============================================================================
 // Pure utility functions (exported separately, not in factory)
@@ -40,27 +44,6 @@ export function locationMatchesTag(
   if (locName.includes(envTagLower)) return true;
 
   return false;
-}
-
-/**
- * Match locations to a shot based on metadata
- * Used when generating shot images to include location references
- */
-export function matchLocationsToShot(
-  shot: Pick<Shot, 'metadata'>,
-  allLocations: SequenceLocation[]
-): SequenceLocation[] {
-  const environmentTag = shot.metadata?.continuity?.environmentTag ?? '';
-  const sceneLocation = shot.metadata?.metadata?.location ?? '';
-
-  if (!environmentTag && !sceneLocation) return [];
-
-  return allLocations.filter((location) => {
-    return (
-      (environmentTag && locationMatchesTag(location, environmentTag)) ||
-      (sceneLocation && locationMatchesTag(location, sceneLocation))
-    );
-  });
 }
 
 // ============================================================================
@@ -323,16 +306,19 @@ export function createSequenceLocationsMethods(db: Database) {
         return [];
       }
 
-      // Get all shots for the sequence
-      const allShots = await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId));
+      const [allShots, sceneContext] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSceneContextBySequenceFromDb(db, sequenceId),
+      ]);
 
       // Filter shots that are at this location
-      return (allShots as Shot[]).filter((shot) => {
-        const environmentTag = shot.metadata?.continuity?.environmentTag ?? '';
-        const sceneLocation = shot.metadata?.metadata?.location ?? '';
+      return allShots.filter((shot) => {
+        const scene = resolveSceneForShot(shot, sceneContext).scene;
+        const environmentTag = scene?.continuity?.environmentTag ?? '';
+        const sceneLocation = scene?.metadata?.location ?? '';
 
         return (
           (environmentTag && locationMatchesTag(location, environmentTag)) ||
@@ -356,18 +342,20 @@ export function createSequenceLocationsMethods(db: Database) {
         return [];
       }
 
-      // Get all shots for the sequence
-      const allShots = await db
-        .select()
-        .from(shots)
-        .where(eq(shots.sequenceId, sequenceId));
+      const [allShots, sceneContext] = await Promise.all([
+        db
+          .select()
+          .from(shots)
+          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+        loadSceneContextBySequenceFromDb(db, sequenceId),
+      ]);
 
       // Filter shots and return IDs
-      return (allShots as Shot[])
+      return allShots
         .filter((shot) => {
-          const environmentTag =
-            shot.metadata?.continuity?.environmentTag ?? '';
-          const sceneLocation = shot.metadata?.metadata?.location ?? '';
+          const scene = resolveSceneForShot(shot, sceneContext).scene;
+          const environmentTag = scene?.continuity?.environmentTag ?? '';
+          const sceneLocation = scene?.metadata?.location ?? '';
 
           return (
             (environmentTag && locationMatchesTag(location, environmentTag)) ||

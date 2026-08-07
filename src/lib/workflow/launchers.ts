@@ -36,12 +36,27 @@
  * separately.
  */
 
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_VIDEO_MODEL,
+  safeImageToVideoModel,
+  safeTextToImageModel,
+} from '@/lib/ai/models';
+import {
+  DEFAULT_ANALYSIS_MODEL,
+  getAnalysisModelById,
+} from '@/lib/ai/models.config';
 import { generateId } from '@/lib/db/id';
+import { NotFoundError, ValidationError } from '@/lib/errors';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { StyleConfigSchema, type Sequence } from '@/lib/db/schema';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { resolveRunState } from '@/lib/workflow/reconcile';
-import type { StoryboardWorkflowInput } from '@/lib/workflow/types';
+import type {
+  StoryboardTriggerInput,
+  StoryboardWorkflowInput,
+} from '@/lib/workflow/types';
 
 /** Thrown when a storyboard run is already in flight for the sequence. */
 export class GenerationInProgressError extends Error {
@@ -104,15 +119,87 @@ export async function assertNoActiveStoryboard(
 }
 
 /**
+ * Snapshot everything the run generates from onto its payload, off the same
+ * row the mutex check just read. The workflow used to derive these itself in
+ * its first step — minutes to hours after the trigger, and again on every step
+ * retry — so a script/style edit made after pressing generate silently became
+ * what got generated. Content validation belongs here too: a missing script is
+ * a synchronous "nothing to generate" for the caller, not a workflow that
+ * accepts the trigger and dies mid-run.
+ */
+async function resolveStoryboardPayload(
+  scopedDb: ScopedDb,
+  sequence: Sequence,
+  input: StoryboardTriggerInput,
+  sequenceId: string
+): Promise<StoryboardWorkflowInput> {
+  if (!sequence.script || sequence.script.trim().length === 0) {
+    throw new ValidationError('Sequence has no script');
+  }
+  if (!sequence.styleId) {
+    throw new ValidationError('Sequence has no style selected');
+  }
+
+  const style = await scopedDb.styles.getById(sequence.styleId);
+  if (!style) {
+    throw new NotFoundError('No style found');
+  }
+
+  const elements = await scopedDb.sequenceElements.list(sequenceId);
+
+  // Casting identity is snapshotted here, alongside every other frozen field:
+  // the matching workflows only re-read these rows for the late-arriving sheet
+  // image, never for the name/description they match on.
+  const [suggestedTalentRows, suggestedLocationRows] = await Promise.all([
+    input.suggestedTalentIds?.length
+      ? scopedDb.talent.getByIds(input.suggestedTalentIds)
+      : Promise.resolve([]),
+    input.suggestedLocationIds?.length
+      ? scopedDb.locations.getByIds(input.suggestedLocationIds)
+      : Promise.resolve([]),
+  ]);
+
+  return {
+    ...input,
+    sequenceId,
+    suggestedTalent: suggestedTalentRows.map((t) => ({
+      talentId: t.id,
+      name: t.name,
+      description: t.description,
+    })),
+    suggestedLocations: suggestedLocationRows.map((l) => ({
+      locationId: l.id,
+      name: l.name,
+      description: l.description,
+    })),
+    title: sequence.title,
+    script: sequence.script,
+    aspectRatio: sequence.aspectRatio,
+    styleConfig: StyleConfigSchema.parse(style.config),
+    analysisModelId:
+      getAnalysisModelById(sequence.analysisModel)?.id ??
+      DEFAULT_ANALYSIS_MODEL,
+    imageModel: safeTextToImageModel(sequence.imageModel, DEFAULT_IMAGE_MODEL),
+    videoModel: safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
+    elementIds: elements.map((el) => el.id),
+    // Snapshotted here for the same reason as everything else: the music-prompt
+    // grandchild runs long after this row could have gained a prompt, and a
+    // lookup down there would relabel the version on a retry.
+    musicPromptSource: sequence.musicPrompt ? 'regenerated' : 'ai-generated',
+  };
+}
+
+/**
  * Start a storyboard run for a sequence: acquire the generation mutex,
- * mark the sequence 'processing' (clearing any prior error), trigger the
- * workflow, and persist the instance id for the reconciler and future
- * mutex checks. The single entry point for `/storyboard` — all call sites
- * (create, retry, regenerate, smart-retry fallback) go through here.
+ * snapshot the sequence's content onto the payload, mark the sequence
+ * 'processing' (clearing any prior error), trigger the workflow, and persist
+ * the instance id for the reconciler and future mutex checks. The single entry
+ * point for `/storyboard` — all call sites (create, retry, regenerate,
+ * smart-retry fallback) go through here.
  */
 export async function triggerStoryboard(
   scopedDb: ScopedDb,
-  input: StoryboardWorkflowInput
+  input: StoryboardTriggerInput
 ): Promise<{ workflowRunId: string }> {
   const { sequenceId } = input;
   if (!sequenceId) {
@@ -122,6 +209,13 @@ export async function triggerStoryboard(
   // Mutex step 1: reject while the previous run is still in flight (or its
   // state can't be verified).
   const sequence = await getSequenceRejectingActiveRun(scopedDb, sequenceId);
+
+  const payload = await resolveStoryboardPayload(
+    scopedDb,
+    sequence,
+    input,
+    sequenceId
+  );
 
   // Mutex step 2: CAS-claim the slot so two racing requests can't both pass.
   const claimId = `storyboard-${sequenceId}-${generateId()}`;
@@ -140,7 +234,7 @@ export async function triggerStoryboard(
   // crashes after create() but the caller retries the whole launcher, the
   // fresh claim produces a fresh instance; a stranded claim resolves as
   // 'failed' on the next acquire and the slot recovers.
-  const workflowRunId = await triggerWorkflow('/storyboard', input, {
+  const workflowRunId = await triggerWorkflow('/storyboard', payload, {
     deduplicationId: claimId,
     label: buildWorkflowLabel(sequenceId),
   });

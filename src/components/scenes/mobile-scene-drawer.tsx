@@ -9,10 +9,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { ChevronUp, Loader2, Video } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import type { BatchGenerateMotionArgs } from './scene-list';
@@ -20,7 +21,9 @@ import { SceneListItem } from './scene-list-item';
 import { SceneThumbnail } from './scene-thumbnail';
 
 type MobileSceneDrawerProps = {
-  shots?: ShotWithImage[];
+  shots?: ShotView[];
+  /** Scenes the shots belong to — they carry the number, title and script. */
+  scenes?: SceneWithScript[];
   selectedShotId?: string;
   aspectRatio: AspectRatio;
   onSelectShot: (shotId: string) => void;
@@ -36,6 +39,7 @@ type MobileSceneDrawerProps = {
 
 export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   shots,
+  scenes,
   selectedShotId,
   aspectRatio,
   onSelectShot,
@@ -62,6 +66,12 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
 
   const totalShots = shots?.length ?? 0;
 
+  const scenesById = useMemo(() => {
+    const map = new Map<string, SceneWithScript>();
+    for (const scene of scenes ?? []) map.set(scene.id, scene);
+    return map;
+  }, [scenes]);
+
   // Get the currently selected shot
   const selectedShot = useMemo(
     () => shots?.find((f) => f.id === selectedShotId),
@@ -77,7 +87,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
         (f.videoStatus === 'pending' ||
           f.videoStatus === 'failed' ||
           f.videoStatus === 'generating') &&
-        f.thumbnailStatus === 'completed'
+        f.frame.imageStatus === 'completed'
     );
   }, [shots]);
 
@@ -89,9 +99,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   // Check if all eligible shots have motion prompts ready
   const motionPromptsReady = useMemo(() => {
     if (!eligibleShots.length) return true;
-    return eligibleShots.every(
-      (f) => f.motionPrompt || f.motionPromptData?.fullPrompt
-    );
+    return eligibleShots.every((f) => f.motionPrompt?.fullPrompt);
   }, [eligibleShots]);
 
   const handleGenerateMotion = async () => {
@@ -110,10 +118,11 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   };
 
   // Extract scene info for the collapsed bar
-  const sceneNumber =
-    selectedShot?.metadata?.sceneNumber ?? (selectedShot?.orderIndex ?? 0) + 1;
-  const sceneTitle =
-    selectedShot?.metadata?.metadata?.title ?? `Scene ${sceneNumber}`;
+  const selectedScene = selectedShot?.sceneId
+    ? scenesById.get(selectedShot.sceneId)
+    : undefined;
+  const sceneNumber = (selectedScene?.orderIndex ?? 0) + 1;
+  const sceneTitle = selectedScene?.title?.trim() || `Scene ${sceneNumber}`;
 
   const hasEligibleShots = eligibleShots.length > 0;
   const isMotionInProgress = regeneratingMotion.size > 0;
@@ -139,9 +148,9 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
         )}
       >
         <SceneThumbnail
-          thumbnailUrl={selectedShot?.thumbnailUrl}
-          previewThumbnailUrl={selectedShot?.previewThumbnailUrl}
-          thumbnailStatus={selectedShot?.thumbnailStatus || undefined}
+          thumbnailUrl={selectedShot?.image?.url}
+          previewThumbnailUrl={selectedShot?.frame.previewImageUrl}
+          thumbnailStatus={selectedShot?.frame.imageStatus || undefined}
           alt={sceneTitle}
           aspectRatio={aspectRatio}
           className="h-10 w-10 shrink-0 rounded object-cover"
@@ -181,6 +190,9 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
                 <SceneListItem
                   key={shot.id}
                   shot={shot}
+                  scene={
+                    shot.sceneId ? scenesById.get(shot.sceneId) : undefined
+                  }
                   aspectRatio={aspectRatio}
                   isActive={shot.id === selectedShotId}
                   onSelect={() => handleSelectShot(shot.id)}

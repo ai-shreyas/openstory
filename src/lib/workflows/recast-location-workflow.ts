@@ -1,29 +1,16 @@
 /**
- * Cloudflare Workflows port of `recastLocationWorkflow`.
+ * Recast a sequence location onto a library location: regenerate its reference
+ * image, then regenerate every shot set in that location.
  *
- * Mirrors the QStash version (`src/lib/workflows/recast-location-workflow.ts`)
- * step for step — same step names, same control flow, same side effects.
- * The only differences are:
- *
- *   - Extends `OpenStoryWorkflowEntrypoint` instead of being built by
- *     `createScopedWorkflow`. Failure parity comes from the base class
- *     (see `base-workflow.ts`).
- *   - Uses `step.do` instead of `context.run`.
- *   - Reads the workflow run id from `event.instanceId` instead of
- *     `context.workflowRunId` (not needed for this workflow, but listed
- *     here for parity with the other CF ports).
- *   - Calls the snapshot DTO computers directly instead of going through
- *     the `context.snapshot.*` extension.
- *   - The chained `location-sheet` child invocation now uses Pattern 3
- *     (`spawnAndAwaitChild`) against the CF `LocationSheetWorkflow`.
- *   - The chained `regenerate-shots` child invocation is stubbed pending
- *     its own CF port (Wave 3 batch). The `build-regenerate-snapshot` step
- *     lives in `regenerateShotsIfNeeded` for diff parity with the QStash
- *     original; the stub fires immediately after the snapshot step so the
- *     workflow falls back to QStash via the registry switch. */
+ * Both children are spawned with `spawnAndAwaitChild` (Pattern 3). The
+ * workflow reads nothing: the sheet DTO and the per-shot regenerate snapshots
+ * are resolved in `recastLocationFn` and inlined on the payload. The one input
+ * that genuinely postdates the trigger — the reference the child just
+ * generated — is merged into the snapshots in memory (`recast-snapshot.ts`).
+ */
 
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { getGenerationChannel } from '@/lib/realtime';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -34,14 +21,9 @@ import type {
   RecastLocationWorkflowInput,
   RegenerateShotsWorkflowInput,
 } from '@/lib/workflow/types';
-import {
-  buildRegenerateShotSnapshot,
-  computeRegenerateShotsBatchHash,
-} from '@/lib/workflows/regenerate-shots-snapshot';
-import {
-  computeLocationSheetHashFromDto,
-  resolveLibraryLocationReferenceHash,
-} from '@/lib/workflows/sheet-snapshots';
+import { computeRegenerateShotsBatchHash } from '@/lib/workflows/regenerate-shots-snapshot';
+import { mergeRecastSheetIntoSnapshots } from '@/lib/workflows/recast-snapshot';
+import { computeLocationSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { getLogger } from '@/lib/observability/logger';
@@ -52,107 +34,106 @@ type RecastLocationWorkflowResult = {
   referenceImageUrl: string;
   shotsRegenerated: number;
   shotsFailed: number;
+  /**
+   * The sheet child preserved the location's existing primary reference and
+   * parked its output as a divergent variant, so no shot was regenerated —
+   * regenerating here would render every shot against the OLD reference.
+   */
+  sheetDiverged: boolean;
+};
+
+/** Mirrors `RegenerateShotsWorkflow`'s return type (module-local there). */
+type RegenerateShotsChildResult = {
+  totalShots: number;
+  successCount: number;
+  failedShots: string[];
+  divergedShotIds: string[];
 };
 
 /**
- * Build the regenerate-shots snapshot and (eventually) invoke the
- * `regenerate-shots` child. Today the invoke is stubbed inside a `step.do`
- * with a `NonRetryableError` — Pattern 3 will wire up the real child spawn
- * once the CF port of `regenerate-shots-workflow` lands.
- *
- * Lives in its own helper to mirror the QStash original's flow: snapshot
- * building runs as its own step before the child kicks off.
+ * Substitute the freshly generated reference into the trigger-time snapshots
+ * and hand them to the regenerate-shots child. Pure — the snapshots arrived on
+ * the payload and the reference arrived in memory from the awaited child.
  */
-async function regenerateShotsIfNeeded(
+async function buildRegeneratePayload(
+  input: RecastLocationWorkflowInput,
+  sheet: { imageUrl: string; inputHash: string | null }
+): Promise<RegenerateShotsWorkflowInput> {
+  const sequenceId = input.sequenceId;
+  if (!sequenceId) {
+    throw new NonRetryableError(
+      '[RecastLocationWorkflow:cf] sequenceId is required to regenerate shots',
+      'WorkflowValidationError'
+    );
+  }
+  const imageModel = input.imageModel ?? DEFAULT_IMAGE_MODEL;
+  const aspectRatio = input.aspectRatio;
+
+  const asSent = await computeRegenerateShotsBatchHash({
+    sequenceId,
+    imageModel,
+    aspectRatio,
+    shotSnapshots: input.shotSnapshots,
+  });
+  if (asSent !== input.snapshotInputHash) {
+    throw new NonRetryableError(
+      '[RecastLocationWorkflow:cf] snapshotInputHash does not match the inlined shot snapshots',
+      'WorkflowValidationError'
+    );
+  }
+
+  const merged = await mergeRecastSheetIntoSnapshots({
+    shotSnapshots: input.shotSnapshots,
+    sequenceId,
+    imageModel,
+    aspectRatio,
+    sheetImageUrl: sheet.imageUrl,
+    sheetInputHash: sheet.inputHash,
+  });
+
+  return {
+    userId: input.userId,
+    teamId: input.teamId,
+    sequenceId,
+    shotIds: merged.shotSnapshots.map((s) => s.shotId),
+    triggerKind: 'location' as const,
+    triggerId: input.locationDbId,
+    imageModel,
+    aspectRatio,
+    shotSnapshots: merged.shotSnapshots,
+    snapshotInputHash: merged.snapshotInputHash,
+  };
+}
+
+async function regenerateShots(
   step: WorkflowStep,
   env: CloudflareEnv,
   parentInstanceId: string,
-  scopedDb: ScopedDb,
-  input: RecastLocationWorkflowInput
+  input: RecastLocationWorkflowInput,
+  sheet: { imageUrl: string; inputHash: string | null }
 ): Promise<{ shotsRegenerated: number; shotsFailed: number }> {
-  if (input.affectedShotIds.length === 0) {
+  if (input.shotSnapshots.length === 0) {
     return { shotsRegenerated: 0, shotsFailed: 0 };
   }
 
-  const regenerateBody = await step.do(
-    'build-regenerate-snapshot',
-    async (): Promise<RegenerateShotsWorkflowInput> => {
-      const sequenceId = input.sequenceId;
-      if (!sequenceId) {
-        throw new NonRetryableError(
-          '[RecastLocationWorkflow:cf] sequenceId is required to regenerate shots',
-          'WorkflowValidationError'
-        );
-      }
-      const imageModel = input.imageModel ?? DEFAULT_IMAGE_MODEL;
-      const sequence = await scopedDb.sequences.getById(sequenceId);
-      if (!sequence) {
-        throw new Error(
-          `[RecastLocationWorkflow:cf] Sequence ${sequenceId} not found`
-        );
-      }
-      const [characters, locations, elements, shots] = await Promise.all([
-        scopedDb.characters.listWithSheets(sequenceId),
-        scopedDb.sequenceLocations.listWithReferences(sequenceId),
-        scopedDb.sequenceElements.list(sequenceId),
-        scopedDb.shots.getByIds(input.affectedShotIds),
-      ]);
-      if (shots.length !== input.affectedShotIds.length) {
-        const found = new Set(shots.map((f) => f.id));
-        const missing = input.affectedShotIds.filter((id) => !found.has(id));
-        throw new Error(
-          `[RecastLocationWorkflow:cf] Missing shots for ${input.locationName}: ${missing.join(', ')}`
-        );
-      }
-      // The image prompt mirror lives on each shot's anchor frame (#989) —
-      // keyed by shotId (NOT id-reuse).
-      const framesByShot = await scopedDb.frames.getAnchorsByShots(
-        shots.map((s) => s.id)
-      );
-      const aspectRatio = sequence.aspectRatio;
-      const shotSnapshots = await Promise.all(
-        shots.map((shot) =>
-          buildRegenerateShotSnapshot({
-            shot,
-            imagePrompt: framesByShot.get(shot.id)?.imagePrompt ?? null,
-            characters,
-            locations,
-            elements,
-            imageModel,
-            aspectRatio,
-          })
-        )
-      );
-      const partial = { sequenceId, imageModel, aspectRatio, shotSnapshots };
-      const snapshotInputHash = await computeRegenerateShotsBatchHash(partial);
-      return {
-        userId: input.userId,
-        teamId: input.teamId,
-        sequenceId,
-        shotIds: input.affectedShotIds,
-        triggerKind: 'location' as const,
-        triggerId: input.locationDbId,
-        imageModel,
-        aspectRatio,
-        shotSnapshots,
-        snapshotInputHash,
-      };
-    }
-  );
-
-  await spawnAndAwaitChild<RegenerateShotsWorkflowInput, unknown>(step, {
+  const result = await spawnAndAwaitChild<
+    RegenerateShotsWorkflowInput,
+    RegenerateShotsChildResult
+  >(step, {
     binding: env.REGENERATE_SHOTS_WORKFLOW,
     parentBindingName: 'RECAST_LOCATION_WORKFLOW',
     parentInstanceId,
     childId: `regenerate-shots:location:${input.locationDbId}`,
-    childPayload: regenerateBody,
+    childPayload: await step.do('build-regenerate-snapshot', () =>
+      buildRegeneratePayload(input, sheet)
+    ),
     spawnStepName: 'spawn-regenerate-shots',
     awaitStepName: 'await-regenerate-shots',
   });
 
   return {
-    shotsRegenerated: input.affectedShotIds.length,
-    shotsFailed: 0,
+    shotsRegenerated: result.successCount,
+    shotsFailed: result.failedShots.length,
   };
 }
 
@@ -160,26 +141,17 @@ export class RecastLocationWorkflow extends OpenStoryWorkflowEntrypoint<RecastLo
   protected override async runImpl(
     event: Readonly<WorkflowEvent<RecastLocationWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<RecastLocationWorkflowResult> {
     const input = event.payload;
 
     logger.info(
-      `[RecastLocationWorkflow:cf] Starting recast for ${input.locationName} with ${input.affectedShotIds.length} affected shots`
+      `[RecastLocationWorkflow:cf] Starting recast for ${input.locationName} with ${input.shotSnapshots.length} affected shots`
     );
 
-    // Step 1: Generate new location reference image with library reference.
-    // Inline the upstream library-location's reference_input_hash so the
-    // child workflow can detect divergence if the library location is
-    // regenerated mid-flight.
     const sheetBody = await step.do(
       'build-location-sheet-snapshot',
       async (): Promise<LocationSheetWorkflowInput> => {
-        const libraryLocationReferenceHash =
-          await resolveLibraryLocationReferenceHash(
-            scopedDb,
-            input.locationDbId
-          );
         const partial: LocationSheetWorkflowInput = {
           locationDbId: input.locationDbId,
           locationName: input.locationName,
@@ -191,7 +163,7 @@ export class RecastLocationWorkflow extends OpenStoryWorkflowEntrypoint<RecastLo
           referenceImageUrl: input.referenceImageUrl,
           libraryLocationDescription: input.libraryLocationDescription,
           styleConfig: input.styleConfig,
-          libraryLocationReferenceHash,
+          libraryLocationReferenceHash: input.libraryLocationReferenceHash,
         };
         partial.snapshotInputHash =
           await computeLocationSheetHashFromDto(partial);
@@ -219,29 +191,40 @@ export class RecastLocationWorkflow extends OpenStoryWorkflowEntrypoint<RecastLo
       );
     }
 
+    const referenceImageUrl = sheetResult.referenceImageUrl;
+
+    if (sheetResult.diverged) {
+      logger.warn(
+        `[RecastLocationWorkflow:cf] Reference diverged for ${input.locationName}; skipping shot regeneration against the unchanged reference`
+      );
+      return {
+        referenceImageUrl,
+        shotsRegenerated: 0,
+        shotsFailed: 0,
+        sheetDiverged: true,
+      };
+    }
+
     logger.info(
-      `[RecastLocationWorkflow:cf] Location reference generated for ${input.locationName}, regenerating ${input.affectedShotIds.length} shots`
+      `[RecastLocationWorkflow:cf] Location reference generated for ${input.locationName}, regenerating ${input.shotSnapshots.length} shots`
     );
 
-    // Step 2: Regenerate affected shots via Pattern 3 spawn.
-    const { shotsRegenerated, shotsFailed } = await regenerateShotsIfNeeded(
+    const { shotsRegenerated, shotsFailed } = await regenerateShots(
       step,
       this.env,
       event.instanceId,
-      scopedDb,
-      input
+      input,
+      {
+        imageUrl: referenceImageUrl,
+        inputHash: sheetBody.snapshotInputHash ?? null,
+      }
     );
 
-    if (input.affectedShotIds.length > 0) {
-      logger.info(
-        `[RecastLocationWorkflow:cf] Regenerated ${shotsRegenerated} shots for ${input.locationName}`
-      );
-    }
-
     return {
-      referenceImageUrl: sheetResult.referenceImageUrl,
+      referenceImageUrl,
       shotsRegenerated,
       shotsFailed,
+      sheetDiverged: false,
     };
   }
 
@@ -251,7 +234,7 @@ export class RecastLocationWorkflow extends OpenStoryWorkflowEntrypoint<RecastLo
   }: {
     event: Readonly<WorkflowEvent<RecastLocationWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

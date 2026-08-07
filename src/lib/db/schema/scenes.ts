@@ -7,8 +7,10 @@
  * A scene is the render unit: capable models render all its shots in one
  * multi-shot call, others render N per-shot calls and attach the assets here.
  * Scene-level fields (location, time of day, story beat, continuity,
- * music design, original script) live in dedicated columns or typed JSON so
- * the shot's own `metadata` no longer has to be the sole source of truth.
+ * music design) live in dedicated columns or typed JSON so the shot's own
+ * `metadata` no longer has to be the sole source of truth. The script is NOT
+ * one of them — it lives in `scene_script_versions`, reached via
+ * `selectedScriptVersionId`.
  *
  * @see src/lib/ai/scene-analysis.schema.ts for the Scene metadata structure
  * @see src/lib/db/schema/shots.ts — shots reference a scene via `shots.sceneId`
@@ -47,13 +49,9 @@ export type DbSceneId = string & { readonly __brand: 'DbSceneId' };
 export const dbSceneId = (id: string): DbSceneId => id as DbSceneId;
 
 // Scene-level slices of the analysis `Scene` object, reused verbatim so the
-// JSON columns stay precisely typed without re-declaring the shapes. All three
-// columns are nullable (the backfill writes NULL for a null-metadata shot), so
-// `| null` is spelled out — `originalScript` is a required field on `Scene`, so
-// unlike the optional `continuity`/`musicDesign` it needs the explicit union.
+// JSON columns stay precisely typed without re-declaring the shapes. Both
+// columns are nullable (the backfill writes NULL for a null-metadata shot).
 type SceneContinuity = NonNullable<Scene['continuity']>;
-type SceneMusicDesign = NonNullable<Scene['musicDesign']>;
-type SceneOriginalScript = Scene['originalScript'] | null;
 
 /**
  * Scenes table — narrative units within a sequence.
@@ -78,13 +76,10 @@ export const scenes = snakeCase.table(
     title: text(),
     // Typed JSON slices of the analysis Scene object.
     continuity: text({ mode: 'json' }).$type<SceneContinuity>(),
-    // TB-20260805: DB-Audit: musicDesign is dead by construction. It should be removed.
-    musicDesign: text({ mode: 'json' }).$type<SceneMusicDesign>(),
 
-    // TB-20260805: DB-Audit: We should be using the script from the selected script version - not storing it here
-    originalScript: text({ mode: 'json' }).$type<SceneOriginalScript>(),
-    // Pointer to the selected row in `scene_script_versions` (#1030). The
-    // column is a plain text id (no FK) to avoid a circular schema dependency.
+    // The scene's script: the pointer to the selected row in
+    // `scene_script_versions` (#1030) IS the script — there is no column copy.
+    // Plain text id (no FK) to avoid a circular schema dependency.
     selectedScriptVersionId: text(),
 
     // NOTE: a scene deliberately has NO model columns (#1066). Model identity

@@ -9,9 +9,11 @@
  *
  * **Selection is a pointer, not a per-row flag.** A segment's chosen video is
  * whichever version `render_segments.selectedVideoVersionId` points at; {@link
- * createVideoVariantsMethods.select} repoints it (and mirrors the shot's
- * `video*` columns for playback) atomically. `discardedAt` soft-hides a version
- * (undoable); there is no `divergedAt` (retired in the redesign).
+ * createVideoVariantsMethods.select} repoints it atomically. Since #1067 phase
+ * 2d that pointer is also the READ path — playback, export and the API project
+ * the pointed-at version's url/path/model through `toShotView`
+ * instead of reading a cached copy on `shots`. `discardedAt` soft-hides a
+ * version (undoable); there is no `divergedAt` (retired in the redesign).
  *
  * Replaces the `variantType='video'` rows of `shot_variants` (retired for video
  * in this phase). Mirrors `scoped/frame-variants.ts` method-for-method.
@@ -22,16 +24,50 @@
 import type { Database } from '@/lib/db/client';
 import { renderSegments, shots, videoVariants } from '@/lib/db/schema';
 import type { NewVideoVariant, VideoVariant } from '@/lib/db/schema';
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { buildRenderSegmentSelect } from './render-segments';
 import { buildEventInsert } from './sequence-events';
-import { buildShotVideoMirror, type CompletedVideoVariant } from './shots';
 
 /** The grouping key that makes a flat row set read as a "variant" (segment). */
 export type VideoVariantGroup = {
   renderSegmentId: string;
   model: string;
 };
+
+// One bound param per shot, so chunk below D1's 100-param ceiling — both batch
+// getters below run on the shots read path with every shot of a sequence
+// (matches SELECTED_MOTION_BY_SHOTS_BATCH). Unit tests run on libsql, which has
+// no such cap, so an unchunked list passes CI and throws on D1 (#1019).
+const VIDEO_BY_SHOTS_BATCH = 90;
+
+export async function getPrimaryVideoByShotIds(
+  db: Database,
+  shotIds: string[]
+): Promise<Map<string, VideoVariant>> {
+  if (shotIds.length === 0) return new Map();
+  // asc by id (≈ time) → last write per shot wins. Chunking is safe for this
+  // reduction: a shot's rows never span two batches (batches partition by shot
+  // id), so per-shot ordering is preserved.
+  const byShot = new Map<string, VideoVariant>();
+  for (let i = 0; i < shotIds.length; i += VIDEO_BY_SHOTS_BATCH) {
+    const rows = await db
+      .select({ shotId: shots.id, version: videoVariants })
+      .from(shots)
+      .innerJoin(
+        videoVariants,
+        eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+      )
+      .where(
+        and(
+          inArray(shots.id, shotIds.slice(i, i + VIDEO_BY_SHOTS_BATCH)),
+          eq(videoVariants.isPrimary, true)
+        )
+      )
+      .orderBy(asc(videoVariants.id));
+    for (const r of rows) byShot.set(r.shotId, r.version);
+  }
+  return byShot;
+}
 
 export function createVideoVariantsMethods(db: Database) {
   return {
@@ -88,8 +124,14 @@ export function createVideoVariantsMethods(db: Database) {
     markFailedByWorkflowRun: async (
       workflowRunId: string,
       error: string
-    ): Promise<void> => {
-      await db
+    ): Promise<number> => {
+      // Returns the number of rows marked. A run that failed BEFORE
+      // `set-generating-status` appended its row (insufficient credits, "shot
+      // has no scene") matches nothing — and since #1067 phase 2d the version
+      // row is the ONLY record of a shot's video lifecycle, a silent 0 would
+      // leave the shot reading 'pending' forever. The caller records a
+      // terminal row instead; see `persistMotionFailure`.
+      const rows = await db
         .update(videoVariants)
         .set({ status: 'failed', error, updatedAt: new Date() })
         .where(
@@ -97,7 +139,9 @@ export function createVideoVariantsMethods(db: Database) {
             eq(videoVariants.workflowRunId, workflowRunId),
             eq(videoVariants.status, 'generating')
           )
-        );
+        )
+        .returning({ id: videoVariants.id });
+      return rows.length;
     },
 
     /** Update generation tracking on an in-flight version (status/url/error/…). */
@@ -279,6 +323,70 @@ export function createVideoVariantsMethods(db: Database) {
     },
 
     /**
+     * Batch {@link getSelectedByShot}, keyed by shotId. Same exclusions (no
+     * segment, no pointer, dangling, discarded → absent), so
+     * `map.get(id) ?? null` matches the single-shot method.
+     *
+     * Shots of a MULTI-shot segment share one render, so they map to the same
+     * version row — the key is the shot because that is what read paths hold.
+     */
+    getSelectedByShotIds: async (
+      shotIds: string[]
+    ): Promise<Map<string, VideoVariant>> => {
+      if (shotIds.length === 0) return new Map();
+      // Chunked for D1's 100-bound-parameter ceiling — see VIDEO_BY_SHOTS_BATCH.
+      const byShot = new Map<string, VideoVariant>();
+      for (let i = 0; i < shotIds.length; i += VIDEO_BY_SHOTS_BATCH) {
+        const rows = await db
+          .select({ shotId: shots.id, version: videoVariants })
+          .from(shots)
+          .innerJoin(
+            renderSegments,
+            eq(renderSegments.id, shots.renderSegmentId)
+          )
+          .innerJoin(
+            videoVariants,
+            eq(videoVariants.id, renderSegments.selectedVideoVersionId)
+          )
+          .where(
+            and(
+              inArray(shots.id, shotIds.slice(i, i + VIDEO_BY_SHOTS_BATCH)),
+              isNull(videoVariants.discardedAt)
+            )
+          );
+        for (const r of rows) byShot.set(r.shotId, r.version);
+      }
+      return byShot;
+    },
+
+    /**
+     * The newest PRIMARY version per shot — the render whose lifecycle IS the
+     * shot's video status (#1067 phase 2d). `variantOnly` renders are excluded
+     * so an added model failing never reads as the shot's video failing.
+     *
+     * Discarded rows are NOT excluded: discarding hides a version from the
+     * picker, but a discarded failure is still the last thing that happened to
+     * the primary slot.
+     */
+    getPrimaryByShotIds: (shotIds: string[]) =>
+      getPrimaryVideoByShotIds(db, shotIds),
+
+    /** Single-shot {@link getPrimaryByShotIds}. */
+    getPrimaryByShot: async (shotId: string): Promise<VideoVariant | null> => {
+      const rows = await db
+        .select({ version: videoVariants })
+        .from(shots)
+        .innerJoin(
+          videoVariants,
+          eq(videoVariants.renderSegmentId, shots.renderSegmentId)
+        )
+        .where(and(eq(shots.id, shotId), eq(videoVariants.isPrimary, true)))
+        .orderBy(desc(videoVariants.id))
+        .limit(1);
+      return rows[0]?.version ?? null;
+    },
+
+    /**
      * The newest FAILED version for a shot's segment, or null. The single-shot
      * analog of {@link listLastFailedModelsBySequence}.
      */
@@ -335,20 +443,13 @@ export function createVideoVariantsMethods(db: Database) {
           `VideoVariant ${versionId} is '${version.status}', not 'completed' — cannot select an unfinished video`
         );
       }
-      // A completed version is expected to carry its output url/path; a missing
-      // one would mirror null onto the shot and blank a good video. Assert it
-      // here so `CompletedVideoVariant` (and the mirror) stays provably non-null.
+      // A completed version must carry its output, or selecting it would
+      // project a null video over a good one.
       if (!version.url || !version.storagePath) {
         throw new Error(
           `VideoVariant ${versionId} is 'completed' but missing its url/storagePath — cannot select`
         );
       }
-      const completedVersion: CompletedVideoVariant = {
-        ...version,
-        status: 'completed',
-        url: version.url,
-        storagePath: version.storagePath,
-      };
 
       const [shot] = await db
         .select({
@@ -383,7 +484,6 @@ export function createVideoVariantsMethods(db: Database) {
       if (shouldClearPending) {
         await db.batch([
           buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-          buildShotVideoMirror(db, shotId, completedVersion),
           db
             .update(renderSegments)
             .set({
@@ -409,7 +509,6 @@ export function createVideoVariantsMethods(db: Database) {
       } else {
         await db.batch([
           buildRenderSegmentSelect(db, version.renderSegmentId, versionId),
-          buildShotVideoMirror(db, shotId, completedVersion),
           buildEventInsert(db, {
             sequenceId: shot.sequenceId,
             actorId: opts.actorId,

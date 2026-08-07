@@ -13,7 +13,7 @@
  * resolved one way or the other. */
 
 import type { MotionPrompt } from '@/lib/ai/scene-analysis.schema';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -38,7 +38,7 @@ export class MotionPromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<Motio
   protected override async runImpl(
     event: Readonly<WorkflowEvent<MotionPromptBatchWorkflowInput>>,
     step: WorkflowStep,
-    _scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<MotionPromptBatchWorkflowResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -169,7 +169,7 @@ export class MotionPromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<Motio
   }: {
     event: Readonly<WorkflowEvent<MotionPromptBatchWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     // Mirror QStash's `failureFunction`, which returned a static string and
     // performed no DB writes — per-scene failures already surface via the

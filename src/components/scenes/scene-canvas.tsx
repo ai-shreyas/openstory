@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useSetSequenceMusic } from '@/hooks/use-sequences';
 import type { TabValue } from '@/components/scenes/scene-script-prompts';
 import type { TextToImageModel } from '@/lib/ai/models';
@@ -20,7 +21,7 @@ import {
   selectionShots,
   type SceneSelection,
 } from '@/lib/scenes/scene-selection';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import type { Sequence } from '@/types/database';
 import { Download, Film, Link, Loader2, Share2 } from 'lucide-react';
 import { usePostHog } from '@posthog/react';
@@ -30,10 +31,12 @@ import type { ExportProgress } from '@/lib/sequence-player/export';
 
 type SceneCanvasProps = {
   selection: SceneSelection;
-  shots?: ShotWithImage[];
+  shots?: ShotView[];
+  /** Scenes the shots belong to — the player reads the displayed shot's title. */
+  scenes?: SceneWithScript[];
   /** Shots query failure — shown instead of an indefinite skeleton. */
   loadError?: Error | null;
-  playerShots?: ShotWithImage[];
+  playerShots?: ShotView[];
   sequence?: Sequence;
   aspectRatio: AspectRatio;
   selectedTab?: TabValue;
@@ -153,6 +156,7 @@ const TheatreShareOverlay: React.FC<{ sequence: Sequence }> = ({
 export const SceneCanvas: React.FC<SceneCanvasProps> = ({
   selection,
   shots,
+  scenes,
   loadError,
   playerShots,
   sequence,
@@ -178,10 +182,9 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
 
   const playbackScenes = useMemo(() => {
     return scopedShots
-      .filter((f): f is ShotWithImage & { videoUrl: string } =>
-        Boolean(f.videoUrl)
-      )
-      .map((f) => ({ orderIndex: f.orderIndex, videoUrl: f.videoUrl }));
+      .map((f) => f.video?.url)
+      .filter((url): url is string => Boolean(url))
+      .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
   }, [scopedShots]);
 
   const setMusicEnabled = useSetSequenceMusic(sequence?.id ?? '');
@@ -225,6 +228,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
       <CanvasMediaStage aspectRatio={aspectRatio}>
         <ScenePlayer
           shots={playerShots}
+          scenes={scenes}
           selectedShotId={selection.shotId}
           aspectRatio={aspectRatio}
           onSelectShot={onSelectShot}
@@ -251,13 +255,14 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
     // preview) plus the generating/failed overlays, so early scenes show
     // something the moment their first preview lands.
     const stillShot =
-      scopedShots.find((s) => s.thumbnailUrl || s.previewThumbnailUrl) ??
+      scopedShots.find((s) => s.image?.url || s.frame.previewImageUrl) ??
       scopedShots[0];
     if (stillShot) {
       return (
         <CanvasMediaStage aspectRatio={aspectRatio}>
           <ScenePlayer
             shots={playerShots}
+            scenes={scenes}
             selectedShotId={stillShot.id}
             aspectRatio={aspectRatio}
             progressMessage={progressMessage}

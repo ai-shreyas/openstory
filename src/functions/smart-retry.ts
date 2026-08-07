@@ -5,11 +5,19 @@
  */
 
 import {
+  loadSceneContextBySequence,
+  resolveSceneForShot,
+} from '@/lib/scenes/scene-script';
+import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_VIDEO_MODEL,
   safeImageToVideoModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
+import {
+  DEFAULT_ANALYSIS_MODEL,
+  getAnalysisModelById,
+} from '@/lib/ai/models.config';
 import {
   resolveImageModel,
   resolveVideoModel,
@@ -25,10 +33,13 @@ import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { type Character, type Sequence } from '@/lib/db/schema';
+import { type Character, type Sequence, type Shot } from '@/lib/db/schema';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
-import { resolveMotionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
-import { projectShotWithImage } from '@/lib/shots/shot-with-image';
+import {
+  motionPromptFromVersion,
+  resolveMotionPromptFromVersion,
+} from '@/lib/motion/resolve-motion-prompt';
+import { toShotView } from '@/lib/shots/shot-view';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -40,14 +51,16 @@ import {
 import type {
   ImageWorkflowInput,
   MotionWorkflowInput,
+  MusicPromptWorkflowInput,
   MusicWorkflowInput,
-  StoryboardWorkflowInput,
+  StoryboardTriggerInput,
 } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { sequenceAccessMiddleware } from './middleware';
-import { buildSceneSummaries } from './sequences';
+import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
+import { sumShotDurationsSeconds } from './sequences';
 
 function getSceneCharacterReferenceImages(
   allCharacters: Character[],
@@ -95,33 +108,59 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   await assertNoActiveStoryboard(context.scopedDb, sequence.id);
 
   const shots = await context.scopedDb.shots.listBySequence(sequence.id);
-  // The still-image surface lives on each shot's anchor frame now (#989).
-  // Project it back under the legacy thumbnail*/image* names — keyed by shotId,
-  // never by id-reuse — so the failure analysis and per-shot retry reads below
-  // are unchanged.
+  // The still-image surface lives on each shot's anchor frame now (#989) —
+  // resolved keyed by shotId, never by id-reuse.
   await context.scopedDb.shots.ensureAnchorFrames(shots);
   const anchorsByShot = new Map(
     (await context.scopedDb.frames.listAnchorsBySequence(sequence.id)).map(
       (fr) => [fr.shotId, fr]
     )
   );
-  const selectedByFrame =
-    await context.scopedDb.frameVariants.getSelectedByFrameIds(
+  const [
+    selectedByFrame,
+    selectedPromptByFrame,
+    selectedVideoByShot,
+    primaryVideoByShot,
+    selectedMotionByShot,
+  ] = await Promise.all([
+    context.scopedDb.frameVariants.getSelectedByFrameIds(
       [...anchorsByShot.values()].map((fr) => fr.id)
-    );
-  const shotsWithImage = shots.flatMap((shot) => {
+    ),
+    context.scopedDb.framePromptVersions.getSelectedByFrameIds(
+      [...anchorsByShot.values()].map((fr) => fr.id)
+    ),
+    context.scopedDb.videoVariants.getSelectedByShotIds(shots.map((s) => s.id)),
+    context.scopedDb.videoVariants.getPrimaryByShotIds(shots.map((s) => s.id)),
+    context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
+      shots.map((s) => s.id)
+    ),
+  ]);
+  const shotViews = shots.flatMap((shot) => {
     const frame = anchorsByShot.get(shot.id);
-    return frame
-      ? [
-          projectShotWithImage(
-            shot,
-            frame,
-            selectedByFrame.get(frame.id) ?? null
-          ),
-        ]
-      : [];
+    if (!frame) return [];
+    const selectedMotion = selectedMotionByShot.get(shot.id);
+    return [
+      toShotView(shot, frame, {
+        image: selectedByFrame.get(frame.id) ?? null,
+        imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
+        video: selectedVideoByShot.get(shot.id) ?? null,
+        primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
+        motionPrompt: selectedMotion
+          ? motionPromptFromVersion(selectedMotion)
+          : null,
+      }),
+    ];
   });
-  const summary = analyzeFailures(shotsWithImage, sequence);
+  const sceneContext = await loadSceneContextBySequence(
+    context.scopedDb,
+    sequence.id
+  );
+  const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
+    resolveSceneForShot(s, sceneContext).scene;
+  const scenesById = new Map(
+    [...sceneContext].map(([sceneId, ctx]) => [sceneId, ctx.scene])
+  );
+  const summary = analyzeFailures(shotViews, sequence, scenesById);
 
   if (!summary.hasFailed) {
     throw new Error('No failures found to retry');
@@ -152,7 +191,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       }
     );
 
-    const workflowInput: StoryboardWorkflowInput = {
+    const workflowInput: StoryboardTriggerInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
@@ -192,13 +231,13 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     context.scopedDb.frameVariants.listLastFailedModelsBySequence(sequence.id),
     context.scopedDb.videoVariants.listLastFailedModelsBySequence(sequence.id),
   ]);
-  const imageModelFor = (shot: (typeof shotsWithImage)[number]) =>
+  const imageModelFor = (shot: (typeof shotViews)[number]) =>
     resolveImageModel({
       lastFailedAttemptModel: failedImageModels.get(shot.id),
       selectedVersionModel: selectedImageModels.get(shot.id),
       sequenceModel: sequence.imageModel,
     });
-  const videoModelFor = (shot: (typeof shotsWithImage)[number]) =>
+  const videoModelFor = (shot: (typeof shotViews)[number]) =>
     resolveVideoModel({
       lastFailedAttemptModel: failedVideoModels.get(shot.id),
       selectedVersionModel: selectedVideoModels.get(shot.id),
@@ -206,11 +245,12 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     });
 
   // Collect failed items and estimate costs
-  const failedImageShots = shotsWithImage.filter(
-    (f) => f.thumbnailStatus === 'failed'
+  const failedImageShots = shotViews.filter(
+    (f) => f.frame.imageStatus === 'failed'
   );
-  const failedMotionShots = shotsWithImage.filter(
-    (f) => f.videoStatus === 'failed' && f.thumbnailUrl && f.motionPrompt
+  const failedMotionShots = shotViews.filter(
+    (f) =>
+      f.videoStatus === 'failed' && f.image?.url && f.motionPrompt?.fullPrompt
   );
   const hasMusicFailure =
     sequence.musicStatus === 'failed' && sequence.musicPrompt;
@@ -261,11 +301,13 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     // reported as retried (and must not clear the failed flag on their own).
     let triggeredImages = 0;
     for (const shot of failedImageShots) {
-      const prompt = shot.imagePrompt || shot.description;
+      const scene = sceneOf(shot);
+      const promptVersion = shot.imagePromptVersion;
+      const prompt = promptVersion?.text || scene?.originalScript.extract;
 
       if (!prompt) continue;
 
-      const characterTags = shot.metadata?.continuity?.characterTags ?? [];
+      const characterTags = scene?.continuity?.characterTags ?? [];
       const referenceImages = getSceneCharacterReferenceImages(
         allCharacters,
         characterTags
@@ -279,6 +321,10 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         imageSize: aspectRatioToImageSize(sequence.aspectRatio),
         numImages: 1,
         shotId: shot.id,
+        // The anchor + the prompt version `prompt` came from, snapshotted here
+        // so the retry's variant is stamped with what it rendered (#1070).
+        frameId: shot.frame.id,
+        promptVersionId: promptVersion?.text ? promptVersion.id : null,
         sequenceId: sequence.id,
         referenceImages,
       };
@@ -296,23 +342,29 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   if (failedMotionShots.length > 0) {
     let triggeredMotion = 0;
     for (const shot of failedMotionShots) {
-      if (!shot.thumbnailUrl) continue;
+      const imageUrl = shot.image?.url;
+      if (!imageUrl) continue;
 
       const shotVideoModel = videoModelFor(shot);
-      const selectedMotion =
-        await context.scopedDb.shotPromptVersions.getSelectedMotion(shot.id);
+      const scene = sceneOf(shot);
+      const selectedMotion = selectedMotionByShot.get(shot.id) ?? null;
       const workflowInput: MotionWorkflowInput = {
         userId: user.id,
         teamId,
         shotId: shot.id,
+        sceneId: shot.sceneId,
         sequenceId: sequence.id,
-        imageUrl: shot.thumbnailUrl,
+        imageUrl,
+        // The versions this clip renders from, pinned here so the render
+        // manifest can't name rows a concurrent edit repointed to.
+        frameVersionId: shot.image?.id ?? null,
+        motionPromptVersionId: selectedMotion?.id ?? null,
+        sequenceTitle: sequence.title,
         prompt: resolveMotionPromptFromVersion(
           selectedMotion,
           {
-            motionPromptMirror: shot.motionPrompt,
-            characterTags: shot.metadata?.continuity?.characterTags,
-            description: shot.description,
+            characterTags: scene?.continuity?.characterTags,
+            description: scene?.originalScript.extract ?? null,
           },
           shotVideoModel
         ),
@@ -335,12 +387,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   // 3. Retry failed music
   if (hasMusicFailure && sequence.musicPrompt) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    const totalDuration = allShots.reduce((sum, shot) => {
-      const seconds = shot.durationMs
-        ? shot.durationMs / 1000
-        : (shot.metadata?.metadata?.durationSeconds ?? 10);
-      return sum + seconds;
-    }, 0);
+    const totalDuration = sumShotDurationsSeconds(allShots);
 
     const musicInput: MusicWorkflowInput = {
       userId: user.id,
@@ -370,24 +417,28 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     sequence.status === 'failed'
   ) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
-    const scenes = buildSceneSummaries(allShots);
-    const totalDuration = allShots.reduce((sum, shot) => {
-      const seconds = shot.durationMs
-        ? shot.durationMs / 1000
-        : (shot.metadata?.metadata?.durationSeconds ?? 10);
-      return sum + seconds;
-    }, 0);
+    const scenes = buildMusicSceneSummaries(
+      allShots.flatMap((shot) => {
+        const scene = sceneOf(shot);
+        return scene ? [scene] : [];
+      })
+    );
+    const totalDuration = sumShotDurationsSeconds(allShots);
 
     // Generate music prompt
-    await triggerWorkflow(
+    await triggerWorkflow<MusicPromptWorkflowInput>(
       '/music-prompt',
       {
         userId: user.id,
         teamId,
         sequenceId: sequence.id,
         sceneSummaries: scenes,
-        analysisModelId: sequence.analysisModel,
+        analysisModelId:
+          getAnalysisModelById(sequence.analysisModel)?.id ??
+          DEFAULT_ANALYSIS_MODEL,
         duration: totalDuration || 30,
+        // This branch only runs when the sequence has no music prompt at all.
+        promptSource: 'ai-generated',
       },
       { label: buildWorkflowLabel(sequence.id) }
     );

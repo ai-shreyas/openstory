@@ -4,13 +4,8 @@
  */
 
 import type { Database } from '@/lib/db/client';
-import type {
-  Shot,
-  ShotVariant,
-  NewShot,
-  NewShotVariant,
-} from '@/lib/db/schema';
-import { shotVariants, shots } from '@/lib/db/schema';
+import type { ShotVariant, NewShotVariant } from '@/lib/db/schema';
+import { shotVariants } from '@/lib/db/schema';
 import type { VariantType } from '@/lib/db/schema/shot-variants';
 import { and, eq, sql } from 'drizzle-orm';
 
@@ -272,66 +267,6 @@ export function createShotVariantsMethods(db: Database) {
         throw new Error(`ShotVariant ${variantId} not found`);
       }
       return discardedAt;
-    },
-
-    /**
-     * Atomically replace the live primary on `shots` with the variant's
-     * fields and soft-delete the variant. Both writes run in a single
-     * `db.batch()` (one libSQL transaction) so partial failure isn't
-     * possible at the SQL layer.
-     *
-     * Pre-checks existence so a missing shot or variant fails fast with a
-     * specific error before the batch runs. Without the pre-check, a
-     * zero-row UPDATE silently succeeds inside the batch, forcing ambiguous
-     * post-batch reasoning about which side was missing.
-     */
-    promoteAtomically: async (
-      shotId: string,
-      shotUpdate: Partial<NewShot>,
-      variantId: string
-    ): Promise<{ shot: Shot; discardedAt: Date }> => {
-      const [existingShot] = await db
-        .select({ id: shots.id })
-        .from(shots)
-        .where(eq(shots.id, shotId));
-      if (!existingShot) {
-        throw new Error(`Shot ${shotId} not found`);
-      }
-      const [existingVariant] = await db
-        .select({ id: shotVariants.id })
-        .from(shotVariants)
-        .where(eq(shotVariants.id, variantId));
-      if (!existingVariant) {
-        throw new Error(`ShotVariant ${variantId} not found`);
-      }
-
-      const now = new Date();
-      const updateShot = db
-        .update(shots)
-        .set({ ...shotUpdate, updatedAt: now })
-        .where(eq(shots.id, shotId))
-        .returning();
-      const discardVariant = db
-        .update(shotVariants)
-        .set({ discardedAt: now, updatedAt: now })
-        .where(eq(shotVariants.id, variantId))
-        .returning();
-      const [shotRows, variantRows] = await db.batch([
-        updateShot,
-        discardVariant,
-      ]);
-      // Existence was checked above. A zero-row result on either side means
-      // the row was deleted between the pre-check and the batch — surface
-      // it so the caller sees the inconsistency rather than silently
-      // discarding a nonexistent variant or "promoting" with no live shot.
-      const promotedShot = shotRows[0];
-      if (!promotedShot) {
-        throw new Error(`Shot ${shotId} disappeared during promote`);
-      }
-      if (variantRows.length === 0) {
-        throw new Error(`ShotVariant ${variantId} disappeared during promote`);
-      }
-      return { shot: promotedShot, discardedAt: now };
     },
 
     /**

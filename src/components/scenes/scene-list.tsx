@@ -4,10 +4,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
-import type { SceneRow, ShotVariant } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import type { ShotVariant } from '@/lib/db/schema';
 import type { SceneSelection } from '@/lib/scenes/scene-selection';
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { cn } from '@/lib/utils';
 import { Loader2, Video } from 'lucide-react';
 import { memo, useMemo, useRef, useState } from 'react';
@@ -24,8 +25,8 @@ export type BatchGenerateMotionArgs = {
 };
 
 type SceneListProps = {
-  shots?: ShotWithImage[] | undefined;
-  scenes?: SceneRow[] | undefined;
+  shots?: ShotView[] | undefined;
+  scenes?: SceneWithScript[] | undefined;
   /** Render segments (#986) — bracket the shots sharing one video per scene. */
   segments?: SequenceSegment[] | undefined;
   /** Shots/scenes query failure — shown instead of the list (never skeletons). */
@@ -108,23 +109,22 @@ const SceneListComponent: React.FC<SceneListProps> = ({
     return shots.filter(
       (f) =>
         (f.videoStatus === 'pending' || f.videoStatus === 'failed') &&
-        f.thumbnailStatus === 'completed'
+        f.frame.imageStatus === 'completed'
     );
   }, [shots]);
 
   const hasGeneratingShots = useMemo(() => {
     if (!shots) return false;
     return shots.some(
-      (f) => f.videoStatus === 'generating' && f.thumbnailStatus === 'completed'
+      (f) =>
+        f.videoStatus === 'generating' && f.frame.imageStatus === 'completed'
     );
   }, [shots]);
 
   // Check if all eligible shots have motion prompts ready
   const motionPromptsReady = useMemo(() => {
     if (!notStartedShots.length) return true;
-    return notStartedShots.every(
-      (f) => f.motionPrompt || f.motionPromptData?.fullPrompt
-    );
+    return notStartedShots.every((f) => f.motionPrompt?.fullPrompt);
   }, [notStartedShots]);
 
   const handleGenerateMotion = async () => {
@@ -152,7 +152,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
     (includeMusic && !musicPromptsReady);
 
   const shotsBySceneId = useMemo(() => {
-    const map = new Map<string, ShotWithImage[]>();
+    const map = new Map<string, ShotView[]>();
     for (const shot of shots ?? []) {
       if (!shot.sceneId) continue;
       const list = map.get(shot.sceneId) ?? [];

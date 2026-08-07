@@ -41,6 +41,22 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 const MIGRATION_SQL =
   './drizzle/migrations/20260805044544_backfill_video_segments_and_selection/migration.sql';
 
+/**
+ * The `shots.video*` mirror this migration reads. Phase 2d dropped it
+ * (`20260805070159_fearless_frightful_four`) and `migrate()` below brings the
+ * DB to HEAD, so re-add the columns to exercise the shipped SQL against the
+ * schema it actually ran on in prod. The drizzle `shots` model no longer
+ * declares them, so the fixtures write and read them over raw SQL.
+ */
+const LEGACY_VIDEO_MIRROR = [
+  'ALTER TABLE `shots` ADD COLUMN `video_url` text',
+  'ALTER TABLE `shots` ADD COLUMN `video_path` text',
+  'ALTER TABLE `shots` ADD COLUMN `video_generated_at` integer',
+  'ALTER TABLE `shots` ADD COLUMN `motion_model` text',
+  'ALTER TABLE `shots` ADD COLUMN `video_status` text',
+  'ALTER TABLE `shots` ADD COLUMN `video_workflow_run_id` text',
+];
+
 let client: Client;
 let db: Database;
 let sequenceId = '';
@@ -137,19 +153,26 @@ async function insertShot(data: {
       id,
       sequenceId,
       sceneId,
-      orderIndex: data.orderIndex,
+      shotNumber: 1,
       durationMs: data.durationMs ?? 3000,
-      videoUrl: data.videoUrl ?? null,
-      videoPath: data.videoUrl ? 'team/seq/v.mp4' : null,
-      videoStatus: data.videoStatus ?? 'completed',
-      videoWorkflowRunId: data.videoUrl ? 'run-1' : null,
-      videoGeneratedAt: data.videoUrl ? new Date() : null,
-      motionModel: data.motionModel ?? 'kling_v2_5_turbo_pro',
       renderSegmentId: data.renderSegmentId ?? null,
       selectedMotionPromptVersionId: data.selectedMotionPromptVersionId ?? null,
     })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
+  const videoUrl = data.videoUrl ?? null;
+  await client.execute({
+    sql: 'UPDATE `shots` SET `video_url` = ?, `video_path` = ?, `video_generated_at` = ?, `motion_model` = ?, `video_status` = ?, `video_workflow_run_id` = ? WHERE `id` = ?',
+    args: [
+      videoUrl,
+      videoUrl ? 'team/seq/v.mp4' : null,
+      videoUrl ? Math.floor(Date.now() / 1000) : null,
+      data.motionModel ?? 'kling_v2_5_turbo_pro',
+      data.videoStatus ?? 'completed',
+      videoUrl ? 'run-1' : null,
+      id,
+    ],
+  });
   await db.insert(frames).values({
     shotId: shot.id,
     sequenceId,
@@ -209,10 +232,32 @@ async function insertLegacySegment(opts: {
   return { segmentId, shot, liveVariantId: created[created.length - 1] };
 }
 
+/** The legacy `shots.video*` rows the migration keys off, read over raw SQL. */
+async function shotsWithLegacyVideo(): Promise<
+  { id: string; renderSegmentId: string | null; videoUrl: string }[]
+> {
+  const { rows } = await client.execute(
+    'SELECT `id`, `render_segment_id`, `video_url` FROM `shots` WHERE `video_url` IS NOT NULL'
+  );
+  return rows.map((row) => {
+    const { id, render_segment_id: segmentId, video_url: videoUrl } = row;
+    if (typeof id !== 'string' || typeof videoUrl !== 'string') {
+      throw new Error('test setup: unexpected shots row shape');
+    }
+    if (segmentId !== null && typeof segmentId !== 'string') {
+      throw new Error('test setup: unexpected render_segment_id');
+    }
+    return { id, renderSegmentId: segmentId, videoUrl };
+  });
+}
+
 beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: './drizzle/migrations' });
+  for (const stmt of LEGACY_VIDEO_MIRROR) {
+    await client.execute(stmt);
+  }
 });
 
 afterAll(() => {
@@ -442,7 +487,7 @@ describe('#1067 phase-2a backfill — replay safety', () => {
 
     // This is the condition phase 2d depends on: no shot with a video may be
     // left without a segment whose selection resolves to a variant with a url.
-    const withVideo = (await db.select().from(shots)).filter((s) => s.videoUrl);
+    const withVideo = await shotsWithLegacyVideo();
     expect(withVideo).toHaveLength(3);
     for (const shot of withVideo) {
       expect(shot.renderSegmentId).not.toBeNull();

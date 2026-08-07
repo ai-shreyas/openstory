@@ -19,11 +19,7 @@
  */
 
 import type { StyleConfig } from '@/lib/db/schema/libraries';
-import type {
-  MotionPrompt,
-  Scene,
-  VisualPrompt,
-} from './scene-analysis.schema';
+import type { MotionPrompt, VisualPrompt } from './scene-analysis.schema';
 import type { SceneWithShots, ShotSpec } from './shot-list.schema';
 
 /** Join non-empty parts with a separator, dropping blanks. */
@@ -174,16 +170,14 @@ export function deriveMotionPrompt(
 export type DerivedShot = {
   shotNumber: number;
   durationMs: number;
-  metadata: Scene;
   visualPrompt: VisualPrompt;
   motionPrompt: MotionPrompt;
 };
 
 /**
  * Convert one analysis scene into the per-shot rows persisted to the `shots`
- * table. Each shot inherits the scene's shared context (so existing read paths
- * that key off `metadata.continuity` / `metadata.metadata` keep working) and
- * carries its own derived visual + motion prompts.
+ * table: the shot's own duration and derived prompts. Scene context is NOT
+ * copied onto the shot — it resolves through `sceneId`.
  *
  * Returned shots are ordered by `shotNumber`. The caller persists each with
  * its `shotNumber` and a `sceneId` linking back to the `scenes` row.
@@ -196,20 +190,9 @@ export function deriveShots(
   return ordered.map((shot) => {
     const visual = deriveVisualPrompt(scene, shot, styleConfig);
     const motion = deriveMotionPrompt(scene, shot);
-    const metadata: Scene = {
-      sceneId: scene.sceneId,
-      sceneNumber: scene.sceneNumber,
-      originalScript: scene.originalScript,
-      metadata: {
-        ...scene.metadata,
-        durationSeconds: shot.durationSeconds,
-      },
-      continuity: scene.continuity,
-    };
     return {
       shotNumber: shot.shotNumber,
       durationMs: Math.round(shot.durationSeconds * 1000),
-      metadata,
       visualPrompt: visual,
       motionPrompt: motion,
     };

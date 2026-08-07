@@ -1,17 +1,15 @@
 /**
  * Scoped Frame Prompt Versions Sub-module (image / visual prompt history).
  *
- * Appends a revision to `frame_prompt_versions` and mirrors the current value
- * onto the frame: `frames.imagePrompt` (text), `frames.visualPromptInputHash`
- * (staleness), and the `frames.selectedImagePromptVersionId` pointer. The
- * frame-side sibling of `shot_prompt_versions` (motion prompt).
+ * Appends a revision to `frame_prompt_versions` and points
+ * `frames.selectedImagePromptVersionId` at it. The frame-side sibling of
+ * `shot_prompt_versions` (motion prompt).
  *
- * Like the shot-prompt path, the append + mirror pair is sequential, not
- * transactional: the version row is the source of truth and the cached columns
- * are a read-path optimization. AI rows dedupe on the partial unique index
- * `(frame_id, input_hash) WHERE input_hash IS NOT NULL AND source != 'restored'`
- * so workflow retries don't double-append; a force-regen against unchanged
- * inputs falls back to a null-hash row so the new text still lands in history.
+ * The version row is the only source: its `text` is the prompt and its
+ * `inputHash` is the upstream context staleness compares against. Only
+ * `source = 'ai-generated'` rows dedupe on `(frame_id, input_hash)`, so a
+ * workflow retry can't double-append while every deliberate write still
+ * appends carrying its real hash.
  *
  * See docs/architecture/workflow-snapshots-and-content-hash-staleness.md
  * § prompt versioning and docs/architecture/scene-shot-frame-redesign.md.
@@ -22,7 +20,10 @@ import type { Database } from '@/lib/db/client';
 import { framePromptVersions, frames, user } from '@/lib/db/schema';
 import type { FramePromptVersion } from '@/lib/db/schema';
 import { and, desc, eq, gt, inArray, isNotNull, ne } from 'drizzle-orm';
+import { getLogger } from '@/lib/observability/logger';
 import { buildEventInsert } from './sequence-events';
+
+const logger = getLogger(['openstory', 'db', 'frame-prompt-versions']);
 
 /** Statuses of an in-flight pending claim — not yet terminal. */
 export const LIVE_PENDING_STATUSES = ['pending', 'generating'] as const;
@@ -37,9 +38,9 @@ type WriteFramePromptVersionBase = {
 /**
  * `inputHash` is the upstream context (scene + style + narrowed bibles +
  * aspectRatio + analysisModel) the prompt aligns with. AI / regenerated rows
- * must carry a real hash + analysis model so the cached
- * `visual_prompt_input_hash` keeps staleness detection alive; user-edits and
- * restores may carry null when context was uncomputable. Restores carry the
+ * must carry a real hash + analysis model, since the row's own hash is what
+ * staleness compares against; user-edits and restores may carry null when
+ * context was uncomputable. Restores carry the
  * source version's hash + model verbatim so restoring an old AI prompt does
  * not silently disable staleness.
  */
@@ -62,15 +63,39 @@ export type WriteFramePromptVersionInput = WriteFramePromptVersionBase &
       }
   );
 
+// One bound param per frame id; 90 keeps each query under D1's 100-bound-
+// parameter ceiling. Unit tests run on libsql, which has no such cap — an
+// unchunked list passes CI and throws `too many SQL variables` on D1 (#1019).
+const SELECTED_PROMPTS_BY_FRAMES_BATCH = 90;
+
+async function getSelectedImagePromptsByFrameIds(
+  db: Database,
+  frameIds: string[]
+): Promise<Map<string, FramePromptVersion>> {
+  if (frameIds.length === 0) return new Map();
+  const byFrame = new Map<string, FramePromptVersion>();
+  for (let i = 0; i < frameIds.length; i += SELECTED_PROMPTS_BY_FRAMES_BATCH) {
+    const batch = frameIds.slice(i, i + SELECTED_PROMPTS_BY_FRAMES_BATCH);
+    const rows = await db
+      .select({ frameId: frames.id, version: framePromptVersions })
+      .from(frames)
+      .innerJoin(
+        framePromptVersions,
+        eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
+      )
+      .where(inArray(frames.id, batch));
+    for (const r of rows) byFrame.set(r.frameId, r.version);
+  }
+  return byFrame;
+}
+
 export function createFramePromptVersionsMethods(db: Database) {
-  /** Point the frame at `version` and mirror its text/hash onto the frame. */
-  const mirrorOntoFrame = (frameId: string, version: FramePromptVersion) =>
+  /** Point the frame at `version`. */
+  const selectVersion = (frameId: string, versionId: string) =>
     db
       .update(frames)
       .set({
-        imagePrompt: version.text,
-        visualPromptInputHash: version.inputHash,
-        selectedImagePromptVersionId: version.id,
+        selectedImagePromptVersionId: versionId,
         updatedAt: new Date(),
       })
       .where(eq(frames.id, frameId));
@@ -130,9 +155,10 @@ export function createFramePromptVersionsMethods(db: Database) {
 
   const methods = {
     /**
-     * Append a prompt version and mirror it onto the frame (text, hash, and
-     * the selected-pointer). Returns the inserted (or pre-existing matching)
-     * row. See the module docstring for the dedupe / force-regen contract.
+     * Append a prompt version and point the frame at it. Returns the inserted
+     * (or pre-existing matching) row. Retry idempotency is
+     * `(frame, input_hash, text)`, so a force-regen appends keeping its real
+     * hash; a restore always appends its audit row.
      */
     write: async (
       input: WriteFramePromptVersionInput
@@ -140,57 +166,38 @@ export function createFramePromptVersionsMethods(db: Database) {
       const nextHash = input.inputHash;
       const analysisModel = input.analysisModel;
 
-      const [inserted] = await db
-        .insert(framePromptVersions)
-        .values({
-          frameId: input.frameId,
-          text: input.text,
-          components: input.components,
-          source: input.source,
-          inputHash: nextHash,
-          analysisModel,
-          createdBy: input.createdBy ?? null,
-        })
-        .onConflictDoNothing()
-        .returning();
-
-      let version: FramePromptVersion | undefined = inserted;
-      if (!version && nextHash !== null) {
-        const [existing] = await db
+      // A workflow step retry re-submits the same output for the same context.
+      // Same context but NEW text is a force-regen and must append.
+      let version: FramePromptVersion | undefined;
+      // A restore always appends its audit row, even at identical content.
+      if (nextHash !== null && input.source !== 'restored') {
+        [version] = await db
           .select()
           .from(framePromptVersions)
           .where(
             and(
               eq(framePromptVersions.frameId, input.frameId),
-              eq(framePromptVersions.inputHash, nextHash)
+              eq(framePromptVersions.inputHash, nextHash),
+              eq(framePromptVersions.text, input.text),
+              ne(framePromptVersions.source, 'restored')
             )
           )
           .limit(1);
+      }
 
-        if (existing && existing.text !== input.text) {
-          // Same upstream hash, genuinely new text. Two ways to get here: a
-          // force-regen (AI runs against unchanged inputs) or a user-edit whose
-          // live hash matches the row it edits. Either way the new text must
-          // land in history, so bypass the partial unique index with a null
-          // input_hash; the cached hash below still tracks the real context.
-          // (`restored` rows never reach this branch — the index excludes them,
-          // so their insert never conflicts.)
-          const [forced] = await db
-            .insert(framePromptVersions)
-            .values({
-              frameId: input.frameId,
-              text: input.text,
-              components: input.components,
-              source: input.source,
-              inputHash: null,
-              analysisModel,
-              createdBy: input.createdBy ?? null,
-            })
-            .returning();
-          version = forced;
-        } else {
-          version = existing;
-        }
+      if (!version) {
+        [version] = await db
+          .insert(framePromptVersions)
+          .values({
+            frameId: input.frameId,
+            text: input.text,
+            components: input.components,
+            source: input.source,
+            inputHash: nextHash,
+            analysisModel,
+            createdBy: input.createdBy ?? null,
+          })
+          .returning();
       }
 
       if (!version) {
@@ -205,8 +212,6 @@ export function createFramePromptVersionsMethods(db: Database) {
         db
           .update(frames)
           .set({
-            imagePrompt: input.text,
-            visualPromptInputHash: nextHash,
             selectedImagePromptVersionId: version.id,
             updatedAt: new Date(),
           })
@@ -348,11 +353,9 @@ export function createFramePromptVersionsMethods(db: Database) {
      * (#1085: "the system cannot lose an edit"). Returns null when the claim
      * was cancelled mid-flight (the output is discarded).
      *
-     * Handles the partial-unique-index edge exactly like `write`: if a
-     * completed row already carries this (frameId, inputHash), the claim
-     * either retires in favour of that row (identical text) or completes with
-     * a null row-hash (new text, index bypass) while the frame's cached hash
-     * still tracks the real context.
+     * If a completed row already carries this (frameId, inputHash), the claim
+     * retires in favour of it when the text is identical; otherwise it
+     * completes as its own row, keeping the real hash.
      */
     completePendingAiVersion: async (input: {
       versionId: string;
@@ -413,7 +416,7 @@ export function createFramePromptVersionsMethods(db: Database) {
         // concurrent write/select that demoted us or landed a newer
         // completed row wins (#1095 TOCTOU).
         if (await stillHoldsMirrorRight(input.frameId, claim.id)) {
-          await mirrorOntoFrame(input.frameId, conflicting);
+          await selectVersion(input.frameId, conflicting.id);
         }
         return conflicting;
       }
@@ -423,7 +426,7 @@ export function createFramePromptVersionsMethods(db: Database) {
         .set({
           text: input.text,
           components: input.components ?? null,
-          inputHash: conflicting ? null : input.inputHash,
+          inputHash: input.inputHash,
           analysisModel: input.analysisModel,
           status: 'completed',
         })
@@ -444,8 +447,6 @@ export function createFramePromptVersionsMethods(db: Database) {
         await db
           .update(frames)
           .set({
-            imagePrompt: input.text,
-            visualPromptInputHash: input.inputHash,
             selectedImagePromptVersionId: updated.id,
             updatedAt: new Date(),
           })
@@ -497,7 +498,7 @@ export function createFramePromptVersionsMethods(db: Database) {
       }
 
       await db.batch([
-        mirrorOntoFrame(frameId, version),
+        selectVersion(frameId, version.id),
         // An explicit repoint revokes in-flight claims' mirror rights (#1085)
         // — their output still lands in history, but must not clobber this.
         demoteLiveClaims(frameId),
@@ -558,6 +559,41 @@ export function createFramePromptVersionsMethods(db: Database) {
         .limit(1);
       return row ?? null;
     },
+
+    /**
+     * The version `frames.selectedImagePromptVersionId` points at, or null.
+     * The image-side twin of `shotPromptVersions.getSelectedMotion`.
+     */
+    getSelected: async (
+      frameId: string
+    ): Promise<FramePromptVersion | null> => {
+      // Left join so "no pointer" is distinguishable from "pointer set, row
+      // gone" — the latter is a broken reference worth surfacing.
+      const [row] = await db
+        .select({
+          pointer: frames.selectedImagePromptVersionId,
+          version: framePromptVersions,
+        })
+        .from(frames)
+        .leftJoin(
+          framePromptVersions,
+          eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
+        )
+        .where(eq(frames.id, frameId))
+        .limit(1);
+      if (row?.pointer && !row.version) {
+        logger.warn(
+          `Frame ${frameId} points at image prompt version ${row.pointer} but no row exists (orphaned pointer)`
+        );
+      }
+      return row?.version ?? null;
+    },
+
+    /** @see getSelectedImagePromptsByFrameIds */
+    getSelectedByFrameIds: (
+      frameIds: string[]
+    ): Promise<Map<string, FramePromptVersion>> =>
+      getSelectedImagePromptsByFrameIds(db, frameIds),
 
     /** Most recent completed version, or null. In-flight/failed rows are
      * placeholders, not content — every "latest" reader wants completed. */

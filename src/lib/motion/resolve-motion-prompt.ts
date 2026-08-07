@@ -76,38 +76,24 @@ export function resolveMotionPrompt(
 }
 
 /**
- * Convenience wrapper for server call sites that hold a selected motion
- * `shot_prompt_versions` row (or null): reconstruct + resolve in one step.
- *
- * `motionPromptMirror` (the `shot.motionPrompt` cached column) is the legacy
- * fallback: shots created before #713 carry the mirror text but no
- * `selectedMotionPromptVersionId` pointer, so there is no version row to read.
- * Using the mirror keeps their motion prompt intact (without the per-model
- * dialogue/audio enrichment, which only the version row can supply) until they
- * are regenerated.
+ * Assemble a shot's motion prompt from its selected version. A shot with no
+ * version has no prompt — the scene's script is the last resort.
  */
 export function resolveMotionPromptFromVersion(
   version: MotionVersionRow | null | undefined,
   opts: {
-    motionPromptMirror?: string | null;
     characterTags?: readonly string[];
     description: string | null;
   },
   model: ImageToVideoModel
 ): string {
-  if (version) {
-    return resolveMotionPrompt(
-      {
-        motionPrompt: motionPromptFromVersion(version),
-        characterTags: opts.characterTags,
-        description: opts.description,
-      },
-      model
-    );
-  }
-  // Legacy fallback: no version row to assemble from. Use the bare mirror text
-  // (there is no structured dialogue/audio to enrich, and re-running
-  // model-specific assembly would change long-standing output), else the
-  // description.
-  return opts.motionPromptMirror || opts.description || '';
+  if (!version) return opts.description || '';
+  return resolveMotionPrompt(
+    {
+      motionPrompt: motionPromptFromVersion(version),
+      characterTags: opts.characterTags,
+      description: opts.description,
+    },
+    model
+  );
 }

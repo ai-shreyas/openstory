@@ -35,6 +35,7 @@ function videoVariant(overrides: Partial<VideoVariant> = {}): VideoVariant {
     storagePath: 'path/v.mp4',
     previewUrl: null,
     status: 'completed',
+    isPrimary: true,
     workflowRunId: 'run-1',
     generatedAt: new Date('2026-06-01T00:00:00Z'),
     error: null,

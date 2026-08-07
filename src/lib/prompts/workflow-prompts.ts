@@ -638,7 +638,6 @@ Draw from these categories as relevant:
 ## HANDLING EDGE CASES
 
 - **Conflicting moods across scenes**: Identify the dominant mood arc. If scenes shift from tense to triumphant, use transitional terms like "building, tense to triumphant" rather than listing both flatly.
-- **Scenes with \`musicPresence: "none"\` or \`"minimal"\`**: These are quiet moments. They inform the overall dynamic range — the music should have room to breathe. Factor them into your tag selection (e.g., "dynamic, sparse sections" or "building intensity").
 - **Short sequences (1-3 scenes)**: Be more specific to the dominant mood. Fewer scenes means less need for broad coverage.
 - **Long sequences (10+ scenes)**: Focus on the overarching arc, not individual scene details.
 

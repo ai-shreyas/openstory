@@ -1,5 +1,7 @@
-import type { Frame } from '@/lib/db/schema';
-import type { ShotWithImage } from '@/lib/shots/shot-with-image';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import { dbSceneId } from '@/lib/db/schema';
+import { frameFixture, frameVariantFixture } from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
 import {
@@ -8,99 +10,71 @@ import {
   type TabValue,
 } from './scene-script-prompts';
 
-// The still-image surface moved off `shots` onto the anchor `frame` in #989;
-// the component reads the legacy projected names (`thumbnail*`/`image*`), so the
-// fixture keeps them and adds the raw anchor `frame`.
-const mockShot = {
-  id: 'shot-1',
+const anchorFrame = frameFixture({
+  id: 'frame-1',
+  shotId: 'shot-1',
   sequenceId: 'seq-1',
-  sceneId: null,
-  shotNumber: null,
-  orderIndex: 0,
-  description: 'A bustling coffee shop interior during morning rush hour',
-  durationMs: 3000,
-  thumbnailUrl: 'https://picsum.photos/seed/coffee/320/180',
-  thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
-  variantImageUrl: null,
-  variantImageStatus: 'pending',
-  videoUrl: null,
-  videoPath: null,
-  thumbnailStatus: 'completed',
-  videoStatus: 'pending',
-  thumbnailWorkflowRunId: null,
-  imageModel: null,
-  thumbnailError: null,
-  imagePrompt: null,
-  videoWorkflowRunId: null,
-  videoGeneratedAt: null,
-  videoError: null,
-  motionPrompt: null,
-  motionModel: 'veo3',
-  motionPromptData: null,
-  selectedMotionPromptVersionId: null,
-  renderSegmentId: null,
-  thumbnailInputHash: null,
-  videoInputHash: null,
-  visualPromptInputHash: null,
-  motionPromptInputHash: null,
-  previewThumbnailUrl: null,
-  metadata: {
-    sceneId: 'scene-1',
-    sceneNumber: 1,
-    originalScript: {
-      extract:
-        'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',
-      dialogue: [
-        {
-          character: 'SARAH',
-          line: 'This deadline is going to kill me.',
-          tone: '',
-        },
-      ],
-    },
-    metadata: {
-      title: 'Coffee Shop Introduction',
-      durationSeconds: 3,
-      location: 'Coffee Shop',
-      timeOfDay: 'Morning',
-      storyBeat: 'Establish protagonist stress and setting',
-    },
-    continuity: {
-      characterTags: [],
-      environmentTag: '',
-      colorPalette: '',
-      lightingSetup: '',
-      styleTag: '',
-    },
-    musicDesign: {
-      presence: 'none',
-      style: '',
-      mood: '',
-      atmosphere: '',
-    },
-    sourceImageUrl: '',
-  },
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  frame: {
+  imageStatus: 'completed',
+});
+
+const mockShot: ShotView = toShotView(
+  {
     id: 'shot-1',
-    shotId: 'shot-1',
     sequenceId: 'seq-1',
-    orderIndex: 0,
-    role: 'first',
-    previewImageUrl: null,
-    imageStatus: 'completed',
-    imageWorkflowRunId: null,
-    imageError: null,
-    imagePrompt: null,
-    selectedImageVersionId: null,
-    selectedImagePromptVersionId: null,
-    pendingPromoteVersionId: null,
-    visualPromptInputHash: null,
+    sceneId: 'scene-1',
+    shotNumber: 1,
+    durationMs: 3000,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-  } satisfies Frame,
-} satisfies ShotWithImage;
+  },
+  anchorFrame,
+  {
+    image: frameVariantFixture({
+      frameId: anchorFrame.id,
+      sequenceId: 'seq-1',
+      url: 'https://picsum.photos/seed/coffee/320/180',
+      storagePath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
+    }),
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+  }
+);
+
+// The script, title and continuity the tabs read live on the scene (#1067).
+const mockScene: SceneWithScript = {
+  id: dbSceneId('scene-1'),
+  sequenceId: 'seq-1',
+  orderIndex: 0,
+  location: 'Coffee Shop',
+  timeOfDay: 'Morning',
+  storyBeat: 'Establish protagonist stress and setting',
+  title: 'Coffee Shop Introduction',
+  continuity: {
+    characterTags: [],
+    environmentTag: '',
+    elementTags: [],
+    colorPalette: '',
+    lightingSetup: '',
+    styleTag: '',
+  },
+  script: {
+    extract:
+      'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',
+    dialogue: [
+      {
+        character: 'SARAH',
+        line: 'This deadline is going to kill me.',
+        tone: '',
+      },
+    ],
+  },
+  selectedScriptVersionId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
 
 const meta: Meta<typeof SceneScriptPrompts> = {
   title: 'Scenes/SceneScriptPrompts',
@@ -110,6 +84,7 @@ const meta: Meta<typeof SceneScriptPrompts> = {
   },
   args: {
     sequenceId: 'seq-1',
+    scene: mockScene,
     selectedTab: 'script' as TabValue,
     visibleTabs: tabsForScope('shot'),
     onTabChange: fn(),
@@ -148,10 +123,8 @@ export const Loading: Story = {
 
 export const PartiallyLoaded: Story = {
   args: {
-    shot: {
-      ...mockShot,
-      metadata: null,
-    },
+    shot: mockShot,
+    scene: undefined,
   },
 };
 
@@ -160,10 +133,11 @@ export const LongScript: Story = {
     shot: {
       ...mockShot,
       durationMs: 8500,
-      metadata: {
-        ...mockShot.metadata,
-        originalScript: {
-          extract: `INT. COFFEE SHOP - MORNING
+    },
+    scene: {
+      ...mockScene,
+      script: {
+        extract: `INT. COFFEE SHOP - MORNING
 
 SARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte. The morning sun streams through large windows, casting long shadows across the wooden floor.
 
@@ -173,14 +147,13 @@ BARISTA (O.S.)
     Large oat milk latte for Sarah!
 
 Sarah doesn't respond, too absorbed in her work. The barista shrugs and sets the drink aside.`,
-          dialogue: [
-            {
-              character: 'BARISTA',
-              line: 'Large oat milk latte for Sarah!',
-              tone: '',
-            },
-          ],
-        },
+        dialogue: [
+          {
+            character: 'BARISTA',
+            line: 'Large oat milk latte for Sarah!',
+            tone: '',
+          },
+        ],
       },
     },
   },
@@ -188,12 +161,7 @@ Sarah doesn't respond, too absorbed in her work. The barista shrugs and sets the
 
 export const LongPrompts: Story = {
   args: {
-    shot: {
-      ...mockShot,
-      metadata: {
-        ...mockShot.metadata,
-      },
-    },
+    shot: mockShot,
   },
 };
 
@@ -202,12 +170,12 @@ export const ShortScript: Story = {
     shot: {
       ...mockShot,
       durationMs: 1500,
-      metadata: {
-        ...mockShot.metadata,
-        originalScript: {
-          extract: 'INT. COFFEE SHOP - MORNING\n\nSARAH types on laptop.',
-          dialogue: [],
-        },
+    },
+    scene: {
+      ...mockScene,
+      script: {
+        extract: 'INT. COFFEE SHOP - MORNING\n\nSARAH types on laptop.',
+        dialogue: [],
       },
     },
   },

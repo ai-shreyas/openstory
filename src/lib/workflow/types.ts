@@ -34,6 +34,21 @@ type PriorMotionDirection = {
   dialogue?: MotionDialogue | null;
   audio?: MotionAudio | null;
 };
+
+/**
+ * The upstream state a user-edited prompt was authored against, captured at
+ * trigger time. Same discipline as {@link PriorMotionDirection}, and for the
+ * same reason: derived in-workflow it would hash whatever the DB says at
+ * execution (or at retry), stamping the edit with inputs the user never saw and
+ * leaving staleness permanently reading fresh.
+ *
+ * `inputHash` is null when the hash could not be computed (no scene, or the
+ * context load failed) — the edit is still recorded, just without provenance.
+ */
+export type UserEditProvenance = {
+  inputHash: string | null;
+  analysisModel: string | null;
+};
 import type { AspectRatio, ImageSize } from '@/lib/constants/aspect-ratios';
 import type {
   CharacterMinimal,
@@ -44,7 +59,7 @@ import type {
   StyleConfig,
 } from '@/lib/db/schema';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
-import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
+import type { UpdateStalePlan } from '@/lib/shots/update-stale-plan';
 import type { Json } from '@/types/database';
 import { z } from 'zod';
 import type { musicDesignResultSchema } from '../ai/response-schemas';
@@ -74,6 +89,21 @@ export interface ImageWorkflowInput extends SequenceWorkflowContext {
   numImages?: number;
   seed?: number;
   shotId?: string; // Optional: update shot thumbnail
+  /**
+   * The shot's anchor frame, resolved at trigger time. Frame id ≠ shot id
+   * (#989); passing it keeps every step of the run bound to the SAME frame
+   * instead of re-resolving the anchor per step. Optional for un-migrated
+   * triggers, which fall back to `frames.getAnchorByShot`.
+   */
+  frameId?: string;
+  /**
+   * The `frame_prompt_versions` row `prompt` was read from, snapshotted at the
+   * trigger (#1070). Stamped onto the variant this run writes, so selecting the
+   * still later restores the prompt text that actually produced it. A live
+   * re-read here would pair the still with a prompt it never saw. Absent on
+   * un-migrated triggers, which fall back to the frame's current pointer.
+   */
+  promptVersionId?: string | null;
   /** Reference images for character consistency (auto-switches to edit endpoint) */
   referenceImages?: ReferenceImageDescription[];
   /** Skip R2 upload and store fal.ai CDN URL directly (for ephemeral preview images) */
@@ -94,12 +124,13 @@ export interface ImageWorkflowInput extends SequenceWorkflowContext {
   /** Hash over `(prompt, model, aspectRatio, sceneSnapshot)`; validated at start. */
   snapshotInputHash?: string;
   /**
-   * `true` when `prompt` came from a user edit (typed in the UI). `false` for
-   * auto paths (storyboard generation, smart-retry, preview, scene split)
-   * where `prompt` came from `frame.imagePrompt` and would not match a bare
-   * edit. Drives whether the workflow appends a `user-edit` variant row.
+   * Present when `prompt` is a real user edit (typed in the UI, and different
+   * from the prompt version currently selected) — absent on auto paths
+   * (storyboard generation, smart-retry, preview, scene split). Presence IS the
+   * instruction to append a `user-edit` prompt version; the payload carries the
+   * provenance so the workflow never re-derives it. @see UserEditProvenance
    */
-  userEditedPrompt?: boolean;
+  userEditProvenance?: UserEditProvenance;
   /**
    * Variant-only mode (#547). When true, the run NEVER touches the live primary
    * `shots.*` image/video columns — it writes only this model's
@@ -133,10 +164,21 @@ export interface ShotVariantWorkflowInput extends SequenceWorkflowContext {
   numImages?: number;
   seed?: number;
   shotId?: string;
+  /**
+   * The shot's anchor frame, resolved at trigger time (frame id ≠ shot id).
+   * Optional only because `shot-images` spawns a grid for a scene that matched
+   * no shot; such a run has no `shotId` either and writes nothing. Without it
+   * the run generates the grid and skips the sheet — it never resolves the
+   * anchor itself, which would read a pointer the spawn never saw.
+   */
+  frameId?: string;
   /** Sequence aspect ratio — drives shot grid layout */
   aspectRatio?: AspectRatio;
   /** Scene visual prompt, from the anchor `frame.imagePrompt` mirror (#713) */
   scenePrompt?: string;
+  /** The `frame_prompt_versions` row `scenePrompt` was read from, snapshotted
+   * at the trigger — stamped on the sheet version for provenance (#1070). */
+  promptVersionId?: string | null;
   /** Character reference sheets for visual consistency */
   characterReferences?: ReferenceImageDescription[];
   /** Location reference images for environment consistency */
@@ -150,9 +192,34 @@ export interface ShotVariantWorkflowResult {
 }
 
 /**
- * Storyboard generation workflow input
+ * Storyboard generation workflow input.
+ *
+ * Everything the run fans out to `analyze-script` is snapshotted from the
+ * sequence row by `triggerStoryboard` — the workflow never re-derives it. A
+ * mid-run re-read would pick up an edit the user made after pressing generate
+ * (or, on a step retry, a different one again), fanning out a payload nobody
+ * asked for. Call sites build the smaller {@link StoryboardTriggerInput}.
  */
 export interface StoryboardWorkflowInput extends SequenceWorkflowContext {
+  title: string;
+  script: string;
+  aspectRatio: AspectRatio;
+  styleConfig: StyleConfig;
+  analysisModelId: AnalysisModelId;
+  imageModel: TextToImageModel;
+  videoModel: ImageToVideoModel;
+  /**
+   * The sequence-element SET the run operates on, pinned at trigger time. The
+   * vision-written fields (description/consistencyTag) legitimately arrive
+   * late and are read live; which elements exist must not.
+   */
+  elementIds: string[];
+  /**
+   * Provenance for the music prompt this run may write, snapshotted from the
+   * sequence row by `triggerStoryboard`. Threaded down analyze-script →
+   * motion-music-prompts → music-prompt, which has no signal of its own.
+   */
+  musicPromptSource: 'ai-generated' | 'regenerated';
   options?: {
     shotsPerScene?: number;
     generateThumbnails?: boolean;
@@ -173,7 +240,31 @@ export interface StoryboardWorkflowInput extends SequenceWorkflowContext {
   suggestedTalentIds?: string[];
   /** Location IDs suggested by user for visual consistency */
   suggestedLocationIds?: string[];
+  /** @see TalentMatchingWorkflowInput.suggestedTalent — resolved by the launcher. */
+  suggestedTalent?: SuggestedTalentSnapshot[];
+  /** @see LocationMatchingWorkflowInput.suggestedLocations — resolved by the launcher. */
+  suggestedLocations?: SuggestedLocationSnapshot[];
 }
+
+/**
+ * What call sites hand to `triggerStoryboard`. The launcher resolves the
+ * snapshotted sequence fields itself, from the same row it reads for the
+ * generation mutex.
+ */
+export type StoryboardTriggerInput = Omit<
+  StoryboardWorkflowInput,
+  | 'title'
+  | 'script'
+  | 'aspectRatio'
+  | 'styleConfig'
+  | 'analysisModelId'
+  | 'imageModel'
+  | 'videoModel'
+  | 'elementIds'
+  | 'musicPromptSource'
+  | 'suggestedTalent'
+  | 'suggestedLocations'
+>;
 
 /**
  * Analyze scenes workflow input
@@ -185,6 +276,10 @@ export interface AnalyzeScriptWorkflowInput extends SequenceWorkflowContext {
   styleConfig: StyleConfig;
   analysisModelId: AnalysisModelId;
   imageModel: TextToImageModel;
+  /** @see StoryboardWorkflowInput.elementIds — passed straight through. */
+  elementIds: string[];
+  /** @see StoryboardWorkflowInput.musicPromptSource — passed straight through. */
+  musicPromptSource: 'ai-generated' | 'regenerated';
   /** Multiple image models for variant generation (first is primary) */
   imageModels?: TextToImageModel[];
   videoModel?: ImageToVideoModel;
@@ -199,6 +294,10 @@ export interface AnalyzeScriptWorkflowInput extends SequenceWorkflowContext {
   suggestedTalentIds?: string[];
   /** Location IDs suggested by user for visual consistency */
   suggestedLocationIds?: string[];
+  /** @see TalentMatchingWorkflowInput.suggestedTalent — passed straight through. */
+  suggestedTalent?: SuggestedTalentSnapshot[];
+  /** @see LocationMatchingWorkflowInput.suggestedLocations — passed straight through. */
+  suggestedLocations?: SuggestedLocationSnapshot[];
 }
 
 /**
@@ -229,10 +328,21 @@ export type SceneSplitWorkflowResult = {
  * products/objects detected during scene split) and ingests them as
  * `sequence_elements` rows so shot generation can attach them.
  */
+/**
+ * One auto-generated element reference. `elementId` is the `sequence_elements`
+ * row id allocated at the spawn: the child's idempotency guards key on it so a
+ * replay can't double-bill because the token was renamed since the first
+ * attempt (`ElementBibleEntry` carries no id, and the token is renameable by
+ * both the user and the vision auto-rename).
+ */
+export type ElementSheetEntry = ElementBibleEntry & {
+  elementId: string;
+};
+
 export interface ElementSheetWorkflowInput extends UserWorkflowContext {
   sequenceId: string;
   /** Element bible entries with no matching uploaded element */
-  entries: ElementBibleEntry[];
+  entries: ElementSheetEntry[];
   /** Image model to use (defaults to DEFAULT_IMAGE_MODEL) */
   imageModel?: TextToImageModel;
   /** Sequence style config to keep references on-style */
@@ -249,6 +359,27 @@ export interface ElementSheetWorkflowResult {
  */
 export interface MotionWorkflowInput extends SequenceWorkflowContext {
   shotId?: string;
+  /**
+   * The shot's scene, pinned at the trigger. Optional only until every trigger
+   * threads it — absent falls back to reading the shot.
+   */
+  sceneId?: string | null;
+  /**
+   * The motion prompt version this clip renders from, recorded in the render
+   * manifest. Pinned at the trigger because the workflow cannot re-read it: on
+   * the `userEditProvenance` path this very run repoints
+   * `shots.selectedMotionPromptVersionId`, so a live read would describe a
+   * different prompt than the one submitted. On that path the id of the version
+   * written by the run itself wins. Absent falls back to the live selection.
+   */
+  motionPromptVersionId?: string | null;
+  /**
+   * The anchor frame's `frame_variants` version that `imageUrl` was resolved
+   * from, recorded in the render manifest. Pinned alongside the URL so a
+   * concurrent select/upscale can't leave the manifest pointing at a still the
+   * clip never rendered from. Absent falls back to the live selection.
+   */
+  frameVersionId?: string | null;
   imageUrl: string;
   prompt: string;
   model?: keyof typeof IMAGE_TO_VIDEO_MODELS;
@@ -263,13 +394,13 @@ export interface MotionWorkflowInput extends SequenceWorkflowContext {
    */
   generateAudio?: boolean;
   /**
-   * `true` when `prompt` came from a user edit (typed in the UI). `false` for
-   * auto paths (batch generation, smart-retry) where `prompt` was produced by
-   * `resolveMotionPrompt` and may include model-specific dialogue/audio
-   * assembly that does not match the bare `shot.motionPrompt`. Drives whether
-   * the workflow appends a `user-edit` variant row.
+   * Present when `prompt` is a real user edit (typed in the UI, and different
+   * from the prompt version currently selected) — absent on auto paths (batch
+   * generation, smart-retry) where `prompt` came from `resolveMotionPrompt` and
+   * may include model-specific dialogue/audio assembly. Presence IS the
+   * instruction to append a `user-edit` prompt version. @see UserEditProvenance
    */
-  userEditedPrompt?: boolean;
+  userEditProvenance?: UserEditProvenance;
   /**
    * Only meaningful when `userEditedPrompt`: the dialogue/audio direction of the
    * version being edited, captured at trigger time so the recorded user-edit
@@ -278,6 +409,18 @@ export interface MotionWorkflowInput extends SequenceWorkflowContext {
    * {@link PriorMotionDirection}.
    */
   priorMotion?: PriorMotionDirection;
+  /**
+   * The scene's title, for the stored video's human-readable filename. Passed
+   * in rather than read at upload time — a workflow has no reason to reach for
+   * scene data, and the name should reflect the scene as it was when the render
+   * was requested.
+   */
+  sceneTitle?: string;
+  /**
+   * The sequence's title, for the stored video's human-readable filename. Same
+   * reasoning as `sceneTitle`; absent falls back to reading the shot's sequence.
+   */
+  sequenceTitle?: string;
   /**
    * Character + element reference images for identity consistency across the
    * clip (#873). Resolved at trigger time from the scene's continuity tags +
@@ -336,6 +479,21 @@ export type RegenerateShotSnapshot = {
   shotId: string;
   /** Visual prompt frozen at trigger time. */
   imagePrompt: string;
+  /**
+   * The `frame_prompt_versions` row `imagePrompt` was frozen from. Text alone
+   * cannot tell a later reader WHICH version the snapshot pinned once the
+   * selection pointer has moved. Null for callers that resolve the prompt
+   * without a version row.
+   */
+  imagePromptVersionId?: string | null;
+  /**
+   * The shot's anchor frame, resolved when the snapshot was built (frame id ≠
+   * shot id). Threaded to the variant spawn so the child writes its sheet to
+   * the frame the snapshot was taken against instead of re-resolving the
+   * anchor mid-run. Null for callers that build a snapshot purely to hash
+   * (staleness checks pass it; it is not part of `snapshotInputHash`).
+   */
+  frameId?: string | null;
   /** Sorted character-sheet input_hashes referenced by this shot. */
   characterSheetHashes: string[];
   /** Sorted location-sheet input_hashes referenced by this shot. */
@@ -364,24 +522,27 @@ export type RegenerateShotSnapshot = {
  */
 /**
  * "Update all" (#1077): regenerate every stale artifact in scope, in
- * dependency order (prompt → image per shot). The payload is deliberately
- * tiny — the workflow's `compute-plan` step recomputes staleness from live
- * scoped state at run start and persists the plan as its durable step result,
- * so the target set is authoritative and immune to a stale client cache.
+ * dependency order (prompt → image per shot).
+ *
+ * The plan — which shots, which artifacts, and therefore what gets billed — is
+ * computed by `updateStaleShotsFn` and shipped whole, so the run is bound to
+ * the state the user actually clicked on rather than to whatever the sequence
+ * looks like whenever a concurrency slot frees up. Scope (`sceneId`/`shotId`)
+ * and `depth` are inputs to that computation and don't outlive it.
+ *
+ * Nothing downstream needs run-start freshness: the spawn-time guards (claim
+ * hashes, in-flight checks, the music `musicPromptInputHash` re-check) already
+ * absorb drift that happens after plan time, so they absorb the trigger→start
+ * gap on the same terms.
  */
 export interface UpdateStaleShotsWorkflowInput extends SequenceWorkflowContext {
   sequenceId: string;
-  /** Limit to one scene's shots (scene-scope Update all). */
-  sceneId?: string;
-  /** Limit to a single shot (shot-scope Update all). */
-  shotId?: string;
   /**
-   * Cascade depth (#1085): 'prompts' | 'images' | 'video' | 'music',
-   * cumulative — see src/lib/shots/update-stale-depth.ts. Absent on runs
-   * enqueued before the picker existed; treated as 'images' (the closest
-   * match to the original stale-only behaviour).
+   * The frozen regeneration plan. Optional only because an instance queued by
+   * the previous build replays with the old payload shape; the workflow fails
+   * such a run with a validation error rather than silently doing nothing.
    */
-  depth?: UpdateStaleDepth;
+  plan?: UpdateStalePlan;
 }
 
 export interface RegenerateShotsWorkflowInput extends SequenceWorkflowContext {
@@ -430,10 +591,26 @@ export interface RecastCharacterWorkflowInput extends SequenceWorkflowContext {
   talentMetadata?: CharacterBibleEntry;
   /** Talent description */
   talentDescription?: string;
-  /** Shot IDs to regenerate after sheet generation */
-  affectedShotIds: string[];
+  /**
+   * The upstream talent sheet's `input_hash`, resolved at trigger time. The
+   * workflow used to re-derive this two DB reads deep, minutes later — a
+   * different talent identity than the one the user recast to.
+   */
+  talentSheetInputHash: string | null;
   /** Sequence style config to apply to the character sheet */
   styleConfig?: StyleConfig;
+  /** Aspect ratio (frozen at trigger time, replaces a live sequence read). */
+  aspectRatio: AspectRatio;
+  /**
+   * Per-shot regenerate-shots snapshots for the shots this character appears
+   * in, resolved at trigger time. The scope of the regeneration IS this list —
+   * there is no separate `affectedShotIds`. The recast character's own sheet
+   * enters as a sentinel (see `recast-snapshot.ts`) because the awaited child
+   * has not generated it yet; the workflow substitutes it in memory.
+   */
+  shotSnapshots: RegenerateShotSnapshot[];
+  /** Batch hash over `shotSnapshots` as sent (payload tamper check). */
+  snapshotInputHash: string;
 }
 
 /**
@@ -458,9 +635,30 @@ export type TalentCharacterMatch = {
 export interface TalentMatchingWorkflowInput extends SequenceWorkflowContext {
   analysisModelId: AnalysisModelId;
   suggestedTalentIds?: string[];
+  /**
+   * Name/description per suggested talent, snapshotted at the trigger. The
+   * workflow re-reads the talent rows only for `defaultSheet.imageUrl`, which
+   * genuinely arrives late (fire-and-forget `/library-talent-sheet`); the
+   * casting identity itself must not drift mid-run.
+   */
+  suggestedTalent?: SuggestedTalentSnapshot[];
   /** Pre-extracted character bible from scene splitting. Skips extraction LLM call when provided. */
   characterBible: CharacterBibleEntry[];
 }
+
+/** @see TalentMatchingWorkflowInput.suggestedTalent */
+type SuggestedTalentSnapshot = {
+  talentId: string;
+  name: string;
+  description: string | null;
+};
+
+/** @see LocationMatchingWorkflowInput.suggestedLocations */
+type SuggestedLocationSnapshot = {
+  locationId: string;
+  name: string;
+  description: string | null;
+};
 
 export interface TalentMatchingWorkflowOutput {
   matches: TalentCharacterMatch[];
@@ -620,6 +818,13 @@ export interface CharacterSheetWorkflowResult {
   sheetImageUrl: string;
   characterDbId?: string;
   sheetImagePath?: string;
+  /**
+   * The run diverged: `sheetImageUrl` is a parked variant and the character's
+   * PRIMARY sheet is unchanged. Without this a parent cannot tell the two
+   * paths apart — both return a URL in the same field — and would cascade
+   * work against the old sheet. Optional so existing consumers compile.
+   */
+  diverged?: boolean;
 }
 
 /**
@@ -628,6 +833,15 @@ export interface CharacterSheetWorkflowResult {
  */
 export interface UpscaleShotVariantWorkflowInput extends SequenceWorkflowContext {
   shotId: string;
+  /** The shot's anchor frame, resolved at trigger time (frame id ≠ shot id) —
+   * the run never re-resolves it, so every step writes to the same frame. */
+  frameId: string;
+  /**
+   * The prompt version selected when the tile was picked (#1070). Stamped on
+   * the upscaled version, which BECOMES the frame's selection — without it a
+   * later prompt-restore from this still permanently no-ops.
+   */
+  promptVersionId: string | null;
   /** URL of the cropped tile to upscale */
   croppedTileUrl: string;
   /** R2 path of the cropped tile (for replacement) */
@@ -718,6 +932,12 @@ export interface LocationSheetWorkflowResult {
   referenceImageUrl: string;
   locationDbId?: string;
   referenceImagePath?: string;
+  /**
+   * The run diverged: `referenceImageUrl` is a parked variant and the
+   * location's PRIMARY reference is unchanged. @see
+   * {@link CharacterSheetWorkflowResult.diverged}
+   */
+  diverged?: boolean;
 }
 
 /**
@@ -737,6 +957,12 @@ export interface LibraryLocationSheetWorkflowInput extends UserWorkflowContext {
   sequenceId: string;
   /** Image model to use */
   imageModel?: TextToImageModel;
+  /**
+   * Hash over the inlined DTO at trigger time. The final reference write is
+   * gated on it: if the location was renamed/re-described mid-run the sheet is
+   * parked as a divergent variant instead of becoming the live reference.
+   */
+  snapshotInputHash?: string;
 }
 
 export interface LibraryLocationSheetWorkflowResult {
@@ -790,6 +1016,12 @@ export type LibraryLocationMatch = {
 export interface LocationMatchingWorkflowInput extends SequenceWorkflowContext {
   analysisModelId: AnalysisModelId;
   suggestedLocationIds?: string[];
+  /**
+   * Name/description per suggested library location, snapshotted at the
+   * trigger. @see TalentMatchingWorkflowInput.suggestedTalent — only
+   * `referenceImageUrl` is read live.
+   */
+  suggestedLocations?: SuggestedLocationSnapshot[];
   /** Pre-extracted location bible from scene splitting. Skips extraction LLM call when provided. */
   locationBible: LocationBibleEntry[];
 }
@@ -814,10 +1046,28 @@ export interface RecastLocationWorkflowInput extends SequenceWorkflowContext {
   referenceImageUrl?: string;
   /** Library location description */
   libraryLocationDescription?: string;
-  /** Shot IDs to regenerate after sheet generation */
-  affectedShotIds: string[];
+  /** The library location this recast binds the sequence location to. */
+  libraryLocationId: string;
+  /**
+   * That library location's `reference_input_hash`, resolved at trigger time.
+   * The workflow used to re-derive it two DB reads deep, minutes later.
+   */
+  libraryLocationReferenceHash: string | null;
   /** Sequence style config to apply to the location sheet */
   styleConfig?: StyleConfig;
+  /** Aspect ratio (frozen at trigger time, replaces a live sequence read). */
+  aspectRatio: AspectRatio;
+  /**
+   * Per-shot regenerate-shots snapshots for the shots this location appears
+   * in, resolved at trigger time. The scope of the regeneration IS this list —
+   * there is no separate `affectedShotIds`. The recast location's own
+   * reference enters as a sentinel (see `recast-snapshot.ts`) because the
+   * awaited child has not generated it yet; the workflow substitutes it in
+   * memory.
+   */
+  shotSnapshots: RegenerateShotSnapshot[];
+  /** Batch hash over `shotSnapshots` as sent (payload tamper check). */
+  snapshotInputHash: string;
 }
 
 /**
@@ -844,6 +1094,13 @@ export interface MusicPromptWorkflowInput extends SequenceWorkflowContext {
   analysisModelId: AnalysisModelId;
 
   duration?: number;
+
+  /**
+   * Provenance of the version this run will write, snapshotted at the trigger
+   * (the caller already knows whether a prompt exists). Optional: spawners
+   * that predate it fall back to an in-workflow lookup.
+   */
+  promptSource?: 'ai-generated' | 'regenerated';
 }
 
 export type MusicPromptWorkflowResult = z.infer<typeof musicDesignResultSchema>;
@@ -884,7 +1141,13 @@ export interface BatchMotionMusicWorkflowInput extends SequenceWorkflowContext {
   /** Per-shot motion inputs (ordered by scene) */
   shots: Array<{
     shotId: string;
+    /** See `MotionWorkflowInput.sceneId`. */
+    sceneId?: string | null;
     imageUrl: string;
+    /** See `MotionWorkflowInput.frameVersionId`. */
+    frameVersionId?: string | null;
+    /** See `MotionWorkflowInput.motionPromptVersionId`. */
+    motionPromptVersionId?: string | null;
     /**
      * Prompt assembled for the primary model. Used directly for single-model
      * runs and as the fallback when `motionPrompt` is absent. For multi-model
@@ -913,8 +1176,12 @@ export interface BatchMotionMusicWorkflowInput extends SequenceWorkflowContext {
     aspectRatio?: AspectRatio;
     /** See `MotionWorkflowInput.generateAudio`. */
     generateAudio?: boolean;
-    /** See `MotionWorkflowInput.userEditedPrompt`. */
-    userEditedPrompt?: boolean;
+    /** See `MotionWorkflowInput.userEditProvenance`. */
+    userEditProvenance?: UserEditProvenance;
+    /** See `MotionWorkflowInput.sceneTitle`. */
+    sceneTitle?: string;
+    /** See `MotionWorkflowInput.sequenceTitle`. */
+    sequenceTitle?: string;
     /** See `MotionWorkflowInput.priorMotion`. */
     priorMotion?: PriorMotionDirection;
     /** See `MotionWorkflowInput.referenceImages` (#873). */
@@ -1038,6 +1305,8 @@ export interface MotionMusicPromptsWorkflowInput extends SequenceWorkflowContext
    * loaded the mirror) threads it here rather than via `scene.prompts.visual`.
    */
   visualSummaryBySceneId?: Record<string, string>;
+  /** @see StoryboardWorkflowInput.musicPromptSource — passed to the music-prompt child. */
+  musicPromptSource: 'ai-generated' | 'regenerated';
 }
 
 export interface MotionMusicPromptsWorkflowResult {
@@ -1059,9 +1328,18 @@ export interface MotionMusicPromptsWorkflowResult {
  * Describes a single uploaded element image using a vision LLM
  */
 export interface ElementVisionWorkflowInput extends SequenceWorkflowContext {
+  /** Required here: the vision auto-rename is scoped to the sequence. */
+  sequenceId: string;
   elementId: string;
   imageUrl: string;
   filename: string;
+  /**
+   * The element's token at trigger time. The vision auto-rename is a
+   * compare-and-swap against it: a user rename landing while the vision LLM
+   * runs makes the swap match zero rows, so the user's name survives and the
+   * script-wide cascade is skipped.
+   */
+  token: string;
 }
 
 export interface ElementVisionWorkflowResult {
@@ -1082,6 +1360,24 @@ export interface ElementVisionWorkflowResult {
  * shot — this is by design for elements (vs cast/location which fully
  * regenerate the shot).
  */
+/**
+ * Per-shot source state for `replaceElementWorkflow`, frozen at trigger time.
+ * The workflow spawns image + motion children that repoint the very selection
+ * pointers these fields come from, so a mid-run re-read (or a replay after
+ * partial fan-out) would edit an already-edited still a second time.
+ */
+export type ReplaceElementShotSnapshot = {
+  /** The shot's anchor frame; null when the shot has no frame row. */
+  frameId: string | null;
+  /** Selected still to edit; null when there is nothing to edit. */
+  sourceImageUrl: string | null;
+  /** Model that produced the selected still — preferred for the edit. */
+  sourceModel: string | null;
+  /** Whether the shot's render segment had a selected video. */
+  hasVideo: boolean;
+  durationMs: number | null;
+};
+
 export interface ReplaceElementWorkflowInput extends SequenceWorkflowContext {
   /** Always present for this workflow — narrowed from the optional base type. */
   sequenceId: string;
@@ -1104,6 +1400,18 @@ export interface ReplaceElementWorkflowInput extends SequenceWorkflowContext {
    * caller resolves from the selected `shot_prompt_versions` row up front.
    */
   motionPromptByShotId: Record<string, string>;
+  /**
+   * Per-shot source state (still, model, video presence, duration) resolved by
+   * the CALLER, keyed by shotId. Same discipline as `motionPromptByShotId`.
+   */
+  shotSnapshotByShotId: Record<string, ReplaceElementShotSnapshot>;
+  /** Sequence aspect ratio, frozen at trigger time. */
+  aspectRatio: AspectRatio;
+  /**
+   * Video model for the re-render, resolved at trigger time — the SAME value
+   * the motion prompts in `motionPromptByShotId` were assembled for.
+   */
+  videoModel: ImageToVideoModel;
   /** Image model to use for the edit (defaults to nano_banana_2 for edit support) */
   imageModel?: TextToImageModel;
 }
@@ -1128,6 +1436,24 @@ export interface AssetGenerationWorkflowInput extends UserWorkflowContext {
   activity: GeneratedAssetActivity;
   /** Schema-validated endpoint input, forwarded verbatim to fal. */
   input: GeneratedAssetInput;
+}
+
+/**
+ * Server-side sequence export (#968). Everything the render needs is resolved
+ * by the POST handler that reserves the `sequence_exports` row, so the
+ * workflow reads no DB: a shot finishing mid-export can't change the cut
+ * half-way through, and a step retry re-renders the same snapshot.
+ */
+export interface SequenceExportWorkflowInput extends UserWorkflowContext {
+  sequenceId: string;
+  /** Pre-reserved `sequence_exports` row (status `processing`) to fill in. */
+  exportId: string;
+  /** R2 key the rendered MP4 is uploaded to. */
+  storagePath: string;
+  /** The ordered cut. Stored URLs — the workflow absolutizes them. */
+  scenes: { orderIndex: number; videoUrl: string }[];
+  /** Stored music URL, already gated on `includeMusic`; null when muted. */
+  musicUrl: string | null;
 }
 
 /**

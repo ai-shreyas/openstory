@@ -27,7 +27,7 @@ export type ShotPromptType = 'visual' | 'motion';
  * Query-key factory for prompt version history (per variant group). Shared by
  * the consumer hooks below AND the realtime cache updater so a regeneration /
  * selection event invalidates the exact key the open history sheet reads —
- * keyed to the frame/shot + prompt axis, not `shots.thumbnailUrl` (#991).
+ * keyed to the frame/shot + prompt axis, not the shot's still (#991).
  */
 export const promptVariantKeys = {
   all: ['prompt-variants'] as const,
@@ -40,7 +40,7 @@ export const promptVariantKeys = {
 /**
  * Version history for a shot's visual or motion prompt, newest first. The
  * current selection is the `selected*PromptVersionId` pointer already projected
- * onto the shot/anchor-frame in `ShotWithImage` (no extra fetch needed).
+ * onto the shot/anchor-frame in `ShotView` (no extra fetch needed).
  */
 export function useShotPromptVariants(
   args: { sequenceId: string; shotId: string; promptType: ShotPromptType },
@@ -85,6 +85,7 @@ export function useRestoreShotPromptVariant(args: {
           sequenceId: args.sequenceId,
           shotId: args.shotId,
           variantId,
+          promptType: args.promptType,
         },
       }),
     onSuccess: async () => {
@@ -106,7 +107,7 @@ export function useRestoreShotPromptVariant(args: {
 /**
  * Persist a hand-edited / shortened prompt as a `user-edit` version WITHOUT
  * rendering. Invalidates the history list, the shot read projection (so the
- * live prompt + `motionPromptData` pick up the edit), and staleness (a fresh
+ * live prompt + `motionPrompt` pick up the edit), and staleness (a fresh
  * user-edit aligns the prompt with the current upstream hash).
  */
 export function useSaveShotPrompt(args: {

@@ -28,7 +28,8 @@ import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
-import type { ScopedDb } from '@/lib/db/scoped';
+import { generateId } from '@/lib/db/id';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { assembleMotionPrompt } from '@/lib/motion/assemble-motion-prompt';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { buildCastCharacterBible } from '@/lib/prompts/character-prompt';
@@ -42,6 +43,7 @@ import type {
   AnalyzeScriptWorkflowInput,
   BatchMotionMusicWorkflowInput,
   CharacterBibleWorkflowInput,
+  ElementSheetEntry,
   ElementSheetWorkflowInput,
   ElementSheetWorkflowResult,
   ShotImagesWorkflowInput,
@@ -82,7 +84,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
   protected override async runImpl(
     event: Readonly<WorkflowEvent<AnalyzeScriptWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<Scene[]> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -92,6 +94,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       aspectRatio,
       styleConfig,
       analysisModelId,
+      elementIds,
       imageModel,
       imageModels: imageModelsInput,
       videoModel,
@@ -137,7 +140,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     // vision before loading — mirrors the talent-sheet / location-reference
     // waits. Already-completed elements short-circuit with no added latency.
     if (sequenceId) {
-      await waitForElementVision(step, scopedDb, sequenceId, {
+      await waitForElementVision(step, scopedDb.liveRead, elementIds, {
         onWaitNeeded: async () => {
           await getGenerationChannel(sequenceId).emit(
             'generation.phase:start',
@@ -154,9 +157,15 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     // See QStash original for the full rationale. After the wait above this
     // only trips for vision that genuinely failed to terminate within the
     // timeout, in which case we still surface the explicit error.
+    //
+    // Reads by the trigger-time `elementIds` — the vision-written fields
+    // arrive late so the ROW read must be live, but re-enumerating the
+    // sequence here would pull in elements uploaded after generation started
+    // (whose pending vision then hard-fails a run they were never part of).
     const elements = await step.do('load-elements', async () => {
       if (!sequenceId) return [];
-      const list = await scopedDb.sequenceElements.list(sequenceId);
+      const list =
+        await scopedDb.liveRead.sequenceElements.listByIds(elementIds);
       const stillRunning = list.filter(
         (el) => el.visionStatus === 'pending' || el.visionStatus === 'analyzing'
       );
@@ -229,6 +238,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           teamId: input.teamId,
           analysisModelId,
           suggestedTalentIds,
+          suggestedTalent: input.suggestedTalent,
           characterBible,
         },
         spawnStepName: 'spawn-talent-matching',
@@ -249,6 +259,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           teamId: input.teamId,
           analysisModelId,
           suggestedLocationIds,
+          suggestedLocations: input.suggestedLocations,
           locationBible,
         },
         spawnStepName: 'spawn-location-matching',
@@ -300,8 +311,14 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     // prompts only consume the bible text, and the generated references are
     // concatenated with `elementsMinimal` into `allElements` before phase 4
     // attaches them to shots.
-    const missingElementEntries = sequenceId
-      ? findMissingElementEntries(elementBible, elementsMinimal)
+    //
+    // Each entry carries a pre-allocated `sequence_elements.id`: the child's
+    // idempotency guards key on it rather than on the (renameable) token, so a
+    // replay after the element was renamed can't bill a second reference image.
+    const missingElementEntries: ElementSheetEntry[] = sequenceId
+      ? findMissingElementEntries(elementBible, elementsMinimal).map(
+          (entry) => ({ ...entry, elementId: generateId() })
+        )
       : [];
     const runElementSheets = async (): Promise<SequenceElementMinimal[]> => {
       if (!sequenceId || missingElementEntries.length === 0) {
@@ -566,6 +583,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           videoModels,
           startingFrameImageUrls,
           visualSummaryBySceneId: visualPromptBySceneId,
+          musicPromptSource: input.musicPromptSource,
         },
         spawnStepName: 'spawn-motion-music-prompts',
         awaitStepName: 'await-motion-music-prompts',
@@ -725,7 +743,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
   }: {
     event: Readonly<WorkflowEvent<AnalyzeScriptWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const { sequenceId } = event.payload;
     if (!sequenceId) return;

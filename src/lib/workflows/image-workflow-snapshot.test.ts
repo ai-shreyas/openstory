@@ -1,18 +1,18 @@
 /**
- * Behavioural tests for the per-shot image-workflow hash helpers.
+ * Behavioural tests for the per-shot image-workflow hash helper.
  *
- * `generateImageWorkflow` opts into the snapshot pattern so it can detect
- * drift between trigger-time and write-time. These tests pin that the inlined
- * DTO hash (`computeImageWorkflowHashFromDto`) and the re-resolved live hash
- * (`computeImageWorkflowHashCurrent`) agree on the convergent path and diverge
- * when any bound input (character sheet, element reference, model) changes
- * mid-flight.
+ * `generateImageWorkflow` opts into the snapshot pattern so it can verify at
+ * start that the inlined DTO matches the hash it was triggered with. These
+ * tests pin that `computeImageWorkflowHashFromDto` is deterministic and moves
+ * with every bound input (model, character sheet).
  *
  * The convergent/divergent WRITE builders and the `persistImageResult`
  * orchestration were retired in #989: image divergence no longer reverts a
  * speculative primary thumbnail on `shots`/`shot_variants`. Image generation
  * now appends a `frame_variants` version and repoints
- * `frames.selectedImageVersionId`, so only the hash-comparison helpers remain.
+ * `frames.selectedImageVersionId`, so only the DTO hasher remains — the live
+ * re-resolve (`computeImageWorkflowHashCurrent`) had no callers left and is
+ * gone.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -20,12 +20,7 @@ import type {
   ShotImageSceneSnapshot,
   ImageWorkflowInput,
 } from '@/lib/workflow/types';
-import {
-  computeImageWorkflowHashCurrent,
-  computeImageWorkflowHashFromDto,
-  type ImageHashScopedDb,
-  type SceneForHash,
-} from './image-workflow-snapshot';
+import { computeImageWorkflowHashFromDto } from './image-workflow-snapshot';
 
 const baseScene: ShotImageSceneSnapshot = {
   sceneId: 's1',
@@ -44,105 +39,6 @@ const baseInput: ImageWorkflowInput = {
   model: 'nano_banana_2',
   aspectRatio: '16:9',
   sceneSnapshot: baseScene,
-};
-
-const DEFAULT_SCENE: SceneForHash = {
-  continuity: {
-    characterTags: ['jack'],
-    environmentTag: 'docks',
-    elementTags: [],
-  },
-  metadata: { location: 'Docks' },
-  originalScript: { extract: '' },
-};
-
-function buildHashScopedDb(opts: {
-  characterSheetHash?: string | null;
-  locationReferenceHash?: string | null;
-  elementImageUrl?: string;
-  shotMetadata?: SceneForHash | null;
-}): ImageHashScopedDb {
-  // `in` check distinguishes explicit `null` (data-corruption case) from omitted (default).
-  const metadata =
-    'shotMetadata' in opts ? (opts.shotMetadata ?? null) : DEFAULT_SCENE;
-  return {
-    shots: {
-      getById: async () => ({ metadata }),
-    },
-    characters: {
-      listWithSheets: async () =>
-        opts.characterSheetHash === undefined
-          ? []
-          : [
-              {
-                id: 'c1',
-                characterId: 'jack',
-                consistencyTag: 'jack',
-                name: 'Jack',
-                physicalDescription: null,
-                sheetImageUrl: 'https://example.com/jack.png',
-                sheetStatus: 'completed',
-                sheetInputHash: opts.characterSheetHash,
-              },
-            ],
-    },
-    sequenceLocations: {
-      listWithReferences: async () =>
-        opts.locationReferenceHash === undefined
-          ? []
-          : [
-              {
-                id: 'l1',
-                locationId: 'docks',
-                description: null,
-                consistencyTag: 'docks',
-                name: 'Docks',
-                referenceImageUrl: 'https://example.com/docks.png',
-                referenceStatus: 'completed',
-                referenceInputHash: opts.locationReferenceHash,
-              },
-            ],
-    },
-    sequenceElements: {
-      list: async () =>
-        opts.elementImageUrl === undefined
-          ? []
-          : [
-              {
-                id: 'e1',
-                token: 'LOGO',
-                description: null,
-                consistencyTag: 'logo',
-                imageUrl: opts.elementImageUrl,
-              },
-            ],
-    },
-  };
-}
-
-const unreachableHashScopedDb: ImageHashScopedDb = {
-  shots: {
-    getById: async () => {
-      throw new Error('shots.getById should not be called in this test');
-    },
-  },
-  characters: {
-    listWithSheets: async () => {
-      throw new Error('characters.listWithSheets should not be called');
-    },
-  },
-  sequenceLocations: {
-    listWithReferences: async () => {
-      throw new Error(
-        'sequenceLocations.listWithReferences should not be called'
-      );
-    },
-  },
-  sequenceElements: {
-    list: async () => {
-      throw new Error('sequenceElements.list should not be called');
-    },
-  },
 };
 
 describe('computeImageWorkflowHashFromDto', () => {
@@ -181,93 +77,6 @@ describe('computeImageWorkflowHashFromDto', () => {
       },
     });
     expect(a).not.toBe(b);
-  });
-});
-
-describe('computeImageWorkflowHashCurrent', () => {
-  it('matches the DTO hash on the convergent path (live state == snapshot)', async () => {
-    const dtoHash = await computeImageWorkflowHashFromDto(baseInput);
-    const currentHash = await computeImageWorkflowHashCurrent(
-      baseInput,
-      buildHashScopedDb({
-        characterSheetHash: 'jack-hash-v1',
-        locationReferenceHash: 'docks-hash-v1',
-      })
-    );
-    expect(currentHash).toBe(dtoHash);
-  });
-
-  it('diverges from the DTO hash when a character sheet was re-hashed mid-flight', async () => {
-    const dtoHash = await computeImageWorkflowHashFromDto(baseInput);
-    const currentHash = await computeImageWorkflowHashCurrent(
-      baseInput,
-      buildHashScopedDb({
-        characterSheetHash: 'jack-hash-v2',
-        locationReferenceHash: 'docks-hash-v1',
-      })
-    );
-    expect(currentHash).not.toBe(dtoHash);
-  });
-
-  it('diverges when an element reference image was swapped', async () => {
-    const inputWithElement: ImageWorkflowInput = {
-      ...baseInput,
-      sceneSnapshot: {
-        ...baseScene,
-        elementReferenceHashes: ['https://example.com/logo-v1.png'],
-      },
-    };
-    const stub = buildHashScopedDb({
-      characterSheetHash: 'jack-hash-v1',
-      locationReferenceHash: 'docks-hash-v1',
-      elementImageUrl: 'https://example.com/logo-v2.png',
-      shotMetadata: {
-        continuity: {
-          characterTags: ['jack'],
-          environmentTag: 'docks',
-          elementTags: ['LOGO'],
-        },
-        metadata: { location: 'Docks' },
-        originalScript: { extract: 'see LOGO at the door' },
-      },
-    });
-    const dtoHash = await computeImageWorkflowHashFromDto(inputWithElement);
-    const currentHash = await computeImageWorkflowHashCurrent(
-      inputWithElement,
-      stub
-    );
-    expect(currentHash).not.toBe(dtoHash);
-  });
-
-  it('returns the inlined hash sentinel when no snapshot is opted in', async () => {
-    const result = await computeImageWorkflowHashCurrent(
-      { ...baseInput, sceneSnapshot: undefined, snapshotInputHash: undefined },
-      unreachableHashScopedDb
-    );
-    expect(result).toBe('');
-  });
-
-  it('throws when sceneSnapshot is present but aspectRatio is missing', () => {
-    expect(
-      computeImageWorkflowHashCurrent(
-        { ...baseInput, aspectRatio: undefined },
-        buildHashScopedDb({
-          characterSheetHash: 'jack-hash-v1',
-          locationReferenceHash: 'docks-hash-v1',
-        })
-      )
-    ).rejects.toThrow(/aspectRatio is required/);
-  });
-
-  it('throws when the shot exists but has null metadata (data corruption)', () => {
-    const stub = buildHashScopedDb({
-      characterSheetHash: 'jack-hash-v1',
-      locationReferenceHash: 'docks-hash-v1',
-      shotMetadata: null,
-    });
-    expect(computeImageWorkflowHashCurrent(baseInput, stub)).rejects.toThrow(
-      /null metadata/
-    );
   });
 });
 

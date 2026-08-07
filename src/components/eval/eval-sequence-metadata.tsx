@@ -124,7 +124,7 @@ const SequenceErrors: React.FC<{ sequence: SequenceWithShots }> = ({
   if (sequence.musicError) errorCount++;
 
   errorCount += sequence.shots.filter(
-    (f) => f.thumbnailStatus === 'failed'
+    (f) => f.frame.imageStatus === 'failed'
   ).length;
   errorCount += sequence.shots.filter((f) => f.videoStatus === 'failed').length;
 

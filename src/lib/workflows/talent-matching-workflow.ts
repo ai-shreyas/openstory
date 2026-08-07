@@ -17,7 +17,7 @@
 
 import { talentMatchResponseSchema } from '@/lib/ai/response-schemas';
 import { buildMatchingPromptVariables } from '@/lib/ai/talent-matching-prompt';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { getGenerationChannel } from '@/lib/realtime';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { durableLLMCallCf } from '@/lib/workflows/llm-call-helper';
@@ -36,7 +36,7 @@ export class TalentMatchingWorkflow extends OpenStoryWorkflowEntrypoint<TalentMa
   protected override async runImpl(
     event: Readonly<WorkflowEvent<TalentMatchingWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<TalentMatchingWorkflowOutput> {
     const input = event.payload;
     const { suggestedTalentIds, sequenceId, analysisModelId } = input;
@@ -54,40 +54,50 @@ export class TalentMatchingWorkflow extends OpenStoryWorkflowEntrypoint<TalentMa
     // fire-and-forget `/library-talent-sheet` workflow, so wait (bounded) for
     // those sheets before reading them — otherwise the cast character is
     // generated with an empty reference and won't look like the chosen talent.
-    if (suggestedTalentIds?.length && input.teamId) {
-      await waitForTalentSheets(step, scopedDb, suggestedTalentIds, {
-        // Surface the wait in the generation progress dialog. Phase 2 is the
-        // "Casting characters & locations…" step; only emitted when we actually
-        // have to wait, so a ready library never flashes a spurious status.
-        onWaitNeeded: async () => {
-          if (!sequenceId) return;
-          await getGenerationChannel(sequenceId).emit(
-            'generation.phase:start',
-            {
-              phase: 2,
-              phaseName: 'Waiting for talent sheets…',
-            }
-          );
-        },
-      });
-    }
+    const sheetRows =
+      suggestedTalentIds?.length && input.teamId
+        ? (
+            await waitForTalentSheets(
+              step,
+              scopedDb.liveRead,
+              suggestedTalentIds,
+              {
+                // Surface the wait in the generation progress dialog. Phase 2 is
+                // the "Casting characters & locations…" step; only emitted when
+                // we actually have to wait, so a ready library never flashes a
+                // spurious status.
+                onWaitNeeded: async () => {
+                  if (!sequenceId) return;
+                  await getGenerationChannel(sequenceId).emit(
+                    'generation.phase:start',
+                    {
+                      phase: 2,
+                      phaseName: 'Waiting for talent sheets…',
+                    }
+                  );
+                },
+              }
+            )
+          ).rows
+        : [];
 
-    const { talentList, matchingPromptVariables } = await step.do(
-      'get-talent-list',
-      async () => {
-        if (!suggestedTalentIds?.length || !input.teamId) {
-          return { talentList: [], matchingPromptVariables: {} };
-        }
-        const talentList = await scopedDb.talent.getByIds(suggestedTalentIds);
-        return {
-          talentList,
-          matchingPromptVariables: buildMatchingPromptVariables(
-            characterBible,
-            talentList
-          ),
-        };
-      }
+    // The wait's final poll IS the read: re-querying here would discard a
+    // fresher result and re-open the race it just closed. Name/description
+    // come from the trigger-time snapshot — only the sheet image is allowed to
+    // arrive late, so a rename mid-run must not change who we cast.
+    const snapshotById = new Map(
+      (input.suggestedTalent ?? []).map((t) => [t.talentId, t])
     );
+    const talentList = sheetRows.map((row) => {
+      const snapshot = snapshotById.get(row.id);
+      return snapshot
+        ? { ...row, name: snapshot.name, description: snapshot.description }
+        : row;
+    });
+    const matchingPromptVariables =
+      talentList.length > 0
+        ? buildMatchingPromptVariables(characterBible, talentList)
+        : {};
 
     const { matches: talentMatches } =
       talentList.length > 0

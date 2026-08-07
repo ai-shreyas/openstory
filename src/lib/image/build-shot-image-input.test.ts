@@ -26,23 +26,10 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     id: 'shot-1',
     sequenceId: 'seq-1',
     sceneId: null,
-    shotNumber: null,
-    orderIndex: 0,
-    description: '',
+    shotNumber: 1,
     durationMs: 3000,
-    videoUrl: null,
-    videoPath: null,
-    videoStatus: 'pending',
-    videoWorkflowRunId: null,
-    videoGeneratedAt: null,
-    videoError: null,
-    motionPrompt: null,
-    motionModel: null,
-    videoInputHash: null,
-    motionPromptInputHash: null,
     selectedMotionPromptVersionId: null,
     renderSegmentId: null,
-    metadata: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -55,11 +42,11 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
  * `schema.parse()` — so the fixture never leans on `.catch()` defaults filling
  * missing keys, a behavior that isn't portable across zod versions.
  */
-function makeScene(opts: { sceneId?: string } = {}): Scene {
+function makeScene(opts: { sceneId?: string; extract?: string } = {}): Scene {
   return {
     sceneId: opts.sceneId ?? 'scene-1',
     sceneNumber: 1,
-    originalScript: { extract: '', dialogue: [] },
+    originalScript: { extract: opts.extract ?? '', dialogue: [] },
     metadata: {
       title: 'Scene',
       durationSeconds: 3,
@@ -71,6 +58,7 @@ function makeScene(opts: { sceneId?: string } = {}): Scene {
 }
 
 const baseOpts = {
+  scene: null as Scene | null,
   model: DEFAULT_IMAGE_MODEL,
   userId: 'user-1',
   teamId: 'team-1',
@@ -83,9 +71,10 @@ const baseOpts = {
 
 describe('buildShotImageWorkflowInput — prompt fallback chain (#547)', () => {
   it('prefers opts.prompt over every stored source', async () => {
-    const shot = makeShot({ description: 'DESC', metadata: makeScene() });
+    const shot = makeShot();
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
+      scene: makeScene({ extract: 'DESC' }),
       shot,
       imagePrompt: 'STORED',
       prompt: 'OVERRIDE',
@@ -95,7 +84,7 @@ describe('buildShotImageWorkflowInput — prompt fallback chain (#547)', () => {
   });
 
   it('falls back to the stored frame imagePrompt when no override', async () => {
-    const shot = makeShot({ description: 'DESC' });
+    const shot = makeShot();
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
       shot,
@@ -105,9 +94,10 @@ describe('buildShotImageWorkflowInput — prompt fallback chain (#547)', () => {
   });
 
   it('falls back to shot.description last', async () => {
-    const shot = makeShot({ description: 'DESC' });
+    const shot = makeShot();
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
+      scene: makeScene({ extract: 'DESC' }),
       shot,
       imagePrompt: null,
     });
@@ -115,10 +105,7 @@ describe('buildShotImageWorkflowInput — prompt fallback chain (#547)', () => {
   });
 
   it('returns null when no prompt is available anywhere (caller skips the shot)', async () => {
-    const shot = makeShot({
-      description: '',
-      metadata: null,
-    });
+    const shot = makeShot();
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
       shot,
@@ -130,70 +117,86 @@ describe('buildShotImageWorkflowInput — prompt fallback chain (#547)', () => {
 
 describe('buildShotImageWorkflowInput — variantOnly (#547)', () => {
   it('propagates variantOnly: true', async () => {
-    const shot = makeShot({ description: 'DESC' });
+    const shot = makeShot();
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
       shot,
+      imagePrompt: 'P',
       variantOnly: true,
     });
     expect(input?.variantOnly).toBe(true);
   });
 
   it('defaults variantOnly to false (the single-shot regenerate path keeps writing the primary)', async () => {
-    const shot = makeShot({ description: 'DESC' });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+    const shot = makeShot();
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: 'P',
+    });
     expect(input?.variantOnly).toBe(false);
   });
 });
 
 describe('buildShotImageWorkflowInput — sceneId + core shape', () => {
-  it('uses metadata.sceneId for the snapshot when present', async () => {
-    const shot = makeShot({
-      description: 'DESC',
-      metadata: makeScene({ sceneId: 'scene-xyz' }),
+  it("uses the scene's id for the snapshot when present", async () => {
+    const shot = makeShot();
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      scene: makeScene({ sceneId: 'scene-xyz', extract: 'DESC' }),
+      shot,
     });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
     expect(input?.sceneSnapshot?.sceneId).toBe('scene-xyz');
   });
 
-  it('falls back to shot.id when metadata is absent', async () => {
-    const shot = makeShot({ id: 'shot-99', description: 'DESC' });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+  it('falls back to shot.id when the shot has no scene', async () => {
+    const shot = makeShot({ id: 'shot-99' });
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: 'P',
+    });
     expect(input?.sceneSnapshot?.sceneId).toBe('shot-99');
   });
 
-  it('sets the workflow fields (shotId, sequenceId, numImages, userEditedPrompt default, hash)', async () => {
-    const shot = makeShot({ id: 'shot-7', description: 'DESC' });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+  it('sets the workflow fields (shotId, sequenceId, numImages, hash)', async () => {
+    const shot = makeShot({ id: 'shot-7' });
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: 'P',
+    });
     expect(input?.shotId).toBe('shot-7');
     expect(input?.sequenceId).toBe('seq-1');
     expect(input?.numImages).toBe(1);
     expect(input?.model).toBe(DEFAULT_IMAGE_MODEL);
-    expect(input?.userEditedPrompt).toBe(false);
     expect(typeof input?.snapshotInputHash).toBe('string');
     expect(input?.snapshotInputHash?.length).toBeGreaterThan(0);
   });
 
-  it('forwards userEditedPrompt when set', async () => {
-    const shot = makeShot({ description: 'DESC' });
+  it('never records a user edit — this builder serves the add-model path', async () => {
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
-      shot,
-      userEditedPrompt: true,
+      shot: makeShot(),
+      imagePrompt: 'P',
     });
-    expect(input?.userEditedPrompt).toBe(true);
+    expect(input?.userEditProvenance).toBeUndefined();
   });
 });
 
 describe('buildShotImageWorkflowInput — reference images', () => {
   it('has no reference images when nothing matches', async () => {
-    const shot = makeShot({ description: 'DESC' });
-    const input = await buildShotImageWorkflowInput({ ...baseOpts, shot });
+    const shot = makeShot();
+    const input = await buildShotImageWorkflowInput({
+      ...baseOpts,
+      shot,
+      imagePrompt: 'P',
+    });
     expect(input?.referenceImages).toEqual([]);
   });
 
   it('includes a matching character (with a sheet) as a character-role reference', async () => {
-    const shot = makeShot({ description: 'DESC' });
+    const shot = makeShot();
     const character: CharacterMinimal = {
       id: 'c1',
       characterId: 'jack',
@@ -207,6 +210,7 @@ describe('buildShotImageWorkflowInput — reference images', () => {
     const input = await buildShotImageWorkflowInput({
       ...baseOpts,
       shot,
+      imagePrompt: 'P',
       characters: [character],
       // Matching continuity passed directly (avoids building shot metadata).
       continuity: {

@@ -82,32 +82,18 @@ describe('resolveMotionPromptFromVersion', () => {
     expect(out).toContain('It was never about the money.');
   });
 
-  it('uses the bare mirror text WITHOUT re-assembly for legacy shots (no version row)', () => {
-    // Load-bearing: pre-#713 shots carry the cached mirror but no selected
-    // version. Re-running model-specific assembly would change long-standing
-    // output, so the mirror must pass through verbatim — even on an audio model.
-    const mirror = 'Legacy motion prompt, exactly as stored.';
+  it('falls back to the scene script when there is no version, else empty', () => {
     expect(
       resolveMotionPromptFromVersion(
         null,
-        { motionPromptMirror: mirror, description: 'ignored' },
-        AUDIO_MODEL
-      )
-    ).toBe(mirror);
-  });
-
-  it('prefers the mirror over the description, and the description over empty', () => {
-    expect(
-      resolveMotionPromptFromVersion(
-        null,
-        { motionPromptMirror: null, description: 'desc fallback' },
+        { description: 'desc fallback' },
         NON_AUDIO_MODEL
       )
     ).toBe('desc fallback');
     expect(
       resolveMotionPromptFromVersion(
         undefined,
-        { motionPromptMirror: null, description: null },
+        { description: null },
         NON_AUDIO_MODEL
       )
     ).toBe('');

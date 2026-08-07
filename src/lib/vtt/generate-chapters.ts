@@ -1,4 +1,11 @@
+import type { SceneRow } from '@/lib/db/schema';
 import type { Shot } from '@/types/database';
+
+/** A shot paired with the scene it belongs to (null when it has none). */
+export type ShotChapter = {
+  shot: Pick<Shot, 'durationMs'>;
+  scene: Pick<SceneRow, 'title' | 'orderIndex'> | null;
+};
 
 /**
  * Formats a time in seconds to WebVTT timestamp format (HH:MM:SS.mmm)
@@ -29,7 +36,9 @@ function escapeVTTText(text: string): string {
  * Generates a WebVTT chapters file from an array of shots.
  * Each shot becomes a chapter with its scene number and title.
  */
-export function generateChaptersVTT(shots: Shot[]): string {
+export function generateChaptersVTT(
+  chapters: ReadonlyArray<ShotChapter>
+): string {
   // Start with WebVTT header
   const lines: string[] = [
     'WEBVTT',
@@ -40,16 +49,16 @@ export function generateChaptersVTT(shots: Shot[]): string {
 
   let cumulativeTime = 0;
 
-  for (let i = 0; i < shots.length; i++) {
-    const shot = shots[i];
-    if (!shot) throw new Error(`expected shot at index ${i}`);
+  for (let i = 0; i < chapters.length; i++) {
+    const chapter = chapters[i];
+    if (!chapter) throw new Error(`expected shot at index ${i}`);
+    const { shot, scene } = chapter;
     const duration = (shot.durationMs || 3000) / 1000; // Convert to seconds
     const startTime = cumulativeTime;
     const endTime = cumulativeTime + duration;
 
-    // Get scene metadata
-    const sceneNumber = shot.metadata?.sceneNumber ?? i + 1;
-    const sceneTitle = shot.metadata?.metadata?.title ?? `Scene ${i + 1}`;
+    const sceneNumber = scene ? scene.orderIndex + 1 : i + 1;
+    const sceneTitle = scene?.title ?? `Scene ${i + 1}`;
 
     // Format: "Scene {number}: {title}"
     const chapterTitle = `Scene ${sceneNumber}: ${escapeVTTText(sceneTitle)}`;

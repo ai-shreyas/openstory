@@ -1,96 +1,66 @@
-import type { Shot } from '@/types/database';
-import { frameFixtureFor } from '@/lib/mocks/frame-fixtures';
-import {
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+import { dbSceneId } from '@/lib/db/schema';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import { frameFixture, frameVariantFixture } from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import type { Meta, StoryObj } from '@storybook/react';
 import { SceneListItem } from './scene-list-item';
 
-// The still IMAGE surface moved off `shots` onto the anchor frame in #989. The
-// mock carries the legacy `thumbnail*`/`image*` names the card still reads (the
-// `ShotWithImage` projection); mirror them back onto a concrete anchor `Frame`
-// (id == shot.id) so the row matches what `getShotsFn` returns.
-const toShotWithImage = (shot: Omit<ShotWithImage, 'frame'>): ShotWithImage => {
-  const { frame, selectedVersion } = frameFixtureFor(shot);
-  return projectShotWithImage(shot, frame, selectedVersion, {
-    url: shot.variantImageUrl,
-    status: shot.variantImageStatus,
-  });
-};
-
-const mockShot: ShotWithImage = toShotWithImage({
-  id: 'shot-1',
+const anchorFrame = frameFixture({
+  shotId: 'shot-1',
   sequenceId: 'seq-1',
-  sceneId: null,
-  shotNumber: null,
-  orderIndex: 0,
-  description: 'A bustling coffee shop interior during morning rush hour',
-  durationMs: 3000,
-  thumbnailUrl: 'https://picsum.photos/seed/coffee/320/180',
-  thumbnailPath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
-  variantImageUrl: null,
-  variantImageStatus: 'pending',
-  videoUrl: null,
-  videoPath: null,
-  thumbnailStatus: 'completed',
-  videoStatus: 'pending',
-  thumbnailWorkflowRunId: null,
-  imageModel: null,
-  thumbnailError: null,
-  imagePrompt: null,
-  videoWorkflowRunId: null,
-  videoGeneratedAt: null,
-  videoError: null,
-  motionPrompt: '',
-  motionModel: 'veo3',
-  motionPromptData: null,
-  selectedMotionPromptVersionId: null,
-  renderSegmentId: null,
-  thumbnailInputHash: null,
-  videoInputHash: null,
-  visualPromptInputHash: null,
-  motionPromptInputHash: null,
-  previewThumbnailUrl: null,
-  metadata: {
-    sceneId: 'scene-1',
-    sceneNumber: 1,
-    originalScript: {
-      extract:
-        'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',
-      dialogue: [
-        {
-          character: 'SARAH',
-          line: 'This deadline is going to kill me.',
-          tone: '',
-        },
-      ],
-    },
-    metadata: {
-      title: 'Coffee Shop Introduction',
-      durationSeconds: 3,
-      location: 'Coffee Shop',
-      timeOfDay: 'Morning',
-      storyBeat: 'Establish protagonist stress and setting',
-    },
-    musicDesign: {
-      presence: 'none',
-      style: '',
-      mood: '',
-      atmosphere: '',
-    },
-    continuity: {
-      characterTags: [],
-      environmentTag: '',
-      colorPalette: '',
-      lightingSetup: '',
-      styleTag: '',
-    },
-    sourceImageUrl: '',
+  imageStatus: 'completed',
+});
+
+const mockShot: ShotView = toShotView(
+  {
+    id: 'shot-1',
+    sequenceId: 'seq-1',
+    sceneId: null,
+    shotNumber: 1,
+    durationMs: 3000,
+    selectedMotionPromptVersionId: null,
+    renderSegmentId: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   },
+  anchorFrame,
+  {
+    image: frameVariantFixture({
+      frameId: anchorFrame.id,
+      sequenceId: 'seq-1',
+      url: 'https://picsum.photos/seed/coffee/320/180',
+      storagePath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
+    }),
+    imagePromptVersion: null,
+    video: null,
+    primaryVideo: null,
+  }
+);
+
+const mockScene: SceneWithScript = {
+  id: dbSceneId('scene-1'),
+  sequenceId: 'seq-1',
+  orderIndex: 0,
+  location: 'Coffee Shop',
+  timeOfDay: 'Morning',
+  storyBeat: 'Establish protagonist stress and setting',
+  title: 'Coffee Shop Introduction',
+  continuity: null,
+  script: {
+    extract:
+      'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte.',
+    dialogue: [
+      {
+        character: 'SARAH',
+        line: 'This deadline is going to kill me.',
+        tone: '',
+      },
+    ],
+  },
+  selectedScriptVersionId: null,
   createdAt: new Date(),
   updatedAt: new Date(),
-});
+};
 
 const meta: Meta<typeof SceneListItem> = {
   title: 'Scenes/SceneListItem',
@@ -106,6 +76,7 @@ const meta: Meta<typeof SceneListItem> = {
     ),
   ],
   args: {
+    scene: mockScene,
     onSelect: () => console.log('onSelect'),
   },
 };
@@ -145,8 +116,8 @@ export const Generating: Story = {
   args: {
     shot: {
       ...mockShot,
-      thumbnailUrl: null,
-      thumbnailStatus: 'generating',
+      image: null,
+      frame: { ...mockShot.frame, imageStatus: 'generating' },
     },
     isActive: false,
   },
@@ -156,8 +127,8 @@ export const GeneratingActive: Story = {
   args: {
     shot: {
       ...mockShot,
-      thumbnailUrl: null,
-      thumbnailStatus: 'generating',
+      image: null,
+      frame: { ...mockShot.frame, imageStatus: 'generating' },
     },
     isActive: true,
   },
@@ -167,9 +138,12 @@ export const Failed: Story = {
   args: {
     shot: {
       ...mockShot,
-      thumbnailUrl: null,
-      thumbnailStatus: 'failed',
-      thumbnailError: 'Generation timeout',
+      image: null,
+      frame: {
+        ...mockShot.frame,
+        imageStatus: 'failed',
+        imageError: 'Generation timeout',
+      },
     },
     isActive: false,
   },
@@ -177,38 +151,11 @@ export const Failed: Story = {
 
 export const LongTitle: Story = {
   args: {
-    shot: {
-      ...mockShot,
-      metadata: {
-        sceneId: mockShot.metadata?.sceneId ?? '',
-        sceneNumber: mockShot.metadata?.sceneNumber ?? 1,
-        originalScript: mockShot.metadata?.originalScript ?? {
-          extract: '',
-          dialogue: [],
-        },
-        metadata: {
-          title:
-            'An Extremely Long Scene Title That Should Wrap Properly Without Breaking Layout',
-          durationSeconds: mockShot.metadata?.metadata?.durationSeconds ?? 3,
-          location: mockShot.metadata?.metadata?.location ?? '',
-          timeOfDay: mockShot.metadata?.metadata?.timeOfDay ?? '',
-          storyBeat: mockShot.metadata?.metadata?.storyBeat ?? '',
-        },
-        audioDesign: mockShot.metadata?.audioDesign ?? {
-          music: { presence: 'none', style: '', mood: '', rationale: '' },
-          soundEffects: [],
-          dialogue: { presence: false, lines: [] },
-          ambient: { roomTone: '', atmosphere: '' },
-        },
-        continuity: mockShot.metadata?.continuity ?? {
-          characterTags: [],
-          environmentTag: '',
-          colorPalette: '',
-          lightingSetup: '',
-          styleTag: '',
-        },
-        sourceImageUrl: mockShot.metadata?.sourceImageUrl ?? '',
-      } satisfies Shot['metadata'],
+    shot: mockShot,
+    scene: {
+      ...mockScene,
+      title:
+        'An Extremely Long Scene Title That Should Wrap Properly Without Breaking Layout',
     },
     isActive: false,
   },
@@ -216,41 +163,14 @@ export const LongTitle: Story = {
 
 export const LongScript: Story = {
   args: {
-    shot: {
-      ...mockShot,
-      metadata: {
-        sceneId: mockShot.metadata?.sceneId ?? '',
-        sceneNumber: mockShot.metadata?.sceneNumber ?? 1,
-        originalScript: {
-          ...(mockShot.metadata?.originalScript ?? {
-            extract: '',
-            dialogue: [],
-          }),
-          extract:
-            'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte. The morning sun streams through large windows, casting long shadows across the wooden floor. Other patrons bustle about, ordering drinks and chatting, creating a backdrop of ambient noise that Sarah tries to tune out.',
-        },
-        metadata: mockShot.metadata?.metadata ?? {
-          title: '',
-          durationSeconds: 3,
-          location: '',
-          timeOfDay: '',
-          storyBeat: '',
-        },
-        audioDesign: mockShot.metadata?.audioDesign ?? {
-          music: { presence: 'none', style: '', mood: '', rationale: '' },
-          soundEffects: [],
-          dialogue: { presence: false, lines: [] },
-          ambient: { roomTone: '', atmosphere: '' },
-        },
-        continuity: mockShot.metadata?.continuity ?? {
-          characterTags: [],
-          environmentTag: '',
-          colorPalette: '',
-          lightingSetup: '',
-          styleTag: '',
-        },
-        sourceImageUrl: mockShot.metadata?.sourceImageUrl ?? '',
-      } satisfies Shot['metadata'],
+    shot: mockShot,
+    scene: {
+      ...mockScene,
+      script: {
+        extract:
+          'INT. COFFEE SHOP - MORNING\n\nSARAH sits at a corner table, typing furiously on her laptop. Steam rises from her untouched latte. The morning sun streams through large windows, casting long shadows across the wooden floor. Other patrons bustle about, ordering drinks and chatting, creating a backdrop of ambient noise that Sarah tries to tune out.',
+        dialogue: [],
+      },
     },
     isActive: false,
   },

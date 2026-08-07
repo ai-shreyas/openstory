@@ -22,7 +22,7 @@ import {
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { generateId } from '@/lib/db/id';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import {
   generateImageWithProvider,
   type ImageGenerationParams,
@@ -57,7 +57,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
   protected override async runImpl(
     event: Readonly<WorkflowEvent<LibraryTalentSheetWorkflowInput>>,
     step: WorkflowStep,
-    scopedDb: ScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<LibraryTalentSheetWorkflowResult> {
     const input = event.payload;
     const workflowRunId = event.instanceId;
@@ -74,16 +74,12 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       }
     });
 
-    // Step 1: Validate input
+    // Step 1: Validate input. No existence read — both triggers created or
+    // loaded the talent row, and the `talent.update` at the end fails loudly on
+    // a row that vanished mid-run.
     await step.do('validate-input', async () => {
       if (!input.talentId) {
         throw new WorkflowValidationError('talentId is required');
-      }
-
-      // Verify talent exists and belongs to team
-      const talentRecord = await scopedDb.talent.getById(input.talentId);
-      if (!talentRecord) {
-        throw new WorkflowValidationError('Talent not found');
       }
 
       const hasReferenceImages =
@@ -129,7 +125,9 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         generationParams.referenceImageUrls = input.referenceImageUrls;
       }
 
-      return await generateImageWithProvider(generationParams, { scopedDb });
+      return await generateImageWithProvider(generationParams, {
+        scopedDb: scopedDb.credentials,
+      });
     });
 
     // Before the deduction guard — see recordFalUsageStep (#1069).
@@ -211,7 +209,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         // `sheets.find(default) ?? sheets[0]`); the `divergedAt` column is
         // the marker the read-side filters on.
         const currentHash = snapshotHash
-          ? await computeLibraryTalentSheetHashCurrent(input, scopedDb)
+          ? await computeLibraryTalentSheetHashCurrent(input, scopedDb.liveRead)
           : null;
         const decision = decideSheetDivergence(snapshotHash, currentHash);
 
@@ -337,7 +335,9 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
           generationParams.referenceImageUrls = input.referenceImageUrls;
         }
 
-        return await generateImageWithProvider(generationParams, { scopedDb });
+        return await generateImageWithProvider(generationParams, {
+          scopedDb: scopedDb.credentials,
+        });
       }
     );
 
@@ -446,7 +446,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
   }: {
     event: Readonly<WorkflowEvent<LibraryTalentSheetWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): Promise<void> {
     const input = event.payload;
 

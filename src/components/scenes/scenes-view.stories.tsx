@@ -1,6 +1,18 @@
 import { ScenesView } from '@/components/scenes/scenes-view';
-import type { SceneRow } from '@/lib/db/schema';
-import type { Sequence, Shot, Style } from '@/types/database';
+import type { SceneWithScript } from '@/hooks/use-scenes';
+import {
+  dbSceneId,
+  type Frame,
+  type FrameVariant,
+  type VideoVariant,
+} from '@/lib/db/schema';
+import {
+  frameFixture,
+  frameVariantFixture,
+  videoVariantFixture,
+} from '@/lib/mocks/frame-fixtures';
+import { toShotView, type ShotView } from '@/lib/shots/shot-view';
+import type { Sequence, Style } from '@/types/database';
 import type { Meta, StoryObj } from '@storybook/react';
 import {
   fixtureScenes,
@@ -19,7 +31,7 @@ import {
 // Extend the component props to include shots for story mocking
 // Shots are passed through parameters, not args, so make them optional
 type ScenesViewStoryProps = React.ComponentProps<typeof ScenesView> & {
-  shots?: Shot[];
+  shots?: ShotView[];
 };
 
 const mockSequence: Sequence = {
@@ -69,8 +81,8 @@ const meta = {
       // Pull mock data from story parameters (not args, since ScenesView doesn't
       // accept them). `context.parameters` is loosely typed (any), so annotate the
       // locals rather than assert — avoids an unsafe-from-any type assertion.
-      const shots: Shot[] = context.parameters.shots ?? [];
-      const scenes: SceneRow[] = context.parameters.scenes ?? [];
+      const shots: ShotView[] = context.parameters.shots ?? [];
+      const scenes: SceneWithScript[] = context.parameters.scenes ?? [];
       const style: Style | undefined = context.parameters.style;
       const sequenceId = context.args.sequenceId || 'mock-sequence';
       const sequenceOverrides: Partial<Sequence> =
@@ -161,54 +173,80 @@ export const RealSequence: Story = {
   },
 };
 
-// Mock shot base — all Shot fields included
-const mockShotBase = {
+/**
+ * A shot's number, title and script come from its scene (#1067), so each mock
+ * shot points at one of these by `sceneId: 'scene-<n>'`.
+ */
+const mockScene = (orderIndex: number, title: string): SceneWithScript => ({
+  id: dbSceneId(`scene-${orderIndex + 1}`),
   sequenceId: 'seq-1',
-  sceneId: null,
-  shotNumber: null,
-  orderIndex: 0,
-  description: 'A scene from the storyboard',
-  durationMs: 5000,
-  thumbnailWorkflowRunId: null,
-  thumbnailGeneratedAt: null,
-  thumbnailError: null,
-  imageModel: 'nano_banana',
-  imagePrompt: null,
-  videoWorkflowRunId: null,
-  videoGeneratedAt: null,
-  videoError: null,
-  motionPrompt: null,
-  motionModel: 'veo3',
-  variantImageUrl: null,
-  variantImageStatus: 'pending' as const,
-  variantWorkflowRunId: null,
-  variantImageGeneratedAt: null,
-  variantImageError: null,
-  previewThumbnailUrl: null,
-  metadata: {
-    sceneId: 'scene-1',
-    sceneNumber: 1,
-    originalScript: {
-      extract: 'Sample scene text',
-      dialogue: [],
-    },
-    metadata: {
-      title: 'Opening Scene',
-      durationSeconds: 5,
-      location: 'Forest',
-      timeOfDay: 'Dawn',
-      storyBeat: 'Introduction',
-    },
-    continuity: {
-      characterTags: ['hero'],
-      environmentTag: 'forest',
-      colorPalette: 'cool',
-      lightingSetup: 'natural',
-      styleTag: '',
-    },
-  } satisfies Shot['metadata'],
+  orderIndex,
+  location: 'Forest',
+  timeOfDay: 'Dawn',
+  storyBeat: 'Introduction',
+  title,
+  continuity: null,
+  script: { extract: 'Sample scene text', dialogue: [] },
+  selectedScriptVersionId: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+});
+
+/**
+ * A shot owns no assets (#1067): its still lives on the anchor frame's selected
+ * `frame_variants` row and its video on the segment's `video_variants` rows.
+ * Each mock names those rows' real columns; only a completed render is
+ * selectable, so the selection is url-gated off the same `render` row.
+ */
+const mockShot = (spec: {
+  id: string;
+  sceneId: string;
+  frame?: Partial<Frame>;
+  image?: Partial<FrameVariant>;
+  render?: Partial<VideoVariant>;
+}): ShotView => {
+  const now = new Date();
+  const frame = frameFixture({
+    shotId: spec.id,
+    sequenceId: 'seq-1',
+    ...spec.frame,
+  });
+  const image = spec.image
+    ? frameVariantFixture({
+        frameId: frame.id,
+        sequenceId: 'seq-1',
+        model: 'nano_banana',
+        ...spec.image,
+      })
+    : null;
+  const render = spec.render
+    ? videoVariantFixture({
+        renderSegmentId: `${spec.id}-segment`,
+        sequenceId: 'seq-1',
+        model: 'veo3',
+        ...spec.render,
+      })
+    : null;
+  return toShotView(
+    {
+      id: spec.id,
+      sequenceId: 'seq-1',
+      sceneId: spec.sceneId,
+      shotNumber: 1,
+      durationMs: 5000,
+      selectedMotionPromptVersionId: null,
+      renderSegmentId: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    frame,
+    {
+      image,
+      imagePromptVersion: null,
+      video: render?.url ? render : null,
+      primaryVideo: render,
+    }
+  );
 };
 
 export const MixedStates: Story = {
@@ -217,100 +255,73 @@ export const MixedStates: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://picsum.photos/seed/scene1/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Opening Scene',
-          },
+        sceneId: 'scene-1',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/scene1/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
+          status: 'completed',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: 'https://picsum.photos/seed/scene2/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/2/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'The Journey',
-          },
+        sceneId: 'scene-2',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/scene2/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          url: 'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/2/motion.mp4',
+          status: 'completed',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: 'https://picsum.photos/seed/scene3/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Climax' },
+        sceneId: 'scene-3',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/scene3/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '4',
-        orderIndex: 3,
-        thumbnailUrl: 'https://picsum.photos/seed/scene4/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/4/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'generating',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 4,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Resolution',
-          },
+        sceneId: 'scene-4',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/scene4/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/4/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'generating',
+        },
+      }),
+      mockShot({
         id: '5',
-        orderIndex: 4,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 5,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Epilogue',
-          },
+        sceneId: 'scene-5',
+        frame: { imageStatus: 'generating' },
+        render: {
+          status: 'pending',
         },
-      },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Opening Scene'),
+      mockScene(1, 'The Journey'),
+      mockScene(2, 'Climax'),
+      mockScene(3, 'Resolution'),
+      mockScene(4, 'Epilogue'),
     ],
     docs: {
       description: {
@@ -327,57 +338,53 @@ export const AllCompleted: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://picsum.photos/seed/complete1/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 1' },
+        sceneId: 'scene-1',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/complete1/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
+          status: 'completed',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: 'https://picsum.photos/seed/complete2/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/2/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 2' },
+        sceneId: 'scene-2',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/complete2/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          url: 'https://test-videos.co.uk/vids/sintel/mp4/h264/360/Sintel_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/2/motion.mp4',
+          status: 'completed',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: 'https://picsum.photos/seed/complete3/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/3/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: { ...mockShotBase.metadata.metadata, title: 'Scene 3' },
+        sceneId: 'scene-3',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/complete3/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
         },
-      },
+        render: {
+          url: 'https://test-videos.co.uk/vids/jellyfish/mp4/h264/360/Jellyfish_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/3/motion.mp4',
+          status: 'completed',
+        },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Scene 1'),
+      mockScene(1, 'Scene 2'),
+      mockScene(2, 'Scene 3'),
     ],
     docs: {
       description: {
@@ -394,63 +401,47 @@ export const AllPending: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://picsum.photos/seed/pending1/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Waiting for Video 1',
-          },
+        sceneId: 'scene-1',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/pending1/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: 'https://picsum.photos/seed/pending2/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Waiting for Video 2',
-          },
+        sceneId: 'scene-2',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/pending2/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: 'https://picsum.photos/seed/pending3/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Waiting for Video 3',
-          },
+        sceneId: 'scene-3',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/pending3/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
         },
-      },
+        render: {
+          status: 'pending',
+        },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Waiting for Video 1'),
+      mockScene(1, 'Waiting for Video 2'),
+      mockScene(2, 'Waiting for Video 3'),
     ],
     docs: {
       description: {
@@ -467,83 +458,54 @@ export const ShotsGenerating: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://picsum.photos/seed/shotgen1/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 1 - Ready',
-          },
+        sceneId: 'scene-1',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/shotgen1/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
+          status: 'completed',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: 'https://picsum.photos/seed/shotgen2/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 2 - Shot Ready',
-          },
+        sceneId: 'scene-2',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/shotgen2/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 3 - Generating Shot',
-          },
+        sceneId: 'scene-3',
+        frame: { imageStatus: 'generating' },
+        render: {
+          status: 'pending',
         },
-      },
-      {
-        ...mockShotBase,
+      }),
+      mockShot({
         id: '4',
-        orderIndex: 3,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'pending',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 4,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Scene 4 - Shot Pending',
-          },
+        sceneId: 'scene-4',
+        frame: { imageStatus: 'pending' },
+        render: {
+          status: 'pending',
         },
-      },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Scene 1 - Ready'),
+      mockScene(1, 'Scene 2 - Shot Ready'),
+      mockScene(2, 'Scene 3 - Generating Shot'),
+      mockScene(3, 'Scene 4 - Shot Pending'),
     ],
     docs: {
       description: {
@@ -560,63 +522,39 @@ export const GenerationInProgress: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://picsum.photos/seed/gen1/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'generating',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Video Generating',
-          },
+        sceneId: 'scene-1',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/gen1/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'generating',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Shot Generating',
-          },
+        sceneId: 'scene-2',
+        frame: { imageStatus: 'generating' },
+        render: {
+          status: 'pending',
         },
-      },
-      {
-        ...mockShotBase,
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'pending',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Shot Pending',
-          },
+        sceneId: 'scene-3',
+        frame: { imageStatus: 'pending' },
+        render: {
+          status: 'pending',
         },
-      },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Video Generating'),
+      mockScene(1, 'Shot Generating'),
+      mockScene(2, 'Shot Pending'),
     ],
     docs: {
       description: {
@@ -633,66 +571,48 @@ export const PreviewMode: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        previewThumbnailUrl: 'https://picsum.photos/seed/preview1/1280/720',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Generating Full Image',
-          },
+        sceneId: 'scene-1',
+        frame: {
+          imageStatus: 'generating',
+          previewImageUrl: 'https://picsum.photos/seed/preview1/1280/720',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        previewThumbnailUrl: 'https://picsum.photos/seed/preview2/1280/720',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Still Processing',
-          },
+        sceneId: 'scene-2',
+        frame: {
+          imageStatus: 'generating',
+          previewImageUrl: 'https://picsum.photos/seed/preview2/1280/720',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: 'https://picsum.photos/seed/final3/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
-        previewThumbnailUrl: 'https://picsum.photos/seed/preview3/1280/720',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Final Image Ready',
-          },
+        sceneId: 'scene-3',
+        frame: {
+          imageStatus: 'completed',
+          previewImageUrl: 'https://picsum.photos/seed/preview3/1280/720',
         },
-      },
+        image: {
+          url: 'https://picsum.photos/seed/final3/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
+        },
+        render: {
+          status: 'pending',
+        },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Preview - Generating Full Image'),
+      mockScene(1, 'Preview - Still Processing'),
+      mockScene(2, 'Final Image Ready'),
     ],
     docs: {
       description: {
@@ -710,66 +630,48 @@ export const PreviewModePortrait: Story = {
   parameters: {
     sequenceOverrides: { aspectRatio: '9:16' },
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        previewThumbnailUrl: 'https://picsum.photos/seed/preview1p/720/1280',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Generating Full Image',
-          },
+        sceneId: 'scene-1',
+        frame: {
+          imageStatus: 'generating',
+          previewImageUrl: 'https://picsum.photos/seed/preview1p/720/1280',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: null,
-        thumbnailPath: null,
-        previewThumbnailUrl: 'https://picsum.photos/seed/preview2p/720/1280',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'generating',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Preview - Still Processing',
-          },
+        sceneId: 'scene-2',
+        frame: {
+          imageStatus: 'generating',
+          previewImageUrl: 'https://picsum.photos/seed/preview2p/720/1280',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'pending',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: 'https://picsum.photos/seed/final3p/720/1280',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
-        previewThumbnailUrl: 'https://picsum.photos/seed/preview3p/720/1280',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Final Image Ready',
-          },
+        sceneId: 'scene-3',
+        frame: {
+          imageStatus: 'completed',
+          previewImageUrl: 'https://picsum.photos/seed/preview3p/720/1280',
         },
-      },
+        image: {
+          url: 'https://picsum.photos/seed/final3p/720/1280',
+          storagePath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
+        },
+        render: {
+          status: 'pending',
+        },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Preview - Generating Full Image'),
+      mockScene(1, 'Preview - Still Processing'),
+      mockScene(2, 'Final Image Ready'),
     ],
     docs: {
       description: {
@@ -786,64 +688,49 @@ export const WithFailures: Story = {
   },
   parameters: {
     shots: [
-      {
-        ...mockShotBase,
+      mockShot({
         id: '1',
-        orderIndex: 0,
-        thumbnailUrl: 'https://picsum.photos/seed/fail1/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
-        videoUrl:
-          'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
-        videoPath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
-        thumbnailStatus: 'completed',
-        videoStatus: 'completed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 1,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Successful Scene',
-          },
+        sceneId: 'scene-1',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/fail1/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/1/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          url: 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_1MB.mp4',
+          storagePath: 'teams/mock/sequences/mock/frames/1/motion.mp4',
+          status: 'completed',
+        },
+      }),
+      mockShot({
         id: '2',
-        orderIndex: 1,
-        thumbnailUrl: 'https://picsum.photos/seed/fail2/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'failed',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 2,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Failed Generation',
-          },
+        sceneId: 'scene-2',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/fail2/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/2/thumbnail.jpg',
         },
-      },
-      {
-        ...mockShotBase,
+        render: {
+          status: 'failed',
+        },
+      }),
+      mockShot({
         id: '3',
-        orderIndex: 2,
-        thumbnailUrl: 'https://picsum.photos/seed/fail3/1280/720',
-        thumbnailPath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
-        videoUrl: null,
-        videoPath: null,
-        thumbnailStatus: 'completed',
-        videoStatus: 'pending',
-        metadata: {
-          ...mockShotBase.metadata,
-          sceneNumber: 3,
-          metadata: {
-            ...mockShotBase.metadata.metadata,
-            title: 'Pending Scene',
-          },
+        sceneId: 'scene-3',
+        frame: { imageStatus: 'completed' },
+        image: {
+          url: 'https://picsum.photos/seed/fail3/1280/720',
+          storagePath: 'teams/mock/sequences/mock/frames/3/thumbnail.jpg',
         },
-      },
+        render: {
+          status: 'pending',
+        },
+      }),
+    ],
+    scenes: [
+      mockScene(0, 'Successful Scene'),
+      mockScene(1, 'Failed Generation'),
+      mockScene(2, 'Pending Scene'),
     ],
     docs: {
       description: {

@@ -13,7 +13,7 @@
  * `shotMapping` (#991). */
 
 import type { Scene, VisualPrompt } from '@/lib/ai/scene-analysis.schema';
-import type { ScopedDb } from '@/lib/db/scoped';
+import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type {
@@ -39,7 +39,7 @@ export class FramePromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<FrameP
   protected override async runImpl(
     event: Readonly<WorkflowEvent<FramePromptBatchWorkflowInput>>,
     step: WorkflowStep,
-    _scopedDb: ScopedDb
+    _scopedDb: WorkflowScopedDb
   ): Promise<FramePromptBatchWorkflowResult> {
     const input = event.payload;
     const {
@@ -185,7 +185,7 @@ export class FramePromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<FrameP
   }: {
     event: Readonly<WorkflowEvent<FramePromptBatchWorkflowInput>>;
     error: string;
-    scopedDb: ScopedDb;
+    scopedDb: WorkflowScopedDb;
   }): void {
     logger.error(
       `[FramePromptBatchWorkflow:cf] Visual prompt generation failed: ${error}`

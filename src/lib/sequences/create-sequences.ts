@@ -35,7 +35,7 @@ import { promoteTempElements } from '@/lib/sequence-elements/promote-temp-elemen
 import { captureProductEvent } from '@/lib/observability/product-events';
 import { bumpStylePopularity } from '@/lib/style/bump-style-popularity';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
-import type { StoryboardWorkflowInput } from '@/lib/workflow/types';
+import type { StoryboardTriggerInput } from '@/lib/workflow/types';
 import { createServerOnlyFn } from '@tanstack/react-start';
 
 export type CreateSequencesContext = {
@@ -216,7 +216,7 @@ export const createSequences = createServerOnlyFn(
           });
         }
 
-        const workflowInput: StoryboardWorkflowInput = {
+        const workflowInput: StoryboardTriggerInput = {
           userId: context.user.id,
           teamId,
           sequenceId: sequence.id,

@@ -3,6 +3,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
+import { useScenesBySequence } from '@/hooks/use-scenes';
 import { useAddModelToSequence, useSequence } from '@/hooks/use-sequences';
 import { useShotsBySequence } from '@/hooks/use-shots';
 import { useStyle } from '@/hooks/use-styles';
@@ -53,6 +54,7 @@ export const AddModelMenuSection = ({
 }) => {
   const addModel = useAddModelToSequence();
   const { data: shots } = useShotsBySequence(sequenceId);
+  const { data: sceneRows } = useScenesBySequence(sequenceId);
   const { data: sequence } = useSequence(sequenceId);
   const { data: style } = useStyle(sequence?.styleId ?? '');
   const aspectRatio = sequence?.aspectRatio ?? DEFAULT_ASPECT_RATIO;
@@ -64,10 +66,15 @@ export const AddModelMenuSection = ({
   const candidates = useMemo<Candidate[]>(() => {
     const used = new Set(usedModels);
     const shotList = shots ?? [];
+    const extractBySceneId = new Map<string, string>(
+      (sceneRows ?? []).map((scene) => [scene.id, scene.script?.extract ?? ''])
+    );
 
     if (variantType === 'image') {
       const count = shotList.filter(
-        (f) => f.imagePrompt || f.description
+        (f) =>
+          f.imagePromptVersion?.text ||
+          (f.sceneId ? extractBySceneId.get(f.sceneId) : undefined)
       ).length;
       return Object.keys(IMAGE_MODELS)
         .filter(isValidTextToImageModel)
@@ -84,7 +91,7 @@ export const AddModelMenuSection = ({
 
     if (variantType === 'video') {
       const count = shotList.filter(
-        (f) => f.thumbnailStatus === 'completed' && f.thumbnailUrl
+        (f) => f.frame.imageStatus === 'completed' && f.image?.url
       ).length;
       return Object.keys(IMAGE_TO_VIDEO_MODELS)
         .filter(isValidImageToVideoModel)
@@ -127,7 +134,7 @@ export const AddModelMenuSection = ({
         name: AUDIO_MODELS[key].name,
         scope: '1 track',
       }));
-  }, [variantType, usedModels, shots, aspectRatio, styleCategory]);
+  }, [variantType, usedModels, shots, sceneRows, aspectRatio, styleCategory]);
 
   if (candidates.length === 0) return null;
 

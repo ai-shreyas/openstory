@@ -7,9 +7,12 @@
  *     recoverable by reading the variant chain.
  *   - Regenerating a prompt produces a `'regenerated'` row with a populated
  *     `input_hash`.
- *   - The cached pointer (`shots.motionPrompt` and `motionPromptInputHash`) is
- *     updated by the helper sequentially after the variant insert (not
- *     transactionally — see the helper docstring for the durability story).
+ *   - The selection pointer (`shots.selectedMotionPromptVersionId`) is moved
+ *     onto the written row by the helper sequentially after the variant insert
+ *     (not transactionally — see the helper docstring for the durability
+ *     story). #1067 dropped the `shots.motionPrompt` /
+ *     `motionPromptInputHash` mirrors, so the prompt text and hash are read
+ *     back off the selected version row.
  *
  * The VISUAL (image) prompt path moved to `frame_prompt_versions` in #989
  * (keyed by the anchor frame id, resolved from the shot — frame ids ≠ shot ids)
@@ -28,6 +31,7 @@ import {
   teams,
   user,
 } from '@/lib/db/schema';
+import type { ShotPromptVersion } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
 import { type Client, createClient } from '@libsql/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -81,10 +85,28 @@ async function seed() {
   });
   const [shot] = await db
     .insert(shots)
-    .values({ sequenceId, orderIndex: 0 })
+    .values({ sequenceId, shotNumber: 1 })
     .returning();
   if (!shot) throw new Error('test setup: shot insert returned nothing');
   shotId = shot.id;
+}
+
+/**
+ * The motion prompt version the shot points at — the row that holds what the
+ * dropped `shots.motionPrompt`/`motionPromptInputHash` mirrors used to cache.
+ * Null when the pointer is unset or orphaned.
+ */
+async function selectedMotionVersion(
+  id: string = shotId
+): Promise<ShotPromptVersion | null> {
+  const [shot] = await db.select().from(shots).where(eq(shots.id, id));
+  if (!shot) throw new Error('test setup: refresh failed');
+  if (!shot.selectedMotionPromptVersionId) return null;
+  const [version] = await db
+    .select()
+    .from(shotPromptVersions)
+    .where(eq(shotPromptVersions.id, shot.selectedMotionPromptVersionId));
+  return version ?? null;
 }
 
 beforeAll(async () => {
@@ -102,20 +124,12 @@ beforeEach(async () => {
 });
 
 describe('shot_prompt_variants helper', () => {
-  it('user-edit with null inputHash appends a row and clears the cached hash', async () => {
+  it('user-edit with null inputHash appends a row and selects it with a null hash', async () => {
     const methods = createShotPromptVersionsMethods(db);
 
-    // Seed the cached column to mimic an existing AI-generated prompt.
-    await db
-      .update(shots)
-      .set({
-        motionPrompt: 'AI-generated prompt v1',
-        motionPromptInputHash: 'hash-v1',
-      })
-      .where(eq(shots.id, shotId));
-
     // A user-edit recorded without an upstream hash (e.g., context was
-    // uncomputable at write time) writes null to both the row and the cache.
+    // uncomputable at write time) writes null to the row the shot then
+    // points at.
     const variant = await methods.write({
       shotId,
       promptType: 'motion',
@@ -129,25 +143,14 @@ describe('shot_prompt_variants helper', () => {
     expect(variant.text).toBe('User edited prompt');
     expect(variant.inputHash).toBeNull();
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('User edited prompt');
-    expect(refreshed.motionPromptInputHash).toBeNull();
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(variant.id);
+    expect(selected?.text).toBe('User edited prompt');
+    expect(selected?.inputHash).toBeNull();
   });
 
-  it('user-edit with a real inputHash stamps both the row and the cached column', async () => {
+  it('user-edit with a real inputHash stamps the row the shot selects', async () => {
     const methods = createShotPromptVersionsMethods(db);
-
-    await db
-      .update(shots)
-      .set({
-        motionPrompt: 'AI-generated prompt v1',
-        motionPromptInputHash: 'hash-v1',
-      })
-      .where(eq(shots.id, shotId));
 
     const variant = await methods.write({
       shotId,
@@ -161,16 +164,13 @@ describe('shot_prompt_variants helper', () => {
     expect(variant.source).toBe('user-edit');
     expect(variant.inputHash).toBe('hash-at-edit-time');
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('User edited prompt');
-    expect(refreshed.motionPromptInputHash).toBe('hash-at-edit-time');
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(variant.id);
+    expect(selected?.text).toBe('User edited prompt');
+    expect(selected?.inputHash).toBe('hash-at-edit-time');
   });
 
-  it('regenerated prompt populates input_hash on both the row and the cached column', async () => {
+  it('regenerated prompt populates input_hash on the row the shot selects', async () => {
     const methods = createShotPromptVersionsMethods(db);
 
     const variant = await methods.write({
@@ -185,18 +185,13 @@ describe('shot_prompt_variants helper', () => {
     expect(variant.source).toBe('regenerated');
     expect(variant.inputHash).toBe('context-hash-abc');
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('AI prompt v2');
-    expect(refreshed.motionPromptInputHash).toBe('context-hash-abc');
     // The selection pointer must move to the written version — the render
     // manifest snapshots this, and leaving it null reintroduced the #990
-    // null-reference bug. A regression dropping the pointer-set is otherwise
-    // invisible (motionPrompt/hash still update), so assert it explicitly.
-    expect(refreshed.selectedMotionPromptVersionId).toBe(variant.id);
+    // null-reference bug.
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(variant.id);
+    expect(selected?.text).toBe('AI prompt v2');
+    expect(selected?.inputHash).toBe('context-hash-abc');
   });
 
   it('preserves prior AI text in the variant chain after a user edit (recoverable history)', async () => {
@@ -279,15 +274,11 @@ describe('shot_prompt_variants helper', () => {
       'ai-generated',
     ]);
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    // Cached column reflects the latest write (user-edit) and the hash is
-    // cleared since the cached value is no longer derived from upstream.
-    expect(refreshed.motionPrompt).toBe('User polished it');
-    expect(refreshed.motionPromptInputHash).toBeNull();
+    // Selection follows the latest write (the user-edit), whose hash is null
+    // since the text is no longer derived from upstream.
+    const selected = await selectedMotionVersion();
+    expect(selected?.text).toBe('User polished it');
+    expect(selected?.inputHash).toBeNull();
   });
 
   it('AI write is idempotent on (shot, type, input_hash) — a retry returns the existing row', async () => {
@@ -317,13 +308,13 @@ describe('shot_prompt_variants helper', () => {
     expect(history).toHaveLength(1);
   });
 
-  it('force-regen at the same input_hash appends a null-hash history row with the new text and keeps the cached hash tracking the live context', async () => {
+  it('force-regen at the same input_hash appends a distinct history row with the new text and selects it', async () => {
     // Mirrors the user-driven "Regenerate Prompt" path: the LLM is invoked
     // again against unchanged upstream inputs, so the new completion's hash
     // collides with the existing row. The helper must still record the new
     // text in history (otherwise the user's regenerated prompt would be
-    // silently lost) while keeping the cached `*_prompt_input_hash` column
-    // tracking the real upstream hash so staleness detection stays correct.
+    // silently lost) and repoint the shot at it. Staleness then falls back to
+    // the latest hashed row, since the forced row's own hash is null.
     const methods = createShotPromptVersionsMethods(db);
 
     const first = await methods.write({
@@ -346,8 +337,8 @@ describe('shot_prompt_variants helper', () => {
 
     // A distinct row was inserted (not the existing one returned verbatim).
     expect(forced.id).not.toBe(first.id);
-    // Bypasses the partial unique index via null `input_hash`.
-    expect(forced.inputHash).toBeNull();
+    // Keeps the real hash: the row itself is what staleness compares against.
+    expect(forced.inputHash).toBe('context-hash-1');
     expect(forced.source).toBe('regenerated');
     expect(forced.text).toBe('Fresh LLM completion against same inputs');
 
@@ -358,20 +349,11 @@ describe('shot_prompt_variants helper', () => {
     expect(latest.text).toBe('Fresh LLM completion against same inputs');
     expect(prior.text).toBe('AI prompt v1');
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe(
-      'Fresh LLM completion against same inputs'
-    );
-    // Cached hash still reflects the live upstream so staleness detection
-    // doesn't fire spuriously after a force regeneration.
-    expect(refreshed.motionPromptInputHash).toBe('context-hash-1');
     // Selection points at the freshly-forced row (not the deduped original),
     // even though that row carries a null input_hash.
-    expect(refreshed.selectedMotionPromptVersionId).toBe(forced.id);
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(forced.id);
+    expect(selected?.text).toBe('Fresh LLM completion against same inputs');
   });
 
   it('idempotent retry of the same text at the same hash still de-dupes (does not fall through to the null-hash branch)', async () => {
@@ -435,7 +417,7 @@ describe('shot_prompt_variants helper', () => {
 
     const [siblingShot] = await db
       .insert(shots)
-      .values({ sequenceId, orderIndex: 1 })
+      .values({ sequenceId, shotNumber: 2 })
       .returning();
     if (!siblingShot)
       throw new Error('test setup: sibling shot insert returned nothing');
@@ -516,13 +498,12 @@ describe('shot_prompt_variants helper', () => {
       'ai-generated',
     ]);
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('AI prompt v1');
-    expect(refreshed.motionPromptInputHash).toBe('context-hash-1');
+    // The shot points at the restored row, which carries the original's hash —
+    // so staleness resumes tracking the upstream context that produced it.
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(restored.id);
+    expect(selected?.text).toBe('AI prompt v1');
+    expect(selected?.inputHash).toBe('context-hash-1');
   });
 
   it('restoring an AI prompt that is currently live still appends a restored row (audit trail)', async () => {
@@ -645,7 +626,7 @@ describe('shot_prompt_variants helper', () => {
     expect(await methods.getSelectedMotion(shotId)).toBeNull();
   });
 
-  it('select repoints the shot at an existing version and mirrors it', async () => {
+  it('select repoints the shot at an existing version', async () => {
     const methods = createShotPromptVersionsMethods(db);
     const v1 = await methods.write({
       shotId,
@@ -668,21 +649,16 @@ describe('shot_prompt_variants helper', () => {
     const restored = await methods.select(shotId, v1.id, { actorId: null });
     expect(restored.id).toBe(v1.id);
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.selectedMotionPromptVersionId).toBe(v1.id);
-    expect(refreshed.motionPrompt).toBe('Motion v1');
-    expect(refreshed.motionPromptInputHash).toBe('hash-1');
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(v1.id);
+    expect(selected?.text).toBe('Motion v1');
   });
 
   it('select refuses a version id that belongs to another shot', async () => {
     const methods = createShotPromptVersionsMethods(db);
     const [otherShot] = await db
       .insert(shots)
-      .values({ sequenceId, orderIndex: 1 })
+      .values({ sequenceId, shotNumber: 2 })
       .returning();
     if (!otherShot) throw new Error('test setup: other shot insert failed');
     const foreign = await methods.write({
@@ -701,7 +677,7 @@ describe('shot_prompt_variants helper', () => {
 });
 
 describe('shotPromptVersions.completePendingAiVersion', () => {
-  it('completes the claim in place and mirrors onto the shot', async () => {
+  it('completes the claim in place and selects it', async () => {
     const m = createShotPromptVersionsMethods(db);
     const claim = await m.createPending({
       shotId,
@@ -720,17 +696,12 @@ describe('shotPromptVersions.completePendingAiVersion', () => {
     expect(completed?.id).toBe(claim.id);
     expect(completed?.status).toBe('completed');
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('Regenerated motion prompt');
-    expect(refreshed.motionPromptInputHash).toBe('live-hash');
-    expect(refreshed.selectedMotionPromptVersionId).toBe(claim.id);
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(claim.id);
+    expect(selected?.text).toBe('Regenerated motion prompt');
   });
 
-  it('a post-click user edit keeps the mirror — the run completes to history only', async () => {
+  it('a post-click user edit keeps the selection — the run completes to history only', async () => {
     const m = createShotPromptVersionsMethods(db);
     const claim = await m.createPending({
       shotId,
@@ -758,21 +729,22 @@ describe('shotPromptVersions.completePendingAiVersion', () => {
     expect(completed?.id).toBe(claim.id);
     expect(completed?.status).toBe('completed');
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('Post-click hand edit');
-    expect(refreshed.selectedMotionPromptVersionId).toBe(edit.id);
+    // The edit — not the completed run — is what the shot points at.
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(edit.id);
+    expect(selected?.text).toBe('Post-click hand edit');
   });
 
-  it('returns null for a claim cancelled mid-flight and never mirrors', async () => {
+  it('returns null for a claim cancelled mid-flight and never repoints', async () => {
     const m = createShotPromptVersionsMethods(db);
-    await db
-      .update(shots)
-      .set({ motionPrompt: 'Original', motionPromptInputHash: 'hash-0' })
-      .where(eq(shots.id, shotId));
+    const original = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Original',
+      source: 'ai-generated',
+      inputHash: 'hash-0',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
     const claim = await m.createPending({
       shotId,
       pendingInputHash: 'live-hash',
@@ -789,15 +761,87 @@ describe('shotPromptVersions.completePendingAiVersion', () => {
     });
 
     expect(completed).toBeNull();
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('Original');
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(original.id);
+    expect(selected?.text).toBe('Original');
   });
 
-  it('restore demotes live claims so completion never remirrors', async () => {
+  it('identical text at a colliding hash retires the claim and RETURNS the surviving row', async () => {
+    // The returned id is load-bearing (#1067): update-stale-shots threads it
+    // out of the motion-prompt child as `finalVersionId` and re-reads it by
+    // explicit id to render from. If this returned the retired placeholder,
+    // the video chain would resolve a 'cancelled' row and stand down.
+    const m = createShotPromptVersionsMethods(db);
+    const existing = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Same output',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'hash-1',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'Same output',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // The existing row wins; the placeholder retires as 'cancelled'.
+    expect(completed?.id).toBe(existing.id);
+    expect(completed?.status).toBe('completed');
+    const [placeholder] = await db
+      .select()
+      .from(shotPromptVersions)
+      .where(eq(shotPromptVersions.id, claim.id));
+    expect(placeholder?.status).toBe('cancelled');
+    // No unique-index violation, and the shot points at the surviving row.
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(existing.id);
+  });
+
+  it('new text at a colliding hash completes as its own row', async () => {
+    const m = createShotPromptVersionsMethods(db);
+    const existing = await m.write({
+      shotId,
+      promptType: 'motion',
+      text: 'Old output',
+      source: 'ai-generated',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+    const claim = await m.createPending({
+      shotId,
+      pendingInputHash: 'hash-1',
+    });
+    await m.markGenerating(claim.id, 'run-1');
+
+    const completed = await m.completePendingAiVersion({
+      versionId: claim.id,
+      shotId,
+      text: 'New output',
+      inputHash: 'hash-1',
+      analysisModel: 'anthropic/claude-haiku-4.5',
+    });
+
+    // Same inputs, different text — the claim keeps its real hash and wins the
+    // selection. This is exactly the case a hash comparison against the
+    // selection pointer could not distinguish from the retire path above.
+    expect(completed?.id).toBe(claim.id);
+    expect(completed?.id).not.toBe(existing.id);
+    expect(completed?.text).toBe('New output');
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(claim.id);
+  });
+
+  it('restore demotes live claims so completion never repoints', async () => {
     const m = createShotPromptVersionsMethods(db);
     const original = await m.write({
       shotId,
@@ -829,13 +873,9 @@ describe('shotPromptVersions.completePendingAiVersion', () => {
       analysisModel: 'anthropic/claude-haiku-4.5',
     });
 
-    const [refreshed] = await db
-      .select()
-      .from(shots)
-      .where(eq(shots.id, shotId));
-    if (!refreshed) throw new Error('test setup: refresh failed');
-    expect(refreshed.motionPrompt).toBe('Original motion');
-    expect(refreshed.selectedMotionPromptVersionId).toBe(original.id);
+    const selected = await selectedMotionVersion();
+    expect(selected?.id).toBe(original.id);
+    expect(selected?.text).toBe('Original motion');
   });
 });
 

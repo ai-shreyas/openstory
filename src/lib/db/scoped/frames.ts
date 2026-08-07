@@ -69,9 +69,7 @@ type FrameMirrorColumn =
   | 'previewImageUrl'
   | 'imageStatus'
   | 'imageError'
-  | 'selectedImagePromptVersionId'
-  | 'imagePrompt'
-  | 'visualPromptInputHash';
+  | 'selectedImagePromptVersionId';
 
 /** Fields `update` accepts — everything on a frame except the mirror columns. */
 export type FrameUpdateInput = Omit<Partial<NewFrame>, FrameMirrorColumn>;

@@ -17,7 +17,11 @@ import {
   getAnalysisModelById,
   type AnalysisModelId,
 } from '@/lib/ai/models.config';
-import { DEFAULT_IMAGE_MODEL, safeTextToImageModel } from '@/lib/ai/models';
+import {
+  DEFAULT_IMAGE_MODEL,
+  safeTextToImageModel,
+  type TextToImageModel,
+} from '@/lib/ai/models';
 import { loadShotPromptContext } from '@/lib/ai/prompt-context';
 import type {
   CharacterBibleEntry,
@@ -28,6 +32,7 @@ import type {
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type {
   Frame,
+  FramePromptVersion,
   FrameVariant,
   Sequence,
   Shot,
@@ -37,7 +42,7 @@ import type { ScopedDb } from '@/lib/db/scoped';
 import { getLogger } from '@/lib/observability/logger';
 import { assembleSequenceSegments } from '@/lib/scenes/scene-segments';
 import {
-  loadSelectedScriptsBySequence,
+  loadSceneContextBySequence,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
 import {
@@ -51,7 +56,8 @@ import {
   type UpdateStaleDepth,
 } from '@/lib/shots/update-stale-depth';
 import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
-import { WorkflowValidationError } from '@/lib/workflow/errors';
+import { NotFoundError } from '@/lib/errors';
+import type { MusicSceneSummary } from '@/lib/workflow/types';
 
 const logger = getLogger(['openstory', 'shots', 'update-stale-plan']);
 
@@ -75,6 +81,30 @@ export type PlanTarget = {
   afterShotId: string | null;
   /** Frame image URL at plan time; image stage may produce a newer one later. */
   startingFrameImageUrl: string | null;
+  /** Clip length, snapped to the model at render time. */
+  durationMs: number | null;
+  /**
+   * The still and motion prompt the shot pointed at when the user clicked —
+   * both selection pointers dereferenced ONCE, here. The video stage reads
+   * these rows back by id (both tables are append-only) instead of following
+   * the pointers, which a concurrent select can move mid-run. Ids rather than
+   * rows: a full motion version (text + components + parameters + dialogue +
+   * audio) per target is exactly the weight the plan cannot carry.
+   *
+   * The click pins the render: re-selecting a still or prompt after starting
+   * Update all no longer changes what an in-flight run produces.
+   */
+  standingImageVariantId: string | null;
+  standingMotionVersionId: string | null;
+  /**
+   * The visual prompt version selected at plan time — the one `imageLiveHash`
+   * describes. A direct render (image stale, prompt fresh) reads THIS row back
+   * by id rather than following the selection pointer, so the claim row's
+   * advertised hash and the image actually billed describe the same prompt.
+   * The id rather than the text because `frame_prompt_versions` is append-only:
+   * the row cannot change under us, and a ULID is ~60× smaller on the payload.
+   */
+  visualPromptVersionId: string | null;
   regenVisual: boolean;
   regenMotion: boolean;
   /**
@@ -89,8 +119,8 @@ export type PlanTarget = {
   visualLiveHash: string | null;
   motionLiveHash: string | null;
   imageLiveHash: string | null;
-  /** Model stamped on the image claim row; prepare-image may overwrite it. */
-  imageModel: string;
+  /** Model stamped on the image claim row AND rendered with. */
+  imageModel: TextToImageModel;
   /**
    * Re-render this shot's video. True only when a video is already selected
    * (never a FIRST render), none is currently generating, and either an
@@ -136,8 +166,39 @@ export type SkippedShot = {
  *   only; no track-level staleness signal today). Never a FIRST generation.
  *
  * Music is always sequence-scoped, even when shot/scene narrows shot targets.
+ *
+ * The remaining fields ARE the music children's inputs, frozen here: the
+ * regen decision is made by hashing exactly these summaries, so deriving them
+ * a second time mid-run could spawn a child with inputs the plan never
+ * evaluated. Inert (empty/default) whenever both flags are false.
  */
-export type MusicPlan = { regenPrompt: boolean; regenTrack: boolean };
+export type MusicPlan = {
+  regenPrompt: boolean;
+  regenTrack: boolean;
+  sceneSummaries: MusicSceneSummary[];
+  analysisModelId: AnalysisModelId;
+  /** Provenance of the version the prompt child will write. */
+  promptSource: 'ai-generated' | 'regenerated';
+  /** Track length: shot durations with the 30s empty floor (generateMusicFn). */
+  durationSeconds: number;
+};
+
+/**
+ * The sequence fields every stage of the run needs, read once in `computePlan`
+ * — the same read the plan's staleness decisions come from. Re-reading the row
+ * per stage let a mid-run model/aspect-ratio change render something the plan
+ * never priced.
+ */
+type PlanSequence = {
+  id: string;
+  teamId: string;
+  title: string;
+  aspectRatio: AspectRatio;
+  imageModel: string;
+  videoModel: string;
+  styleId: string | null;
+  analysisModel: string;
+};
 
 type PlanPromptContext = {
   characterBible: CharacterBibleEntry[];
@@ -149,12 +210,26 @@ type PlanPromptContext = {
 
 export type UpdateStalePlan = {
   aspectRatio: AspectRatio;
+  sequence: PlanSequence;
   /** Non-null only at depth 'music'. */
   music: MusicPlan | null;
   promptContext: PlanPromptContext | null;
   targets: PlanTarget[];
   skipped: SkippedShot[];
 };
+
+function toPlanSequence(sequence: Sequence): PlanSequence {
+  return {
+    id: sequence.id,
+    teamId: sequence.teamId,
+    title: sequence.title,
+    aspectRatio: sequence.aspectRatio,
+    imageModel: sequence.imageModel,
+    videoModel: sequence.videoModel,
+    styleId: sequence.styleId,
+    analysisModel: sequence.analysisModel,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // computePlan
@@ -182,7 +257,9 @@ export async function computePlan(args: {
 
   const sequence = await scopedDb.sequences.getById(sequenceId);
   if (!sequence) {
-    throw new WorkflowValidationError(`Sequence ${sequenceId} not found`);
+    // Trigger-side (computePlan runs in the server fn): OpenStoryError rides
+    // the serialization adapter to the client as a typed 404, not a 500.
+    throw new NotFoundError(`Sequence ${sequenceId} not found`);
   }
 
   const allShots = await scopedDb.shots.listBySequence(sequenceId);
@@ -196,6 +273,7 @@ export async function computePlan(args: {
 
   const empty: UpdateStalePlan = {
     aspectRatio: sequence.aspectRatio,
+    sequence: toPlanSequence(sequence),
     music,
     promptContext: null,
     targets: [],
@@ -211,7 +289,7 @@ export async function computePlan(args: {
   const [anchorRows, scriptBySceneId, characters, locations, elements, style] =
     await Promise.all([
       scopedDb.frames.listAnchorsBySequence(sequenceId),
-      loadSelectedScriptsBySequence(scopedDb, sequenceId),
+      loadSceneContextBySequence(scopedDb, sequenceId),
       scopedDb.characters.listWithSheets(sequenceId),
       scopedDb.sequenceLocations.listWithReferences(sequenceId),
       scopedDb.sequenceElements.list(sequenceId),
@@ -222,9 +300,17 @@ export async function computePlan(args: {
   const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
   // Stills live on the selected `frame_variants` rows (#1067) — one batch read
   // so the per-shot loop below stays query-free on the image surface.
-  const selectedByFrame = await scopedDb.frameVariants.getSelectedByFrameIds(
-    anchorRows.map((f) => f.id)
-  );
+  const frameIds = anchorRows.map((f) => f.id);
+  const [selectedByFrame, selectedPromptByFrame, selectedMotionByShot] =
+    await Promise.all([
+      scopedDb.frameVariants.getSelectedByFrameIds(frameIds),
+      scopedDb.framePromptVersions.getSelectedByFrameIds(frameIds),
+      // Dereference the motion pointer HERE, once, so the video stage never
+      // has to (see `PlanTarget.standingMotionVersionId`).
+      scopedDb.shotPromptVersions.getSelectedMotionByShots(
+        inScope.map((s) => s.id)
+      ),
+    ]);
   const refs: ShotStalenessRefs = { characters, locations, elements, style };
 
   const targets: PlanTarget[] = [];
@@ -242,6 +328,10 @@ export async function computePlan(args: {
       shot,
       frame,
       selectedImage: frame ? (selectedByFrame.get(frame.id) ?? null) : null,
+      selectedPrompt: frame
+        ? (selectedPromptByFrame.get(frame.id) ?? null)
+        : null,
+      selectedMotionVersionId: selectedMotionByShot.get(shot.id)?.id ?? null,
       scene,
       refs,
       depth,
@@ -273,6 +363,7 @@ export async function computePlan(args: {
 
   return {
     aspectRatio: sequence.aspectRatio,
+    sequence: toPlanSequence(sequence),
     music,
     promptContext: {
       characterBible: ctx.characterBible,
@@ -376,6 +467,11 @@ async function decideShotTarget(args: {
   frame: Frame | undefined;
   /** Selected `frame_variants` row — the still's url/model/hash (#1067). */
   selectedImage: FrameVariant | null;
+  /** Selected `frame_prompt_versions` row — the visual prompt a direct
+   * image render will be built from. */
+  selectedPrompt: FramePromptVersion | null;
+  /** Selected motion prompt version id — the video-only-regen default. */
+  selectedMotionVersionId: string | null;
   scene: Scene | null;
   refs: ShotStalenessRefs;
   depth: UpdateStaleDepth;
@@ -389,6 +485,8 @@ async function decideShotTarget(args: {
     shot,
     frame,
     selectedImage,
+    selectedPrompt,
+    selectedMotionVersionId,
     scene,
     refs,
     depth,
@@ -449,6 +547,10 @@ async function decideShotTarget(args: {
       afterShotId:
         flags.regenMotion && idx >= 0 ? (allShots[idx + 1]?.id ?? null) : null,
       startingFrameImageUrl: selectedImage?.url ?? null,
+      durationMs: shot.durationMs,
+      standingImageVariantId: selectedImage?.id ?? null,
+      standingMotionVersionId: selectedMotionVersionId,
+      visualPromptVersionId: selectedPrompt?.id ?? null,
       regenVisual: flags.regenVisual,
       regenMotion: flags.regenMotion,
       regenImage: flags.regenImage,
@@ -526,17 +628,44 @@ function cascadeFlags(args: {
  * (no stored hash / no scenes) means nothing — never a first music prompt or
  * track. In-flight generation is left to finish.
  */
+/** Same rule as `generateMusicFn`: shot durations, 10s each when unset, with
+ * a 30s floor for an empty sequence. */
+function musicDurationSeconds(allShots: Shot[]): number {
+  return (
+    Math.round(
+      allShots.reduce(
+        (sum, s) => sum + (s.durationMs ? s.durationMs / 1000 : 10),
+        0
+      )
+    ) || 30
+  );
+}
+
 async function computeMusicPlan(
   scopedDb: ScopedDb,
   sequence: Sequence,
   allShots: Shot[]
 ): Promise<MusicPlan> {
-  const none: MusicPlan = { regenPrompt: false, regenTrack: false };
+  // The child model the prompt regen would run with — the sequence's, matching
+  // the manual regenerate path. The staleness comparison below instead honours
+  // a model pinned by the latest stored version, mirroring
+  // `getMusicPromptStalenessFn`.
+  const analysisModelId =
+    getAnalysisModelById(sequence.analysisModel)?.id ?? DEFAULT_ANALYSIS_MODEL;
+  const none: MusicPlan = {
+    regenPrompt: false,
+    regenTrack: false,
+    sceneSummaries: [],
+    analysisModelId,
+    promptSource: 'ai-generated',
+    durationSeconds: 30,
+  };
   if (!sequence.musicPromptInputHash) return none;
 
+  const sceneContext = await loadSceneContextBySequence(scopedDb, sequence.id);
   const scenes = allShots
-    .map((s) => s.metadata)
-    .filter((m): m is NonNullable<typeof m> => m !== null);
+    .map((s) => resolveSceneForShot(s, sceneContext).scene)
+    .filter((s): s is NonNullable<typeof s> => s !== null);
   if (scenes.length === 0) return none;
 
   try {
@@ -544,10 +673,7 @@ async function computeMusicPlan(
     const latest = await scopedDb.sequenceMusicPromptVersions.getLatest(
       sequence.id
     );
-    const analysisModel =
-      latest?.analysisModel ??
-      getAnalysisModelById(sequence.analysisModel)?.id ??
-      DEFAULT_ANALYSIS_MODEL;
+    const analysisModel = latest?.analysisModel ?? analysisModelId;
     const liveHash = await computeMusicPromptInputHash({
       sceneSummaries,
       analysisModel,
@@ -560,6 +686,10 @@ async function computeMusicPlan(
         regenPrompt &&
         !!sequence.musicUrl &&
         sequence.musicStatus !== 'generating',
+      sceneSummaries,
+      analysisModelId,
+      promptSource: latest ? 'regenerated' : 'ai-generated',
+      durationSeconds: musicDurationSeconds(allShots),
     };
   } catch (error) {
     // Fail closed — same posture as per-shot 'unknown'.

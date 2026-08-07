@@ -10,32 +10,19 @@ import { generateId } from '@/lib/db/id';
 import { user } from '@/lib/db/schema/auth';
 import { credits, transactions } from '@/lib/db/schema/credits';
 import { shots } from '@/lib/db/schema/shots';
-import { frameVariants } from '@/lib/db/schema/frame-variants';
-import { frames } from '@/lib/db/schema/frames';
+import {
+  assembleShotViews,
+  selectShotViewRows,
+  shotHierarchicalOrder,
+} from './shot-view-query';
 import { giftTokenRedemptions, giftTokens } from '@/lib/db/schema/gift-tokens';
 import type { GiftToken } from '@/lib/db/schema/gift-tokens';
 import { sequences } from '@/lib/db/schema/sequences';
 import type { Sequence } from '@/lib/db/schema';
-import {
-  projectShotMissingFrame,
-  projectShotWithImage,
-  type ShotWithImage,
-} from '@/lib/shots/shot-with-image';
+import type { ShotView } from '@/lib/shots/shot-view';
 import { teamMembers, teams } from '@/lib/db/schema/teams';
 import { ValidationError } from '@/lib/errors';
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  exists,
-  isNull,
-  like,
-  not,
-  or,
-  sql,
-} from 'drizzle-orm';
+import { and, count, desc, eq, exists, like, not, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
 // Ambiguity-free alphabet (no 0/O/1/I) -- 32 chars -> 32^6 ~ 1B combinations
@@ -216,33 +203,11 @@ export function createAdminMethods(db: Database) {
     }));
   }
 
-  async function getShotsForSequence(
-    sequenceId: string
-  ): Promise<ShotWithImage[]> {
-    // Project the anchor-frame image surface (#989) — the shot's first frame
-    // (orderIndex 0), joined by shotId (NOT id-reuse).
-    const rows = await db
-      .select()
-      .from(shots)
-      .leftJoin(
-        frames,
-        and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
-      )
-      // The still lives on the SELECTED version (#1067).
-      .leftJoin(
-        frameVariants,
-        and(
-          eq(frameVariants.id, frames.selectedImageVersionId),
-          isNull(frameVariants.discardedAt)
-        )
-      )
+  async function getShotsForSequence(sequenceId: string): Promise<ShotView[]> {
+    const rows = await selectShotViewRows(db)
       .where(eq(shots.sequenceId, sequenceId))
-      .orderBy(asc(shots.orderIndex));
-    return rows.map((row) =>
-      row.frames
-        ? projectShotWithImage(row.shots, row.frames, row.frame_variants)
-        : projectShotMissingFrame(row.shots)
-    );
+      .orderBy(...shotHierarchicalOrder);
+    return assembleShotViews(db, rows);
   }
 
   // ---- User activity reporting ----
