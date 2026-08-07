@@ -68,14 +68,18 @@ import { Suspense, useState } from 'react';
 
 /**
  * `getModelDetail` throws CatalogApiError(404, 'unknown_schema') when the
- * endpoint has no input schema. Seroval preserves own props across the
- * server-fn boundary (#1087), so we match on status+code — not message prose.
- * A modelschemas outage is 5xx and will not match.
+ * endpoint has no input schema. CatalogApiError extends OpenStoryError, so
+ * the serialization adapter (#1087/#1099) delivers `code`/`statusCode` here —
+ * match on those, never message prose. A modelschemas outage is 5xx and will
+ * not match.
  */
 function isNoSchemaError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
-  const { status, code } = error as { status?: unknown; code?: unknown };
-  return status === 404 && code === 'unknown_schema';
+  const { statusCode, code } = error as {
+    statusCode?: unknown;
+    code?: unknown;
+  };
+  return statusCode === 404 && code === 'unknown_schema';
 }
 
 /**

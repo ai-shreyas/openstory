@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { openStoryErrorSerializationAdapter } from '@/lib/errors';
 
 /**
  * The catalog module holds a TTL response cache at module level, so each
@@ -271,7 +272,7 @@ describe('listCatalogModelFamilies', () => {
     const promise = listCatalogModelFamilies();
     await expect(promise).rejects.toBeInstanceOf(CatalogApiError);
     await expect(promise).rejects.toMatchObject({
-      status: 429,
+      statusCode: 429,
       code: 'rate_limited',
       message: 'Too many requests',
     });
@@ -282,8 +283,29 @@ describe('listCatalogModelFamilies', () => {
     mockFetch.mockResolvedValueOnce(new Response('gateway荒', { status: 502 }));
 
     await expect(listCatalogModelFamilies()).rejects.toMatchObject({
-      status: 502,
+      statusCode: 502,
+      code: 'CATALOG_API_ERROR',
       message: 'modelschemas request failed (502)',
+    });
+  });
+
+  it('carries code/statusCode across the server-fn boundary', async () => {
+    // CatalogApiError must stay an OpenStoryError: any plain Error is
+    // flattened to message-only by TanStack Router's ShallowErrorPlugin, and
+    // isNoSchemaError (model-detail-view.tsx) would silently never match.
+    const { CatalogApiError } = await importCatalog();
+    const restored: unknown =
+      openStoryErrorSerializationAdapter.fromSerializable(
+        openStoryErrorSerializationAdapter.toSerializable(
+          new CatalogApiError('No schema', 404, 'unknown_schema')
+        )
+      );
+
+    expect(restored).toMatchObject({
+      name: 'CatalogApiError',
+      message: 'No schema',
+      statusCode: 404,
+      code: 'unknown_schema',
     });
   });
 });
@@ -372,7 +394,7 @@ describe('getModelDetail', () => {
     const promise = getModelDetail('fal-ai/does-not-exist', 'image');
     await expect(promise).rejects.toBeInstanceOf(CatalogApiError);
     await expect(promise).rejects.toMatchObject({
-      status: 404,
+      statusCode: 404,
       code: 'unknown_schema',
     });
   });

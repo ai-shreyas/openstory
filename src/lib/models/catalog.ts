@@ -25,6 +25,7 @@
  */
 import type { GeneratedAssetActivity, JsonValue } from '@/lib/db/schema';
 import { getEnv } from '#env';
+import { OpenStoryError } from '@/lib/errors';
 import { groupModelsIntoFamilies, type ModelFamily } from './model-families';
 
 const MODELSCHEMAS_BASE_URL = 'https://modelschemas.com';
@@ -121,20 +122,17 @@ export type ModelDetail = {
 };
 
 /**
- * @public Typed upstream failure. Own props (`status`/`code`) survive the
- * server-fn boundary via seroval (#1087), so client code can branch on them
- * (see `isNoSchemaError` in model-detail-view.tsx). Inside this module,
- * `fetchSchema` still maps 404 → null before rethrowing a richer error.
+ * @public Typed upstream failure. Extends OpenStoryError because that is the
+ * only error the serialization adapter in `createStart` carries across the
+ * server-fn boundary — every other Error hits TanStack Router's
+ * ShallowErrorPlugin, which keeps `message` alone (#1087/#1099). Client code
+ * branches on `code`/`statusCode` (see `isNoSchemaError` in
+ * model-detail-view.tsx). Inside this module, `fetchSchema` still maps
+ * 404 → null before rethrowing a richer error.
  */
-export class CatalogApiError extends Error {
-  readonly status: number;
-  readonly code?: string;
-
-  constructor(message: string, status: number, code?: string) {
-    super(message);
-    this.name = 'CatalogApiError';
-    this.status = status;
-    this.code = code;
+export class CatalogApiError extends OpenStoryError {
+  constructor(message: string, statusCode: number, code?: string) {
+    super(message, code ?? 'CATALOG_API_ERROR', statusCode);
   }
 }
 
@@ -412,7 +410,8 @@ async function fetchSchema(
     );
     return parseSchemaResponse(body, endpointId);
   } catch (error) {
-    if (error instanceof CatalogApiError && error.status === 404) return null;
+    if (error instanceof CatalogApiError && error.statusCode === 404)
+      return null;
     throw error;
   }
 }

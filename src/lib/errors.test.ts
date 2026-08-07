@@ -179,9 +179,9 @@ describe('errorCode / isInsufficientCreditsError', () => {
   });
 
   it('matches our error across the server-fn boundary but not a provider’s', () => {
-    // Seroval reconstitutes a thrown OpenStoryError as a plain Error with the
-    // same own props (code/statusCode/details) — not the original class.
-    // See #1087 / seroval Error own-property serialization.
+    // The serialization adapter reconstitutes a thrown OpenStoryError with
+    // the same own props (code/statusCode/details) — not the original
+    // subclass. See #1087/#1099.
     const acrossBoundary = Object.assign(
       new Error('Insufficient credits for image'),
       {
