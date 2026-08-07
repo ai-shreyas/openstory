@@ -570,6 +570,27 @@ export async function cleanupTalentById(talentId: string): Promise<void> {
 }
 
 /**
+ * Find and clean up talent by team + name (for UI-created test entities).
+ *
+ * Specs share one team, so a by-name cleanup must never widen to the whole
+ * team: doing so deletes talent that other parallel workers created mid-test
+ * and their list assertions then fail on missing rows (#827).
+ */
+export async function cleanupTalentByName(
+  teamId: string,
+  name: string
+): Promise<void> {
+  const db = getDb();
+  const [created] = await db
+    .select({ id: talent.id })
+    .from(talent)
+    .where(and(eq(talent.teamId, teamId), eq(talent.name, name)));
+  if (created) {
+    await db.delete(talent).where(eq(talent.id, created.id));
+  }
+}
+
+/**
  * Clean up test locations for a team (cascades to sheets).
  */
 export async function cleanupTestLocations(teamId: string): Promise<void> {

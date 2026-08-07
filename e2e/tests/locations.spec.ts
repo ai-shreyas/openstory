@@ -14,6 +14,9 @@ import {
 import {
   waitForLibraryPageLoad,
   cleanupLocationByName,
+  openLibraryCard,
+  returnToLibraryList,
+  LOCATION_DETAIL_URL,
 } from '../fixtures/test-utils';
 function waitForLocationsPageLoad(page: import('playwright/test').Page) {
   return waitForLibraryPageLoad(page, 'Add Location');
@@ -153,7 +156,7 @@ testWithUser.describe('Edit Location', () => {
     await page.goto('/locations');
     await waitForLocationsPageLoad(page);
 
-    await page.getByText(testLocation.name).click();
+    await openLibraryCard(page, testLocation.name, LOCATION_DETAIL_URL);
 
     await expect(
       page.getByRole('heading', { name: testLocation.name })
@@ -170,7 +173,7 @@ testWithUser.describe('Edit Location', () => {
       await page.goto('/locations');
       await waitForLocationsPageLoad(page);
 
-      await page.getByText(testLocation.name).click();
+      await openLibraryCard(page, testLocation.name, LOCATION_DETAIL_URL);
 
       await page.locator('button:has(svg.lucide-pencil)').first().click();
 
@@ -185,7 +188,7 @@ testWithUser.describe('Edit Location', () => {
   testWithUser('can cancel edit dialog without saving', async ({ page }) => {
     await page.goto('/locations');
     await waitForLocationsPageLoad(page);
-    await page.getByText(testLocation.name).click();
+    await openLibraryCard(page, testLocation.name, LOCATION_DETAIL_URL);
 
     await page.locator('button:has(svg.lucide-pencil)').first().click();
 
@@ -244,15 +247,14 @@ testWithUser.describe('Location Library - List View', () => {
       await page.goto('/locations');
       await waitForLocationsPageLoad(page);
 
-      await page.getByText(testLocationAlpha.name).click();
+      await openLibraryCard(page, testLocationAlpha.name, LOCATION_DETAIL_URL);
       await expect(
         page.getByRole('heading', { name: testLocationAlpha.name })
       ).toBeVisible();
 
-      await page.getByRole('link', { name: 'Back to Locations' }).click();
-      await expect(page).toHaveURL(/\/locations(\?|$)/);
+      await returnToLibraryList(page, 'Back to Locations', /\/locations(\?|$)/);
 
-      await page.getByText(testLocationBeta.name).click();
+      await openLibraryCard(page, testLocationBeta.name, LOCATION_DETAIL_URL);
       await expect(
         page.getByRole('heading', { name: testLocationBeta.name })
       ).toBeVisible();

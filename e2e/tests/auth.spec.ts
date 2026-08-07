@@ -5,6 +5,7 @@
 
 import { test as baseTest } from 'playwright/test';
 import { expect, test } from '../fixtures/auth.fixture';
+import { waitForScriptEditor } from '../fixtures/test-utils';
 
 // Route Protection Tests (no auth fixture needed)
 baseTest.describe('Route Protection', () => {
@@ -41,12 +42,8 @@ baseTest.describe('Route Protection', () => {
       await page.goto('/');
 
       // Composing a draft is allowed while logged out… (the script input is a
-      // TipTap contenteditable, not a <textarea> — same locator as
-      // full-sequence.spec.ts)
-      const scriptEditor = page.locator(
-        '[data-slot="markdown-editor"] .ProseMirror'
-      );
-      await expect(scriptEditor).toBeVisible();
+      // TipTap contenteditable, not a <textarea>)
+      const scriptEditor = await waitForScriptEditor(page);
       await scriptEditor.fill(
         'INT. KITCHEN - DAY\n\nA cat knocks a glass off the counter.'
       );

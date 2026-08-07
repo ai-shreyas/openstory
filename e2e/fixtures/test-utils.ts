@@ -3,8 +3,52 @@
  * Contains common patterns for page loading and cleanup operations
  */
 
-import type { Page } from 'playwright/test';
+import type { Locator, Page } from 'playwright/test';
 import { expect } from 'playwright/test';
+
+/**
+ * Budget for "this element only exists once the client has hydrated".
+ * The 5s default `expect` timeout is sized for elements that are already in the
+ * SSR markup; under `vite dev` with parallel workers, first-hit hydration of a
+ * heavy client chunk routinely takes longer than that.
+ */
+const HYDRATION_TIMEOUT = 15_000;
+
+/**
+ * Resolve the composer's script input once it is actually usable.
+ *
+ * The wrapper is server-rendered but the TipTap editor sets
+ * `immediatelyRender: false`, so `.ProseMirror` appears only after the client
+ * editor initialises — this is a hydration gate, not a plain visibility check,
+ * and asserting it on the default 5s timeout flakes (#827).
+ */
+export async function waitForScriptEditor(page: Page): Promise<Locator> {
+  const editor = page.locator('[data-slot="markdown-editor"] .ProseMirror');
+  await expect(editor).toBeVisible({ timeout: HYDRATION_TIMEOUT });
+  return editor;
+}
+
+/**
+ * Wait until every file picked in an add/edit dialog has finished uploading.
+ *
+ * Order matters. The submit button is only disabled while
+ * `files.length > uploadedUrls.length`, and both are empty until React commits
+ * the picked file — so waiting on the button alone passes instantly, before the
+ * upload even starts, and the form submits with no media (#827). Waiting for
+ * the file row first pins `files.length >= 1`, which makes the subsequent
+ * enabled-check a genuine "uploadedUrls caught up" signal.
+ */
+export async function waitForUploadComplete(
+  page: Page,
+  submitName = 'Add Talent'
+): Promise<void> {
+  await expect(
+    page.locator('[data-slot="file-upload-item"]').first()
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: submitName })).toBeEnabled({
+    timeout: 15_000,
+  });
+}
 
 /**
  * Wait for a library page to be hydrated by checking that its Add button is enabled.
@@ -16,6 +60,39 @@ export async function waitForLibraryPageLoad(
 ): Promise<void> {
   const addButton = page.getByRole('button', { name: buttonName }).first();
   await expect(addButton).toBeEnabled({ timeout: 30000 });
+}
+
+/** URL shapes that only the library *detail* routes can produce. */
+export const LOCATION_DETAIL_URL = /\/locations\/[^/?#]+/;
+export const TALENT_DETAIL_URL = /\/talent\/[^/?#]+/;
+
+/**
+ * Click a library card and wait for its detail route to take over.
+ *
+ * Gate on the URL, not the heading: the card itself renders the entity name in
+ * an `<h3>`, so `getByRole('heading', { name })` also matches on the list page
+ * and passes even when the click never navigated. That false positive is what
+ * made #827 surface as an unrelated-looking miss on a detail-only element
+ * several assertions later.
+ */
+export async function openLibraryCard(
+  page: Page,
+  name: string,
+  detailUrl: RegExp
+): Promise<void> {
+  await page.getByText(name).click();
+  // Lazy route chunk + loader, so this is a hydration-class wait too.
+  await expect(page).toHaveURL(detailUrl, { timeout: HYDRATION_TIMEOUT });
+}
+
+/** Follow a "Back to …" link and wait for the list route to take over. */
+export async function returnToLibraryList(
+  page: Page,
+  linkName: string,
+  listUrl: RegExp
+): Promise<void> {
+  await page.getByRole('link', { name: linkName }).click();
+  await expect(page).toHaveURL(listUrl, { timeout: HYDRATION_TIMEOUT });
 }
 
 /**
