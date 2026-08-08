@@ -11,8 +11,11 @@ import {
  * semantics. `ArtifactStaleness` is imported rather than redeclared so the
  * client and server can't drift on the vocabulary. Only `'stale'` drives UI
  * regenerate actions: `'untracked'` (no hash) and `'unknown'` (check failed)
- * both mean "no opinion to surface as stale", and `'updating'` means a job is
- * already fixing it (#1085).
+ * both mean "no opinion to surface as stale", `'updating'` means a job is
+ * already fixing it (#1085), and `'generating'` means the sequence is mid-run
+ * so no verdict was computed at all (#1121). The predicates below deliberately
+ * match none of the last three as stale, so a `'generating'` shot renders
+ * exactly nothing — no banner, no chip, no dot.
  */
 
 /** The tracked artifacts, and the source of truth for `ShotStaleness`'s keys. */

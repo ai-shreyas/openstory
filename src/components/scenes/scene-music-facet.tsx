@@ -8,6 +8,7 @@ import { generateMusicFn } from '@/functions/sequences';
 import { useActiveAudioModel } from '@/hooks/use-active-audio-model';
 import { useShotsBySequence } from '@/hooks/use-shots';
 import {
+  musicPromptStalenessKey,
   sequenceKeys,
   useSequence,
   useSequenceAudioVariants,
@@ -237,12 +238,9 @@ export const SceneMusicFacet: React.FC<SceneMusicFacetProps> = ({
     },
   });
 
-  const musicPromptStalenessKey = [
-    'music-prompt-staleness',
-    sequenceId,
-  ] as const;
+  const stalenessKey = musicPromptStalenessKey(sequenceId);
   const { data: musicPromptStaleness } = useQuery({
-    queryKey: musicPromptStalenessKey,
+    queryKey: stalenessKey,
     queryFn: () => getMusicPromptStalenessFn({ data: { sequenceId } }),
     staleTime: 30_000,
     enabled: editable,
@@ -255,7 +253,7 @@ export const SceneMusicFacet: React.FC<SceneMusicFacetProps> = ({
         toast.info('Music prompt is already up to date');
       }
       await queryClient.invalidateQueries({
-        queryKey: musicPromptStalenessKey,
+        queryKey: stalenessKey,
       });
       await queryClient.invalidateQueries({
         queryKey: sequenceKeys.detail(sequenceId),

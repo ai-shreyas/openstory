@@ -29,6 +29,7 @@ import { NotFoundError } from '@/lib/errors';
 import { getLogger, toErrorPayload } from '@/lib/observability/logger';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import type { Frame } from '@/lib/db/schema';
+import type { SequenceStatus } from '@/lib/db/schema/sequences';
 import type { Shot, Sequence } from '@/types/database';
 import { createMiddleware } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
@@ -71,7 +72,9 @@ type PartialSequence = {
   id: string;
   teamId: string;
   title: string;
-  status: string;
+  /** Narrow, not `string`: staleness defers while the sequence is
+   * 'processing' (#1121), and that check must not be a string compare. */
+  status: SequenceStatus;
   styleId: string | null;
   imageModel: string;
   videoModel: string;

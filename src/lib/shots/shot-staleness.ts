@@ -18,6 +18,7 @@ import {
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
+import type { SequenceStatus } from '@/lib/db/schema/sequences';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
 import { getLogger } from '@/lib/observability/logger';
@@ -33,11 +34,15 @@ const logger = getLogger(['openstory', 'shots', 'staleness']);
  * `pendingInputHash` equals the live hash — a job is already fixing exactly
  * this. Claims self-invalidate on edit: the live hash moves, the claim no
  * longer matches, and the artifact honestly reads 'stale' again.
+ *
+ * `'generating'` (#1121): the sequence itself is mid-run. See
+ * `computeShotStaleness`'s early return.
  */
 export type ArtifactStaleness =
   | 'stale'
   | 'fresh'
   | 'updating'
+  | 'generating'
   | 'untracked'
   | 'unknown';
 
@@ -67,6 +72,24 @@ export const UNTRACKED_STALENESS: ShotStalenessResult = {
   liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
 };
 
+/** Every artifact deferred — the sequence is mid-run (#1121). */
+const GENERATING_STALENESS: ShotStalenessResult = {
+  thumbnail: 'generating',
+  visualPrompt: 'generating',
+  motionPrompt: 'generating',
+  liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
+};
+
+/**
+ * The one status that means "a run owns this sequence's artifacts right now":
+ * `triggerStoryboard` is the only writer (create / retry / regenerate), and it
+ * rebuilds every shot. Nothing else — a shot regenerate, an Update all run —
+ * moves the sequence off 'completed', so this never suppresses a genuine
+ * post-edit staleness verdict.
+ */
+const isSequenceGenerating = (status: SequenceStatus): boolean =>
+  status === 'processing';
+
 /** Sequence-scoped rows loaded once for a batch of shot comparisons. */
 export type ShotStalenessRefs = ShotPromptContextRefs;
 
@@ -81,6 +104,8 @@ export type ShotStalenessRefs = ShotPromptContextRefs;
  *                     Distinct from `'fresh'` so the UI can suppress the
  *                     regenerate prompt without lying about the artifact's
  *                     freshness.
+ *   - `'generating'`— the sequence is mid-generation run (#1121); see the
+ *                     early return below.
  *   - `'unknown'`   — the comparison itself failed (style deleted mid-flight,
  *                     transient D1 read, malformed row). Distinct from
  *                     `'untracked'`: the UI renders it as "couldn't check"
@@ -95,7 +120,10 @@ export type ShotStalenessRefs = ShotPromptContextRefs;
  */
 export async function computeShotStaleness(args: {
   scopedDb: ScopedDb;
-  sequence: ShotPromptContextSequence & { aspectRatio: AspectRatio };
+  sequence: ShotPromptContextSequence & {
+    aspectRatio: AspectRatio;
+    status: SequenceStatus;
+  };
   shot: Shot;
   frame: Frame;
   /**
@@ -108,6 +136,29 @@ export async function computeShotStaleness(args: {
   refs?: ShotStalenessRefs;
 }): Promise<ShotStalenessResult> {
   const { scopedDb, sequence, shot, frame, selectedImage, scene, refs } = args;
+
+  // ============================================================
+  // Mid-run short-circuit (#1121). Every comparison below pits a hash stamped
+  // at some earlier moment against one recomputed from live scoped state. That
+  // is only a statement about the user's edits once the sequence has settled:
+  // during a storyboard run the inputs the hashes are taken over — cast rows,
+  // locations, elements, and therefore the narrowed bibles
+  // `loadNarrowShotPromptContext` derives — are still being written, so a
+  // prompt stamped against the context of five minutes ago legitimately
+  // diverges from the context of now, and the run itself is what closes the
+  // gap (the pipeline writes a final version against the settled context,
+  // which is why the banner used to clear on its own at the end).
+  //
+  // Reporting that as 'stale' told the user "out of date since your edit" when
+  // they had not edited anything, and offered "Update all" — regenerating,
+  // for real money, artifacts the running pipeline was about to overwrite.
+  // 'generating' is the honest answer: no verdict, no action, and the client
+  // predicates (`shotIsStale`/`shotIsUpdating`/`shotStalenessUnknown`) all
+  // ignore it, so nothing renders. Returned BEFORE any read: the batch fn
+  // recomputes hashes for every shot in the sequence on a poll loop that runs
+  // hardest during exactly this window.
+  // ============================================================
+  if (isSequenceGenerating(sequence.status)) return GENERATING_STALENESS;
 
   const liveHashes: ShotLiveHashes = {
     thumbnail: null,

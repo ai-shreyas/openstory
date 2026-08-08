@@ -53,6 +53,7 @@ import {
   shotAccessMiddleware,
   sequenceAccessMiddleware,
 } from './middleware';
+import { ValidationError } from '@/lib/errors';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -696,6 +697,16 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user, scopedDb } = context;
     const depth = data.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
+    // Never race the pipeline (#1121). While a storyboard run owns the
+    // sequence it is rewriting these artifacts anyway, so an Update all run
+    // would bill for work that is about to be overwritten. Staleness reads
+    // 'generating' during this window, so the UI offers no action to get
+    // here — this is the guard for a stale tab or a direct API call.
+    if (sequence.status === 'processing') {
+      throw new ValidationError(
+        'This sequence is still generating — wait for the run to finish before updating out-of-date shots.'
+      );
+    }
     // Deliberately before the plan: this is a floor, not a quote — a run that
     // can't afford even one artifact of its most expensive level should never
     // start, and there's no point planning a whole sequence to tell the user
