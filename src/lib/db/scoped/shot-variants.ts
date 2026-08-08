@@ -96,7 +96,6 @@ export function createShotVariantsMethods(db: Database) {
           set: {
             url: sql.raw(`excluded."url"`),
             storagePath: sql.raw(`excluded."storage_path"`),
-            previewUrl: sql.raw(`excluded."preview_url"`),
             status: sql.raw(`excluded."status"`),
             workflowRunId: sql.raw(`excluded."workflow_run_id"`),
             generatedAt: sql.raw(`excluded."generated_at"`),

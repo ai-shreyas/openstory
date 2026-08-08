@@ -79,7 +79,6 @@ export const videoVariants = snakeCase.table(
     // Output
     url: text(),
     storagePath: text(),
-    previewUrl: text(),
 
     // Generation tracking
     status: text().$type<VideoGenerationStatus>().default('pending').notNull(),

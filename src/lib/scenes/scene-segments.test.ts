@@ -92,7 +92,6 @@ const version = (
   model,
   status: 'completed',
   url: `https://cdn.test/${id}.mp4`,
-  previewUrl: null,
   createdAt: new Date('2026-01-01'),
   manifest,
 });

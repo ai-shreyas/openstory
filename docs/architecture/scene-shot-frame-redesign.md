@@ -26,11 +26,22 @@ pending, or for reference-driven shots that never get a dedicated first frame);
 it upgrades to `'generated'` **in place** so the i2v anchor identity never
 changes underneath motion generation.
 
+> **Superseded by #1101.** `frames.source` was never wired up — every row read
+> `'generated'` — and `frames.previewImageUrl` was the only image artifact in
+> the system that wasn't a row. Preview-ness is now a third `frame_variants`
+> kind (`'preview'`), derived rather than stored: a render of the RAW SCENE
+> TEXT rather than of the frame's prompt, never selectable, never promotable,
+> never snapshotted into a render manifest. Both frame columns are dropped, as
+> are the never-populated `previewUrl` columns on `frame_variants`,
+> `video_variants` and `shot_variants`.
+
 ## Vocabulary (this is binding — two words, not three)
 
 - **variant** — a parallel candidate you select between. Axis = **model** _or_
   **framing** (the 3×3 is `kind: 'framing'`, derived from a model image — not a
-  separate concept).
+  separate concept). `kind: 'preview'` (#1101) is the one row that is NOT a
+  candidate: it renders the raw scene text rather than the prompt, so it is
+  never selectable.
 - **version** — the stored generation history _within_ a variant, time-ordered.
   Re-rolls accumulate (we keep them); they never overwrite.
 - Prompt history is also **versions**.
@@ -55,9 +66,8 @@ frames
   sequenceId → sequences.id (cascade)   // denormalized for sequence-scoped queries
   orderIndex (0 = first/anchor)
   role:   'first' | 'last' | 'key'
-  source: 'preview' | 'generated'
   imageUrl                // cached mirror of the selected image version
-  previewImageUrl, imagePath, imageStatus, imageWorkflowRunId,
+  imagePath, imageStatus, imageWorkflowRunId,
   imageGeneratedAt, imageError, imageInputHash
   imageModel              // SQL default a frozen literal, never a mutable constant
   selectedImageVersionId → frame_variants.id (set null)
@@ -74,10 +84,10 @@ frame_variants
   id                      // ULID; the version's stable id
   frameId → frames.id (cascade)
   sequenceId → sequences.id (cascade)
-  kind:   'model' | 'framing'
+  kind:   'model' | 'framing' | 'preview'   // 'preview' added in #1101
   model
   sourceVariantId?        // for 'framing' rows: which model image's 3×3 this came from
-  url, storagePath, previewUrl
+  url, storagePath
   status, workflowRunId, generatedAt, error
   promptHash, inputHash   // staleness of THIS version
   discardedAt?            // soft-hide (undoable)

@@ -33,7 +33,6 @@ function videoVariant(overrides: Partial<VideoVariant> = {}): VideoVariant {
     model: 'veo3_1',
     url: 'https://r2/v.mp4',
     storagePath: 'path/v.mp4',
-    previewUrl: null,
     status: 'completed',
     isPrimary: true,
     workflowRunId: 'run-1',

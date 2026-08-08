@@ -34,7 +34,6 @@ function projectEntry(
     model: version.model,
     url: version.url,
     storagePath: version.storagePath,
-    previewUrl: version.previewUrl,
     // The 3×3 grid was image-only; never set for video.
     shotVariantUrl: null,
     shotVariantPath: null,

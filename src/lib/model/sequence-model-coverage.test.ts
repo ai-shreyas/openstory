@@ -15,7 +15,6 @@ const baseVariant: ShotVariant = {
   model: 'nano_banana_2',
   url: 'https://r2/img.png',
   storagePath: 'team/seq/img.png',
-  previewUrl: null,
   shotVariantUrl: null,
   shotVariantPath: null,
   shotVariantStatus: null,

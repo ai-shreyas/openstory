@@ -159,6 +159,7 @@ function makeShot({
     updatedAt: NOW,
   });
   return toShotView(shot, frame, {
+    preview: null,
     image:
       imageUrl === null
         ? null

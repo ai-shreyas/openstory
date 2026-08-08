@@ -72,6 +72,7 @@ function makeShot(
       sequenceId: SEQ,
       url: OLD_THUMB,
     }),
+    preview: null,
     imagePromptVersion: null,
     video,
     // That same render is the segment's primary, so the shot reads `completed`.

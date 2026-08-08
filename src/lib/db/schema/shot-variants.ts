@@ -44,7 +44,6 @@ export const shotVariants = snakeCase.table(
     // Output URLs and storage paths
     url: text(),
     storagePath: text(),
-    previewUrl: text(),
 
     // Shot variant (3x3 grid image generated from this model's output)
     shotVariantUrl: text(),

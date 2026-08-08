@@ -157,8 +157,9 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         };
 
         // No frame context (preview mode, or shotless ad-hoc): generate without
-        // touching the DB — no version, no status flip. The caller stores the
-        // preview URL on the frame in the skipStorage branch below.
+        // claiming a version row — no in-flight row, no status flip. A preview
+        // gets its own `kind: 'preview'` row on completion, in the skipStorage
+        // branch below.
         if (!input.shotId || !input.sequenceId || input.skipStorage) {
           return { params, versionId: '' };
         }
@@ -386,7 +387,6 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
             {
               url: upload.url,
               storagePath: upload.path,
-              previewUrl: null,
               generatedAt: new Date(),
               error: null,
               promptHash,
@@ -505,22 +505,32 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         return { imageUrl, shotId, sequenceId, cancelled: true };
       }
     } else if (imageUrl && shotId && input.skipStorage) {
-      await step.do('store-preview-url', async () => {
+      await step.do('record-preview-variant', async () => {
         const anchor = await this.resolveFrame(scopedDb, input);
-        const updatedFrame = anchor
-          ? await scopedDb.frames.setImageGenerationStatus(
-              anchor.id,
-              { previewImageUrl: imageUrl, imageError: null },
-              { throwOnMissing: false }
-            )
-          : null;
-
-        if (!updatedFrame) {
+        if (!anchor) {
           logger.info(
-            `[ImageWorkflow] Shot ${shotId} has no anchor frame, skipping preview update`
+            `[ImageWorkflow] Shot ${shotId} has no anchor frame, skipping preview`
           );
           return;
         }
+
+        // A preview is a render of the RAW SCENE TEXT, not of the frame's
+        // prompt (#1101) — it exists so something can appear during script
+        // analysis, before a prompt version does. So it lands as its own
+        // `kind: 'preview'` row: keyed by the scene text it came from, never
+        // paired with a prompt version, never selectable or promotable.
+        //
+        // `skipStorage` still skips the R2 upload, deliberately, to keep the
+        // progressive reveal fast (#1091). The url expires; that is harmless
+        // precisely because nothing durable can ever point at this row.
+        await scopedDb.frameVariants.recordPreview({
+          frameId: anchor.id,
+          sequenceId: anchor.sequenceId,
+          model: prep.params.model,
+          url: imageUrl,
+          promptHash: input.prompt ? simpleHash(input.prompt) : null,
+          workflowRunId,
+        });
 
         if (sequenceId) {
           await getGenerationChannel(sequenceId).emit(

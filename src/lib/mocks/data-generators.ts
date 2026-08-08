@@ -97,6 +97,7 @@ const generateMockShot = (overrides?: Partial<ShotView>): ShotView => {
   return {
     ...toShotView(shot, frame, {
       image,
+      preview: null,
       imagePromptVersion: null,
       // Only a completed render is ever selectable.
       video: primaryVideo.status === 'completed' ? primaryVideo : null,

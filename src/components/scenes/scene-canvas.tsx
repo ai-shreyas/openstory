@@ -255,7 +255,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
     // preview) plus the generating/failed overlays, so early scenes show
     // something the moment their first preview lands.
     const stillShot =
-      scopedShots.find((s) => s.image?.url || s.frame.previewImageUrl) ??
+      scopedShots.find((s) => s.image?.url || s.previewThumbnailUrl) ??
       scopedShots[0];
     if (stillShot) {
       return (

@@ -66,7 +66,6 @@ type FrameOrderBy = 'orderIndex' | 'createdAt' | 'updatedAt';
  */
 type FrameMirrorColumn =
   | 'selectedImageVersionId'
-  | 'previewImageUrl'
   | 'imageStatus'
   | 'imageError'
   | 'selectedImagePromptVersionId';
@@ -217,7 +216,7 @@ export function createFramesMethods(db: Database) {
       frameId: string,
       data: Pick<
         Partial<NewFrame>,
-        'imageStatus' | 'imageWorkflowRunId' | 'imageError' | 'previewImageUrl'
+        'imageStatus' | 'imageWorkflowRunId' | 'imageError'
       >,
       options?: { throwOnMissing?: boolean }
     ): Promise<Frame | undefined> => {
@@ -241,6 +240,21 @@ export function createFramesMethods(db: Database) {
       frameId: string,
       versionId: string | null
     ): Promise<void> => {
+      // A preview is a pre-prompt stand-in and can never become a still
+      // (#1101). `frameVariants.select` already refuses one, but promotion is
+      // an unattended path — a claim pointed here would surface as a workflow
+      // failure minutes later instead of at the mistake.
+      if (versionId !== null) {
+        const [target] = await db
+          .select({ kind: frameVariants.kind })
+          .from(frameVariants)
+          .where(eq(frameVariants.id, versionId));
+        if (target?.kind === 'preview') {
+          throw new Error(
+            `FrameVariant ${versionId} is a preview — it can never be promoted to frame ${frameId}'s still`
+          );
+        }
+      }
       await db
         .update(frames)
         .set({ pendingPromoteVersionId: versionId, updatedAt: new Date() })

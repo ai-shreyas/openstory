@@ -54,6 +54,7 @@ function makeShot(
       sequenceId: shot.sequenceId,
       url: 'https://example.com/thumb.jpg',
     }),
+    preview: null,
     imagePromptVersion: null,
     video,
     primaryVideo: video,

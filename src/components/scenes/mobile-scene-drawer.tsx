@@ -149,7 +149,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
       >
         <SceneThumbnail
           thumbnailUrl={selectedShot?.image?.url}
-          previewThumbnailUrl={selectedShot?.frame.previewImageUrl}
+          previewThumbnailUrl={selectedShot?.previewThumbnailUrl}
           thumbnailStatus={selectedShot?.frame.imageStatus || undefined}
           alt={sceneTitle}
           aspectRatio={aspectRatio}

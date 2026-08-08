@@ -109,6 +109,7 @@ function makeShot(
   });
   return toShotView(shot, frame, {
     image: null,
+    preview: null,
     imagePromptVersion: null,
     video: null,
     primaryVideo: null,
@@ -223,6 +224,26 @@ function depsWithShots(
     frameVariants: {
       getSelectedByFrameIds: async () =>
         new Map(shots.flatMap((s) => (s.image ? [[s.frame.id, s.image]] : []))),
+      // The pre-prompt stand-in is a `kind: 'preview'` row (#1101); the view
+      // carries only its url, so re-derive a row from it here.
+      listLatestPreviewsByFrameIds: async () =>
+        new Map(
+          shots.flatMap((s) =>
+            s.previewThumbnailUrl
+              ? [
+                  [
+                    s.frame.id,
+                    frameVariantFixture({
+                      frameId: s.frame.id,
+                      sequenceId: s.sequenceId,
+                      kind: 'preview',
+                      url: s.previewThumbnailUrl,
+                    }),
+                  ],
+                ]
+              : []
+          )
+        ),
     },
     videoVariants: {
       getSelectedByShotIds: async () =>
@@ -353,7 +374,16 @@ describe('buildSequenceState', () => {
   it('treats a preview thumbnail as an available image', async () => {
     const state = await build(
       depsWithShots([
-        makeShot({ frame: { previewImageUrl: 'https://cdn/p.png' } }),
+        makeShot({
+          sources: {
+            preview: frameVariantFixture({
+              frameId: frameIdFor('shot-1'),
+              sequenceId: 'seq-1',
+              kind: 'preview',
+              url: 'https://cdn/p.png',
+            }),
+          },
+        }),
       ]),
       makeSequence()
     );

@@ -118,7 +118,6 @@ describe('frames.update', () => {
       .update(frames)
       .set({
         selectedImageVersionId: 'ver-1',
-        previewImageUrl: 'https://cdn/keep-preview.png',
         imageStatus: 'completed',
       })
       .where(eq(frames.id, frame.id));
@@ -134,7 +133,6 @@ describe('frames.update', () => {
     expect(refreshed.role).toBe('key');
     // Selection-owned columns untouched.
     expect(refreshed.selectedImageVersionId).toBe('ver-1');
-    expect(refreshed.previewImageUrl).toBe('https://cdn/keep-preview.png');
     expect(refreshed.imageStatus).toBe('completed');
   });
 
@@ -227,5 +225,78 @@ describe('frames.isStale', () => {
       .where(eq(frames.id, a.id));
     expect(await m.isStale(a.id, 'h-match')).toBe(false);
     expect(await m.isStale(a.id, 'h-new')).toBe(true);
+  });
+});
+
+describe('frames.setPendingPromoteVersionId (#1101)', () => {
+  it('refuses to claim auto-promote for a preview version', async () => {
+    const m = createFramesMethods(db);
+    const frame = await m.create({
+      shotId,
+      sequenceId,
+      orderIndex: 0,
+      role: 'first',
+    });
+    const [preview] = await db
+      .insert(frameVariants)
+      .values({
+        frameId: frame.id,
+        sequenceId,
+        kind: 'preview',
+        model: 'flux_2_turbo',
+        url: 'https://fal.media/preview.png',
+        status: 'completed',
+      })
+      .returning();
+    if (!preview)
+      throw new Error('test setup: preview insert returned nothing');
+
+    // Promotion is unattended: without this guard a mis-pointed claim would
+    // surface as a workflow failure minutes later instead of at the mistake.
+    await expect(
+      m.setPendingPromoteVersionId(frame.id, preview.id)
+    ).rejects.toThrow(/preview/);
+
+    const [refreshed] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frame.id));
+    expect(refreshed?.pendingPromoteVersionId).toBeNull();
+  });
+
+  it('still claims for a model version, and clears on null', async () => {
+    const m = createFramesMethods(db);
+    const frame = await m.create({
+      shotId,
+      sequenceId,
+      orderIndex: 0,
+      role: 'first',
+    });
+    const [version] = await db
+      .insert(frameVariants)
+      .values({
+        frameId: frame.id,
+        sequenceId,
+        kind: 'model',
+        model: 'nano_banana_2',
+        status: 'generating',
+      })
+      .returning();
+    if (!version)
+      throw new Error('test setup: version insert returned nothing');
+
+    await m.setPendingPromoteVersionId(frame.id, version.id);
+    const [claimed] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frame.id));
+    expect(claimed?.pendingPromoteVersionId).toBe(version.id);
+
+    await m.setPendingPromoteVersionId(frame.id, null);
+    const [cleared] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frame.id));
+    expect(cleared?.pendingPromoteVersionId).toBeNull();
   });
 });
