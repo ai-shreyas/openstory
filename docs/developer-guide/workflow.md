@@ -141,7 +141,11 @@ flowchart TD
 
 - Generates a poster image from the script+title+style for the video player empty state
 - Non-critical — failures are logged and swallowed
-- Emits `generation.poster:ready` with the URL
+
+**Steps: `upload-poster` → `save-poster`**
+
+- `upload-poster` streams the provider image into R2 (`uploadPosterToStorage`) so the stored URL is the origin-relative `/r2/` path and never expires (#1117). Also non-critical: an upload failure falls back to the provider URL
+- `save-poster` writes `posterUrl` on the sequence and emits `generation.poster:ready` with the URL
 
 Then spawns the `AnalyzeScriptWorkflow` child via `spawnAndAwaitChild(ANALYZE_SCRIPT_WORKFLOW, …)` (`src/lib/workflow/await-child.ts`) and awaits its completion. The child runs as its own durable instance with its own per-step retry budget.
 

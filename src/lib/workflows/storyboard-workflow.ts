@@ -30,6 +30,7 @@ import {
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
+import { uploadPosterToStorage } from '@/lib/image/image-storage';
 import { buildPosterPrompt } from '@/lib/prompts/poster-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { validateSequenceAuth } from '@/lib/workflow/auth';
@@ -116,8 +117,30 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     });
 
     if (posterResult) {
-      const posterUrl = posterResult.imageUrls[0];
-      if (posterUrl) {
+      const generatedPosterUrl = posterResult.imageUrls[0];
+      if (generatedPosterUrl) {
+        // The provider URL is ephemeral — persist the bytes into R2 so the
+        // stored row keeps resolving after the CDN link expires (#1117).
+        // Non-critical like the generation above: an upload outage falls back
+        // to the provider URL (today's behaviour) rather than failing the run.
+        const storedPosterUrl = await step.do('upload-poster', async () => {
+          try {
+            const upload = await uploadPosterToStorage({
+              imageUrl: generatedPosterUrl,
+              teamId,
+              sequenceId,
+            });
+            return upload.url;
+          } catch (error) {
+            logger.warn('[StoryboardWorkflow:cf] Poster upload failed:', {
+              err: error,
+            });
+            return null;
+          }
+        });
+
+        const posterUrl = storedPosterUrl ?? generatedPosterUrl;
+
         await step.do('save-poster', async () => {
           await scopedDb.sequences.update({ id: sequenceId, posterUrl });
           await getGenerationChannel(sequenceId).emit(
