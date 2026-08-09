@@ -14,11 +14,10 @@
  *     and the workflow run id from `event.instanceId` instead of
  *     `context.workflowRunId`.
  *   - The Promise.all over `context.invoke('image', ...)` becomes
- *     `Promise.all` spawn + `Promise.allSettled` await of
- *     `spawnAndAwaitChild` (Pattern 3 fan-out helpers in
- *     `await-child.ts`). Each child gets a deterministic instance ID
- *     (`image:${sequenceId}:${shotId}`) and a unique event-type qualifier so
- *     siblings cannot match each other's completion events.
+ *     wave-bounded (#1126) Pattern 3 `spawnAndAwaitChild` fan-out
+ *     (`mapInWaves` + `await-child.ts`). Each child gets a deterministic
+ *     instance ID (`image:${sequenceId}:${shotId}`) and a unique event-type
+ *     qualifier so siblings cannot match each other's completion events.
  *   - Calls the snapshot DTO computer (`computeRegenerateShotsBatchHash`)
  *     directly inside `step.do('validate-snapshot')` instead of going
  *     through the `context.snapshot.*` extension.
@@ -32,6 +31,7 @@ import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
+import { FANOUT_CONCURRENCY, mapInWaves } from '@/lib/workflow/map-in-waves';
 import type {
   ImageWorkflowInput,
   RegenerateShotsWorkflowInput,
@@ -128,21 +128,21 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     });
 
     // ============================================================
-    // PHASE: Per-shot image regeneration — fan out via Pattern 3.
-    // Use Promise.allSettled so a single child timeout / failure does not
-    // kill the parent — each sibling resolves independently, and per-shot
-    // failures become `ShotResult` entries that the reconcile pass below
-    // handles individually.
+    // PHASE: Per-shot image regeneration — Pattern 3 fan-out, wave-bounded
+    // (#1126) so large batches don't stampede Workflow isolates + D1.
+    // Within a wave: allSettled isolation; between waves: sequential.
     // ============================================================
-    const settled = await Promise.allSettled(
-      snapshots.map((snapshot, shotIndex): Promise<ShotResult> => {
+    const settled = await mapInWaves(
+      snapshots,
+      FANOUT_CONCURRENCY.image,
+      async (snapshot, shotIndex): Promise<ShotResult> => {
         if (!snapshot.imagePrompt) {
           // Per-shot failure — peer shots in the batch should still run.
-          return Promise.resolve({
+          return {
             shotId: snapshot.shotId,
             success: false,
             error: 'no image prompt',
-          });
+          };
         }
 
         const referenceImages = [
@@ -165,50 +165,49 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
           referenceImages,
         };
 
-        return spawnAndAwaitChild<ImageWorkflowInput, ImageChildOutput>(step, {
-          binding: childBinding,
-          parentBindingName: 'REGENERATE_SHOTS_WORKFLOW',
-          parentInstanceId,
-          childId: `image:${sequenceId}:${snapshot.shotId}`,
-          childPayload,
-          spawnStepName: `spawn-image-${shotIndex}`,
-          awaitStepName: `await-image-${shotIndex}`,
-        }).then(
-          (body): ShotResult => {
-            if (!body.imageUrl) {
-              logger.error(
-                `[RegenerateShotsWorkflow:cf] Image generation failed shot=${snapshot.shotId} reason=no imageUrl`
-              );
-              return {
-                shotId: snapshot.shotId,
-                success: false,
-                error: 'Image generation no imageUrl',
-              };
-            }
-            return {
-              shotId: snapshot.shotId,
-              success: true,
-              imageUrl: body.imageUrl,
-            };
-          },
-          (err: unknown): ShotResult => {
-            const reason = err instanceof Error ? err.message : String(err);
+        try {
+          const body = await spawnAndAwaitChild<
+            ImageWorkflowInput,
+            ImageChildOutput
+          >(step, {
+            binding: childBinding,
+            parentBindingName: 'REGENERATE_SHOTS_WORKFLOW',
+            parentInstanceId,
+            childId: `image:${sequenceId}:${snapshot.shotId}`,
+            childPayload,
+            spawnStepName: `spawn-image-${shotIndex}`,
+            awaitStepName: `await-image-${shotIndex}`,
+          });
+          if (!body.imageUrl) {
             logger.error(
-              `[RegenerateShotsWorkflow:cf] Image generation failed shot=${snapshot.shotId} reason=${reason}`
+              `[RegenerateShotsWorkflow:cf] Image generation failed shot=${snapshot.shotId} reason=no imageUrl`
             );
             return {
               shotId: snapshot.shotId,
               success: false,
-              error: `Image generation failed: ${reason}`,
+              error: 'Image generation no imageUrl',
             };
           }
-        );
-      })
+          return {
+            shotId: snapshot.shotId,
+            success: true,
+            imageUrl: body.imageUrl,
+          };
+        } catch (err: unknown) {
+          const reason = err instanceof Error ? err.message : String(err);
+          logger.error(
+            `[RegenerateShotsWorkflow:cf] Image generation failed shot=${snapshot.shotId} reason=${reason}`
+          );
+          return {
+            shotId: snapshot.shotId,
+            success: false,
+            error: `Image generation failed: ${reason}`,
+          };
+        }
+      }
     );
 
-    // Promise.allSettled with onfulfilled/onrejected mappers above means every
-    // entry is a resolved ShotResult. Collect them into the same shape the
-    // QStash original produced.
+    // mapInWaves is allSettled per wave; collect into ShotResult[] for reconcile.
     const imageResults: ShotResult[] = settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       const snapshot = snapshots[i];
@@ -234,10 +233,13 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
 
     // Regenerate the 3×3 grid sheet for each (re)imaged shot — it is derived
     // from the primary still and would otherwise show the pre-recast subject.
-    // Fire-and-forget; each variant runs as its own workflow.
+    // Fire-and-forget; wave-bounded creates so we don't open N variant DOs
+    // in one tick (#1126).
     await step.do('trigger-variant-regen', async () => {
-      await Promise.all(
-        succeeded.map(async (result) => {
+      await mapInWaves(
+        succeeded,
+        FANOUT_CONCURRENCY.variantTrigger,
+        async (result) => {
           const snapshot = snapshots.find((s) => s.shotId === result.shotId);
           if (!snapshot) return;
           await triggerWorkflow<ShotVariantWorkflowInput>(
@@ -267,7 +269,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
               deduplicationId: `variant-image-${result.shotId}-${imageModel}-${snapshot.snapshotInputHash.slice(0, 16)}`,
             }
           );
-        })
+        }
       );
     });
 
