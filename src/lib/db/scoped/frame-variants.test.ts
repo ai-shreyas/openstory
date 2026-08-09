@@ -1073,4 +1073,57 @@ describe("frameVariants kind: 'preview' (#1101)", () => {
     const modelVersions = await m.listModelVersionsBySequence(sequenceId);
     expect(modelVersions.map((v) => v.model)).toEqual(['nano_banana_2']);
   });
+
+  it('keeps an image-less husk out of the model dropdown (#1133)', async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(variantInput({ model: 'nano_banana_2' }));
+    // The shape the #1101 reclassify could not move because a frame selects it:
+    // kind 'model', completed, but it never produced an image. 58 of these are
+    // live in production and leak `flux_2_turbo` into 15 sequences' dropdown.
+    await db.insert(frameVariants).values({
+      id: 'husk-selected',
+      frameId,
+      sequenceId,
+      kind: 'model',
+      model: 'flux_2_turbo',
+      status: 'completed',
+      url: null,
+      storagePath: null,
+    });
+
+    expect(await m.listModelsForSequence(sequenceId)).toEqual([
+      'nano_banana_2',
+    ]);
+  });
+
+  it('orders by createdAt, so a non-ULID legacy id cannot win (#1132)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const real = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/real.png',
+      promptHash: null,
+      workflowRunId: 'run-ordering-1',
+    });
+
+    // A QStash-era row: 26-char hex id that sorts above EVERY ULID, but is
+    // genuinely older. Ordering by id alone hands it the "newest" slot.
+    await db.insert(frameVariants).values({
+      id: 'ffdabf476d92ad8114fb89c8be',
+      frameId,
+      sequenceId,
+      kind: 'preview',
+      model: 'flux_2_turbo',
+      status: 'completed',
+      url: 'https://fal.media/stale-2026-03.png',
+      createdAt: new Date(real.createdAt.getTime() - 60_000),
+    });
+
+    expect((await m.getLatestPreview(frameId))?.url).toBe(
+      'https://fal.media/real.png'
+    );
+    const byFrame = await m.listLatestPreviewsByFrameIds([frameId]);
+    expect(byFrame.get(frameId)?.url).toBe('https://fal.media/real.png');
+  });
 });
