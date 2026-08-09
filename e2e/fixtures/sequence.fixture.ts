@@ -51,8 +51,10 @@ export async function createTestSequence(
   userId: string,
   title = 'E2E Test Sequence'
 ): Promise<TestSequence> {
-  await createTestStyle(teamId); // ensures a style exists for the team
-
+  // No style is created here on purpose: the API route already creates the
+  // sequence's own style, and `cleanupSequenceById` only deletes that one — so
+  // a second style here leaked an orphan row onto the shared team on every
+  // call, permanently widening the team's style catalog mid-run.
   const res = await fetch('http://localhost:3001/api/test/sequence', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

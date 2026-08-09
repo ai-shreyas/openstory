@@ -14,6 +14,10 @@ import {
 import {
   waitForLibraryPageLoad,
   cleanupTalentByName,
+  openLibraryCard,
+  returnToLibraryList,
+  waitForUploadComplete,
+  TALENT_DETAIL_URL,
 } from '../fixtures/test-utils';
 import path from 'node:path';
 
@@ -128,12 +132,7 @@ testWithUser.describe('Add Talent with Reference Media', () => {
       );
       await fileChooser.setFiles(testImagePath);
 
-      // Wait for upload to complete (button should become enabled)
-      await expect(
-        page.getByRole('button', { name: 'Add Talent' })
-      ).toBeEnabled({
-        timeout: 15000,
-      });
+      await waitForUploadComplete(page);
 
       // Submit the form (exercises the create path through the dialog)
       await page.getByRole('button', { name: 'Add Talent' }).click();
@@ -154,7 +153,7 @@ testWithUser.describe('Add Talent with Reference Media', () => {
     }
   );
 
-  testWithUser('shows upload progress indicator', async ({ page }) => {
+  testWithUser('shows the picked file while it uploads', async ({ page }) => {
     const uniqueName = `Test Upload Progress ${crypto.randomUUID().slice(0, 8)}`;
 
     await page.goto('/talent');
@@ -176,11 +175,12 @@ testWithUser.describe('Add Talent with Reference Media', () => {
     );
     await fileChooser.setFiles(testImagePath);
 
-    // Button should show uploading state or be disabled during upload
-    // The button text changes to "Uploading..." during upload
-    await expect(page.getByRole('button', { name: 'Add Talent' })).toBeEnabled({
-      timeout: 15000,
-    });
+    // The picked file lands in the list with a preview, and the upload runs to
+    // completion. Asserting only "submit is enabled" proved nothing: submit is
+    // enabled from the moment the dialog opens, so it passed before the file
+    // was even registered (#827).
+    await expect(page.locator('[data-slot="file-upload-item"]')).toHaveCount(1);
+    await waitForUploadComplete(page);
     // Note: This test doesn't submit, so no cleanup needed
   });
 
@@ -232,7 +232,7 @@ testWithUser.describe('Edit Talent with Reference Media', () => {
     await waitForTalentPageLoad(page);
 
     // Click on the talent card to view details (use variable, not hardcoded)
-    await page.getByText(testTalent.name).click();
+    await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
     // Should be on detail page
     await expect(
@@ -250,7 +250,7 @@ testWithUser.describe('Edit Talent with Reference Media', () => {
       await waitForTalentPageLoad(page);
 
       // Click on the talent to view details
-      await page.getByText(testTalent.name).click();
+      await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
       // Click the edit button (pencil icon)
       await page
@@ -269,48 +269,47 @@ testWithUser.describe('Edit Talent with Reference Media', () => {
     }
   );
 
-  // TODO: This test is flaky - the update mutation doesn't complete
-  // Needs investigation into why the dialog doesn't close after save
-  testWithUser.skip(
-    'can update talent name and description',
-    async ({ page }) => {
-      await page.goto('/talent');
-      await waitForTalentPageLoad(page);
-      await page.getByText(testTalent.name).click();
+  // Previously skipped as "the update mutation doesn't complete / the dialog
+  // doesn't close after save". That was #827: arriving from a library list with
+  // enough cards exhausted the browser's connection budget with per-card SSE
+  // streams, so the update POST could never be sent. Fixed by multiplexing.
+  testWithUser('can update talent name and description', async ({ page }) => {
+    await page.goto('/talent');
+    await waitForTalentPageLoad(page);
+    await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
-      // Open edit dialog
-      await page.locator('button:has(svg.lucide-pencil)').first().click();
+    // Open edit dialog
+    await page.locator('button:has(svg.lucide-pencil)').first().click();
 
-      await expect(
-        page.getByRole('dialog', { name: 'Edit Talent' })
-      ).toBeVisible();
+    await expect(
+      page.getByRole('dialog', { name: 'Edit Talent' })
+    ).toBeVisible();
 
-      // Update name
-      const updatedName = `E2E Updated Talent ${crypto.randomUUID().slice(0, 8)}`;
-      await page.getByLabel('Name').fill(updatedName);
-      await page.getByLabel('Description').fill('Updated description');
+    // Update name
+    const updatedName = `E2E Updated Talent ${crypto.randomUUID().slice(0, 8)}`;
+    await page.getByLabel('Name').fill(updatedName);
+    await page.getByLabel('Description').fill('Updated description');
 
-      // Save changes
-      await page.getByRole('button', { name: 'Save Changes' }).click();
+    // Save changes
+    await page.getByRole('button', { name: 'Save Changes' }).click();
 
-      // Wait for the save to complete and dialog to close
-      await expect(
-        page.getByRole('dialog', { name: 'Edit Talent' })
-      ).not.toBeVisible({ timeout: 15000 });
+    // Wait for the save to complete and dialog to close
+    await expect(
+      page.getByRole('dialog', { name: 'Edit Talent' })
+    ).not.toBeVisible({ timeout: 15000 });
 
-      // Updated name should appear on the detail page
-      await expect(
-        page.getByRole('heading', {
-          name: updatedName,
-        })
-      ).toBeVisible({ timeout: 10000 });
-    }
-  );
+    // Updated name should appear on the detail page
+    await expect(
+      page.getByRole('heading', {
+        name: updatedName,
+      })
+    ).toBeVisible({ timeout: 10000 });
+  });
 
   testWithUser('can add media to existing talent', async ({ page }) => {
     await page.goto('/talent');
     await waitForTalentPageLoad(page);
-    await page.getByText(testTalent.name).click();
+    await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
     // Open edit dialog
     await page.locator('button:has(svg.lucide-pencil)').first().click();
@@ -331,7 +330,7 @@ testWithUser.describe('Edit Talent with Reference Media', () => {
   testWithUser('displays existing media in edit dialog', async ({ page }) => {
     await page.goto('/talent');
     await waitForTalentPageLoad(page);
-    await page.getByText(testTalent.name).click();
+    await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
     // Open edit dialog
     await page.locator('button:has(svg.lucide-pencil)').first().click();
@@ -355,7 +354,7 @@ testWithUser.describe('Edit Talent with Reference Media', () => {
   testWithUser('can cancel edit dialog without saving', async ({ page }) => {
     await page.goto('/talent');
     await waitForTalentPageLoad(page);
-    await page.getByText(testTalent.name).click();
+    await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
     // Open edit dialog
     await page.locator('button:has(svg.lucide-pencil)').first().click();
@@ -416,17 +415,16 @@ testWithUser.describe('Talent with Media - List View', () => {
     await waitForTalentPageLoad(page);
 
     // Click first talent
-    await page.getByText(testTalentAlpha.name).click();
+    await openLibraryCard(page, testTalentAlpha.name, TALENT_DETAIL_URL);
     await expect(
       page.getByRole('heading', { name: testTalentAlpha.name })
     ).toBeVisible();
 
     // Go back to list
-    await page.getByRole('link', { name: 'Back to Talent' }).click();
-    await expect(page).toHaveURL(/\/talent(\?|$)/);
+    await returnToLibraryList(page, 'Back to Talent', /\/talent(\?|$)/);
 
     // Click second talent
-    await page.getByText(testTalentBeta.name).click();
+    await openLibraryCard(page, testTalentBeta.name, TALENT_DETAIL_URL);
     await expect(
       page.getByRole('heading', { name: testTalentBeta.name })
     ).toBeVisible();

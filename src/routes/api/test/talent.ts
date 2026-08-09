@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
 import {
   cleanupTalentById,
+  cleanupTalentByName,
   cleanupTestTalent,
   createTestTalent,
   createTestTalentWithMedia,
@@ -18,6 +19,7 @@ const CreateTalentSchema = z.object({
 const DeleteTalentSchema = z.object({
   teamId: z.string().optional(),
   talentId: z.string().optional(),
+  name: z.string().optional(),
 });
 
 export const Route = createFileRoute('/api/test/talent')({
@@ -50,19 +52,25 @@ export const Route = createFileRoute('/api/test/talent')({
 
         /**
          * DELETE /api/test/talent
+         * Supports: {teamId} (all for team), {talentId}, or {teamId, name}
          */
         DELETE: async ({ request }) => {
-          const { teamId, talentId } = DeleteTalentSchema.parse(
+          const { teamId, talentId, name } = DeleteTalentSchema.parse(
             await request.json()
           );
 
-          if (teamId) {
-            await cleanupTestTalent(teamId);
+          if (teamId && name) {
+            await cleanupTalentByName(teamId, name);
           } else if (talentId) {
             await cleanupTalentById(talentId);
+          } else if (teamId) {
+            await cleanupTestTalent(teamId);
           } else {
             return Response.json(
-              { error: 'teamId or talentId is required' },
+              {
+                error:
+                  'teamId (for all) or talentId or (teamId + name) required',
+              },
               { status: 400 }
             );
           }

@@ -18,20 +18,22 @@ import type {
 /**
  * In-repo realtime client (#802), replacing the removed Upstash-hosted realtime client.
  *
- * One `EventSource` is opened per distinct channel, ref-counted across every
- * hook that subscribes to it, and pointed at `/api/realtime?channel=…` which
- * routes through to that channel's `RealtimeChannel` Durable Object. The DO
- * holds the stream open, so the browser's native `EventSource` reconnect is the
- * only reconnection logic we need — no manual reconnect loop.
+ * Exactly **one** `EventSource` is open at a time, carrying the union of every
+ * channel the mounted hooks have registered: `/api/realtime?channels=a,b,c`
+ * fans out to one `RealtimeChannel` Durable Object per channel server-side and
+ * merges them back into that single stream. The DO holds the stream open, so
+ * the browser's native `EventSource` reconnect is the only reconnection logic
+ * we need — no manual reconnect loop.
+ *
+ * One connection per channel is NOT a valid alternative: browsers cap
+ * concurrent HTTP/1.1 connections per origin at 6, and an SSE stream holds its
+ * connection open for life. A library page rendering ~5 cards (one channel
+ * each) plus the billing pill exhausted that budget and wedged the entire
+ * origin — every later navigation, server function and image request queued
+ * behind the streams forever (#827).
  */
 
 type Subscriber = (msg: RealtimeUserEvent) => void;
-
-type ChannelConnection = {
-  source: EventSource;
-  subscribers: Set<Subscriber>;
-  status: ConnectionStatus;
-};
 
 type RealtimeContextValue = {
   status: ConnectionStatus;
@@ -68,98 +70,89 @@ function parseUserEvent(raw: string): RealtimeUserEvent | null {
   };
 }
 
-/** Collapse per-channel statuses into a single value (mirrors the old single-stream status). */
-function aggregateStatus(
-  connections: Map<string, ChannelConnection>
-): ConnectionStatus {
-  if (connections.size === 0) return 'disconnected';
-  const statuses = [...connections.values()].map((c) => c.status);
-  if (statuses.some((s) => s === 'connecting')) return 'connecting';
-  if (statuses.every((s) => s === 'connected')) return 'connected';
-  if (statuses.every((s) => s === 'error')) return 'error';
-  return 'connecting';
-}
-
 export const RealtimeProvider: FC<{ children: ReactNode }> = ({ children }) => {
-  const connectionsRef = useRef<Map<string, ChannelConnection>>(new Map());
   const subscriptionsRef = useRef<
     Map<string, { channels: string[]; cb: Subscriber }>
   >(new Map());
+  const sourceRef = useRef<EventSource | null>(null);
+  /** Channel set the open stream was built for; empty when nothing is open. */
+  const openKeyRef = useRef('');
+  const syncHandleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
 
-  const refreshStatus = () =>
-    setStatus(aggregateStatus(connectionsRef.current));
+  const closeSource = (): void => {
+    sourceRef.current?.close();
+    sourceRef.current = null;
+    openKeyRef.current = '';
+  };
 
-  const openChannel = (channel: string): ChannelConnection => {
-    const existing = connectionsRef.current.get(channel);
-    if (existing) return existing;
+  const syncSource = (): void => {
+    const channels = [
+      ...new Set(
+        [...subscriptionsRef.current.values()].flatMap((s) => s.channels)
+      ),
+    ].sort();
+    const key = channels.join(',');
+    if (key === openKeyRef.current) return;
+
+    closeSource();
+    if (channels.length === 0) {
+      setStatus('disconnected');
+      return;
+    }
 
     const source = new EventSource(
-      `/api/realtime?channel=${encodeURIComponent(channel)}`
+      `/api/realtime?channels=${encodeURIComponent(key)}`
     );
-    const connection: ChannelConnection = {
-      source,
-      subscribers: new Set(),
-      status: 'connecting',
-    };
-    connectionsRef.current.set(channel, connection);
+    sourceRef.current = source;
+    openKeyRef.current = key;
+    setStatus('connecting');
 
-    source.onopen = () => {
-      connection.status = 'connected';
-      refreshStatus();
-    };
+    source.onopen = () => setStatus('connected');
     source.onerror = () => {
       // EventSource reconnects automatically; surface the transient error so
       // status-driven UI (toasts) can react, but don't tear the stream down.
-      connection.status =
-        source.readyState === EventSource.CLOSED ? 'error' : 'connecting';
-      refreshStatus();
+      setStatus(
+        source.readyState === EventSource.CLOSED ? 'error' : 'connecting'
+      );
     };
     source.onmessage = (event) => {
       const msg = parseUserEvent(event.data);
       if (!msg) return;
-      for (const subscriber of connection.subscribers) subscriber(msg);
+      for (const {
+        channels: subscribed,
+        cb,
+      } of subscriptionsRef.current.values()) {
+        if (subscribed.includes(msg.channel)) cb(msg);
+      }
     };
-
-    refreshStatus();
-    return connection;
   };
 
-  const closeChannel = (channel: string): void => {
-    const connection = connectionsRef.current.get(channel);
-    if (!connection || connection.subscribers.size > 0) return;
-    connection.source.close();
-    connectionsRef.current.delete(channel);
-    refreshStatus();
+  // Hooks register one at a time as they mount; coalescing to the end of the
+  // tick means a page mounting N cards opens one stream, not N in sequence.
+  const scheduleSync = (): void => {
+    if (syncHandleRef.current !== null) return;
+    syncHandleRef.current = setTimeout(() => {
+      syncHandleRef.current = null;
+      syncSource();
+    }, 0);
   };
 
   const register = (id: string, channels: string[], cb: Subscriber): void => {
-    unregister(id);
     subscriptionsRef.current.set(id, { channels, cb });
-    for (const channel of channels) {
-      openChannel(channel).subscribers.add(cb);
-    }
+    scheduleSync();
   };
 
   const unregister = (id: string): void => {
-    const subscription = subscriptionsRef.current.get(id);
-    if (!subscription) return;
-    subscriptionsRef.current.delete(id);
-    for (const channel of subscription.channels) {
-      const connection = connectionsRef.current.get(channel);
-      connection?.subscribers.delete(subscription.cb);
-      closeChannel(channel);
-    }
+    if (!subscriptionsRef.current.delete(id)) return;
+    scheduleSync();
   };
 
   useEffect(() => {
-    const connections = connectionsRef.current;
     const subscriptions = subscriptionsRef.current;
     return () => {
-      for (const connection of connections.values()) {
-        connection.source.close();
-      }
-      connections.clear();
+      if (syncHandleRef.current !== null) clearTimeout(syncHandleRef.current);
+      closeSource();
       subscriptions.clear();
     };
   }, []);

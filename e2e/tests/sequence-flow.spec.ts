@@ -10,6 +10,7 @@
 import { expect } from 'playwright/test';
 import { test as testWithUser } from '../fixtures/auth.fixture';
 import { setupMockRoutes } from '../mocks/handlers';
+import { waitForScriptEditor } from '../fixtures/test-utils';
 import {
   createTestTalentSet,
   cleanupTalentById,
@@ -65,10 +66,7 @@ testWithUser.describe('Sequence Creation Flow', () => {
 
       // Script input is now a TipTap-backed contenteditable, not a <textarea>.
       // Playwright's .fill() works on contenteditable elements.
-      const scriptTextarea = page.locator(
-        '[data-slot="markdown-editor"] .ProseMirror'
-      );
-      await expect(scriptTextarea).toBeVisible();
+      const scriptTextarea = await waitForScriptEditor(page);
       await expect(page).toHaveURL('/sequences/new');
 
       // Enter a simple test script

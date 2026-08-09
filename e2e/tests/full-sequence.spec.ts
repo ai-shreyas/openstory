@@ -34,6 +34,7 @@ import {
   getSystemTalentByName,
   type TestTalent,
 } from '../fixtures/talent.fixture';
+import { waitForScriptEditor } from '../fixtures/test-utils';
 import { t } from '../recording-mode';
 
 const fullPipeline = process.env.PLAYWRIGHT_FULL_PIPELINE === 'true';
@@ -65,6 +66,46 @@ const expectPlayableMedia = async (locator: Locator, label: string) => {
       }
     )
     .toBe(true);
+};
+
+/**
+ * Assert the shared player is playing *this* scene's video, and return the
+ * source it settled on.
+ *
+ * The `<video>` element persists across scene selection — only its `src`
+ * changes — so a plain readyState check is satisfied instantly by the previous
+ * scene's already-loaded metadata, and a scene with a broken video passes
+ * green. Requiring the source to differ from the one we last asserted ties each
+ * iteration to the scene it names.
+ */
+const expectSceneVideoPlayable = async (
+  locator: Locator,
+  previousSrc: string,
+  label: string
+): Promise<string> => {
+  await expect(locator, `${label}: element visible`).toBeVisible({
+    timeout: t(60_000),
+  });
+  await expect
+    .poll(
+      async () =>
+        locator.evaluate(
+          (el: HTMLMediaElement, prev) =>
+            Boolean(el.currentSrc) &&
+            el.currentSrc !== prev &&
+            el.readyState >= 1 &&
+            Number.isFinite(el.duration) &&
+            el.duration > 0,
+          previousSrc
+        ),
+      {
+        message: `${label}: switched to its own source, readyState>=1, duration>0`,
+        timeout: t(60_000),
+        intervals: [500, 1_000, 2_000],
+      }
+    )
+    .toBe(true);
+  return locator.evaluate((el: HTMLMediaElement) => el.currentSrc);
 };
 
 testWithUser.describe('Full Sequence Pipeline', () => {
@@ -199,10 +240,7 @@ SUPER:  CORAL.  OUT NOW.
       `.trim();
       // Script input is now a TipTap-backed contenteditable, not a <textarea>.
       // Playwright's .fill() works on contenteditable elements.
-      const scriptTextarea = page.locator(
-        '[data-slot="markdown-editor"] .ProseMirror'
-      );
-      await expect(scriptTextarea).toBeVisible();
+      const scriptTextarea = await waitForScriptEditor(page);
       await scriptTextarea.fill(script);
 
       // 4. Enhance script (LLM streaming via aimock OpenRouter passthrough).
@@ -296,9 +334,14 @@ SUPER:  CORAL.  OUT NOW.
       // the canvas has nothing to show until the first shot preview arrives.
       // Assert immediately after the redirect, before any preview can land
       // and auto-reveal the canvas.
-      await expect(
-        page.getByRole('radio', { name: 'Show the script' })
-      ).toHaveAttribute('data-state', 'on');
+      //
+      // The toggle itself only exists post-hydration, so wait for it to render
+      // before reading `data-state` — on the bare 5s expect timeout the
+      // assertion could fail because the control had not mounted yet, which
+      // looks identical to the view being wrong.
+      const scriptToggle = page.getByRole('radio', { name: 'Show the script' });
+      await expect(scriptToggle).toBeVisible({ timeout: t(15_000) });
+      await expect(scriptToggle).toHaveAttribute('data-state', 'on');
 
       // 9. Wait for storyboard + shot images to land in the DB.
       //
@@ -378,10 +421,18 @@ SUPER:  CORAL.  OUT NOW.
       expect(sceneCount, 'sequence has at least one scene').toBeGreaterThan(0);
       await sceneItems.first().click();
       await page.getByRole('tab', { name: 'Video' }).click();
-      const playerVideo = page.locator('video').first();
+      // Scope to visible videos: the hidden next-scene prefetch is a <video>
+      // too, and while the player swaps scenes its own element can drop out of
+      // the DOM, so a bare `video` locator resolves to the prefetch.
+      const playerVideo = page.locator('video:visible').first();
+      let assertedSrc = '';
       for (let i = 0; i < sceneCount; i++) {
         await sceneItems.nth(i).click();
-        await expectPlayableMedia(playerVideo, `scene ${i + 1} video`);
+        assertedSrc = await expectSceneVideoPlayable(
+          playerVideo,
+          assertedSrc,
+          `scene ${i + 1} video`
+        );
       }
 
       // 12. Music playback in the Scenes editor Music facet (#986).
