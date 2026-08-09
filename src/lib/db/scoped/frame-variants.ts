@@ -105,6 +105,20 @@ type VariantGroup = {
   sourceVariantId?: string | null;
 };
 
+/**
+ * Chronological order for this table. `id` ALONE IS NOT SAFE here: 1355 legacy
+ * rows from the QStash era carry 26-char hex ids instead of ULIDs (#1132), so
+ * they sort arbitrarily against every ULID — one beginning `ff` outranks every
+ * id ever minted. `createdAt` is populated and correct on every row including
+ * those, and `id` breaks same-second ties, which is the ordering ULIDs already
+ * give within a second.
+ *
+ * Every "newest version wins" read in this module depends on this being right;
+ * #1131 is what it looks like when it isn't.
+ */
+const newestFirst = [desc(frameVariants.createdAt), desc(frameVariants.id)];
+const oldestFirst = [asc(frameVariants.createdAt), asc(frameVariants.id)];
+
 // One bound param per frame, so chunk below D1's 100-param ceiling — this runs
 // on the shots read path with every anchor frame of a sequence (matches
 // VIDEO_BY_SHOTS_BATCH). Unit tests run on libsql, which has no such cap, so an
@@ -152,7 +166,7 @@ export async function getLatestPreviewByFrameIds(
           isNull(frameVariants.discardedAt)
         )
       )
-      .orderBy(asc(frameVariants.id));
+      .orderBy(...oldestFirst);
     for (const row of rows) byFrame.set(row.frameId, row);
   }
   return byFrame;
@@ -344,7 +358,7 @@ export function createFrameVariantsMethods(db: Database) {
             )
           )
         )
-        .orderBy(desc(frameVariants.id));
+        .orderBy(...newestFirst);
     },
 
     /**
@@ -506,7 +520,7 @@ export function createFrameVariantsMethods(db: Database) {
         .select()
         .from(frameVariants)
         .where(and(...conditions))
-        .orderBy(asc(frameVariants.id));
+        .orderBy(...oldestFirst);
     },
 
     /**
@@ -531,11 +545,23 @@ export function createFrameVariantsMethods(db: Database) {
             isNull(frameVariants.discardedAt)
           )
         )
-        .orderBy(asc(frameVariants.id));
+        .orderBy(...oldestFirst);
       return rows.map((r) => ({ ...r.variant, shotId: r.shotId }));
     },
 
-    /** Distinct `kind:'model'` model names that have a version in a sequence. */
+    /**
+     * Distinct `kind:'model'` model names that actually RENDERED something in a
+     * sequence — this drives the user-facing image-model dropdown.
+     *
+     * `url IS NOT NULL` is load-bearing, not tidiness (#1133). Without it the
+     * dropdown's correctness depends on the #1101 reclassify having caught
+     * every `flux_2_turbo` row, and it did not: 58 rows across 15 sequences are
+     * still `kind:'model'` because a frame selects them, which leaks the
+     * internal preview model into those sequences as a selectable option. A
+     * model whose only rows are empty husks produced nothing, so requiring an
+     * actual image fixes this for any hidden/internal model rather than
+     * depending on migration coverage.
+     */
     listModelsForSequence: async (sequenceId: string): Promise<string[]> => {
       const rows = await db
         .selectDistinct({ model: frameVariants.model })
@@ -544,6 +570,7 @@ export function createFrameVariantsMethods(db: Database) {
           and(
             eq(frameVariants.sequenceId, sequenceId),
             eq(frameVariants.kind, 'model'),
+            isNotNull(frameVariants.url),
             isNull(frameVariants.discardedAt)
           )
         );
@@ -563,7 +590,7 @@ export function createFrameVariantsMethods(db: Database) {
         .select()
         .from(frameVariants)
         .where(and(...conditions))
-        .orderBy(asc(frameVariants.id));
+        .orderBy(...oldestFirst);
     },
 
     /**
@@ -586,7 +613,7 @@ export function createFrameVariantsMethods(db: Database) {
             isNull(frameVariants.discardedAt)
           )
         )
-        .orderBy(desc(frameVariants.id))
+        .orderBy(...newestFirst)
         .limit(1);
       return rows[0] ?? null;
     },
@@ -610,7 +637,7 @@ export function createFrameVariantsMethods(db: Database) {
             isNull(frameVariants.discardedAt)
           )
         )
-        .orderBy(asc(frameVariants.id));
+        .orderBy(...oldestFirst);
       // asc by id (≈ time) → last write per frame wins.
       const byFrame = new Map<string, FrameVariant>();
       for (const row of rows) byFrame.set(row.frameId, row);
@@ -637,7 +664,7 @@ export function createFrameVariantsMethods(db: Database) {
             isNull(frameVariants.discardedAt)
           )
         )
-        .orderBy(desc(frameVariants.id))
+        .orderBy(...newestFirst)
         .limit(1);
       return rows[0] ?? null;
     },
@@ -711,7 +738,7 @@ export function createFrameVariantsMethods(db: Database) {
             isNull(frameVariants.discardedAt)
           )
         )
-        .orderBy(asc(frameVariants.id));
+        .orderBy(...oldestFirst);
       // asc by id (≈ time) → last write per shot wins.
       const byShot = new Map<string, string>();
       for (const row of rows) byShot.set(row.shotId, row.model);
@@ -778,7 +805,7 @@ export function createFrameVariantsMethods(db: Database) {
             isNull(frameVariants.discardedAt)
           )
         )
-        .orderBy(desc(frameVariants.id))
+        .orderBy(...newestFirst)
         .limit(1);
       return rows[0] ?? null;
     },
