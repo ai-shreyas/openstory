@@ -133,7 +133,7 @@ it('resolves previewThumbnailUrl through the whole assembly path', async () => {
   );
 
   // A url-less husk (what the #1101 migration retags) sorts newest but must not
-  // shadow the real preview — this is what the `status = 'completed'` filter buys.
+  // shadow the real preview.
   await db.insert(frameVariants).values({
     id: 'preview-3',
     frameId,
@@ -141,6 +141,24 @@ it('resolves previewThumbnailUrl through the whole assembly path', async () => {
     kind: 'preview',
     model: 'flux_2_turbo',
     status: 'generating',
+    url: null,
+  });
+  expect((await assemble())[0]?.previewThumbnailUrl).toBe(
+    'https://cdn.example/new.png'
+  );
+
+  // The shape that actually shipped: the reclassify retagged url-less rows
+  // WITHOUT regard to status, so 2150 of them were already 'completed'. Those
+  // carry real ULIDs while backfilled rows carry synthetic `00…` ids, so the
+  // husk outranks the image and `status` alone let it win — 2150 of 3009
+  // frames lost their preview in production. Only `url IS NOT NULL` stops it.
+  await db.insert(frameVariants).values({
+    id: 'preview-4',
+    frameId,
+    sequenceId,
+    kind: 'preview',
+    model: 'flux_2_turbo',
+    status: 'completed',
     url: null,
   });
   expect((await assemble())[0]?.previewThumbnailUrl).toBe(
