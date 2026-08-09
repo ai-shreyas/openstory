@@ -18,20 +18,26 @@ interface UploadImageOptions {
   shotId: string;
 }
 
+interface UploadPosterOptions {
+  imageUrl: string;
+  teamId: string;
+  sequenceId: string;
+}
+
 type StorageResult = {
   url: string;
   path: string;
 };
 
 /**
- * Upload an image from URL to R2 Storage
- * Uses ULID-based filename and preserves original file extension
+ * Download an image from a (provider) URL and stream it into the thumbnails
+ * bucket. `buildPath` receives the resolved file extension so callers own the
+ * key layout without duplicating the extension sniffing below.
  */
-export async function uploadImageToStorage(
-  options: UploadImageOptions
+async function uploadImageFromUrl(
+  imageUrl: string,
+  buildPath: (extension: string) => string
 ): Promise<StorageResult> {
-  const { imageUrl, teamId, sequenceId, shotId } = options;
-
   // Download image from URL first to get content type
   const response = await fetch(imageUrl);
 
@@ -52,9 +58,7 @@ export async function uploadImageToStorage(
     else if (responseContentType.includes('gif')) extension = 'gif';
   }
 
-  // Generate ULID-based filename
-  const ulid = generateId();
-  const storagePath = `teams/${teamId}/sequences/${sequenceId}/frames/${shotId}/${ulid}.${extension}`;
+  const storagePath = buildPath(extension);
 
   // Get proper MIME type for the extension
   const contentType = getMimeTypeFromExtension(extension);
@@ -73,4 +77,40 @@ export async function uploadImageToStorage(
     url: result.publicUrl,
     path: storagePath,
   };
+}
+
+/**
+ * Upload an image from URL to R2 Storage
+ * Uses ULID-based filename and preserves original file extension
+ */
+export async function uploadImageToStorage(
+  options: UploadImageOptions
+): Promise<StorageResult> {
+  const { imageUrl, teamId, sequenceId, shotId } = options;
+
+  return uploadImageFromUrl(
+    imageUrl,
+    (extension) =>
+      `teams/${teamId}/sequences/${sequenceId}/frames/${shotId}/${generateId()}.${extension}`
+  );
+}
+
+/**
+ * Upload a generated sequence poster to R2 Storage (#1117).
+ *
+ * Posters used to be persisted as the provider's own CDN URL, which expires —
+ * the video-player empty state then silently 404s. Like every other generated
+ * asset, the poster now lives in our bucket and the row holds the
+ * origin-relative `/r2/` path (#894).
+ */
+export async function uploadPosterToStorage(
+  options: UploadPosterOptions
+): Promise<StorageResult> {
+  const { imageUrl, teamId, sequenceId } = options;
+
+  return uploadImageFromUrl(
+    imageUrl,
+    (extension) =>
+      `teams/${teamId}/sequences/${sequenceId}/poster/${generateId()}.${extension}`
+  );
 }

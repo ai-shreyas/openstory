@@ -125,8 +125,10 @@ export const sequences = snakeCase.table(
     // dialogue audio are unaffected (#834).
     includeMusic: integer({ mode: 'boolean' }).default(true).notNull(),
 
-    // Poster image (sequence-level preview from script, ephemeral CDN URL)
-    // TB-20260804: DB-Audit: posterUrl should be stored - not ephemeral
+    // Poster image (sequence-level preview generated from the script). Stored
+    // in R2 as an origin-relative `/r2/` URL (#1117, #894) — rows written
+    // before that fix hold a provider CDN URL that may have expired, and fall
+    // back to the player's empty state until the sequence regenerates.
     posterUrl: text(),
 
     // Auto-generation flags (set at sequence creation, read by UI for phase display)
