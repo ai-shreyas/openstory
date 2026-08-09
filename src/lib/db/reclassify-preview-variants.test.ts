@@ -97,8 +97,17 @@ beforeAll(async () => {
 
   const base = { frameId: frame.id, sequenceId } as const;
   await db.insert(frameVariants).values([
-    // Moves: the shape every one of the legacy rows has.
-    { ...base, id: 'legacy-preview', kind: 'model', model: 'flux_2_turbo' },
+    // Moves: the shape every one of the legacy rows has — the old preview path
+    // opened a 'generating' row, skipped the R2 upload, and never completed it.
+    {
+      ...base,
+      id: 'legacy-preview',
+      kind: 'model',
+      model: 'flux_2_turbo',
+      status: 'generating',
+      url: null,
+      storagePath: null,
+    },
     // Stays: a real still from a user-pickable model.
     { ...base, id: 'real-still', kind: 'model', model: 'nano_banana_2' },
     // Stays: a 3x3 grid sheet was never a preview, whatever rendered it.
@@ -114,10 +123,38 @@ beforeAll(async () => {
     // Stays: a frame points at it, so it is that frame's still by definition —
     // moving it would strand the pointer against the new `select` guard.
     { ...base, id: 'selected', kind: 'model', model: 'flux_2_turbo' },
+    // Stays: #989 step 3 synthesised primary rows from `shots.image_model`,
+    // which pre-#989 preview runs left at flux_2_turbo, paired with a REAL
+    // thumbnail url. Every other discriminator passes, so the url/path guard is
+    // the only thing between this still and an irreversible misfiling.
+    {
+      ...base,
+      id: 'synthetic-still',
+      kind: 'model',
+      model: 'flux_2_turbo',
+      status: 'completed',
+      url: 'https://cdn.example/real-still.png',
+      storagePath: 'frames/real-still.png',
+    },
+    // Stays: url-less like a husk, but a live auto-promote claim points at it.
+    // `selectIfPendingPromoteIs` clears the claim BEFORE calling the throwing
+    // `select`, so reclassifying this would discard the claim and then fail.
+    {
+      ...base,
+      id: 'promote-target',
+      kind: 'model',
+      model: 'flux_2_turbo',
+      status: 'generating',
+      url: null,
+      storagePath: null,
+    },
   ]);
   await db
     .update(frames)
-    .set({ selectedImageVersionId: 'selected' })
+    .set({
+      selectedImageVersionId: 'selected',
+      pendingPromoteVersionId: 'promote-target',
+    })
     .where(eq(frames.id, frame.id));
 
   const sql = readMigration();
@@ -137,8 +174,10 @@ it('reclassifies only the legacy preview rows', async () => {
   expect(Object.fromEntries(rows.rows.map((r) => [r.id, r.kind]))).toEqual({
     framing: 'framing',
     'legacy-preview': 'preview',
+    'promote-target': 'model',
     'real-still': 'model',
     selected: 'model',
+    'synthetic-still': 'model',
     'with-prompt': 'model',
   });
 });

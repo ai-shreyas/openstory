@@ -156,6 +156,22 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           referenceImageUrls: referenceUrls,
         };
 
+        // A preview for a shot can only land if it knows its anchor frame, and
+        // `record-preview-variant` doesn't find that out until after the image
+        // is generated AND billed. Stand down here instead, while it is still
+        // free — otherwise a payload missing `frameId` (a stale in-flight
+        // instance from a pre-#1067 build, which is why the field is still
+        // optional) buys an image and then discards it. That is #1119 exactly,
+        // and a log line does not prevent it.
+        if (input.skipStorage && input.shotId && !input.frameId) {
+          logger.warn(
+            `[ImageWorkflow] Shot ${input.shotId} triggered a preview without a frameId; ` +
+              `standing down before spend. Either a stale pre-#1067 instance, or a ` +
+              `spawner that failed to thread the anchor frame id.`
+          );
+          return null;
+        }
+
         // No frame context (preview mode, or shotless ad-hoc): generate without
         // claiming a version row — no in-flight row, no status flip. A preview
         // gets its own `kind: 'preview'` row on completion, in the skipStorage
@@ -508,8 +524,11 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
       await step.do('record-preview-variant', async () => {
         const anchor = await this.resolveFrame(scopedDb, input);
         if (!anchor) {
-          logger.info(
-            `[ImageWorkflow] Shot ${shotId} has no anchor frame, skipping preview`
+          // Reachable only if the frame was deleted mid-run — a missing
+          // `frameId` now stands down in `prep`, before spend. Not `info`: the
+          // image is already paid for and is about to be discarded.
+          logger.warn(
+            `[ImageWorkflow] Shot ${shotId} lost its anchor frame mid-run; discarding a preview that was already generated and billed`
           );
           return;
         }

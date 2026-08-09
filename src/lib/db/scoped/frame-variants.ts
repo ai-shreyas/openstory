@@ -24,8 +24,8 @@ import type { Database } from '@/lib/db/client';
 import { framePromptVersions, frameVariants, frames } from '@/lib/db/schema';
 import type { FrameVariant, NewFrameVariant } from '@/lib/db/schema';
 import {
-  SELECTABLE_FRAME_VARIANT_KINDS,
   type FrameVariantKind,
+  isSelectableFrameVariantKind,
 } from '@/lib/db/schema/frame-variants';
 import {
   and,
@@ -38,7 +38,10 @@ import {
   or,
 } from 'drizzle-orm';
 import { LIVE_PENDING_STATUSES } from './frame-prompt-versions';
-import { buildFrameImageSelection, type CompletedFrameVariant } from './frames';
+import {
+  buildFrameImageSelection,
+  type PromotableFrameVariant,
+} from './frames';
 import { buildEventInsert } from './sequence-events';
 
 function readStringProp(value: object, key: string): string | null {
@@ -93,10 +96,6 @@ function isUniqueConstraintError(error: unknown): boolean {
  */
 export type ImageVariantWithShot = FrameVariant & { shotId: string };
 
-function isSelectableFrameVariantKind(kind: FrameVariantKind): boolean {
-  return (SELECTABLE_FRAME_VARIANT_KINDS as readonly string[]).includes(kind);
-}
-
 /** The grouping key that makes a flat row set read as a "variant". */
 type VariantGroup = {
   frameId: string;
@@ -141,6 +140,10 @@ export async function getLatestPreviewByFrameIds(
             frameIds.slice(i, i + PREVIEW_BY_FRAMES_BATCH)
           ),
           eq(frameVariants.kind, 'preview'),
+          // `recordPreview` only ever writes 'completed' with a url, so this
+          // costs nothing forward — it excludes the url-less husks the #1101
+          // migration retagged, which would otherwise read as "no preview".
+          eq(frameVariants.status, 'completed'),
           isNull(frameVariants.discardedAt)
         )
       )
@@ -623,6 +626,8 @@ export function createFrameVariantsMethods(db: Database) {
           and(
             eq(frameVariants.frameId, frameId),
             eq(frameVariants.kind, 'preview'),
+            // Matches the batch read — see getLatestPreviewByFrameIds.
+            eq(frameVariants.status, 'completed'),
             isNull(frameVariants.discardedAt)
           )
         )
@@ -809,9 +814,10 @@ export function createFrameVariantsMethods(db: Database) {
       // rendered from — and its url expires. Reject at the one door every
       // selection goes through, so `frames.selectedImageVersionId` (and every
       // render manifest that snapshots it) can never name a preview.
-      if (!isSelectableFrameVariantKind(version.kind)) {
+      const { kind } = version;
+      if (!isSelectableFrameVariantKind(kind)) {
         throw new Error(
-          `FrameVariant ${versionId} is kind '${version.kind}' — a preview is a pre-prompt stand-in and can never become a frame's still`
+          `FrameVariant ${versionId} is kind '${kind}' — a preview is a pre-prompt stand-in and can never become a frame's still`
         );
       }
       // Only a finished image may become the frame's primary still. Selecting a
@@ -822,18 +828,19 @@ export function createFrameVariantsMethods(db: Database) {
           `FrameVariant ${versionId} is '${version.status}', not 'completed' — cannot select an unfinished image`
         );
       }
-      // `version` is a single object type, so the guard above narrows reads of
-      // `version.status` but not `version` as a whole — re-affirm the completed
-      // status in a typed local so the mirror builder's precondition is met
-      // without an unsafe assertion.
-      const completedVersion: CompletedFrameVariant = {
+      // `version` is a single object type, so the guards above narrow reads of
+      // its fields but not `version` as a whole — re-affirm both in a typed
+      // local so the mirror builder's precondition is met without an unsafe
+      // assertion.
+      const promotableVersion: PromotableFrameVariant = {
         ...version,
+        kind,
         status: 'completed',
       };
       const mirrorUpdate = buildFrameImageSelection(
         db,
         frameId,
-        completedVersion
+        promotableVersion
       );
 
       const [frame] = await db

@@ -56,7 +56,25 @@ export type FrameVariantKind = (typeof FRAME_VARIANT_KINDS)[number];
  * pair a still with a prompt it was never rendered from — and its fal CDN url
  * expires, which is only harmless because nothing durable ever points at it.
  */
-export const SELECTABLE_FRAME_VARIANT_KINDS = ['model', 'framing'] as const;
+const SELECTABLE_FRAME_VARIANT_KINDS = [
+  'model',
+  'framing',
+] as const satisfies readonly FrameVariantKind[];
+
+export type SelectableFrameVariantKind =
+  (typeof SELECTABLE_FRAME_VARIANT_KINDS)[number];
+
+/**
+ * Narrows rather than returning `boolean`, so a checked row carries the proof
+ * into {@link PromotableFrameVariant} instead of every caller re-asserting it.
+ */
+export function isSelectableFrameVariantKind(
+  kind: FrameVariantKind
+): kind is SelectableFrameVariantKind {
+  return SELECTABLE_FRAME_VARIANT_KINDS.some(
+    (selectable) => selectable === kind
+  );
+}
 
 export const frameVariants = snakeCase.table(
   'frame_variants',

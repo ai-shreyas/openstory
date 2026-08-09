@@ -18,6 +18,10 @@
 import type { Database } from '@/lib/db/client';
 import { frameVariants, frames } from '@/lib/db/schema';
 import type { Frame, FrameVariant, NewFrame } from '@/lib/db/schema';
+import {
+  type SelectableFrameVariantKind,
+  isSelectableFrameVariantKind,
+} from '@/lib/db/schema/frame-variants';
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 
 /** A frame plus the `frame_variants` version it currently points at (if any). */
@@ -27,24 +31,35 @@ export type ResolvedFrame = {
 };
 
 /**
- * A frame variant that has finished generating — the ONLY kind that may become
- * a frame's primary still. Mirroring a pending/failed version would copy its
- * null url + non-completed status onto the frame, silently blanking a good
- * image. Encoding the precondition in {@link buildFrameImageMirror}'s signature
- * keeps it compile-time enforced rather than relying on a runtime guard living
+ * A frame variant that has finished generating — mirroring a pending/failed
+ * version would copy its null url + non-completed status onto the frame,
+ * silently blanking a good image.
+ */
+type CompletedFrameVariant = FrameVariant & { status: 'completed' };
+
+/**
+ * The ONLY shape that may become a frame's primary still: finished AND of a
+ * selectable kind. Both halves are needed — `recordPreview` writes previews as
+ * `status: 'completed'`, so completeness alone would admit one (#1101), and a
+ * preview renders the raw scene text rather than the frame's prompt.
+ *
+ * Encoding both preconditions in {@link buildFrameImageSelection}'s signature
+ * keeps them compile-time enforced rather than relying on runtime guards living
  * in the (sibling-module) caller.
  */
-export type CompletedFrameVariant = FrameVariant & { status: 'completed' };
+export type PromotableFrameVariant = CompletedFrameVariant & {
+  kind: SelectableFrameVariantKind;
+};
 
 /**
  * UPDATE repointing a frame's image selection, unexecuted so the caller can
- * batch it with the activity event. {@link CompletedFrameVariant} is required
- * so an unfinished image can never become the frame's still.
+ * batch it with the activity event. {@link PromotableFrameVariant} is required
+ * so neither an unfinished image nor a preview can become the frame's still.
  */
 export function buildFrameImageSelection(
   db: Database,
   frameId: string,
-  version: CompletedFrameVariant
+  version: PromotableFrameVariant
 ) {
   return db
     .update(frames)
@@ -243,15 +258,22 @@ export function createFramesMethods(db: Database) {
       // A preview is a pre-prompt stand-in and can never become a still
       // (#1101). `frameVariants.select` already refuses one, but promotion is
       // an unattended path — a claim pointed here would surface as a workflow
-      // failure minutes later instead of at the mistake.
+      // failure minutes later instead of at the mistake. Same allowlist
+      // spelling as `select`, so a future non-selectable kind is refused by
+      // both doors rather than slipping past this one.
       if (versionId !== null) {
         const [target] = await db
           .select({ kind: frameVariants.kind })
           .from(frameVariants)
           .where(eq(frameVariants.id, versionId));
-        if (target?.kind === 'preview') {
+        if (!target) {
           throw new Error(
-            `FrameVariant ${versionId} is a preview — it can never be promoted to frame ${frameId}'s still`
+            `FrameVariant ${versionId} does not exist — refusing to leave frame ${frameId} with a dangling promote claim`
+          );
+        }
+        if (!isSelectableFrameVariantKind(target.kind)) {
+          throw new Error(
+            `FrameVariant ${versionId} is kind '${target.kind}' — it can never be promoted to frame ${frameId}'s still`
           );
         }
       }

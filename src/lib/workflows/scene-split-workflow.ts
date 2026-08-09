@@ -377,8 +377,9 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                       imageSize: aspectRatioToImageSize(aspectRatio),
                       numImages: 1,
                       shotId: prevShot.id,
-                      // Without this the run generates (and bills) the preview,
-                      // then drops it at `store-preview-url` (#1119).
+                      // Without this the run stands down before generating —
+                      // and before #1101 it generated, billed, then dropped the
+                      // preview at `record-preview-variant` (#1119).
                       frameId: prevShot.frameId,
                       skipStorage: true,
                     } satisfies ImageWorkflowInput,
