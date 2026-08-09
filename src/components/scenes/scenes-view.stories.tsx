@@ -242,6 +242,7 @@ const mockShot = (spec: {
     frame,
     {
       image,
+      preview: null,
       imagePromptVersion: null,
       video: render?.url ? render : null,
       primaryVideo: render,
@@ -576,7 +577,6 @@ export const PreviewMode: Story = {
         sceneId: 'scene-1',
         frame: {
           imageStatus: 'generating',
-          previewImageUrl: 'https://picsum.photos/seed/preview1/1280/720',
         },
         render: {
           status: 'pending',
@@ -587,7 +587,6 @@ export const PreviewMode: Story = {
         sceneId: 'scene-2',
         frame: {
           imageStatus: 'generating',
-          previewImageUrl: 'https://picsum.photos/seed/preview2/1280/720',
         },
         render: {
           status: 'pending',
@@ -598,7 +597,6 @@ export const PreviewMode: Story = {
         sceneId: 'scene-3',
         frame: {
           imageStatus: 'completed',
-          previewImageUrl: 'https://picsum.photos/seed/preview3/1280/720',
         },
         image: {
           url: 'https://picsum.photos/seed/final3/1280/720',
@@ -635,7 +633,6 @@ export const PreviewModePortrait: Story = {
         sceneId: 'scene-1',
         frame: {
           imageStatus: 'generating',
-          previewImageUrl: 'https://picsum.photos/seed/preview1p/720/1280',
         },
         render: {
           status: 'pending',
@@ -646,7 +643,6 @@ export const PreviewModePortrait: Story = {
         sceneId: 'scene-2',
         frame: {
           imageStatus: 'generating',
-          previewImageUrl: 'https://picsum.photos/seed/preview2p/720/1280',
         },
         render: {
           status: 'pending',
@@ -657,7 +653,6 @@ export const PreviewModePortrait: Story = {
         sceneId: 'scene-3',
         frame: {
           imageStatus: 'completed',
-          previewImageUrl: 'https://picsum.photos/seed/preview3p/720/1280',
         },
         image: {
           url: 'https://picsum.photos/seed/final3p/720/1280',

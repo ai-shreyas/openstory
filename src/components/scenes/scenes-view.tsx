@@ -323,7 +323,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // first images as they arrive. No effect, no state: pure derivation.
   const canvasReady =
     !isProcessing ||
-    (shots?.some((s) => s.image?.url || s.frame.previewImageUrl) ?? false);
+    (shots?.some((s) => s.image?.url || s.previewThumbnailUrl) ?? false);
   const effectiveView = canvasReady ? view : 'script';
 
   // Escape progressive zoom-out (#986):

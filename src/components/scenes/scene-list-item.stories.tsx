@@ -31,6 +31,7 @@ const mockShot: ShotView = toShotView(
       url: 'https://picsum.photos/seed/coffee/320/180',
       storagePath: 'teams/mock/sequences/mock/frames/shot-1/thumbnail.jpg',
     }),
+    preview: null,
     imagePromptVersion: null,
     video: null,
     primaryVideo: null,

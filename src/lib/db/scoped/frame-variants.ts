@@ -23,7 +23,10 @@
 import type { Database } from '@/lib/db/client';
 import { framePromptVersions, frameVariants, frames } from '@/lib/db/schema';
 import type { FrameVariant, NewFrameVariant } from '@/lib/db/schema';
-import type { FrameVariantKind } from '@/lib/db/schema/frame-variants';
+import {
+  type FrameVariantKind,
+  isSelectableFrameVariantKind,
+} from '@/lib/db/schema/frame-variants';
 import {
   and,
   asc,
@@ -35,7 +38,10 @@ import {
   or,
 } from 'drizzle-orm';
 import { LIVE_PENDING_STATUSES } from './frame-prompt-versions';
-import { buildFrameImageSelection, type CompletedFrameVariant } from './frames';
+import {
+  buildFrameImageSelection,
+  type PromotableFrameVariant,
+} from './frames';
 import { buildEventInsert } from './sequence-events';
 
 function readStringProp(value: object, key: string): string | null {
@@ -98,6 +104,54 @@ type VariantGroup = {
   /** Only for `kind: 'framing'` rows — the model image the 3×3 came from. */
   sourceVariantId?: string | null;
 };
+
+// One bound param per frame, so chunk below D1's 100-param ceiling — this runs
+// on the shots read path with every anchor frame of a sequence (matches
+// VIDEO_BY_SHOTS_BATCH). Unit tests run on libsql, which has no such cap, so an
+// unchunked list passes CI and throws on D1 (#1019).
+const PREVIEW_BY_FRAMES_BATCH = 90;
+
+/**
+ * Newest non-discarded `kind: 'preview'` version per frame (#1101), keyed by
+ * frameId. Frames with no preview are absent, so `map.get(id) ?? null` matches
+ * the single-frame read.
+ *
+ * Module-level (like `getPrimaryVideoByShotIds`) because the shared `ShotView`
+ * query shape resolves it as a follow-up read: newest-per-frame is a group-wise
+ * max, not a pointer hop, so it cannot ride the join.
+ */
+export async function getLatestPreviewByFrameIds(
+  db: Database,
+  frameIds: string[]
+): Promise<Map<string, FrameVariant>> {
+  if (frameIds.length === 0) return new Map();
+  // asc by id (≈ time) → last write per frame wins. Chunking is safe for this
+  // reduction: a frame's rows never span two batches (batches partition by
+  // frame id), so per-frame ordering is preserved.
+  const byFrame = new Map<string, FrameVariant>();
+  for (let i = 0; i < frameIds.length; i += PREVIEW_BY_FRAMES_BATCH) {
+    const rows = await db
+      .select()
+      .from(frameVariants)
+      .where(
+        and(
+          inArray(
+            frameVariants.frameId,
+            frameIds.slice(i, i + PREVIEW_BY_FRAMES_BATCH)
+          ),
+          eq(frameVariants.kind, 'preview'),
+          // `recordPreview` only ever writes 'completed' with a url, so this
+          // costs nothing forward — it excludes the url-less husks the #1101
+          // migration retagged, which would otherwise read as "no preview".
+          eq(frameVariants.status, 'completed'),
+          isNull(frameVariants.discardedAt)
+        )
+      )
+      .orderBy(asc(frameVariants.id));
+    for (const row of rows) byFrame.set(row.frameId, row);
+  }
+  return byFrame;
+}
 
 export function createFrameVariantsMethods(db: Database) {
   const methods = {
@@ -200,6 +254,65 @@ export function createFrameVariantsMethods(db: Database) {
       if (!row) {
         throw new Error(
           `Failed to insert pending image claim for frame ${input.frameId}`
+        );
+      }
+      return row;
+    },
+
+    /**
+     * Record the pre-prompt stand-in for a frame (#1101): a `kind: 'preview'`
+     * row holding the raw fal CDN url the preview render returned. Keyed by the
+     * scene text it was rendered from (`promptHash`) — never by a prompt
+     * version, because a preview exists precisely BEFORE one does.
+     *
+     * `storagePath` stays null on purpose: the preview path skips the R2 upload
+     * to keep the progressive reveal fast (#1091), so the url expires. That is
+     * harmless only because this row is never selectable, never promotable and
+     * never snapshotted — it just has to outlive the window before the real
+     * still lands.
+     *
+     * Idempotent on `(frameId, workflowRunId)`: this is written inside a
+     * workflow step, and a Cloudflare step retry after a partial failure would
+     * otherwise append a second preview for the same run.
+     */
+    recordPreview: async (input: {
+      frameId: string;
+      sequenceId: string;
+      model: string;
+      url: string;
+      promptHash: string | null;
+      workflowRunId: string;
+    }): Promise<FrameVariant> => {
+      const [existing] = await db
+        .select()
+        .from(frameVariants)
+        .where(
+          and(
+            eq(frameVariants.frameId, input.frameId),
+            eq(frameVariants.kind, 'preview'),
+            eq(frameVariants.workflowRunId, input.workflowRunId)
+          )
+        );
+      if (existing) return existing;
+      const [row] = await db
+        .insert(frameVariants)
+        .values({
+          frameId: input.frameId,
+          sequenceId: input.sequenceId,
+          kind: 'preview',
+          model: input.model,
+          url: input.url,
+          storagePath: null,
+          status: 'completed',
+          generatedAt: new Date(),
+          promptHash: input.promptHash,
+          promptVersionId: null,
+          workflowRunId: input.workflowRunId,
+        })
+        .returning();
+      if (!row) {
+        throw new Error(
+          `Failed to record preview variant for frame ${input.frameId}`
         );
       }
       return row;
@@ -500,6 +613,37 @@ export function createFrameVariantsMethods(db: Database) {
     },
 
     /**
+     * The frame's current pre-prompt stand-in (#1101): the newest
+     * non-discarded `kind: 'preview'` version. This IS the projection behind
+     * `ShotView.previewThumbnailUrl` — what `frames.preview_image_url` used to
+     * hold. Null when script analysis never produced one (or it was discarded).
+     */
+    getLatestPreview: async (frameId: string): Promise<FrameVariant | null> => {
+      const rows = await db
+        .select()
+        .from(frameVariants)
+        .where(
+          and(
+            eq(frameVariants.frameId, frameId),
+            eq(frameVariants.kind, 'preview'),
+            // Matches the batch read — see getLatestPreviewByFrameIds.
+            eq(frameVariants.status, 'completed'),
+            isNull(frameVariants.discardedAt)
+          )
+        )
+        .orderBy(desc(frameVariants.id))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    /**
+     * Batch {@link getLatestPreview}, keyed by frameId — frames with no preview
+     * are absent, so `map.get(id) ?? null` matches the single-frame read.
+     */
+    listLatestPreviewsByFrameIds: (frameIds: string[]) =>
+      getLatestPreviewByFrameIds(db, frameIds),
+
+    /**
      * The model of each shot's SELECTED image version across a sequence, keyed
      * by the owning shot (#1066). Model identity lives on the version row that
      * produced the bytes, so this is what generate/display resolve from — see
@@ -665,6 +809,17 @@ export function createFrameVariantsMethods(db: Database) {
           `FrameVariant ${versionId} not found for frame ${frameId}`
         );
       }
+      // A preview renders the raw scene text, not the frame's prompt (#1101),
+      // so promoting one would pair the still with a prompt it was never
+      // rendered from — and its url expires. Reject at the one door every
+      // selection goes through, so `frames.selectedImageVersionId` (and every
+      // render manifest that snapshots it) can never name a preview.
+      const { kind } = version;
+      if (!isSelectableFrameVariantKind(kind)) {
+        throw new Error(
+          `FrameVariant ${versionId} is kind '${kind}' — a preview is a pre-prompt stand-in and can never become a frame's still`
+        );
+      }
       // Only a finished image may become the frame's primary still. Selecting a
       // pending/failed version would mirror its null url + failed status onto
       // the frame, silently blanking a good image.
@@ -673,18 +828,19 @@ export function createFrameVariantsMethods(db: Database) {
           `FrameVariant ${versionId} is '${version.status}', not 'completed' — cannot select an unfinished image`
         );
       }
-      // `version` is a single object type, so the guard above narrows reads of
-      // `version.status` but not `version` as a whole — re-affirm the completed
-      // status in a typed local so the mirror builder's precondition is met
-      // without an unsafe assertion.
-      const completedVersion: CompletedFrameVariant = {
+      // `version` is a single object type, so the guards above narrow reads of
+      // its fields but not `version` as a whole — re-affirm both in a typed
+      // local so the mirror builder's precondition is met without an unsafe
+      // assertion.
+      const promotableVersion: PromotableFrameVariant = {
         ...version,
+        kind,
         status: 'completed',
       };
       const mirrorUpdate = buildFrameImageSelection(
         db,
         frameId,
-        completedVersion
+        promotableVersion
       );
 
       const [frame] = await db

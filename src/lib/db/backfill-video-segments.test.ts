@@ -55,6 +55,10 @@ const LEGACY_VIDEO_MIRROR = [
   'ALTER TABLE `shots` ADD COLUMN `motion_model` text',
   'ALTER TABLE `shots` ADD COLUMN `video_status` text',
   'ALTER TABLE `shots` ADD COLUMN `video_workflow_run_id` text',
+  // #1101 dropped `video_variants.preview_url` — never populated, only ever
+  // written as the literal NULL this backfill passes positionally. Same reason
+  // as above: restore the era's shape so the shipped SQL runs verbatim.
+  'ALTER TABLE `video_variants` ADD COLUMN `preview_url` text',
 ];
 
 let client: Client;

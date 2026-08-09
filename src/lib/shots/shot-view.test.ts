@@ -36,7 +36,6 @@ function makeFrame(shot: Shot, overrides: Partial<Frame> = {}): Frame {
   return frameFixture({
     shotId: shot.id,
     sequenceId: shot.sequenceId,
-    previewImageUrl: 'https://cdn/preview.png',
     imageStatus: 'completed',
     imageWorkflowRunId: 'run-123',
     ...overrides,
@@ -67,6 +66,7 @@ describe('toShotView', () => {
 
     const view = toShotView(shot, frame, {
       image,
+      preview: null,
       imagePromptVersion: null,
       video,
       primaryVideo: video,
@@ -84,11 +84,46 @@ describe('toShotView', () => {
     });
   });
 
+  it('projects previewThumbnailUrl from the preview version (#1101)', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+    const preview = frameVariantFixture({
+      frameId: frame.id,
+      sequenceId: SEQ,
+      kind: 'preview',
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/preview.png',
+    });
+
+    const withPreview = toShotView(shot, frame, {
+      image: null,
+      preview,
+      imagePromptVersion: null,
+      video: null,
+      primaryVideo: null,
+    });
+    expect(withPreview.previewThumbnailUrl).toBe(
+      'https://fal.media/preview.png'
+    );
+
+    // No preview row → null, not undefined: the client treats the field as the
+    // fallback behind `image.url`, and `undefined` would read as "not loaded".
+    const withoutPreview = toShotView(shot, frame, {
+      image: null,
+      preview: null,
+      imagePromptVersion: null,
+      video: null,
+      primaryVideo: null,
+    });
+    expect(withoutPreview.previewThumbnailUrl).toBeNull();
+  });
+
   it('defaults the optional sources to null rather than undefined', () => {
     const shot = makeShot();
 
     const view = toShotView(shot, makeFrame(shot), {
       image: null,
+      preview: null,
       imagePromptVersion: null,
       video: null,
       primaryVideo: null,
@@ -107,6 +142,7 @@ describe('toShotView', () => {
 
     const view = toShotView(shot, makeFrame(shot), {
       image: null,
+      preview: null,
       imagePromptVersion: null,
       video: null,
       primaryVideo: null,
@@ -121,6 +157,7 @@ describe('toShotView', () => {
 
     const view = toShotView(shot, makeFrame(shot), {
       image: null,
+      preview: null,
       imagePromptVersion: null,
       video: makeVideo(),
       primaryVideo: null,
@@ -143,6 +180,7 @@ describe('toShotView', () => {
 
     const view = toShotView(shot, makeFrame(shot), {
       image: null,
+      preview: null,
       imagePromptVersion: null,
       video: selected,
       primaryVideo: primary,
@@ -164,6 +202,7 @@ describe('toShotView', () => {
 
     const view = toShotView(shot, makeFrame(shot), {
       image: null,
+      preview: null,
       imagePromptVersion: null,
       video: null,
       primaryVideo: primary,

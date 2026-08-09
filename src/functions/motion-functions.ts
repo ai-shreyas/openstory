@@ -279,6 +279,9 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         ? [
             toShotView(s, frame, {
               image: selectedByFrame.get(frame.id) ?? null,
+              // Eligibility only — nothing here renders a thumbnail, so the
+              // pre-prompt stand-in (#1101) is not resolved.
+              preview: null,
               imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
               video: selectedVideoByShot.get(s.id) ?? null,
               primaryVideo: primaryVideoByShot.get(s.id) ?? null,

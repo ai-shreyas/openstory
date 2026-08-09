@@ -571,10 +571,9 @@ export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
 export type ShotImageVersionRow = {
   id: string;
   model: string;
-  kind: 'model' | 'framing';
+  kind: 'model';
   status: string;
   url: string | null;
-  previewUrl: string | null;
   createdAt: Date;
   selected: boolean;
 };
@@ -588,7 +587,6 @@ export type ShotVideoVersionRow = {
   model: string;
   status: string;
   url: string | null;
-  previewUrl: string | null;
   createdAt: Date;
   selected: boolean;
 };
@@ -600,9 +598,10 @@ const shotHistoryListInputSchema = z.object({
 
 /**
  * Append-only image generation history for a shot's anchor frame (#1070).
- * Newest first. Only `kind: 'model'` rows — framing rows are the 3×3 grid
- * sheet / tile picks used by the Frame variants picker, not still history.
- * Includes in-flight / failed rows so the sheet can show progress and errors;
+ * Newest first. Only `kind: 'model'` rows — framing rows are the 3x3 grid
+ * sheet / tile picks used by the Frame variants picker, and preview rows are
+ * the pre-prompt stand-in (#1101); neither is still history. Includes
+ * in-flight / failed rows so the sheet can show progress and errors;
  * discarded rows stay hidden (soft-hide is undoable elsewhere).
  */
 export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
@@ -618,10 +617,9 @@ export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
       .map((v) => ({
         id: v.id,
         model: v.model,
-        kind: v.kind,
+        kind: 'model' as const,
         status: v.status,
         url: v.url,
-        previewUrl: v.previewUrl,
         createdAt: v.createdAt,
         selected: v.id === frame.selectedImageVersionId,
       }));
@@ -649,7 +647,6 @@ export const listShotVideoVersionsFn = createServerFn({ method: 'GET' })
       model: v.model,
       status: v.status,
       url: v.url,
-      previewUrl: v.previewUrl,
       createdAt: v.createdAt,
       selected: v.id === selectedId,
     }));

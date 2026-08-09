@@ -142,6 +142,9 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     return [
       toShotView(shot, frame, {
         image: selectedByFrame.get(frame.id) ?? null,
+        // Retry planning only — nothing here renders a thumbnail, so the
+        // pre-prompt stand-in (#1101) is not resolved.
+        preview: null,
         imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
         video: selectedVideoByShot.get(shot.id) ?? null,
         primaryVideo: primaryVideoByShot.get(shot.id) ?? null,

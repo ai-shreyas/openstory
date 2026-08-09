@@ -1,0 +1,161 @@
+/**
+ * Acceptance test for the shared `ShotView` assembly query. In-memory libSQL
+ * with the real migrations.
+ *
+ * The preview follow-up read (#1101) is the reason this file exists: nothing
+ * else covered `assembleShotViews`, so deleting its `getLatestPreviewByFrameIds`
+ * call left every shot with `previewThumbnailUrl: null` and the whole suite
+ * still passed — on the path that feeds `sequences.listShotViewsBySequenceIds`
+ * and the public API's readiness counts.
+ */
+
+import type { Database } from '@/lib/db/client';
+import { generateId } from '@/lib/db/id';
+import {
+  frameVariants,
+  frames,
+  sequences,
+  shots,
+  styles,
+  teams,
+} from '@/lib/db/schema';
+import { relations } from '@/lib/db/schema/relations';
+import { type Client, createClient } from '@libsql/client';
+import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/libsql';
+import { migrate } from 'drizzle-orm/libsql/migrator';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { assembleShotViews, selectShotViewRows } from './shot-view-query';
+
+let client: Client;
+let db: Database;
+let frameId = '';
+
+function required<T>(row: T | undefined, what: string): T {
+  if (!row) throw new Error(`test setup: ${what} insert returned nothing`);
+  return row;
+}
+
+async function assemble() {
+  const rows = await selectShotViewRows(db);
+  return await assembleShotViews(db, rows);
+}
+
+beforeAll(async () => {
+  client = createClient({ url: ':memory:' });
+  db = drizzle({ client, relations });
+  await migrate(db, { migrationsFolder: './drizzle/migrations' });
+
+  const teamId = generateId();
+  const sequenceId = generateId();
+  await db.insert(teams).values({ id: teamId, name: 'T', slug: 't' });
+  const style = required(
+    (
+      await db
+        .insert(styles)
+        .values({
+          teamId,
+          name: 'default',
+          config: {
+            mood: 'neutral',
+            artStyle: 'cinematic',
+            lighting: 'natural',
+            colorPalette: ['#000', '#fff'],
+            cameraWork: 'static',
+            referenceFilms: [],
+            colorGrading: 'neutral',
+          },
+        })
+        .returning()
+    )[0],
+    'style'
+  );
+  await db
+    .insert(sequences)
+    .values({ id: sequenceId, teamId, title: 'S', styleId: style.id });
+  const shot = required(
+    (
+      await db.insert(shots).values({ sequenceId, shotNumber: 1 }).returning()
+    )[0],
+    'shot'
+  );
+  const frame = required(
+    (
+      await db
+        .insert(frames)
+        .values({ shotId: shot.id, sequenceId, orderIndex: 0, role: 'first' })
+        .returning()
+    )[0],
+    'frame'
+  );
+  frameId = frame.id;
+});
+
+afterAll(() => {
+  client.close();
+});
+
+it('resolves previewThumbnailUrl through the whole assembly path', async () => {
+  // A frame with no preview row reads null — the value `frames.preview_image_url`
+  // used to carry by default.
+  expect((await assemble())[0]?.previewThumbnailUrl).toBeNull();
+
+  const sequenceId = required(
+    (await db.select().from(sequences))[0],
+    'sequence'
+  ).id;
+  // Ids stand in for ULIDs, so they must sort in creation order.
+  await db.insert(frameVariants).values({
+    id: 'preview-1',
+    frameId,
+    sequenceId,
+    kind: 'preview',
+    model: 'flux_2_turbo',
+    status: 'completed',
+    url: 'https://cdn.example/old.png',
+  });
+  expect((await assemble())[0]?.previewThumbnailUrl).toBe(
+    'https://cdn.example/old.png'
+  );
+
+  // Newest non-discarded wins.
+  await db.insert(frameVariants).values({
+    id: 'preview-2',
+    frameId,
+    sequenceId,
+    kind: 'preview',
+    model: 'flux_2_turbo',
+    status: 'completed',
+    url: 'https://cdn.example/new.png',
+  });
+  expect((await assemble())[0]?.previewThumbnailUrl).toBe(
+    'https://cdn.example/new.png'
+  );
+
+  // A url-less husk (what the #1101 migration retags) sorts newest but must not
+  // shadow the real preview — this is what the `status = 'completed'` filter buys.
+  await db.insert(frameVariants).values({
+    id: 'preview-3',
+    frameId,
+    sequenceId,
+    kind: 'preview',
+    model: 'flux_2_turbo',
+    status: 'generating',
+    url: null,
+  });
+  expect((await assemble())[0]?.previewThumbnailUrl).toBe(
+    'https://cdn.example/new.png'
+  );
+
+  // Discarded rows fall back to the older one.
+  await db
+    .update(frameVariants)
+    .set({ discardedAt: new Date() })
+    .where(eq(frameVariants.id, 'preview-2'));
+  expect((await assemble())[0]?.previewThumbnailUrl).toBe(
+    'https://cdn.example/old.png'
+  );
+
+  // A preview is never the still.
+  expect((await assemble())[0]?.image).toBeNull();
+});

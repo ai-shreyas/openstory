@@ -124,6 +124,7 @@ function makeShot(
   });
   return toShotView(shot, frame, {
     image: null,
+    preview: null,
     imagePromptVersion: null,
     video: null,
     primaryVideo: null,

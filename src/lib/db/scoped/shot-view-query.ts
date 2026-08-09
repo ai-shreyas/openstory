@@ -36,6 +36,7 @@ import {
   toShotView,
 } from '@/lib/shots/shot-view';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { getLatestPreviewByFrameIds } from './frame-variants';
 import { getPrimaryVideoByShotIds } from './video-variants';
 
 /**
@@ -110,19 +111,26 @@ export function selectShotViewRows(db: Database) {
 /**
  * Map rows from {@link selectShotViewRows} to views.
  *
- * One follow-up query: the newest PRIMARY render per shot, which is a
- * group-wise max rather than a pointer hop and so cannot ride the join. Grid
- * sheets are optional because only the scenes read path shows them.
+ * Two follow-up queries: the newest PRIMARY render per shot and the newest
+ * `kind: 'preview'` version per anchor frame (#1101). Both are group-wise maxes
+ * rather than pointer hops, so neither can ride the join. Grid sheets are
+ * optional because only the scenes read path shows them.
  */
 export async function assembleShotViews(
   db: Database,
   rows: ShotViewRow[],
   gridSheetByFrameId?: Map<string, ShotGridSheet>
 ): Promise<ShotView[]> {
-  const primaryByShot = await getPrimaryVideoByShotIds(
-    db,
-    rows.map((r) => r.shots.id)
-  );
+  const [primaryByShot, previewByFrame] = await Promise.all([
+    getPrimaryVideoByShotIds(
+      db,
+      rows.map((r) => r.shots.id)
+    ),
+    getLatestPreviewByFrameIds(
+      db,
+      rows.flatMap((r) => (r.frames ? [r.frames.id] : []))
+    ),
+  ]);
   return rows.map((row) => {
     const video = {
       video: row.video_variants,
@@ -134,6 +142,7 @@ export async function assembleShotViews(
     if (!row.frames) return shotViewMissingFrame(row.shots, video);
     return toShotView(row.shots, row.frames, {
       image: row.frame_variants,
+      preview: previewByFrame.get(row.frames.id) ?? null,
       imagePromptVersion: row.frame_prompt_versions,
       gridSheet: gridSheetByFrameId?.get(row.frames.id) ?? null,
       ...video,

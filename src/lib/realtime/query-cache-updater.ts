@@ -175,10 +175,13 @@ export function updateQueryCacheFromEvent(
                     thumbnailUrl && f.image
                       ? { ...f.image, url: thumbnailUrl }
                       : f.image,
+                  // Projected from the newest `kind: 'preview'` row (#1101).
+                  // The emit carries the url so the stand-in appears without a
+                  // refetch; the row itself is not in this cache.
+                  previewThumbnailUrl:
+                    previewThumbnailUrl ?? f.previewThumbnailUrl,
                   frame: {
                     ...f.frame,
-                    previewImageUrl:
-                      previewThumbnailUrl ?? f.frame.previewImageUrl,
                     imageStatus: isValidShotStatus(status)
                       ? status
                       : f.frame.imageStatus,
