@@ -36,8 +36,10 @@ projects the newest non-discarded one as `previewThumbnailUrl`.
 > which was the last image artifact in the frame's image block still stored as
 > a column rather than projected from a row, along with the never-populated
 > `previewUrl` columns on `frame_variants`, `video_variants` and
-> `shot_variants`. Its values were NOT backfilled: they are expiring fal CDN
-> urls, so minting rows from them would import broken images.
+> `shot_variants`. Its values WERE backfilled onto `kind: 'preview'` rows
+> (`20260808010000_backfill_preview_variants`) — the column was their only
+> copy, and fal CDN urls are described as short-lived but do not actually
+> expire, so they are live images rather than dead links.
 
 ## Vocabulary (this is binding — two words, not three)
 

@@ -68,12 +68,11 @@
 -- misclassification, and it would have broken the moment a second fast model
 -- shipped or flux_2_turbo was unhidden.
 --
--- NOT backfilled: `frames.preview_image_url`. A preview is a raw fal CDN url
--- that expires within hours; the column's live values are the stand-in for
--- sequences mid-analysis, and one that survives to the deploy is either
--- already superseded by its real still or already dead. Minting rows from it
--- would import broken images, not preserve data. The next analysis run writes
--- a real 'preview' row.
+-- `frames.preview_image_url` is handled by 20260808025651_curved_ink, which
+-- backfills its values onto `kind: 'preview'` rows in the same statement list
+-- that drops the column. It is NOT dropped on the floor: fal CDN urls are
+-- described as short-lived but do not actually expire, so the column's values
+-- are live images and the column is their only copy.
 --
 -- Set-based, not correlated subqueries — those trip D1's remote CPU limit, and
 -- migrations apply BEFORE deploy, so a slow one freezes the deploy (#1019).
