@@ -140,10 +140,15 @@ export async function getLatestPreviewByFrameIds(
             frameIds.slice(i, i + PREVIEW_BY_FRAMES_BATCH)
           ),
           eq(frameVariants.kind, 'preview'),
-          // `recordPreview` only ever writes 'completed' with a url, so this
-          // costs nothing forward — it excludes the url-less husks the #1101
-          // migration retagged, which would otherwise read as "no preview".
+          // A preview with no url is not a preview. `status` alone is NOT
+          // enough: the #1101 reclassify retagged url-less rows regardless of
+          // status, and 2150 of them were already 'completed'. Those carry
+          // real ULIDs (`01…`) while the backfilled rows carry synthetic `00…`
+          // ids, so a husk outranks the row holding the actual image and the
+          // preview reads as absent — which is exactly what happened to 2150
+          // of 3009 frames in production.
           eq(frameVariants.status, 'completed'),
+          isNotNull(frameVariants.url),
           isNull(frameVariants.discardedAt)
         )
       )
@@ -628,6 +633,7 @@ export function createFrameVariantsMethods(db: Database) {
             eq(frameVariants.kind, 'preview'),
             // Matches the batch read — see getLatestPreviewByFrameIds.
             eq(frameVariants.status, 'completed'),
+            isNotNull(frameVariants.url),
             isNull(frameVariants.discardedAt)
           )
         )
