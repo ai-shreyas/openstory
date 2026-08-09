@@ -233,44 +233,47 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
 
     // Regenerate the 3×3 grid sheet for each (re)imaged shot — it is derived
     // from the primary still and would otherwise show the pre-recast subject.
-    // Fire-and-forget; wave-bounded creates so we don't open N variant DOs
-    // in one tick (#1126).
+    // Fire-and-forget creates, wave-bounded (#1126). Use Promise.all within
+    // each wave (not allSettled) so a failed create fails the durable step
+    // and CF retries — mapInWaves would swallow partial failures.
     await step.do('trigger-variant-regen', async () => {
-      await mapInWaves(
-        succeeded,
-        FANOUT_CONCURRENCY.variantTrigger,
-        async (result) => {
-          const snapshot = snapshots.find((s) => s.shotId === result.shotId);
-          if (!snapshot) return;
-          await triggerWorkflow<ShotVariantWorkflowInput>(
-            '/variant-image',
-            {
-              userId: input.userId,
-              teamId,
-              sequenceId,
-              shotId: result.shotId,
-              frameId: snapshot.frameId ?? undefined,
-              thumbnailUrl: result.imageUrl,
-              scenePrompt: snapshot.imagePrompt,
-              characterReferences:
-                snapshot.characterRefs.length > 0
-                  ? snapshot.characterRefs
-                  : undefined,
-              locationReferences:
-                snapshot.locationRefs.length > 0
-                  ? snapshot.locationRefs
-                  : undefined,
-              aspectRatio,
-              model: imageModel,
-            },
-            {
-              label,
-              // Dedupe: a retry of this step.do mustn't re-fire variants.
-              deduplicationId: `variant-image-${result.shotId}-${imageModel}-${snapshot.snapshotInputHash.slice(0, 16)}`,
-            }
-          );
-        }
-      );
+      const limit = FANOUT_CONCURRENCY.variantTrigger;
+      for (let i = 0; i < succeeded.length; i += limit) {
+        const wave = succeeded.slice(i, i + limit);
+        await Promise.all(
+          wave.map(async (result) => {
+            const snapshot = snapshots.find((s) => s.shotId === result.shotId);
+            if (!snapshot) return;
+            await triggerWorkflow<ShotVariantWorkflowInput>(
+              '/variant-image',
+              {
+                userId: input.userId,
+                teamId,
+                sequenceId,
+                shotId: result.shotId,
+                frameId: snapshot.frameId ?? undefined,
+                thumbnailUrl: result.imageUrl,
+                scenePrompt: snapshot.imagePrompt,
+                characterReferences:
+                  snapshot.characterRefs.length > 0
+                    ? snapshot.characterRefs
+                    : undefined,
+                locationReferences:
+                  snapshot.locationRefs.length > 0
+                    ? snapshot.locationRefs
+                    : undefined,
+                aspectRatio,
+                model: imageModel,
+              },
+              {
+                label,
+                // Dedupe: a retry of this step.do mustn't re-fire variants.
+                deduplicationId: `variant-image-${result.shotId}-${imageModel}-${snapshot.snapshotInputHash.slice(0, 16)}`,
+              }
+            );
+          })
+        );
+      }
     });
 
     const failedShots = imageResults
