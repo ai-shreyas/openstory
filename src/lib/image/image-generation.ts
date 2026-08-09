@@ -8,6 +8,10 @@ import {
 } from '@/lib/image/build-image-request';
 
 import { getEnv } from '#env';
+import {
+  createDeadlineFetch,
+  FAL_GENERATION_TIMEOUT_MS,
+} from '@/lib/ai/fal-deadline-fetch';
 import type { FalCredentialScopedDb } from '@/lib/db/scoped-workflow';
 import {
   recordMediaGenerationSpan,
@@ -65,8 +69,14 @@ export type ImageGenerationResult = {
 };
 
 function createFalAdapter(modelId: string, falApiKey?: string) {
+  // Prefer an explicit key (BYOK / caller), then the platform FAL_KEY.
   const key = falApiKey ?? getEnv().FAL_KEY;
-  return key ? falImage(modelId, { apiKey: key }) : falImage(modelId);
+  // Fresh deadline per generation so a hung fal.subscribe cannot stall the
+  // workflow step forever — the step fails and CF Workflows can retry (#826).
+  return falImage(modelId, {
+    apiKey: key,
+    fetch: createDeadlineFetch(FAL_GENERATION_TIMEOUT_MS, 'Image generation'),
+  });
 }
 
 export async function generateImageWithProvider(

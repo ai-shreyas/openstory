@@ -1,6 +1,10 @@
 import { getEnv } from '#env';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import {
+  createDeadlineFetch,
+  FAL_GENERATION_TIMEOUT_MS,
+} from '@/lib/ai/fal-deadline-fetch';
+import {
   AUDIO_MODELS,
   DEFAULT_MUSIC_MODEL,
   type AudioModel,
@@ -210,7 +214,12 @@ async function callFalAudio(
     ? await options.scopedDb.resolveKey('fal')
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
-  const adapter = falAudio(modelConfig.id, { apiKey: falApiKeyInfo.key });
+  // Same hang-bound as image gen: fal.subscribe with no timeout can stall a
+  // workflow step forever on a dead connection (#826).
+  const adapter = falAudio(modelConfig.id, {
+    apiKey: falApiKeyInfo.key,
+    fetch: createDeadlineFetch(FAL_GENERATION_TIMEOUT_MS, 'Music generation'),
+  });
   const result = await generateAudio({
     adapter,
     prompt: shape.prompt,

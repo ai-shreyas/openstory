@@ -1,6 +1,10 @@
 import { getEnv } from '#env';
 import { estimateFalCost, type EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import {
+  createDeadlineFetch,
+  FAL_REQUEST_TIMEOUT_MS,
+} from '@/lib/ai/fal-deadline-fetch';
+import {
   DEFAULT_VIDEO_MODEL,
   IMAGE_TO_VIDEO_MODELS,
   type ImageToVideoModel,
@@ -149,9 +153,12 @@ export async function submitMotionJob(
   // Create the Tanstack AI adapter and submit the job
   // Note this is typesafe - only options compatible with modelConfig.id are allowed
   // Important: fal.ai supports string for model ids that the client doesn't know about - so most new models _aren't_ typesafe
+  // Bound the submit HTTP call so a hung fal connection fails the step and
+  // can retry rather than stalling the motion workflow (#826).
   const job = await generateVideo({
     adapter: falVideo(endpoint.endpointId, {
       apiKey: falApiKeyInfo.key,
+      fetch: createDeadlineFetch(FAL_REQUEST_TIMEOUT_MS, 'Motion job submit'),
     }),
     prompt: optimisedPrompt,
     modelOptions,
@@ -185,11 +192,13 @@ export async function pollMotionJob(
     ? await scopedDb.resolveKey('fal')
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
-  // Create the Tanstack AI adapter and poll the job status
-
+  // Bound a single status fetch — the workflow already budgets total poll
+  // wall-clock across batches; this only prevents one hung HTTP call from
+  // freezing a poll step forever (#826).
   return await getVideoJobStatus({
     adapter: falVideo(modelConfig.id, {
       apiKey: falApiKeyInfo.key,
+      fetch: createDeadlineFetch(FAL_REQUEST_TIMEOUT_MS, 'Motion job status'),
     }),
     jobId,
   });
@@ -258,7 +267,11 @@ async function falQueueFetch(
     throw new Error('FAL_KEY environment variable is required');
   }
 
-  const response = await fetch(url, {
+  const deadlineFetch = createDeadlineFetch(
+    FAL_REQUEST_TIMEOUT_MS,
+    'Motion queue request'
+  );
+  const response = await deadlineFetch(url, {
     ...init,
     headers: new Headers({
       Authorization: `Key ${apiKey}`,
