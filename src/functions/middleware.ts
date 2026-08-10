@@ -26,7 +26,11 @@ import {
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { NotFoundError } from '@/lib/errors';
-import { getLogger, toErrorPayload } from '@/lib/observability/logger';
+import {
+  errorHeadline,
+  getLogger,
+  toErrorPayload,
+} from '@/lib/observability/logger';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import type { Frame } from '@/lib/db/schema';
 import type { SequenceStatus } from '@/lib/db/schema/sequences';
@@ -186,7 +190,10 @@ export const loggerMiddleware = createMiddleware({ type: 'function' }).server(
         fnName,
         durationMs,
         errCode: err.code,
-        errMessage: err.message,
+        // Reason-first and length-capped: a raw driver message (drizzle puts
+        // the whole SQL statement there) would otherwise fill the body's
+        // truncation budget and evict the cause — see errorHeadline (#1135).
+        errMessage: errorHeadline(err),
         err,
       };
       // Expected business rejections are outcomes, not failures: warn, so prod
