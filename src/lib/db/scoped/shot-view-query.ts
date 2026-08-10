@@ -48,7 +48,15 @@ export type ShotViewRow = {
   frames: Frame | null;
   frame_variants: FrameVariant | null;
   frame_prompt_versions: FramePromptVersion | null;
-  shot_prompt_versions: ShotPromptVersion | null;
+  /**
+   * Narrowed to what {@link motionPromptFromVersion} reads — the query projects
+   * these three columns rather than the whole row, to stay clear of D1's
+   * 100-column result-set cap (see {@link selectShotViewRows}).
+   */
+  shot_prompt_versions: Pick<
+    ShotPromptVersion,
+    'text' | 'dialogue' | 'audio'
+  > | null;
   video_variants: VideoVariant | null;
 };
 
@@ -73,7 +81,30 @@ export const shotHierarchicalOrder = [
 export function selectShotViewRows(db: Database) {
   return (
     db
-      .select()
+      // Explicit projection, NOT a bare `db.select()`. D1 rejects any result
+      // set wider than 100 columns ("too many columns in result set", #1135),
+      // and a bare select projects every column of every joined table — here
+      // that included `render_segments` and `scenes`, joined only for their
+      // pointers and the ORDER BY, never read. The 8-table walk reached 104
+      // columns and every shot read in prod started failing.
+      //
+      // Naming the tables also caps the cost of a caller's own join:
+      // `listShotsByIds` adds `sequences` for its team filter, and under a bare
+      // select that pushed the same query another ~12 columns wider.
+      .select({
+        shots,
+        frames,
+        frame_variants: frameVariants,
+        frame_prompt_versions: framePromptVersions,
+        // Only the three fields `motionPromptFromVersion` rebuilds a prompt
+        // from — `components`/`parameters` are history, not render input.
+        shot_prompt_versions: {
+          text: shotPromptVersions.text,
+          dialogue: shotPromptVersions.dialogue,
+          audio: shotPromptVersions.audio,
+        },
+        video_variants: videoVariants,
+      })
       .from(shots)
       // Anchor frame holds the image surface (#989) — the shot's first frame
       // (orderIndex 0), joined by shotId (NOT id-reuse).

@@ -177,3 +177,25 @@ it('resolves previewThumbnailUrl through the whole assembly path', async () => {
   // A preview is never the still.
   expect((await assemble())[0]?.image).toBeNull();
 });
+
+/**
+ * The regression guard for #1135. libSQL (and every other SQLite this suite
+ * runs on) happily returns a 104-column row, so nothing here would ever fail on
+ * width — only D1 rejects it, and only in production. Assert the count instead.
+ */
+it('projects fewer columns than D1 accepts, including a caller join', async () => {
+  const { sql } = selectShotViewRows(db)
+    // What `sequences.listShotsByIds` adds for its team filter. Under a bare
+    // `db.select()` this join dragged in every `sequences` column too.
+    .innerJoin(sequences, eq(shots.sequenceId, sequences.id))
+    .toSQL();
+  const projected = sql
+    .slice('select '.length, sql.indexOf(' from '))
+    .split(', ');
+  expect(projected.length).toBeLessThanOrEqual(100);
+
+  // A left-joined group with no matching row must be null, not an object of
+  // nulls: `assembleShotViews` branches on truthiness, so the latter would
+  // rebuild a motion prompt out of nothing.
+  expect((await selectShotViewRows(db))[0]?.shot_prompt_versions).toBeNull();
+});
