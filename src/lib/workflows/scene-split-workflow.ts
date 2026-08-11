@@ -111,6 +111,70 @@ async function persistStreamedSceneAndShot(
 }
 
 /**
+ * Fire-and-forget preview image for one shot, routed through `triggerWorkflow`
+ * so the engine registry picks whichever engine is configured for `/image` at
+ * runtime. The deduplicationId makes a replay of the mega-step idempotent (see
+ * dedup-ids.ts).
+ *
+ * Failures are swallowed by design (#1149). Previews are decorative
+ * (`skipStorage: true`) and nothing downstream reads the result, but a throw
+ * here fails `scene-splitting-stream` → `scene-split` → `analyze-script` → the
+ * whole sequence, discarding every still that already rendered and cost money.
+ * A content-checker hit on one of ~18 previews is a routine outcome, not a
+ * reason to lose the run.
+ */
+async function triggerPreviewImage({
+  input,
+  sequenceId,
+  parentInstanceId,
+  shot,
+  scene,
+}: {
+  input: SceneSplitWorkflowInput;
+  sequenceId: string;
+  parentInstanceId: string;
+  shot: { id: string; frameId: string };
+  scene: SceneSplittingScene;
+}): Promise<void> {
+  const sceneText =
+    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
+    scene.originalScript?.extract ??
+    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
+    scene.metadata?.title ??
+    'A cinematic scene';
+
+  try {
+    await triggerWorkflow(
+      '/image',
+      {
+        userId: input.userId,
+        teamId: input.teamId,
+        sequenceId,
+        prompt: buildPreviewPrompt(sceneText, input.styleConfig),
+        model: PREVIEW_IMAGE_MODEL,
+        imageSize: aspectRatioToImageSize(input.aspectRatio),
+        numImages: 1,
+        shotId: shot.id,
+        // Without this the run stands down before generating — and before
+        // #1101 it generated, billed, then dropped the preview at
+        // `record-preview-variant` (#1119).
+        frameId: shot.frameId,
+        skipStorage: true,
+      } satisfies ImageWorkflowInput,
+      {
+        label: buildWorkflowLabel(sequenceId),
+        deduplicationId: previewImageDedupId(parentInstanceId, shot.id),
+      }
+    );
+  } catch (error) {
+    logger.warn(
+      `[SceneSplitWorkflow:cf] preview image trigger failed for shot ${shot.id}; continuing without it`,
+      { sequenceId, err: error }
+    );
+  }
+}
+
+/**
  * Shape produced by the streaming step (post JSON round-trip). Mirrors the
  * QStash `streamResult` value — note `projectMetadata` is preserved so the
  * reconcile step can extract the title, and `shotMapping` reflects only the
@@ -144,13 +208,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     scopedDb: WorkflowScopedDb
   ): Promise<SceneSplitWorkflowResult> {
     const input = event.payload;
-    const {
-      sequenceId,
-      modelId,
-      styleConfig,
-      aspectRatio,
-      elements = [],
-    } = input;
+    const { sequenceId, modelId, aspectRatio, elements = [] } = input;
 
     // Gap C: this single `step.do` owns the prompt fetch + the entire
     // streaming session. Inside, the partial-JSON parser, per-chunk DB writes
@@ -353,44 +411,15 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                   }
                 );
                 if (prevScene && prevShot) {
-                  const sceneText =
-                    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-                    prevScene.originalScript?.extract ??
-                    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-                    prevScene.metadata?.title ??
-                    'A cinematic scene';
-                  const prompt = buildPreviewPrompt(sceneText, styleConfig);
-
-                  // Fire-and-forget preview-image trigger for the previous
-                  // scene. Routed through `triggerWorkflow` so the engine
-                  // registry picks whichever engine is configured for
-                  // `/image` at runtime. The deduplicationId makes a replay
-                  // of this mega-step idempotent (see dedup-ids.ts).
-                  await triggerWorkflow(
-                    '/image',
-                    {
-                      userId: input.userId,
-                      teamId: input.teamId,
-                      sequenceId,
-                      prompt,
-                      model: PREVIEW_IMAGE_MODEL,
-                      imageSize: aspectRatioToImageSize(aspectRatio),
-                      numImages: 1,
-                      shotId: prevShot.id,
-                      // Without this the run stands down before generating —
-                      // and before #1101 it generated, billed, then dropped the
-                      // preview at `record-preview-variant` (#1119).
-                      frameId: prevShot.frameId,
-                      skipStorage: true,
-                    } satisfies ImageWorkflowInput,
-                    {
-                      label: buildWorkflowLabel(sequenceId),
-                      deduplicationId: previewImageDedupId(
-                        event.instanceId,
-                        prevShot.id
-                      ),
-                    }
-                  );
+                  // Preview for the PREVIOUS scene — the loop always trails by
+                  // one so a scene's text is complete before it's rendered.
+                  await triggerPreviewImage({
+                    input,
+                    sequenceId,
+                    parentInstanceId: event.instanceId,
+                    shot: prevShot,
+                    scene: prevScene,
+                  });
                 }
 
                 prevShot = { id: shot.id, frameId: shot.anchorFrameId };
@@ -402,36 +431,13 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
 
         // Trigger preview for the last scene (the loop only triggers N-1).
         if (prevScene && prevShot && sequenceId) {
-          const sceneText =
-            // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-            prevScene.originalScript?.extract ??
-            // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-            prevScene.metadata?.title ??
-            'A cinematic scene';
-          const prompt = buildPreviewPrompt(sceneText, styleConfig);
-
-          await triggerWorkflow(
-            '/image',
-            {
-              userId: input.userId,
-              teamId: input.teamId,
-              sequenceId,
-              prompt,
-              model: PREVIEW_IMAGE_MODEL,
-              imageSize: aspectRatioToImageSize(aspectRatio),
-              numImages: 1,
-              shotId: prevShot.id,
-              frameId: prevShot.frameId,
-              skipStorage: true,
-            } satisfies ImageWorkflowInput,
-            {
-              label: buildWorkflowLabel(sequenceId),
-              deduplicationId: previewImageDedupId(
-                event.instanceId,
-                prevShot.id
-              ),
-            }
-          );
+          await triggerPreviewImage({
+            input,
+            sequenceId,
+            parentInstanceId: event.instanceId,
+            shot: prevShot,
+            scene: prevScene,
+          });
         }
 
         if (!parsedResult) {
