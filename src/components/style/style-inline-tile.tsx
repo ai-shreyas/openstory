@@ -57,7 +57,9 @@ export function StyleInlineTile({
       tabIndex={tabIndex}
       disabled={disabled}
       className={cn(
-        'group relative aspect-square overflow-hidden rounded-lg border-2',
+        // whitespace-normal: UA button styles are nowrap (inherited), which
+        // defeats line-clamp-2 on the name and truncates mid-word.
+        'group relative aspect-square overflow-hidden rounded-lg border-2 whitespace-normal',
         'transition-all duration-200 hover:scale-105 hover:shadow-lg',
         'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
@@ -78,7 +80,7 @@ export function StyleInlineTile({
         </span>
       )}
       <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 via-black/60 to-transparent p-2">
-        <p className="line-clamp-2 text-center text-xs font-medium text-white">
+        <p className="line-clamp-2 whitespace-normal text-center text-xs font-medium text-white">
           {style.name}
         </p>
       </div>

@@ -15,7 +15,9 @@ const ToggleGroupContext = React.createContext<
 >({
   size: 'default',
   variant: 'default',
-  spacing: 2,
+  // App uses connected segmented controls (duration, aspect ratio, etc.).
+  // shadcn registry default is 2 (gapped pills) — keep 0 when re-adding.
+  spacing: 0,
   orientation: 'horizontal',
 });
 
@@ -23,7 +25,7 @@ function ToggleGroup({
   className,
   variant,
   size,
-  spacing = 2,
+  spacing = 0,
   orientation = 'horizontal',
   children,
   ...props
