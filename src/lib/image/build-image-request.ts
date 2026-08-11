@@ -100,6 +100,13 @@ function buildFalModelOptions(
         ...(params.seed !== undefined && { seed: params.seed }),
         ...(params.numImages !== undefined && { num_images: params.numImages }),
         ...(params.outputFormat && { output_format: params.outputFormat }),
+        // Reference images route this model to `fal-ai/flux-2/turbo/edit`
+        // (EDIT_ENDPOINTS), which requires `image_urls`. Omitting them sent an
+        // edit request with no images and fal rejected every one with a 422
+        // "Field required" — the only model in this switch that was missing it.
+        ...(params.referenceImageUrls?.length && {
+          image_urls: params.referenceImageUrls,
+        }),
         sync_mode: false,
       };
 
