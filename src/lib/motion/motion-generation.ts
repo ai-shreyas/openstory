@@ -153,15 +153,14 @@ export async function submitMotionJob(
   // Create the Tanstack AI adapter and submit the job
   // Note this is typesafe - only options compatible with modelConfig.id are allowed
   // Important: fal.ai supports string for model ids that the client doesn't know about - so most new models _aren't_ typesafe
-  // Bound the submit HTTP call so a hung fal connection fails the step and
-  // can retry rather than stalling the motion workflow (#826).
+  // Bound submit so a hung fal connection fails the step (#826).
   const job = await generateVideo({
     adapter: falVideo(endpoint.endpointId, {
       apiKey: falApiKeyInfo.key,
-      fetch: createDeadlineFetch(FAL_REQUEST_TIMEOUT_MS, 'Motion job submit'),
     }),
     prompt: optimisedPrompt,
     modelOptions,
+    timeout: FAL_REQUEST_TIMEOUT_MS,
     debug: false,
   });
 

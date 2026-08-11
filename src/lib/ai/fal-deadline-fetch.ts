@@ -1,15 +1,14 @@
 /**
- * Timeout-aware fetch wrappers for fal.ai calls.
+ * Timeout helpers for fal.ai calls that still lack activity-level controls.
  *
- * `@tanstack/ai-fal` adapters call `fal.subscribe()` without a timeout or
- * abort signal, so a hung TCP connection (or a never-completing queue poll)
- * can stall a Cloudflare Workflow step indefinitely — no error, no retry
- * (#826). Passing a custom `fetch` is the adapter's documented configuration
- * boundary; we use it to enforce a wall-clock deadline across every HTTP
- * request that belongs to one generation.
+ * Media activities (`generateImage` / `generateAudio` / `generateVideo`) use
+ * native `timeout` on `@tanstack/ai@0.44+` (TanStack/ai#981 / PR #1047). This
+ * module remains for paths that talk to fal outside those activities:
+ * - `getVideoJobStatus` / raw `fal.queue.*` (no activity timeout option)
+ * - low-level `falQueueFetch` helpers
  *
- * Upstream: TanStack/ai#981 proposes first-class `timeout` / `abortSignal`
- * on media activities. This stays the app-side safeguard until that lands.
+ * A hung connection without a bound can stall a Cloudflare Workflow step
+ * indefinitely so its retry policy never fires (#826).
  */
 
 /** Wall-clock budget for a fal.subscribe()-style image or audio generation. */
