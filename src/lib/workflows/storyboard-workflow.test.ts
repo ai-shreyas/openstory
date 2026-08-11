@@ -96,7 +96,7 @@ function makeEvent(
     payload,
     instanceId: 'storyboard_run_A',
     timestamp: new Date(0),
-  } as unknown as Readonly<WorkflowEvent<StoryboardWorkflowInput>>;
+  };
 }
 
 function makeScopedDb(status: 'processing' | 'failed') {

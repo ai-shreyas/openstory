@@ -401,8 +401,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   // Image & motion regeneration state
   const [editPrompts, setEditPrompts] = useState({
-    imagePrompt: '' as string,
-    motionPrompt: '' as string,
+    imagePrompt: '',
+    motionPrompt: '',
   });
   const { imagePrompt: editedImagePrompt, motionPrompt: editedMotionPrompt } =
     editPrompts;

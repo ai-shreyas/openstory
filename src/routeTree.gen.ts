@@ -9,94 +9,87 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
-import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
-import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
-import { Route as DocsRouteImport } from './routes/docs'
-import { Route as AuthRouteRouteImport } from './routes/_auth/route'
 import { Route as AppRouteRouteImport } from './routes/_app/route'
-import { Route as DocsIndexRouteImport } from './routes/docs/index'
+import { Route as AuthRouteRouteImport } from './routes/_auth/route'
+import { Route as DocsRouteImport } from './routes/docs'
+import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
+import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
-import { Route as R2SplatRouteImport } from './routes/r2.$'
-import { Route as MetaOgLinkedinRouteImport } from './routes/meta/og-linkedin'
-import { Route as MetaOgGithubRouteImport } from './routes/meta/og-github'
-import { Route as MetaOgRouteImport } from './routes/meta/og'
-import { Route as GiftCodeRouteImport } from './routes/gift/$code'
-import { Route as DocsLlmsDotmdRouteImport } from './routes/docs/llms[.]md'
-import { Route as DocsFaqRouteImport } from './routes/docs/faq'
-import { Route as DocsSplatRouteImport } from './routes/docs/$'
-import { Route as ApiRealtimeRouteImport } from './routes/api/realtime'
-import { Route as AuthVerifyRouteImport } from './routes/_auth/verify'
-import { Route as AuthLoginRouteImport } from './routes/_auth/login'
-import { Route as AppTermsRouteImport } from './routes/_app/terms'
-import { Route as AppPrivacyRouteImport } from './routes/_app/privacy'
-import { Route as AppPricingRouteImport } from './routes/_app/pricing'
-import { Route as AppCreditsRouteImport } from './routes/_app/credits'
-import { Route as ApiTestRouteRouteImport } from './routes/api/test/route'
-import { Route as AppSettingsRouteRouteImport } from './routes/_app/settings/route'
 import { Route as AppAdminRouteRouteImport } from './routes/_app/admin/route'
-import { Route as ApiV1IndexRouteImport } from './routes/api/v1/index'
-import { Route as AppTalentIndexRouteImport } from './routes/_app/talent/index'
-import { Route as AppStylesIndexRouteImport } from './routes/_app/styles/index'
-import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
-import { Route as AppSequencesIndexRouteImport } from './routes/_app/sequences/index'
-import { Route as AppModelsIndexRouteImport } from './routes/_app/models/index'
-import { Route as AppLocationsIndexRouteImport } from './routes/_app/locations/index'
-import { Route as AppGalleryIndexRouteImport } from './routes/_app/gallery/index'
-import { Route as ApiV1SequencesRouteImport } from './routes/api/v1/sequences'
-import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
-import { Route as ApiTestVerifyRouteImport } from './routes/api/test/verify'
-import { Route as ApiTestUserRouteImport } from './routes/api/test/user'
-import { Route as ApiTestTalentRouteImport } from './routes/api/test/talent'
-import { Route as ApiTestStyleRouteImport } from './routes/api/test/style'
-import { Route as ApiTestShotRouteImport } from './routes/api/test/shot'
-import { Route as ApiTestSequenceRouteImport } from './routes/api/test/sequence'
-import { Route as ApiTestLocationRouteImport } from './routes/api/test/location'
-import { Route as ApiTestImageRouteImport } from './routes/api/test/image'
-import { Route as ApiTestCleanupRouteImport } from './routes/api/test/cleanup'
-import { Route as ApiTestCharacterRouteImport } from './routes/api/test/character'
-import { Route as ApiStorageUploadRouteImport } from './routes/api/storage/upload'
-import { Route as ApiStorageMultipartRouteImport } from './routes/api/storage/multipart'
-import { Route as ApiOpenrouterCallbackRouteImport } from './routes/api/openrouter/callback'
-import { Route as ApiDevMemoryRouteImport } from './routes/api/dev/memory'
-import { Route as ApiBillingWebhookRouteImport } from './routes/api/billing/webhook'
-import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as AppTalentIdRouteImport } from './routes/_app/talent/$id'
-import { Route as AppSettingsPasskeysRouteImport } from './routes/_app/settings/passkeys'
-import { Route as AppSettingsDeveloperRouteImport } from './routes/_app/settings/developer'
-import { Route as AppSettingsApiKeysRouteImport } from './routes/_app/settings/api-keys'
-import { Route as AppSequencesNewRouteImport } from './routes/_app/sequences/new'
-import { Route as AppModelsSplatRouteImport } from './routes/_app/models/$'
-import { Route as AppLocationsLocationIdRouteImport } from './routes/_app/locations/$locationId'
+import { Route as AppCreditsRouteImport } from './routes/_app/credits'
+import { Route as AppPricingRouteImport } from './routes/_app/pricing'
+import { Route as AppPrivacyRouteImport } from './routes/_app/privacy'
+import { Route as AppSettingsRouteRouteImport } from './routes/_app/settings/route'
+import { Route as AppTermsRouteImport } from './routes/_app/terms'
+import { Route as AuthLoginRouteImport } from './routes/_auth/login'
+import { Route as AuthVerifyRouteImport } from './routes/_auth/verify'
+import { Route as ApiRealtimeRouteImport } from './routes/api/realtime'
+import { Route as ApiTestRouteRouteImport } from './routes/api/test/route'
+import { Route as DocsIndexRouteImport } from './routes/docs/index'
+import { Route as DocsSplatRouteImport } from './routes/docs/$'
+import { Route as DocsFaqRouteImport } from './routes/docs/faq'
+import { Route as DocsLlmsDotmdRouteImport } from './routes/docs/llms[.]md'
+import { Route as GiftCodeRouteImport } from './routes/gift/$code'
+import { Route as MetaOgRouteImport } from './routes/meta/og'
+import { Route as MetaOgGithubRouteImport } from './routes/meta/og-github'
+import { Route as MetaOgLinkedinRouteImport } from './routes/meta/og-linkedin'
+import { Route as R2SplatRouteImport } from './routes/r2.$'
 import { Route as AppAdminUsageRouteImport } from './routes/_app/admin/usage'
+import { Route as AppGalleryIndexRouteImport } from './routes/_app/gallery/index'
+import { Route as AppLocationsIndexRouteImport } from './routes/_app/locations/index'
+import { Route as AppLocationsLocationIdRouteImport } from './routes/_app/locations/$locationId'
+import { Route as AppModelsIndexRouteImport } from './routes/_app/models/index'
+import { Route as AppModelsSplatRouteImport } from './routes/_app/models/$'
+import { Route as AppSequencesIndexRouteImport } from './routes/_app/sequences/index'
 import { Route as AppSequencesIdRouteRouteImport } from './routes/_app/sequences/$id/route'
-import { Route as ApiV1SequencesIdRouteImport } from './routes/api/v1/sequences.$id'
-import { Route as ApiV1ScriptsEnhanceRouteImport } from './routes/api/v1/scripts.enhance'
-import { Route as AppSequencesIdTheatreRouteImport } from './routes/_app/sequences/$id/theatre'
-import { Route as AppSequencesIdScriptRouteImport } from './routes/_app/sequences/$id/script'
-import { Route as AppSequencesIdScenesRouteImport } from './routes/_app/sequences/$id/scenes'
-import { Route as AppSequencesIdMusicRouteImport } from './routes/_app/sequences/$id/music'
-import { Route as AppSequencesIdElementsRouteImport } from './routes/_app/sequences/$id/elements'
+import { Route as AppSequencesNewRouteImport } from './routes/_app/sequences/new'
+import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
+import { Route as AppSettingsApiKeysRouteImport } from './routes/_app/settings/api-keys'
+import { Route as AppSettingsDeveloperRouteImport } from './routes/_app/settings/developer'
+import { Route as AppSettingsPasskeysRouteImport } from './routes/_app/settings/passkeys'
+import { Route as AppStylesIndexRouteImport } from './routes/_app/styles/index'
+import { Route as AppTalentIndexRouteImport } from './routes/_app/talent/index'
+import { Route as AppTalentIdRouteImport } from './routes/_app/talent/$id'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiBillingWebhookRouteImport } from './routes/api/billing/webhook'
+import { Route as ApiDevMemoryRouteImport } from './routes/api/dev/memory'
+import { Route as ApiOpenrouterCallbackRouteImport } from './routes/api/openrouter/callback'
+import { Route as ApiStorageMultipartRouteImport } from './routes/api/storage/multipart'
+import { Route as ApiStorageUploadRouteImport } from './routes/api/storage/upload'
+import { Route as ApiTestCharacterRouteImport } from './routes/api/test/character'
+import { Route as ApiTestCleanupRouteImport } from './routes/api/test/cleanup'
+import { Route as ApiTestImageRouteImport } from './routes/api/test/image'
+import { Route as ApiTestLocationRouteImport } from './routes/api/test/location'
+import { Route as ApiTestSequenceRouteImport } from './routes/api/test/sequence'
+import { Route as ApiTestShotRouteImport } from './routes/api/test/shot'
+import { Route as ApiTestStyleRouteImport } from './routes/api/test/style'
+import { Route as ApiTestTalentRouteImport } from './routes/api/test/talent'
+import { Route as ApiTestUserRouteImport } from './routes/api/test/user'
+import { Route as ApiTestVerifyRouteImport } from './routes/api/test/verify'
+import { Route as ApiV1IndexRouteImport } from './routes/api/v1/index'
+import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
+import { Route as ApiV1SequencesRouteImport } from './routes/api/v1/sequences'
 import { Route as AppModelsFamilySplatRouteImport } from './routes/_app/models/family/$'
-import { Route as AppSequencesIdLocationsIndexRouteImport } from './routes/_app/sequences/$id/locations/index'
+import { Route as AppSequencesIdElementsRouteImport } from './routes/_app/sequences/$id/elements'
+import { Route as AppSequencesIdMusicRouteImport } from './routes/_app/sequences/$id/music'
+import { Route as AppSequencesIdScenesRouteImport } from './routes/_app/sequences/$id/scenes'
+import { Route as AppSequencesIdScriptRouteImport } from './routes/_app/sequences/$id/script'
+import { Route as AppSequencesIdTheatreRouteImport } from './routes/_app/sequences/$id/theatre'
+import { Route as ApiV1ScriptsEnhanceRouteImport } from './routes/api/v1/scripts.enhance'
+import { Route as ApiV1SequencesIdRouteImport } from './routes/api/v1/sequences.$id'
 import { Route as AppSequencesIdCastIndexRouteImport } from './routes/_app/sequences/$id/cast/index'
-import { Route as ApiV1SequencesIdExportsRouteImport } from './routes/api/v1/sequences.$id.exports'
-import { Route as AppSequencesIdLocationsLocationIdRouteImport } from './routes/_app/sequences/$id/locations/$locationId'
 import { Route as AppSequencesIdCastCharacterIdRouteImport } from './routes/_app/sequences/$id/cast/$characterId'
+import { Route as AppSequencesIdLocationsIndexRouteImport } from './routes/_app/sequences/$id/locations/index'
+import { Route as AppSequencesIdLocationsLocationIdRouteImport } from './routes/_app/sequences/$id/locations/$locationId'
+import { Route as ApiV1SequencesIdExportsRouteImport } from './routes/api/v1/sequences.$id.exports'
 
-const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
-  id: '/sitemap.xml',
-  path: '/sitemap.xml',
+const AppRouteRoute = AppRouteRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
-  id: '/robots.txt',
-  path: '/robots.txt',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
-  id: '/llms.txt',
-  path: '/llms.txt',
+const AuthRouteRoute = AuthRouteRouteImport.update({
+  id: '/_auth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsRoute = DocsRouteImport.update({
@@ -104,107 +97,24 @@ const DocsRoute = DocsRouteImport.update({
   path: '/docs',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthRouteRoute = AuthRouteRouteImport.update({
-  id: '/_auth',
+const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
+  id: '/llms.txt',
+  path: '/llms.txt',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppRouteRoute = AppRouteRouteImport.update({
-  id: '/_app',
+const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
+  id: '/robots.txt',
+  path: '/robots.txt',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DocsIndexRoute = DocsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => DocsRoute,
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const R2SplatRoute = R2SplatRouteImport.update({
-  id: '/r2/$',
-  path: '/r2/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MetaOgLinkedinRoute = MetaOgLinkedinRouteImport.update({
-  id: '/meta/og-linkedin',
-  path: '/meta/og-linkedin',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MetaOgGithubRoute = MetaOgGithubRouteImport.update({
-  id: '/meta/og-github',
-  path: '/meta/og-github',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MetaOgRoute = MetaOgRouteImport.update({
-  id: '/meta/og',
-  path: '/meta/og',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GiftCodeRoute = GiftCodeRouteImport.update({
-  id: '/gift/$code',
-  path: '/gift/$code',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocsLlmsDotmdRoute = DocsLlmsDotmdRouteImport.update({
-  id: '/llms.md',
-  path: '/llms.md',
-  getParentRoute: () => DocsRoute,
-} as any)
-const DocsFaqRoute = DocsFaqRouteImport.update({
-  id: '/faq',
-  path: '/faq',
-  getParentRoute: () => DocsRoute,
-} as any)
-const DocsSplatRoute = DocsSplatRouteImport.update({
-  id: '/$',
-  path: '/$',
-  getParentRoute: () => DocsRoute,
-} as any)
-const ApiRealtimeRoute = ApiRealtimeRouteImport.update({
-  id: '/api/realtime',
-  path: '/api/realtime',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthVerifyRoute = AuthVerifyRouteImport.update({
-  id: '/verify',
-  path: '/verify',
-  getParentRoute: () => AuthRouteRoute,
-} as any)
-const AuthLoginRoute = AuthLoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => AuthRouteRoute,
-} as any)
-const AppTermsRoute = AppTermsRouteImport.update({
-  id: '/terms',
-  path: '/terms',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppPrivacyRoute = AppPrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppPricingRoute = AppPricingRouteImport.update({
-  id: '/pricing',
-  path: '/pricing',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppCreditsRoute = AppCreditsRouteImport.update({
-  id: '/credits',
-  path: '/credits',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const ApiTestRouteRoute = ApiTestRouteRouteImport.update({
-  id: '/api/test',
-  path: '/api/test',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppSettingsRouteRoute = AppSettingsRouteRouteImport.update({
-  id: '/settings',
-  path: '/settings',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppAdminRouteRoute = AppAdminRouteRouteImport.update({
@@ -212,34 +122,104 @@ const AppAdminRouteRoute = AppAdminRouteRouteImport.update({
   path: '/admin',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const ApiV1IndexRoute = ApiV1IndexRouteImport.update({
-  id: '/api/v1/',
-  path: '/api/v1/',
+const AppCreditsRoute = AppCreditsRouteImport.update({
+  id: '/credits',
+  path: '/credits',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppPricingRoute = AppPricingRouteImport.update({
+  id: '/pricing',
+  path: '/pricing',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppPrivacyRoute = AppPrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppSettingsRouteRoute = AppSettingsRouteRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppTermsRoute = AppTermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AuthLoginRoute = AuthLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AuthRouteRoute,
+} as any)
+const AuthVerifyRoute = AuthVerifyRouteImport.update({
+  id: '/verify',
+  path: '/verify',
+  getParentRoute: () => AuthRouteRoute,
+} as any)
+const ApiRealtimeRoute = ApiRealtimeRouteImport.update({
+  id: '/api/realtime',
+  path: '/api/realtime',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppTalentIndexRoute = AppTalentIndexRouteImport.update({
-  id: '/talent/',
-  path: '/talent/',
-  getParentRoute: () => AppRouteRoute,
+const ApiTestRouteRoute = ApiTestRouteRouteImport.update({
+  id: '/api/test',
+  path: '/api/test',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppStylesIndexRoute = AppStylesIndexRouteImport.update({
-  id: '/styles/',
-  path: '/styles/',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+const DocsIndexRoute = DocsIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppSettingsRouteRoute,
+  getParentRoute: () => DocsRoute,
 } as any)
-const AppSequencesIndexRoute = AppSequencesIndexRouteImport.update({
-  id: '/sequences/',
-  path: '/sequences/',
-  getParentRoute: () => AppRouteRoute,
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => DocsRoute,
 } as any)
-const AppModelsIndexRoute = AppModelsIndexRouteImport.update({
-  id: '/models/',
-  path: '/models/',
+const DocsFaqRoute = DocsFaqRouteImport.update({
+  id: '/faq',
+  path: '/faq',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsLlmsDotmdRoute = DocsLlmsDotmdRouteImport.update({
+  id: '/llms.md',
+  path: '/llms.md',
+  getParentRoute: () => DocsRoute,
+} as any)
+const GiftCodeRoute = GiftCodeRouteImport.update({
+  id: '/gift/$code',
+  path: '/gift/$code',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MetaOgRoute = MetaOgRouteImport.update({
+  id: '/meta/og',
+  path: '/meta/og',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MetaOgGithubRoute = MetaOgGithubRouteImport.update({
+  id: '/meta/og-github',
+  path: '/meta/og-github',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MetaOgLinkedinRoute = MetaOgLinkedinRouteImport.update({
+  id: '/meta/og-linkedin',
+  path: '/meta/og-linkedin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const R2SplatRoute = R2SplatRouteImport.update({
+  id: '/r2/$',
+  path: '/r2/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppAdminUsageRoute = AppAdminUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => AppAdminRouteRoute,
+} as any)
+const AppGalleryIndexRoute = AppGalleryIndexRouteImport.update({
+  id: '/gallery/',
+  path: '/gallery/',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppLocationsIndexRoute = AppLocationsIndexRouteImport.update({
@@ -247,124 +227,14 @@ const AppLocationsIndexRoute = AppLocationsIndexRouteImport.update({
   path: '/locations/',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppGalleryIndexRoute = AppGalleryIndexRouteImport.update({
-  id: '/gallery/',
-  path: '/gallery/',
+const AppLocationsLocationIdRoute = AppLocationsLocationIdRouteImport.update({
+  id: '/locations/$locationId',
+  path: '/locations/$locationId',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const ApiV1SequencesRoute = ApiV1SequencesRouteImport.update({
-  id: '/api/v1/sequences',
-  path: '/api/v1/sequences',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
-  id: '/api/v1/openapi.json',
-  path: '/api/v1/openapi.json',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiTestVerifyRoute = ApiTestVerifyRouteImport.update({
-  id: '/verify',
-  path: '/verify',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestUserRoute = ApiTestUserRouteImport.update({
-  id: '/user',
-  path: '/user',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestTalentRoute = ApiTestTalentRouteImport.update({
-  id: '/talent',
-  path: '/talent',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestStyleRoute = ApiTestStyleRouteImport.update({
-  id: '/style',
-  path: '/style',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestShotRoute = ApiTestShotRouteImport.update({
-  id: '/shot',
-  path: '/shot',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestSequenceRoute = ApiTestSequenceRouteImport.update({
-  id: '/sequence',
-  path: '/sequence',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestLocationRoute = ApiTestLocationRouteImport.update({
-  id: '/location',
-  path: '/location',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestImageRoute = ApiTestImageRouteImport.update({
-  id: '/image',
-  path: '/image',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestCleanupRoute = ApiTestCleanupRouteImport.update({
-  id: '/cleanup',
-  path: '/cleanup',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiTestCharacterRoute = ApiTestCharacterRouteImport.update({
-  id: '/character',
-  path: '/character',
-  getParentRoute: () => ApiTestRouteRoute,
-} as any)
-const ApiStorageUploadRoute = ApiStorageUploadRouteImport.update({
-  id: '/api/storage/upload',
-  path: '/api/storage/upload',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiStorageMultipartRoute = ApiStorageMultipartRouteImport.update({
-  id: '/api/storage/multipart',
-  path: '/api/storage/multipart',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiOpenrouterCallbackRoute = ApiOpenrouterCallbackRouteImport.update({
-  id: '/api/openrouter/callback',
-  path: '/api/openrouter/callback',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiDevMemoryRoute = ApiDevMemoryRouteImport.update({
-  id: '/api/dev/memory',
-  path: '/api/dev/memory',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiBillingWebhookRoute = ApiBillingWebhookRouteImport.update({
-  id: '/api/billing/webhook',
-  path: '/api/billing/webhook',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppTalentIdRoute = AppTalentIdRouteImport.update({
-  id: '/talent/$id',
-  path: '/talent/$id',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppSettingsPasskeysRoute = AppSettingsPasskeysRouteImport.update({
-  id: '/passkeys',
-  path: '/passkeys',
-  getParentRoute: () => AppSettingsRouteRoute,
-} as any)
-const AppSettingsDeveloperRoute = AppSettingsDeveloperRouteImport.update({
-  id: '/developer',
-  path: '/developer',
-  getParentRoute: () => AppSettingsRouteRoute,
-} as any)
-const AppSettingsApiKeysRoute = AppSettingsApiKeysRouteImport.update({
-  id: '/api-keys',
-  path: '/api-keys',
-  getParentRoute: () => AppSettingsRouteRoute,
-} as any)
-const AppSequencesNewRoute = AppSequencesNewRouteImport.update({
-  id: '/sequences/new',
-  path: '/sequences/new',
+const AppModelsIndexRoute = AppModelsIndexRouteImport.update({
+  id: '/models/',
+  path: '/models/',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppModelsSplatRoute = AppModelsSplatRouteImport.update({
@@ -372,44 +242,159 @@ const AppModelsSplatRoute = AppModelsSplatRouteImport.update({
   path: '/models/$',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppLocationsLocationIdRoute = AppLocationsLocationIdRouteImport.update({
-  id: '/locations/$locationId',
-  path: '/locations/$locationId',
+const AppSequencesIndexRoute = AppSequencesIndexRouteImport.update({
+  id: '/sequences/',
+  path: '/sequences/',
   getParentRoute: () => AppRouteRoute,
-} as any)
-const AppAdminUsageRoute = AppAdminUsageRouteImport.update({
-  id: '/usage',
-  path: '/usage',
-  getParentRoute: () => AppAdminRouteRoute,
 } as any)
 const AppSequencesIdRouteRoute = AppSequencesIdRouteRouteImport.update({
   id: '/sequences/$id',
   path: '/sequences/$id',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const ApiV1SequencesIdRoute = ApiV1SequencesIdRouteImport.update({
-  id: '/$id',
-  path: '/$id',
-  getParentRoute: () => ApiV1SequencesRoute,
+const AppSequencesNewRoute = AppSequencesNewRouteImport.update({
+  id: '/sequences/new',
+  path: '/sequences/new',
+  getParentRoute: () => AppRouteRoute,
 } as any)
-const ApiV1ScriptsEnhanceRoute = ApiV1ScriptsEnhanceRouteImport.update({
-  id: '/api/v1/scripts/enhance',
-  path: '/api/v1/scripts/enhance',
+const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppSettingsRouteRoute,
+} as any)
+const AppSettingsApiKeysRoute = AppSettingsApiKeysRouteImport.update({
+  id: '/api-keys',
+  path: '/api-keys',
+  getParentRoute: () => AppSettingsRouteRoute,
+} as any)
+const AppSettingsDeveloperRoute = AppSettingsDeveloperRouteImport.update({
+  id: '/developer',
+  path: '/developer',
+  getParentRoute: () => AppSettingsRouteRoute,
+} as any)
+const AppSettingsPasskeysRoute = AppSettingsPasskeysRouteImport.update({
+  id: '/passkeys',
+  path: '/passkeys',
+  getParentRoute: () => AppSettingsRouteRoute,
+} as any)
+const AppStylesIndexRoute = AppStylesIndexRouteImport.update({
+  id: '/styles/',
+  path: '/styles/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppTalentIndexRoute = AppTalentIndexRouteImport.update({
+  id: '/talent/',
+  path: '/talent/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppTalentIdRoute = AppTalentIdRouteImport.update({
+  id: '/talent/$id',
+  path: '/talent/$id',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppSequencesIdTheatreRoute = AppSequencesIdTheatreRouteImport.update({
-  id: '/theatre',
-  path: '/theatre',
-  getParentRoute: () => AppSequencesIdRouteRoute,
+const ApiBillingWebhookRoute = ApiBillingWebhookRouteImport.update({
+  id: '/api/billing/webhook',
+  path: '/api/billing/webhook',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppSequencesIdScriptRoute = AppSequencesIdScriptRouteImport.update({
-  id: '/script',
-  path: '/script',
-  getParentRoute: () => AppSequencesIdRouteRoute,
+const ApiDevMemoryRoute = ApiDevMemoryRouteImport.update({
+  id: '/api/dev/memory',
+  path: '/api/dev/memory',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppSequencesIdScenesRoute = AppSequencesIdScenesRouteImport.update({
-  id: '/scenes',
-  path: '/scenes',
+const ApiOpenrouterCallbackRoute = ApiOpenrouterCallbackRouteImport.update({
+  id: '/api/openrouter/callback',
+  path: '/api/openrouter/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStorageMultipartRoute = ApiStorageMultipartRouteImport.update({
+  id: '/api/storage/multipart',
+  path: '/api/storage/multipart',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStorageUploadRoute = ApiStorageUploadRouteImport.update({
+  id: '/api/storage/upload',
+  path: '/api/storage/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTestCharacterRoute = ApiTestCharacterRouteImport.update({
+  id: '/character',
+  path: '/character',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestCleanupRoute = ApiTestCleanupRouteImport.update({
+  id: '/cleanup',
+  path: '/cleanup',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestImageRoute = ApiTestImageRouteImport.update({
+  id: '/image',
+  path: '/image',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestLocationRoute = ApiTestLocationRouteImport.update({
+  id: '/location',
+  path: '/location',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestSequenceRoute = ApiTestSequenceRouteImport.update({
+  id: '/sequence',
+  path: '/sequence',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestShotRoute = ApiTestShotRouteImport.update({
+  id: '/shot',
+  path: '/shot',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestStyleRoute = ApiTestStyleRouteImport.update({
+  id: '/style',
+  path: '/style',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestTalentRoute = ApiTestTalentRouteImport.update({
+  id: '/talent',
+  path: '/talent',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestUserRoute = ApiTestUserRouteImport.update({
+  id: '/user',
+  path: '/user',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiTestVerifyRoute = ApiTestVerifyRouteImport.update({
+  id: '/verify',
+  path: '/verify',
+  getParentRoute: () => ApiTestRouteRoute,
+} as any)
+const ApiV1IndexRoute = ApiV1IndexRouteImport.update({
+  id: '/api/v1/',
+  path: '/api/v1/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
+  id: '/api/v1/openapi.json',
+  path: '/api/v1/openapi.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1SequencesRoute = ApiV1SequencesRouteImport.update({
+  id: '/api/v1/sequences',
+  path: '/api/v1/sequences',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppModelsFamilySplatRoute = AppModelsFamilySplatRouteImport.update({
+  id: '/models/family/$',
+  path: '/models/family/$',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppSequencesIdElementsRoute = AppSequencesIdElementsRouteImport.update({
+  id: '/elements',
+  path: '/elements',
   getParentRoute: () => AppSequencesIdRouteRoute,
 } as any)
 const AppSequencesIdMusicRoute = AppSequencesIdMusicRouteImport.update({
@@ -417,44 +402,59 @@ const AppSequencesIdMusicRoute = AppSequencesIdMusicRouteImport.update({
   path: '/music',
   getParentRoute: () => AppSequencesIdRouteRoute,
 } as any)
-const AppSequencesIdElementsRoute = AppSequencesIdElementsRouteImport.update({
-  id: '/elements',
-  path: '/elements',
+const AppSequencesIdScenesRoute = AppSequencesIdScenesRouteImport.update({
+  id: '/scenes',
+  path: '/scenes',
   getParentRoute: () => AppSequencesIdRouteRoute,
 } as any)
-const AppModelsFamilySplatRoute = AppModelsFamilySplatRouteImport.update({
-  id: '/models/family/$',
-  path: '/models/family/$',
-  getParentRoute: () => AppRouteRoute,
+const AppSequencesIdScriptRoute = AppSequencesIdScriptRouteImport.update({
+  id: '/script',
+  path: '/script',
+  getParentRoute: () => AppSequencesIdRouteRoute,
 } as any)
-const AppSequencesIdLocationsIndexRoute =
-  AppSequencesIdLocationsIndexRouteImport.update({
-    id: '/locations/',
-    path: '/locations/',
-    getParentRoute: () => AppSequencesIdRouteRoute,
-  } as any)
+const AppSequencesIdTheatreRoute = AppSequencesIdTheatreRouteImport.update({
+  id: '/theatre',
+  path: '/theatre',
+  getParentRoute: () => AppSequencesIdRouteRoute,
+} as any)
+const ApiV1ScriptsEnhanceRoute = ApiV1ScriptsEnhanceRouteImport.update({
+  id: '/api/v1/scripts/enhance',
+  path: '/api/v1/scripts/enhance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1SequencesIdRoute = ApiV1SequencesIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiV1SequencesRoute,
+} as any)
 const AppSequencesIdCastIndexRoute = AppSequencesIdCastIndexRouteImport.update({
   id: '/cast/',
   path: '/cast/',
   getParentRoute: () => AppSequencesIdRouteRoute,
 } as any)
-const ApiV1SequencesIdExportsRoute = ApiV1SequencesIdExportsRouteImport.update({
-  id: '/exports',
-  path: '/exports',
-  getParentRoute: () => ApiV1SequencesIdRoute,
-} as any)
-const AppSequencesIdLocationsLocationIdRoute =
-  AppSequencesIdLocationsLocationIdRouteImport.update({
-    id: '/locations/$locationId',
-    path: '/locations/$locationId',
-    getParentRoute: () => AppSequencesIdRouteRoute,
-  } as any)
 const AppSequencesIdCastCharacterIdRoute =
   AppSequencesIdCastCharacterIdRouteImport.update({
     id: '/cast/$characterId',
     path: '/cast/$characterId',
     getParentRoute: () => AppSequencesIdRouteRoute,
   } as any)
+const AppSequencesIdLocationsIndexRoute =
+  AppSequencesIdLocationsIndexRouteImport.update({
+    id: '/locations/',
+    path: '/locations/',
+    getParentRoute: () => AppSequencesIdRouteRoute,
+  } as any)
+const AppSequencesIdLocationsLocationIdRoute =
+  AppSequencesIdLocationsLocationIdRouteImport.update({
+    id: '/locations/$locationId',
+    path: '/locations/$locationId',
+    getParentRoute: () => AppSequencesIdRouteRoute,
+  } as any)
+const ApiV1SequencesIdExportsRoute = ApiV1SequencesIdExportsRouteImport.update({
+  id: '/exports',
+  path: '/exports',
+  getParentRoute: () => ApiV1SequencesIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -932,32 +932,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/sitemap.xml': {
-      id: '/sitemap.xml'
-      path: '/sitemap.xml'
-      fullPath: '/sitemap.xml'
-      preLoaderRoute: typeof SitemapDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/robots.txt': {
-      id: '/robots.txt'
-      path: '/robots.txt'
-      fullPath: '/robots.txt'
-      preLoaderRoute: typeof RobotsDottxtRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/llms.txt': {
-      id: '/llms.txt'
-      path: '/llms.txt'
-      fullPath: '/llms.txt'
-      preLoaderRoute: typeof LlmsDottxtRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/docs': {
-      id: '/docs'
-      path: '/docs'
-      fullPath: '/docs'
-      preLoaderRoute: typeof DocsRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
@@ -967,144 +946,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app': {
-      id: '/_app'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AppRouteRouteImport
+    '/docs': {
+      id: '/docs'
+      path: '/docs'
+      fullPath: '/docs'
+      preLoaderRoute: typeof DocsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/docs/': {
-      id: '/docs/'
-      path: '/'
-      fullPath: '/docs/'
-      preLoaderRoute: typeof DocsIndexRouteImport
-      parentRoute: typeof DocsRoute
+    '/llms.txt': {
+      id: '/llms.txt'
+      path: '/llms.txt'
+      fullPath: '/llms.txt'
+      preLoaderRoute: typeof LlmsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/robots.txt': {
+      id: '/robots.txt'
+      path: '/robots.txt'
+      fullPath: '/robots.txt'
+      preLoaderRoute: typeof RobotsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_app/': {
       id: '/_app/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/r2/$': {
-      id: '/r2/$'
-      path: '/r2/$'
-      fullPath: '/r2/$'
-      preLoaderRoute: typeof R2SplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/meta/og-linkedin': {
-      id: '/meta/og-linkedin'
-      path: '/meta/og-linkedin'
-      fullPath: '/meta/og-linkedin'
-      preLoaderRoute: typeof MetaOgLinkedinRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/meta/og-github': {
-      id: '/meta/og-github'
-      path: '/meta/og-github'
-      fullPath: '/meta/og-github'
-      preLoaderRoute: typeof MetaOgGithubRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/meta/og': {
-      id: '/meta/og'
-      path: '/meta/og'
-      fullPath: '/meta/og'
-      preLoaderRoute: typeof MetaOgRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/gift/$code': {
-      id: '/gift/$code'
-      path: '/gift/$code'
-      fullPath: '/gift/$code'
-      preLoaderRoute: typeof GiftCodeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/docs/llms.md': {
-      id: '/docs/llms.md'
-      path: '/llms.md'
-      fullPath: '/docs/llms.md'
-      preLoaderRoute: typeof DocsLlmsDotmdRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/docs/faq': {
-      id: '/docs/faq'
-      path: '/faq'
-      fullPath: '/docs/faq'
-      preLoaderRoute: typeof DocsFaqRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/docs/$': {
-      id: '/docs/$'
-      path: '/$'
-      fullPath: '/docs/$'
-      preLoaderRoute: typeof DocsSplatRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/api/realtime': {
-      id: '/api/realtime'
-      path: '/api/realtime'
-      fullPath: '/api/realtime'
-      preLoaderRoute: typeof ApiRealtimeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_auth/verify': {
-      id: '/_auth/verify'
-      path: '/verify'
-      fullPath: '/verify'
-      preLoaderRoute: typeof AuthVerifyRouteImport
-      parentRoute: typeof AuthRouteRoute
-    }
-    '/_auth/login': {
-      id: '/_auth/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof AuthLoginRouteImport
-      parentRoute: typeof AuthRouteRoute
-    }
-    '/_app/terms': {
-      id: '/_app/terms'
-      path: '/terms'
-      fullPath: '/terms'
-      preLoaderRoute: typeof AppTermsRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/privacy': {
-      id: '/_app/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof AppPrivacyRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/pricing': {
-      id: '/_app/pricing'
-      path: '/pricing'
-      fullPath: '/pricing'
-      preLoaderRoute: typeof AppPricingRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/credits': {
-      id: '/_app/credits'
-      path: '/credits'
-      fullPath: '/credits'
-      preLoaderRoute: typeof AppCreditsRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/api/test': {
-      id: '/api/test'
-      path: '/api/test'
-      fullPath: '/api/test'
-      preLoaderRoute: typeof ApiTestRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_app/settings': {
-      id: '/_app/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AppSettingsRouteRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/_app/admin': {
@@ -1114,46 +988,144 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminRouteRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/api/v1/': {
-      id: '/api/v1/'
-      path: '/api/v1'
-      fullPath: '/api/v1/'
-      preLoaderRoute: typeof ApiV1IndexRouteImport
+    '/_app/credits': {
+      id: '/_app/credits'
+      path: '/credits'
+      fullPath: '/credits'
+      preLoaderRoute: typeof AppCreditsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/pricing': {
+      id: '/_app/pricing'
+      path: '/pricing'
+      fullPath: '/pricing'
+      preLoaderRoute: typeof AppPricingRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/privacy': {
+      id: '/_app/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof AppPrivacyRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/terms': {
+      id: '/_app/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof AppTermsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_auth/login': {
+      id: '/_auth/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof AuthLoginRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/verify': {
+      id: '/_auth/verify'
+      path: '/verify'
+      fullPath: '/verify'
+      preLoaderRoute: typeof AuthVerifyRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/api/realtime': {
+      id: '/api/realtime'
+      path: '/api/realtime'
+      fullPath: '/api/realtime'
+      preLoaderRoute: typeof ApiRealtimeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/talent/': {
-      id: '/_app/talent/'
-      path: '/talent'
-      fullPath: '/talent/'
-      preLoaderRoute: typeof AppTalentIndexRouteImport
-      parentRoute: typeof AppRouteRoute
+    '/api/test': {
+      id: '/api/test'
+      path: '/api/test'
+      fullPath: '/api/test'
+      preLoaderRoute: typeof ApiTestRouteRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/styles/': {
-      id: '/_app/styles/'
-      path: '/styles'
-      fullPath: '/styles/'
-      preLoaderRoute: typeof AppStylesIndexRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/settings/': {
-      id: '/_app/settings/'
+    '/docs/': {
+      id: '/docs/'
       path: '/'
-      fullPath: '/settings/'
-      preLoaderRoute: typeof AppSettingsIndexRouteImport
-      parentRoute: typeof AppSettingsRouteRoute
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof DocsRoute
     }
-    '/_app/sequences/': {
-      id: '/_app/sequences/'
-      path: '/sequences'
-      fullPath: '/sequences/'
-      preLoaderRoute: typeof AppSequencesIndexRouteImport
-      parentRoute: typeof AppRouteRoute
+    '/docs/$': {
+      id: '/docs/$'
+      path: '/$'
+      fullPath: '/docs/$'
+      preLoaderRoute: typeof DocsSplatRouteImport
+      parentRoute: typeof DocsRoute
     }
-    '/_app/models/': {
-      id: '/_app/models/'
-      path: '/models'
-      fullPath: '/models/'
-      preLoaderRoute: typeof AppModelsIndexRouteImport
+    '/docs/faq': {
+      id: '/docs/faq'
+      path: '/faq'
+      fullPath: '/docs/faq'
+      preLoaderRoute: typeof DocsFaqRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/llms.md': {
+      id: '/docs/llms.md'
+      path: '/llms.md'
+      fullPath: '/docs/llms.md'
+      preLoaderRoute: typeof DocsLlmsDotmdRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/gift/$code': {
+      id: '/gift/$code'
+      path: '/gift/$code'
+      fullPath: '/gift/$code'
+      preLoaderRoute: typeof GiftCodeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/meta/og': {
+      id: '/meta/og'
+      path: '/meta/og'
+      fullPath: '/meta/og'
+      preLoaderRoute: typeof MetaOgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/meta/og-github': {
+      id: '/meta/og-github'
+      path: '/meta/og-github'
+      fullPath: '/meta/og-github'
+      preLoaderRoute: typeof MetaOgGithubRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/meta/og-linkedin': {
+      id: '/meta/og-linkedin'
+      path: '/meta/og-linkedin'
+      fullPath: '/meta/og-linkedin'
+      preLoaderRoute: typeof MetaOgLinkedinRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/r2/$': {
+      id: '/r2/$'
+      path: '/r2/$'
+      fullPath: '/r2/$'
+      preLoaderRoute: typeof R2SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/admin/usage': {
+      id: '/_app/admin/usage'
+      path: '/usage'
+      fullPath: '/admin/usage'
+      preLoaderRoute: typeof AppAdminUsageRouteImport
+      parentRoute: typeof AppAdminRouteRoute
+    }
+    '/_app/gallery/': {
+      id: '/_app/gallery/'
+      path: '/gallery'
+      fullPath: '/gallery/'
+      preLoaderRoute: typeof AppGalleryIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/_app/locations/': {
@@ -1163,172 +1135,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppLocationsIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/_app/gallery/': {
-      id: '/_app/gallery/'
-      path: '/gallery'
-      fullPath: '/gallery/'
-      preLoaderRoute: typeof AppGalleryIndexRouteImport
+    '/_app/locations/$locationId': {
+      id: '/_app/locations/$locationId'
+      path: '/locations/$locationId'
+      fullPath: '/locations/$locationId'
+      preLoaderRoute: typeof AppLocationsLocationIdRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/api/v1/sequences': {
-      id: '/api/v1/sequences'
-      path: '/api/v1/sequences'
-      fullPath: '/api/v1/sequences'
-      preLoaderRoute: typeof ApiV1SequencesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/v1/openapi.json': {
-      id: '/api/v1/openapi.json'
-      path: '/api/v1/openapi.json'
-      fullPath: '/api/v1/openapi.json'
-      preLoaderRoute: typeof ApiV1OpenapiDotjsonRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/test/verify': {
-      id: '/api/test/verify'
-      path: '/verify'
-      fullPath: '/api/test/verify'
-      preLoaderRoute: typeof ApiTestVerifyRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/user': {
-      id: '/api/test/user'
-      path: '/user'
-      fullPath: '/api/test/user'
-      preLoaderRoute: typeof ApiTestUserRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/talent': {
-      id: '/api/test/talent'
-      path: '/talent'
-      fullPath: '/api/test/talent'
-      preLoaderRoute: typeof ApiTestTalentRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/style': {
-      id: '/api/test/style'
-      path: '/style'
-      fullPath: '/api/test/style'
-      preLoaderRoute: typeof ApiTestStyleRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/shot': {
-      id: '/api/test/shot'
-      path: '/shot'
-      fullPath: '/api/test/shot'
-      preLoaderRoute: typeof ApiTestShotRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/sequence': {
-      id: '/api/test/sequence'
-      path: '/sequence'
-      fullPath: '/api/test/sequence'
-      preLoaderRoute: typeof ApiTestSequenceRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/location': {
-      id: '/api/test/location'
-      path: '/location'
-      fullPath: '/api/test/location'
-      preLoaderRoute: typeof ApiTestLocationRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/image': {
-      id: '/api/test/image'
-      path: '/image'
-      fullPath: '/api/test/image'
-      preLoaderRoute: typeof ApiTestImageRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/cleanup': {
-      id: '/api/test/cleanup'
-      path: '/cleanup'
-      fullPath: '/api/test/cleanup'
-      preLoaderRoute: typeof ApiTestCleanupRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/test/character': {
-      id: '/api/test/character'
-      path: '/character'
-      fullPath: '/api/test/character'
-      preLoaderRoute: typeof ApiTestCharacterRouteImport
-      parentRoute: typeof ApiTestRouteRoute
-    }
-    '/api/storage/upload': {
-      id: '/api/storage/upload'
-      path: '/api/storage/upload'
-      fullPath: '/api/storage/upload'
-      preLoaderRoute: typeof ApiStorageUploadRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/storage/multipart': {
-      id: '/api/storage/multipart'
-      path: '/api/storage/multipart'
-      fullPath: '/api/storage/multipart'
-      preLoaderRoute: typeof ApiStorageMultipartRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/openrouter/callback': {
-      id: '/api/openrouter/callback'
-      path: '/api/openrouter/callback'
-      fullPath: '/api/openrouter/callback'
-      preLoaderRoute: typeof ApiOpenrouterCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/dev/memory': {
-      id: '/api/dev/memory'
-      path: '/api/dev/memory'
-      fullPath: '/api/dev/memory'
-      preLoaderRoute: typeof ApiDevMemoryRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/billing/webhook': {
-      id: '/api/billing/webhook'
-      path: '/api/billing/webhook'
-      fullPath: '/api/billing/webhook'
-      preLoaderRoute: typeof ApiBillingWebhookRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/auth/$': {
-      id: '/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/api/auth/$'
-      preLoaderRoute: typeof ApiAuthSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_app/talent/$id': {
-      id: '/_app/talent/$id'
-      path: '/talent/$id'
-      fullPath: '/talent/$id'
-      preLoaderRoute: typeof AppTalentIdRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/settings/passkeys': {
-      id: '/_app/settings/passkeys'
-      path: '/passkeys'
-      fullPath: '/settings/passkeys'
-      preLoaderRoute: typeof AppSettingsPasskeysRouteImport
-      parentRoute: typeof AppSettingsRouteRoute
-    }
-    '/_app/settings/developer': {
-      id: '/_app/settings/developer'
-      path: '/developer'
-      fullPath: '/settings/developer'
-      preLoaderRoute: typeof AppSettingsDeveloperRouteImport
-      parentRoute: typeof AppSettingsRouteRoute
-    }
-    '/_app/settings/api-keys': {
-      id: '/_app/settings/api-keys'
-      path: '/api-keys'
-      fullPath: '/settings/api-keys'
-      preLoaderRoute: typeof AppSettingsApiKeysRouteImport
-      parentRoute: typeof AppSettingsRouteRoute
-    }
-    '/_app/sequences/new': {
-      id: '/_app/sequences/new'
-      path: '/sequences/new'
-      fullPath: '/sequences/new'
-      preLoaderRoute: typeof AppSequencesNewRouteImport
+    '/_app/models/': {
+      id: '/_app/models/'
+      path: '/models'
+      fullPath: '/models/'
+      preLoaderRoute: typeof AppModelsIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/_app/models/$': {
@@ -1338,19 +1156,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppModelsSplatRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/_app/locations/$locationId': {
-      id: '/_app/locations/$locationId'
-      path: '/locations/$locationId'
-      fullPath: '/locations/$locationId'
-      preLoaderRoute: typeof AppLocationsLocationIdRouteImport
+    '/_app/sequences/': {
+      id: '/_app/sequences/'
+      path: '/sequences'
+      fullPath: '/sequences/'
+      preLoaderRoute: typeof AppSequencesIndexRouteImport
       parentRoute: typeof AppRouteRoute
-    }
-    '/_app/admin/usage': {
-      id: '/_app/admin/usage'
-      path: '/usage'
-      fullPath: '/admin/usage'
-      preLoaderRoute: typeof AppAdminUsageRouteImport
-      parentRoute: typeof AppAdminRouteRoute
     }
     '/_app/sequences/$id': {
       id: '/_app/sequences/$id'
@@ -1359,39 +1170,207 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSequencesIdRouteRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/api/v1/sequences/$id': {
-      id: '/api/v1/sequences/$id'
-      path: '/$id'
-      fullPath: '/api/v1/sequences/$id'
-      preLoaderRoute: typeof ApiV1SequencesIdRouteImport
-      parentRoute: typeof ApiV1SequencesRoute
+    '/_app/sequences/new': {
+      id: '/_app/sequences/new'
+      path: '/sequences/new'
+      fullPath: '/sequences/new'
+      preLoaderRoute: typeof AppSequencesNewRouteImport
+      parentRoute: typeof AppRouteRoute
     }
-    '/api/v1/scripts/enhance': {
-      id: '/api/v1/scripts/enhance'
-      path: '/api/v1/scripts/enhance'
-      fullPath: '/api/v1/scripts/enhance'
-      preLoaderRoute: typeof ApiV1ScriptsEnhanceRouteImport
+    '/_app/settings/': {
+      id: '/_app/settings/'
+      path: '/'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof AppSettingsIndexRouteImport
+      parentRoute: typeof AppSettingsRouteRoute
+    }
+    '/_app/settings/api-keys': {
+      id: '/_app/settings/api-keys'
+      path: '/api-keys'
+      fullPath: '/settings/api-keys'
+      preLoaderRoute: typeof AppSettingsApiKeysRouteImport
+      parentRoute: typeof AppSettingsRouteRoute
+    }
+    '/_app/settings/developer': {
+      id: '/_app/settings/developer'
+      path: '/developer'
+      fullPath: '/settings/developer'
+      preLoaderRoute: typeof AppSettingsDeveloperRouteImport
+      parentRoute: typeof AppSettingsRouteRoute
+    }
+    '/_app/settings/passkeys': {
+      id: '/_app/settings/passkeys'
+      path: '/passkeys'
+      fullPath: '/settings/passkeys'
+      preLoaderRoute: typeof AppSettingsPasskeysRouteImport
+      parentRoute: typeof AppSettingsRouteRoute
+    }
+    '/_app/styles/': {
+      id: '/_app/styles/'
+      path: '/styles'
+      fullPath: '/styles/'
+      preLoaderRoute: typeof AppStylesIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/talent/': {
+      id: '/_app/talent/'
+      path: '/talent'
+      fullPath: '/talent/'
+      preLoaderRoute: typeof AppTalentIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/talent/$id': {
+      id: '/_app/talent/$id'
+      path: '/talent/$id'
+      fullPath: '/talent/$id'
+      preLoaderRoute: typeof AppTalentIdRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/sequences/$id/theatre': {
-      id: '/_app/sequences/$id/theatre'
-      path: '/theatre'
-      fullPath: '/sequences/$id/theatre'
-      preLoaderRoute: typeof AppSequencesIdTheatreRouteImport
-      parentRoute: typeof AppSequencesIdRouteRoute
+    '/api/billing/webhook': {
+      id: '/api/billing/webhook'
+      path: '/api/billing/webhook'
+      fullPath: '/api/billing/webhook'
+      preLoaderRoute: typeof ApiBillingWebhookRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/sequences/$id/script': {
-      id: '/_app/sequences/$id/script'
-      path: '/script'
-      fullPath: '/sequences/$id/script'
-      preLoaderRoute: typeof AppSequencesIdScriptRouteImport
-      parentRoute: typeof AppSequencesIdRouteRoute
+    '/api/dev/memory': {
+      id: '/api/dev/memory'
+      path: '/api/dev/memory'
+      fullPath: '/api/dev/memory'
+      preLoaderRoute: typeof ApiDevMemoryRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_app/sequences/$id/scenes': {
-      id: '/_app/sequences/$id/scenes'
-      path: '/scenes'
-      fullPath: '/sequences/$id/scenes'
-      preLoaderRoute: typeof AppSequencesIdScenesRouteImport
+    '/api/openrouter/callback': {
+      id: '/api/openrouter/callback'
+      path: '/api/openrouter/callback'
+      fullPath: '/api/openrouter/callback'
+      preLoaderRoute: typeof ApiOpenrouterCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/storage/multipart': {
+      id: '/api/storage/multipart'
+      path: '/api/storage/multipart'
+      fullPath: '/api/storage/multipart'
+      preLoaderRoute: typeof ApiStorageMultipartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/storage/upload': {
+      id: '/api/storage/upload'
+      path: '/api/storage/upload'
+      fullPath: '/api/storage/upload'
+      preLoaderRoute: typeof ApiStorageUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/test/character': {
+      id: '/api/test/character'
+      path: '/character'
+      fullPath: '/api/test/character'
+      preLoaderRoute: typeof ApiTestCharacterRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/cleanup': {
+      id: '/api/test/cleanup'
+      path: '/cleanup'
+      fullPath: '/api/test/cleanup'
+      preLoaderRoute: typeof ApiTestCleanupRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/image': {
+      id: '/api/test/image'
+      path: '/image'
+      fullPath: '/api/test/image'
+      preLoaderRoute: typeof ApiTestImageRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/location': {
+      id: '/api/test/location'
+      path: '/location'
+      fullPath: '/api/test/location'
+      preLoaderRoute: typeof ApiTestLocationRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/sequence': {
+      id: '/api/test/sequence'
+      path: '/sequence'
+      fullPath: '/api/test/sequence'
+      preLoaderRoute: typeof ApiTestSequenceRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/shot': {
+      id: '/api/test/shot'
+      path: '/shot'
+      fullPath: '/api/test/shot'
+      preLoaderRoute: typeof ApiTestShotRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/style': {
+      id: '/api/test/style'
+      path: '/style'
+      fullPath: '/api/test/style'
+      preLoaderRoute: typeof ApiTestStyleRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/talent': {
+      id: '/api/test/talent'
+      path: '/talent'
+      fullPath: '/api/test/talent'
+      preLoaderRoute: typeof ApiTestTalentRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/user': {
+      id: '/api/test/user'
+      path: '/user'
+      fullPath: '/api/test/user'
+      preLoaderRoute: typeof ApiTestUserRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/test/verify': {
+      id: '/api/test/verify'
+      path: '/verify'
+      fullPath: '/api/test/verify'
+      preLoaderRoute: typeof ApiTestVerifyRouteImport
+      parentRoute: typeof ApiTestRouteRoute
+    }
+    '/api/v1/': {
+      id: '/api/v1/'
+      path: '/api/v1'
+      fullPath: '/api/v1/'
+      preLoaderRoute: typeof ApiV1IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/openapi.json': {
+      id: '/api/v1/openapi.json'
+      path: '/api/v1/openapi.json'
+      fullPath: '/api/v1/openapi.json'
+      preLoaderRoute: typeof ApiV1OpenapiDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/sequences': {
+      id: '/api/v1/sequences'
+      path: '/api/v1/sequences'
+      fullPath: '/api/v1/sequences'
+      preLoaderRoute: typeof ApiV1SequencesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/models/family/$': {
+      id: '/_app/models/family/$'
+      path: '/models/family/$'
+      fullPath: '/models/family/$'
+      preLoaderRoute: typeof AppModelsFamilySplatRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/sequences/$id/elements': {
+      id: '/_app/sequences/$id/elements'
+      path: '/elements'
+      fullPath: '/sequences/$id/elements'
+      preLoaderRoute: typeof AppSequencesIdElementsRouteImport
       parentRoute: typeof AppSequencesIdRouteRoute
     }
     '/_app/sequences/$id/music': {
@@ -1401,26 +1380,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSequencesIdMusicRouteImport
       parentRoute: typeof AppSequencesIdRouteRoute
     }
-    '/_app/sequences/$id/elements': {
-      id: '/_app/sequences/$id/elements'
-      path: '/elements'
-      fullPath: '/sequences/$id/elements'
-      preLoaderRoute: typeof AppSequencesIdElementsRouteImport
+    '/_app/sequences/$id/scenes': {
+      id: '/_app/sequences/$id/scenes'
+      path: '/scenes'
+      fullPath: '/sequences/$id/scenes'
+      preLoaderRoute: typeof AppSequencesIdScenesRouteImport
       parentRoute: typeof AppSequencesIdRouteRoute
     }
-    '/_app/models/family/$': {
-      id: '/_app/models/family/$'
-      path: '/models/family/$'
-      fullPath: '/models/family/$'
-      preLoaderRoute: typeof AppModelsFamilySplatRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/_app/sequences/$id/locations/': {
-      id: '/_app/sequences/$id/locations/'
-      path: '/locations'
-      fullPath: '/sequences/$id/locations/'
-      preLoaderRoute: typeof AppSequencesIdLocationsIndexRouteImport
+    '/_app/sequences/$id/script': {
+      id: '/_app/sequences/$id/script'
+      path: '/script'
+      fullPath: '/sequences/$id/script'
+      preLoaderRoute: typeof AppSequencesIdScriptRouteImport
       parentRoute: typeof AppSequencesIdRouteRoute
+    }
+    '/_app/sequences/$id/theatre': {
+      id: '/_app/sequences/$id/theatre'
+      path: '/theatre'
+      fullPath: '/sequences/$id/theatre'
+      preLoaderRoute: typeof AppSequencesIdTheatreRouteImport
+      parentRoute: typeof AppSequencesIdRouteRoute
+    }
+    '/api/v1/scripts/enhance': {
+      id: '/api/v1/scripts/enhance'
+      path: '/api/v1/scripts/enhance'
+      fullPath: '/api/v1/scripts/enhance'
+      preLoaderRoute: typeof ApiV1ScriptsEnhanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/sequences/$id': {
+      id: '/api/v1/sequences/$id'
+      path: '/$id'
+      fullPath: '/api/v1/sequences/$id'
+      preLoaderRoute: typeof ApiV1SequencesIdRouteImport
+      parentRoute: typeof ApiV1SequencesRoute
     }
     '/_app/sequences/$id/cast/': {
       id: '/_app/sequences/$id/cast/'
@@ -1429,12 +1422,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSequencesIdCastIndexRouteImport
       parentRoute: typeof AppSequencesIdRouteRoute
     }
-    '/api/v1/sequences/$id/exports': {
-      id: '/api/v1/sequences/$id/exports'
-      path: '/exports'
-      fullPath: '/api/v1/sequences/$id/exports'
-      preLoaderRoute: typeof ApiV1SequencesIdExportsRouteImport
-      parentRoute: typeof ApiV1SequencesIdRoute
+    '/_app/sequences/$id/cast/$characterId': {
+      id: '/_app/sequences/$id/cast/$characterId'
+      path: '/cast/$characterId'
+      fullPath: '/sequences/$id/cast/$characterId'
+      preLoaderRoute: typeof AppSequencesIdCastCharacterIdRouteImport
+      parentRoute: typeof AppSequencesIdRouteRoute
+    }
+    '/_app/sequences/$id/locations/': {
+      id: '/_app/sequences/$id/locations/'
+      path: '/locations'
+      fullPath: '/sequences/$id/locations/'
+      preLoaderRoute: typeof AppSequencesIdLocationsIndexRouteImport
+      parentRoute: typeof AppSequencesIdRouteRoute
     }
     '/_app/sequences/$id/locations/$locationId': {
       id: '/_app/sequences/$id/locations/$locationId'
@@ -1443,12 +1443,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSequencesIdLocationsLocationIdRouteImport
       parentRoute: typeof AppSequencesIdRouteRoute
     }
-    '/_app/sequences/$id/cast/$characterId': {
-      id: '/_app/sequences/$id/cast/$characterId'
-      path: '/cast/$characterId'
-      fullPath: '/sequences/$id/cast/$characterId'
-      preLoaderRoute: typeof AppSequencesIdCastCharacterIdRouteImport
-      parentRoute: typeof AppSequencesIdRouteRoute
+    '/api/v1/sequences/$id/exports': {
+      id: '/api/v1/sequences/$id/exports'
+      path: '/exports'
+      fullPath: '/api/v1/sequences/$id/exports'
+      preLoaderRoute: typeof ApiV1SequencesIdExportsRouteImport
+      parentRoute: typeof ApiV1SequencesIdRoute
     }
   }
 }

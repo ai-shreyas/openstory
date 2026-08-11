@@ -39,6 +39,7 @@ export const CanvasViewToggle: React.FC<CanvasViewToggleProps> = ({
       }}
       variant="outline"
       size="sm"
+      spacing={0}
     >
       <ToggleGroupItem
         value="canvas"

@@ -1021,7 +1021,7 @@ export const ScriptView: FC<{
           </div>
         </CardHeader>
 
-        <CardContent className="min-h-0 @container flex flex-col gap-4 py-6 overflow-hidden">
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 py-6 overflow-hidden">
           {/* Thinking bar shows during the reasoning pass — i.e. while
               enhancing but before any enhanced text has streamed back. */}
           <ThinkingBar
@@ -1127,6 +1127,7 @@ export const ScriptView: FC<{
                           }}
                           variant="outline"
                           size="sm"
+                          spacing={0}
                         >
                           {DURATION_PRESETS.map((preset) => (
                             <ToggleGroupItem
@@ -1300,6 +1301,7 @@ export const ScriptView: FC<{
               }}
               variant="outline"
               size="sm"
+              spacing={0}
             >
               {DURATION_PRESETS.map((preset) => (
                 <ToggleGroupItem key={preset.value} value={preset.value}>

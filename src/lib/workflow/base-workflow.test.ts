@@ -74,7 +74,7 @@ function makeEvent(withParent: boolean): Readonly<WorkflowEvent<TestPayload>> {
     },
     instanceId: 'child_run_A',
     timestamp: new Date(0),
-  } as unknown as Readonly<WorkflowEvent<TestPayload>>;
+  };
 }
 
 function makeStep(): WorkflowStep {

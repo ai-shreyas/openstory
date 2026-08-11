@@ -318,7 +318,7 @@ function buildVideoTasks(imageUrl: string): Task[] {
         endpointId: config.id,
         variation: label,
         tier,
-        input: input as Record<string, unknown>,
+        input: input,
         estimatedCostUsd: estimateUsd(
           estimateFalCost(
             config.id,
