@@ -97,7 +97,17 @@ async function pollToTerminal(
 const DEFAULT_IMAGE_MODEL = 'flux_2_turbo';
 const DEFAULT_STYLE = 'Product Ad';
 const DEFAULT_SEQUENCES = 20;
-const DEFAULT_TARGET_SECONDS = 30;
+/**
+ * Long enough that the scene-splitter keeps ~15 scenes rather than merging
+ * beats. This is the whole experiment: at or below 4 scenes the wave cap
+ * never binds and both arms execute identically, so a short sequence would
+ * return "no difference" for a purely mechanical reason. ~15 scenes gives
+ * arm A four sequential waves against arm B's single burst.
+ *
+ * Calibrated on the preview: 150s yielded 24 shots, 90s lands near 15 — enough
+ * to bind the cap while keeping 20 sequences per arm inside budget.
+ */
+const DEFAULT_TARGET_SECONDS = 90;
 
 /** Rough per-image price for the estimate only — fal's bill is the truth. */
 const TURBO_USD_PER_IMAGE = 0.008;
@@ -110,15 +120,25 @@ const TURBO_USD_PER_IMAGE = 0.008;
  * hang triggers and would be missed by an images-only-looking test.
  */
 const SCRIPT = `A courier named Mira steps off a night bus onto a rain-slick street.
-She checks a paper address under a flickering awning.
-Inside a narrow lock-up garage, a mechanic named Ovie is closing for the night.
-Mira hands him a sealed package. He does not take it.
-Ovie wipes his hands and finally sets the package on the bench.
-He cuts the seal. Light spills from inside the box.
-Mira steps back toward the garage door, watching him.
+The bus pulls away, its tail lights smearing in the puddles.
+Mira checks a paper address under a flickering awning.
+She folds the paper into her jacket and starts walking.
+A row of shuttered shopfronts passes on her left.
+She stops at a narrow lock-up garage with its roller door half open.
+Inside the garage, a mechanic named Ovie is wiping down a workbench.
+An engine block sits under a caged work light.
+Ovie notices Mira standing at the threshold and straightens up.
+Mira holds out a sealed package. Ovie does not take it.
+He looks past her at the empty street.
+Ovie finally sets the package on the bench between them.
+He cuts the seal with a box knife.
+Light spills from inside the box across his face.
+Mira steps back toward the roller door, watching him.
 Ovie looks up at her for the first time.
-Outside, the rain stops. The street is silent.
-Mira walks back toward the bus stop alone.`;
+He closes the box and pushes it toward her.
+Mira leaves it on the bench and ducks under the door.
+Outside, the rain has stopped and the street is silent.
+Mira walks back toward the empty bus stop alone.`;
 
 type Args = {
   baseUrl: string;
@@ -183,7 +203,13 @@ async function runOne(
     const created = await createSampleSequence(config, {
       script: SCRIPT,
       title: `loadtest-${args.arm}-${index}`,
-      enhance: 'off',
+      // `enhance: 'off'` scene-splits verbatim and semantically condensed this
+      // 20-beat script to 3 shots — below the cap, where both arms behave
+      // identically. targetSeconds only applies when enhancement runs, so
+      // 'always' is the only lever that reaches ~15 shots. Cost: each sequence
+      // gets a slightly different enhanced script, so shot counts vary; the
+      // summary reports totals per arm so workload can be compared.
+      enhance: 'always',
       targetSeconds: args.targetSeconds,
       styleName: args.style,
       aspectRatio: '16:9',
@@ -234,8 +260,8 @@ async function main(): Promise<void> {
   console.log(`image model    ${args.imageModel}`);
   console.log(`style          ${args.style}`);
   console.log(`motion/music   off`);
-  // ~10 scenes → 10 stills + 10 variant grids + ~4 sheets.
-  const estImages = args.sequences * 24;
+  // ~15 scenes → 15 stills + 15 variant grids + ~4 character/location sheets.
+  const estImages = args.sequences * 34;
   console.log(
     `est. cost      ~$${(estImages * TURBO_USD_PER_IMAGE).toFixed(2)} (~${estImages} images @ $${TURBO_USD_PER_IMAGE})`
   );
