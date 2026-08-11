@@ -28,6 +28,22 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'ai', 'llm-client']);
 
+function isTokenUsage(value: unknown): value is TokenUsage {
+  if (!value || typeof value !== 'object') return false;
+  if (
+    !('promptTokens' in value) ||
+    !('completionTokens' in value) ||
+    !('totalTokens' in value)
+  ) {
+    return false;
+  }
+  return (
+    typeof value.promptTokens === 'number' &&
+    typeof value.completionTokens === 'number' &&
+    typeof value.totalTokens === 'number'
+  );
+}
+
 function usageHasCost(usage: TokenUsage | undefined): usage is TokenUsage & {
   cost: number;
 } {
@@ -89,13 +105,8 @@ export function createUsageCapture(): {
     noteFromStreamEvent: (event) => {
       if (!event || typeof event !== 'object') return;
       if (!('type' in event) || event.type !== 'RUN_FINISHED') return;
-      if (
-        !('usage' in event) ||
-        !event.usage ||
-        typeof event.usage !== 'object'
-      )
-        return;
-      note(event.usage as TokenUsage);
+      if (!('usage' in event) || !isTokenUsage(event.usage)) return;
+      note(event.usage);
     },
   };
 }
