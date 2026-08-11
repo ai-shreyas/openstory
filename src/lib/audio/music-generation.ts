@@ -1,5 +1,6 @@
 import { getEnv } from '#env';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
+import { FAL_GENERATION_TIMEOUT_MS } from '@/lib/ai/fal-deadline-fetch';
 import {
   AUDIO_MODELS,
   DEFAULT_MUSIC_MODEL,
@@ -211,11 +212,14 @@ async function callFalAudio(
     : { key: getEnv().FAL_KEY, source: 'platform' as const };
 
   const adapter = falAudio(modelConfig.id, { apiKey: falApiKeyInfo.key });
+  // Bound so a hung fal.subscribe fails the workflow step and CF can retry
+  // (#826). Native activity `timeout` since @tanstack/ai@0.44 / ai-fal@0.10.
   const result = await generateAudio({
     adapter,
     prompt: shape.prompt,
     duration: shape.duration,
     modelOptions: shape.modelOptions,
+    timeout: FAL_GENERATION_TIMEOUT_MS,
     debug: false,
   });
 

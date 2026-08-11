@@ -8,6 +8,7 @@ import {
 } from '@/lib/image/build-image-request';
 
 import { getEnv } from '#env';
+import { FAL_GENERATION_TIMEOUT_MS } from '@/lib/ai/fal-deadline-fetch';
 import type { FalCredentialScopedDb } from '@/lib/db/scoped-workflow';
 import {
   recordMediaGenerationSpan,
@@ -65,8 +66,9 @@ export type ImageGenerationResult = {
 };
 
 function createFalAdapter(modelId: string, falApiKey?: string) {
+  // Prefer an explicit key (BYOK / caller), then the platform FAL_KEY.
   const key = falApiKey ?? getEnv().FAL_KEY;
-  return key ? falImage(modelId, { apiKey: key }) : falImage(modelId);
+  return falImage(modelId, { apiKey: key });
 }
 
 export async function generateImageWithProvider(
@@ -171,10 +173,13 @@ async function generateImageInternal(
     ),
   });
 
+  // Bound so a hung fal.subscribe fails the workflow step and CF can retry
+  // (#826). Native activity `timeout` since @tanstack/ai@0.44 / ai-fal@0.10.
   const result = await generateImage({
     adapter,
     prompt,
     modelOptions,
+    timeout: FAL_GENERATION_TIMEOUT_MS,
     debug: false,
   });
 
