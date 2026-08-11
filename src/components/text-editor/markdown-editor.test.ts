@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   plainTextPasteAsMarkdown,
+  screenplayTextToJsonContent,
   toHardBreakMarkdown,
 } from './markdown-editor';
 
@@ -33,11 +34,41 @@ describe('plainTextPasteAsMarkdown', () => {
     expect(plainTextPasteAsMarkdown(html, 'Title\nBody')).toBe('Title  \nBody');
   });
 
-  it('defers plain-text-only paste to the markdown clipboard parser', () => {
-    expect(plainTextPasteAsMarkdown('', '# Heading')).toBeNull();
+  it('uses plain text even when HTML is empty (still coerces newlines)', () => {
+    expect(plainTextPasteAsMarkdown('', '# Heading\nline')).toBe(
+      '# Heading  \nline'
+    );
   });
 
   it('defers image-only / non-text paste to the default handler', () => {
     expect(plainTextPasteAsMarkdown('<img src="x">', '')).toBeNull();
+  });
+});
+
+describe('screenplayTextToJsonContent', () => {
+  it('turns single newlines into hardBreak nodes within one paragraph', () => {
+    expect(screenplayTextToJsonContent('INT. ROOM\nA man enters.')).toEqual([
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'INT. ROOM' },
+          { type: 'hardBreak' },
+          { type: 'text', text: 'A man enters.' },
+        ],
+      },
+    ]);
+  });
+
+  it('splits blank lines into separate paragraphs', () => {
+    expect(screenplayTextToJsonContent('Scene one.\n\nScene two.')).toEqual([
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Scene one.' }],
+      },
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Scene two.' }],
+      },
+    ]);
   });
 });
