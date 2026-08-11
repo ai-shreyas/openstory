@@ -22,8 +22,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
-import { useShowActionCosts } from '@/hooks/use-show-action-costs';
-import { useShowBalance } from '@/hooks/use-show-balance';
+import { useShowCosts } from '@/hooks/use-show-costs';
 import { useUser } from '@/hooks/use-user';
 import { SIGNUP_GRANT_MICROS } from '@/lib/billing/constants';
 import { microsToDisplayUsd } from '@/lib/billing/money';
@@ -70,8 +69,7 @@ function writeDismissedAt(): void {
 
 export const WelcomeCreditsDialog: React.FC = () => {
   const { data: user } = useUser();
-  const { showBalance, setShowBalance } = useShowBalance();
-  const { showActionCosts, setShowActionCosts } = useShowActionCosts();
+  const { showCosts, setShowCosts } = useShowCosts();
   const {
     stripeEnabled,
     hasUsedCredits,
@@ -136,33 +134,18 @@ export const WelcomeCreditsDialog: React.FC = () => {
         </div>
 
         <div className="flex flex-col gap-4 px-6 py-5">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] p-3.5">
-              <div className="space-y-0.5">
-                <p className="text-sm font-medium">Show credits in sidebar</p>
-                <p className="text-xs text-muted-foreground">
-                  Keep your balance visible above your account
-                </p>
-              </div>
-              <Switch
-                checked={showBalance}
-                onCheckedChange={setShowBalance}
-                aria-label="Show credits in sidebar"
-              />
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] p-3.5">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Show costs</p>
+              <p className="text-xs text-muted-foreground">
+                Balance in the sidebar and estimates under Generate
+              </p>
             </div>
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] p-3.5">
-              <div className="space-y-0.5">
-                <p className="text-sm font-medium">Show cost on actions</p>
-                <p className="text-xs text-muted-foreground">
-                  Estimate generation cost under Generate and other actions
-                </p>
-              </div>
-              <Switch
-                checked={showActionCosts}
-                onCheckedChange={setShowActionCosts}
-                aria-label="Show cost on actions"
-              />
-            </div>
+            <Switch
+              checked={showCosts}
+              onCheckedChange={setShowCosts}
+              aria-label="Show costs"
+            />
           </div>
 
           <DialogFooter className="gap-2 sm:justify-stretch">

@@ -7,7 +7,7 @@
  *    see the free starting balance before they create an account (#1140)
  * 2. Low balance with no safety net (amber)
  * 3. Balance topped up — brief green flash
- * 4. User toggled "always show" on the credits page (muted)
+ * 4. User left "Show costs" on (default) — muted wallet amount (#1140)
  *
  * Expanded: wallet + $amount at normal sidebar foreground weight.
  * Collapsed (icon rail): wallet icon only + tooltip with amount — never the
@@ -27,7 +27,7 @@ import { useBalanceFlash } from '@/hooks/use-balance-flash';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
 import { useBillingBalanceRealtime } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGateQuery } from '@/hooks/use-billing-gate';
-import { useShowBalance } from '@/hooks/use-show-balance';
+import { useShowCosts } from '@/hooks/use-show-costs';
 import { useUser } from '@/hooks/use-user';
 import { SIGNUP_GRANT_MICROS } from '@/lib/billing/constants';
 import { microsToDisplayUsd } from '@/lib/billing/money';
@@ -40,7 +40,7 @@ export const CreditBalancePill: React.FC = () => {
   const { data: user, isLoading: userLoading } = useUser();
   const { balance, teamId, isLowBalance } = useBillingBalance();
   const { data: gateStatus } = useBillingGateQuery();
-  const { showBalance } = useShowBalance();
+  const { showCosts } = useShowCosts();
   const { isFlashing } = useBalanceFlash();
 
   const isSignedOut = !userLoading && !user;
@@ -50,7 +50,7 @@ export const CreditBalancePill: React.FC = () => {
   const hasSafetyNet = gateStatus?.hasAutoTopUp || gateStatus?.hasFalKey;
 
   const isLowBalanceVisible = isLowBalance && !hasSafetyNet;
-  const isSignedInVisible = isLowBalanceVisible || showBalance || isFlashing;
+  const isSignedInVisible = isLowBalanceVisible || showCosts || isFlashing;
 
   // SSE only while signed in and the pill is showing a live balance.
   useBillingBalanceRealtime(teamId, !isSignedOut && isSignedInVisible);

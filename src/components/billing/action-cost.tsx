@@ -2,7 +2,7 @@
  * Likely cost label under a generation action (#1140).
  *
  * Renders nothing when:
- * - the user turned action costs off (default is ON)
+ * - the user turned "Show costs" off (default is ON)
  * - there is no estimate (null/undefined) — never invent a number here
  * - estimate is still loading and no value yet
  *
@@ -18,7 +18,7 @@
 
 import { useBillingBalance } from '@/hooks/use-billing-balance';
 import { useBillingGateQuery } from '@/hooks/use-billing-gate';
-import { useShowActionCosts } from '@/hooks/use-show-action-costs';
+import { useShowCosts } from '@/hooks/use-show-costs';
 import {
   microsToDisplayUsd,
   microsToUsd,
@@ -40,11 +40,11 @@ export function ActionCost({
   className,
   align = 'center',
 }: ActionCostProps) {
-  const { showActionCosts } = useShowActionCosts();
+  const { showCosts } = useShowCosts();
   const { balance } = useBillingBalance();
   const { data: gate } = useBillingGateQuery();
 
-  if (!showActionCosts || estimate == null) return null;
+  if (!showCosts || estimate == null) return null;
 
   // Wallet path only — team fal key covers media (and LLM when routed via fal).
   // OpenRouter-only BYOK is not checked here.

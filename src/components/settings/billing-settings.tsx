@@ -36,8 +36,7 @@ import {
   useBillingBalance,
 } from '@/hooks/use-billing-balance';
 import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
-import { useShowActionCosts } from '@/hooks/use-show-action-costs';
-import { useShowBalance } from '@/hooks/use-show-balance';
+import { useShowCosts } from '@/hooks/use-show-costs';
 import { MIN_TOPUP_AMOUNT_USD } from '@/lib/billing/constants';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
@@ -271,8 +270,7 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
               ${balanceData?.balance.toFixed(2) ?? '0.00'}
             </p>
           )}
-          <ShowBalanceToggle />
-          <ShowActionCostsToggle />
+          <ShowCostsToggle />
         </CardContent>
       </Card>
 
@@ -414,37 +412,21 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
   );
 }
 
-function ShowBalanceToggle() {
-  const { showBalance, setShowBalance } = useShowBalance();
+function ShowCostsToggle() {
+  const { showCosts, setShowCosts } = useShowCosts();
 
   return (
     <div className="flex items-center justify-between border-t pt-4">
       <div>
-        <p className="text-sm font-medium">Show balance in sidebar</p>
+        <p className="text-sm font-medium">Show costs</p>
         <p className="text-xs text-muted-foreground">
-          Always display your credit balance above your account
-        </p>
-      </div>
-      <Switch checked={showBalance} onCheckedChange={setShowBalance} />
-    </div>
-  );
-}
-
-function ShowActionCostsToggle() {
-  const { showActionCosts, setShowActionCosts } = useShowActionCosts();
-
-  return (
-    <div className="flex items-center justify-between border-t pt-4">
-      <div>
-        <p className="text-sm font-medium">Show cost on actions</p>
-        <p className="text-xs text-muted-foreground">
-          Estimate generation cost under Generate and other actions
+          Balance in the sidebar and estimates under generation actions
         </p>
       </div>
       <Switch
-        checked={showActionCosts}
-        onCheckedChange={setShowActionCosts}
-        aria-label="Show cost on actions"
+        checked={showCosts}
+        onCheckedChange={setShowCosts}
+        aria-label="Show costs"
       />
     </div>
   );
