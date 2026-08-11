@@ -36,6 +36,7 @@ import {
   useBillingBalance,
 } from '@/hooks/use-billing-balance';
 import { BILLING_GATE_KEY } from '@/hooks/use-billing-gate';
+import { useShowActionCosts } from '@/hooks/use-show-action-costs';
 import { useShowBalance } from '@/hooks/use-show-balance';
 import { MIN_TOPUP_AMOUNT_USD } from '@/lib/billing/constants';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -271,6 +272,7 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
             </p>
           )}
           <ShowBalanceToggle />
+          <ShowActionCostsToggle />
         </CardContent>
       </Card>
 
@@ -424,6 +426,26 @@ function ShowBalanceToggle() {
         </p>
       </div>
       <Switch checked={showBalance} onCheckedChange={setShowBalance} />
+    </div>
+  );
+}
+
+function ShowActionCostsToggle() {
+  const { showActionCosts, setShowActionCosts } = useShowActionCosts();
+
+  return (
+    <div className="flex items-center justify-between border-t pt-4">
+      <div>
+        <p className="text-sm font-medium">Show cost on actions</p>
+        <p className="text-xs text-muted-foreground">
+          Estimate generation cost under Generate and other actions
+        </p>
+      </div>
+      <Switch
+        checked={showActionCosts}
+        onCheckedChange={setShowActionCosts}
+        aria-label="Show cost on actions"
+      />
     </div>
   );
 }

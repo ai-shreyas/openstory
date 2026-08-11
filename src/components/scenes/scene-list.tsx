@@ -1,11 +1,24 @@
+import { ActionCost } from '@/components/billing/action-cost';
 import { MusicModelSelector } from '@/components/model/music-model-selector';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
+import {
+  DEFAULT_MUSIC_MODEL,
+  DEFAULT_VIDEO_MODEL,
+  safeImageToVideoModel,
+  type AudioModel,
+} from '@/lib/ai/models';
+import {
+  estimateAudioCost,
+  estimateVideoCost,
+} from '@/lib/billing/cost-estimation';
+import { addMicros, ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import { useFalPricing } from '@/hooks/use-fal-pricing';
 import type { SceneWithScript } from '@/hooks/use-scenes';
 import type { ShotVariant } from '@/lib/db/schema';
+import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import type { SceneSelection } from '@/lib/scenes/scene-selection';
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import type { ShotView } from '@/lib/shots/shot-view';
@@ -150,6 +163,49 @@ const SceneListComponent: React.FC<SceneListProps> = ({
     notStartedShots.length === 0 ||
     !motionPromptsReady ||
     (includeMusic && !musicPromptsReady);
+
+  // Batch cost = sum of per-shot motion (+ optional music track) (#1140).
+  const { pricing: falPricing } = useFalPricing();
+  const batchCostEstimate = useMemo((): Microdollars | null => {
+    if (!falPricing || notStartedShots.length === 0) return null;
+    let total: Microdollars = ZERO_MICROS;
+    let anyHonest = false;
+    for (const shot of notStartedShots) {
+      const model = safeImageToVideoModel(
+        shot.video?.model ?? shot.primaryVideo?.model,
+        DEFAULT_VIDEO_MODEL
+      );
+      const duration = resolveShotDuration({
+        durationMs: shot.durationMs,
+        model,
+      });
+      const perShot = estimateVideoCost(model, duration, {
+        pricing: falPricing,
+      });
+      if (perShot === null) continue;
+      anyHonest = true;
+      total = addMicros(total, perShot);
+    }
+    if (includeMusic) {
+      const audioDuration = notStartedShots.reduce((sum, shot) => {
+        const model = safeImageToVideoModel(
+          shot.video?.model ?? shot.primaryVideo?.model,
+          DEFAULT_VIDEO_MODEL
+        );
+        return (
+          sum + resolveShotDuration({ durationMs: shot.durationMs, model })
+        );
+      }, 0);
+      const music = estimateAudioCost(musicModel, Math.max(audioDuration, 5), {
+        pricing: falPricing,
+      });
+      if (music !== null) {
+        anyHonest = true;
+        total = addMicros(total, music);
+      }
+    }
+    return anyHonest ? total : null;
+  }, [falPricing, notStartedShots, includeMusic, musicModel]);
 
   const shotsBySceneId = useMemo(() => {
     const map = new Map<string, ShotView[]>();
@@ -303,35 +359,38 @@ const SceneListComponent: React.FC<SceneListProps> = ({
               />
             </div>
           )}
-          <Button
-            variant="default"
-            className="w-full"
-            onClick={() => void handleGenerateMotion()}
-            disabled={isButtonDisabled}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Generating…
-              </>
-            ) : !motionPromptsReady ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Writing motion prompts…
-              </>
-            ) : includeMusic && !musicPromptsReady ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Composing music…
-              </>
-            ) : (
-              <>
-                <Video className="mr-2 h-4 w-4" />
-                Generate {notStartedShots.length} / {totalShots}{' '}
-                {totalShots === 1 ? 'shot' : 'shots'}
-              </>
-            )}
-          </Button>
+          <div className="flex flex-col gap-1">
+            <Button
+              variant="default"
+              className="w-full"
+              onClick={() => void handleGenerateMotion()}
+              disabled={isButtonDisabled}
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating…
+                </>
+              ) : !motionPromptsReady ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Writing motion prompts…
+                </>
+              ) : includeMusic && !musicPromptsReady ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Composing music…
+                </>
+              ) : (
+                <>
+                  <Video className="mr-2 h-4 w-4" />
+                  Generate {notStartedShots.length} / {totalShots}{' '}
+                  {totalShots === 1 ? 'shot' : 'shots'}
+                </>
+              )}
+            </Button>
+            <ActionCost estimate={batchCostEstimate} />
+          </div>
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             <Checkbox
               checked={includeMusic}

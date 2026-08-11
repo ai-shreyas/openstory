@@ -1,5 +1,6 @@
 import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
+import { ActionCost } from '@/components/billing/action-cost';
 import { PremiumCard } from '@/components/cards/premium-card';
 import {
   ElementSelector,
@@ -35,6 +36,7 @@ import { useAutoScroll } from '@/hooks/use-auto-scroll';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { BILLING_TRANSACTIONS_KEY } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGate } from '@/hooks/use-billing-gate';
+import { useFalPricing } from '@/hooks/use-fal-pricing';
 import { useGenerationSettings } from '@/hooks/use-generation-settings';
 import { useComposedScript } from '@/hooks/use-scenes';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
@@ -69,9 +71,14 @@ import {
 } from '@/lib/ai/models.config';
 import { SCRIPT_SHORT_THRESHOLD } from '@/lib/ai/should-enhance';
 import {
+  estimateImageCost,
+  estimateStoryboardCost,
+} from '@/lib/billing/cost-estimation';
+import {
   aspectRatioSchema,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
 import { cn } from '@/lib/utils';
 import {
@@ -869,6 +876,41 @@ export const ScriptView: FC<{
     content: scriptValue,
   });
 
+  // Transparent pricing under Generate (#1140). Honest estimate only —
+  // null when the primary image model has no pricing signal.
+  const { pricing: falPricing } = useFalPricing();
+  const storyboardCostEstimate = useMemo(() => {
+    if (!falPricing) return null;
+    const primaryImage = imageModels[0] ?? DEFAULT_IMAGE_MODEL;
+    if (
+      estimateImageCost(primaryImage, aspectRatio, 1, {
+        pricing: falPricing,
+      }) === null
+    ) {
+      return null;
+    }
+    return estimateStoryboardCost({
+      imageModel: primaryImage,
+      imageModelCount: Math.max(imageModels.length, 1),
+      aspectRatio,
+      estimatedSceneCount: estimateSceneCount(scriptValue),
+      autoGenerateMotion,
+      videoModels: autoGenerateMotion ? videoModels : undefined,
+      autoGenerateMusic,
+      audioModels: autoGenerateMusic ? audioModels : undefined,
+      pricing: falPricing,
+    });
+  }, [
+    falPricing,
+    imageModels,
+    aspectRatio,
+    scriptValue,
+    autoGenerateMotion,
+    videoModels,
+    autoGenerateMusic,
+    audioModels,
+  ]);
+
   return (
     <PremiumCard
       className={cn(
@@ -1140,28 +1182,31 @@ export const ScriptView: FC<{
                     Cancel
                   </Button>
                 )}
-                <Button
-                  type="submit"
-                  disabled={isDisabled}
-                  className="group relative px-6 bg-linear-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold tracking-wide shadow-lg shadow-primary/20 hover:shadow-primary/30 overflow-hidden"
-                >
-                  <span className="relative z-10 flex items-center justify-center gap-2">
-                    {isSubmitting || isElementBusy ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <GenerateSequenceIcon className="size-4" />
-                    )}
-                    {isSubmitting
-                      ? 'Generating…'
-                      : isElementBusy
-                        ? 'Analyzing elements…'
-                        : isEditing
-                          ? 'Generate Copy'
-                          : 'Generate'}
-                  </span>
-                  {/* Shine effect */}
-                  <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
-                </Button>
+                <div className="flex flex-col items-stretch gap-1">
+                  <Button
+                    type="submit"
+                    disabled={isDisabled}
+                    className="group relative px-6 bg-linear-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold tracking-wide shadow-lg shadow-primary/20 hover:shadow-primary/30 overflow-hidden"
+                  >
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      {isSubmitting || isElementBusy ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <GenerateSequenceIcon className="size-4" />
+                      )}
+                      {isSubmitting
+                        ? 'Generating…'
+                        : isElementBusy
+                          ? 'Analyzing elements…'
+                          : isEditing
+                            ? 'Generate Copy'
+                            : 'Generate'}
+                    </span>
+                    {/* Shine effect */}
+                    <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
+                  </Button>
+                  <ActionCost estimate={storyboardCostEstimate} align="end" />
+                </div>
               </div>
               <span className="hidden sm:block text-xs text-muted-foreground text-right">
                 {isEditing

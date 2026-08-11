@@ -21,6 +21,9 @@ const SESSION_MUTATION_PATHS = [
   '/organization/set-active',
 ];
 
+/** Matches `sessionQueryOptions.queryKey` — inlined to avoid client↔session-query cycles. */
+const SESSION_QUERY_KEY = ['session'] as const;
+
 // Create the auth client
 export const authClient = createAuthClient({
   fetchOptions: {
@@ -32,7 +35,14 @@ export const authClient = createAuthClient({
       if (!isSessionMutation) return;
       // When session is mutated, clear the query client to avoid stale data
       const queryClient = getQueryClient();
+      const isSignOut = path.includes('/sign-out');
       queryClient.clear();
+      // Seed anonymous session so consumers (sidebar footer, etc.) flip to
+      // "Sign in" immediately instead of `isLoading` skeleton while a fresh
+      // getSession refetch is in flight after clear().
+      if (isSignOut) {
+        queryClient.setQueryData(SESSION_QUERY_KEY, null);
+      }
     },
   },
   plugins: [

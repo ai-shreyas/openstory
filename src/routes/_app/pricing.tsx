@@ -13,7 +13,7 @@ import {
 import { getPricingCatalogFn } from '@/functions/pricing';
 import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
-import { ArrowRight, ArrowUpRight, KeyRound } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, KeyRound, Sparkles } from 'lucide-react';
 
 const title = `Pricing — ${SITE_CONFIG.name}`;
 const description =
@@ -37,7 +37,7 @@ export const Route = createFileRoute('/_app/pricing')({
 });
 
 function PricingPage() {
-  const { sections, lastUpdated } = Route.useLoaderData();
+  const { sections, lastUpdated, filmCosts } = Route.useLoaderData();
   const feePercent = formatPlatformFeePercent();
   const chargeFor100 = (100 * (1 + PLATFORM_FEE_PERCENT)).toFixed(0);
 
@@ -72,6 +72,77 @@ function PricingPage() {
           pay the platform directly and skip the credit wallet.
         </p>
       </div>
+
+      {filmCosts && (
+        <section id="film-cost" className="mt-12">
+          <div className="mb-4 max-w-2xl">
+            <h2 className="text-xl font-semibold tracking-tight">
+              What a film really costs
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              No &ldquo;unlimited&rdquo; plans that hide the meter. Every
+              generation draws credits at provider rates — and we show the
+              estimate under each action before you spend. New accounts start
+              with{' '}
+              <span className="font-medium text-foreground tabular-nums">
+                {filmCosts.welcomeCredits}
+              </span>{' '}
+              free welcome credits.
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Indicative totals for ~8 scenes using defaults (
+              {filmCosts.imageModelName}
+              {', '}
+              {filmCosts.videoModelName}
+              {', '}
+              {filmCosts.audioModelName}). Actual bills follow billed units and
+              your model picks.
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            {filmCosts.examples.map((example) => (
+              <div
+                key={example.id}
+                className="flex flex-col gap-3 rounded-xl border bg-card p-5"
+              >
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm font-medium">{example.title}</p>
+                  <p className="font-heading text-2xl font-bold tracking-tight tabular-nums">
+                    {example.cost}
+                  </p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {example.description}
+                  </p>
+                </div>
+                <ul className="flex flex-col gap-1.5 border-t pt-3 text-xs text-muted-foreground">
+                  {example.breakdown.map((line) => (
+                    <li key={line} className="flex items-start gap-2">
+                      <span
+                        aria-hidden
+                        className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/50"
+                      />
+                      <span>{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 flex items-start gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm">
+            <Sparkles className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <p className="text-muted-foreground">
+              <span className="font-medium text-foreground">
+                Welcome credits cover a first stills sequence
+              </span>
+              {' — '}
+              sign up, keep Generate costs visible (on by default), and see the
+              estimate before every spend.
+            </p>
+          </div>
+        </section>
+      )}
 
       <div className="mt-12 flex flex-col gap-12">
         {sections.map((section) => (
