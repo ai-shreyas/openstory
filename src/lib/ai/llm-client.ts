@@ -28,29 +28,99 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'ai', 'llm-client']);
 
+function usageHasCost(usage: TokenUsage | undefined): usage is TokenUsage & {
+  cost: number;
+} {
+  return (
+    !!usage && typeof usage.cost === 'number' && Number.isFinite(usage.cost)
+  );
+}
+
 /**
- * Convert a completed LLM call's usage into a charge. OpenRouter reports an
- * authoritative per-request `cost` (USD) on every response; we charge that raw
- * cost at face value in `deductCredits`. Logs and charges
- * nothing when no cost was reported, surfacing the gap rather than guessing.
+ * Prefer a usage object that carries a finite `cost` (OpenRouter bill);
+ * otherwise keep the latest token counts for diagnostics / missing-cost reports.
+ */
+export function preferUsage(
+  current: TokenUsage | undefined,
+  next: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (!next) return current;
+  if (usageHasCost(next)) return next;
+  if (usageHasCost(current)) return current;
+  return next;
+}
+
+/**
+ * Capture provider usage for billing. TanStack AI fires cost/tokens on:
+ * - `onUsage` when `RUN_FINISHED.usage` is present
+ * - `onFinish` with `info.usage` (may lag or omit cost on some paths)
+ *
+ * Always call `noteFromStreamEvent` while draining a stream so a
+ * `RUN_FINISHED` chunk is not missed when middleware hooks are suppressed for
+ * structured-output consumers. Pair with `stream: true` +
+ * `streamOptions: { includeUsage: true }` — non-stream structured output does
+ * not surface OpenRouter's `usage.cost` (TanStack/ai#1076).
+ */
+export function createUsageCapture(): {
+  get: () => TokenUsage | undefined;
+  /** Spread into `chat({ middleware: [...] })`. */
+  middleware: Array<{
+    onUsage?: (ctx: unknown, usage: TokenUsage) => void;
+    onFinish?: (ctx: unknown, info: { usage?: TokenUsage }) => void;
+  }>;
+  noteFromStreamEvent: (event: unknown) => void;
+} {
+  let usage: TokenUsage | undefined;
+  const note = (next: TokenUsage | undefined) => {
+    usage = preferUsage(usage, next);
+  };
+  return {
+    get: () => usage,
+    middleware: [
+      {
+        onUsage: (_ctx, u) => {
+          note(u);
+        },
+        onFinish: (_ctx, info) => {
+          note(info.usage);
+        },
+      },
+    ],
+    noteFromStreamEvent: (event) => {
+      if (!event || typeof event !== 'object') return;
+      if (!('type' in event) || event.type !== 'RUN_FINISHED') return;
+      if (
+        !('usage' in event) ||
+        !event.usage ||
+        typeof event.usage !== 'object'
+      )
+        return;
+      note(event.usage as TokenUsage);
+    },
+  };
+}
+
+/**
+ * Convert a completed LLM call's usage into a charge.
+ *
+ * Uses OpenRouter's per-request `cost` (USD) only. Missing cost → $0 and a
+ * missing-cost report. Do not invent rates — if cost is absent the capture
+ * path failed (structured streaming + {@link createUsageCapture}).
  */
 export function llmCostFromUsage(
   usage: TokenUsage | undefined,
   modelId: string
 ): Microdollars {
-  if (
-    !usage ||
-    typeof usage.cost !== 'number' ||
-    !Number.isFinite(usage.cost)
-  ) {
-    reportMissingBillingCost({
-      source: 'llm-cost-from-usage',
-      modelId,
-      metadata: { usage },
-    });
-    return ZERO_MICROS;
+  if (usageHasCost(usage)) {
+    return usdToMicros(usage.cost);
   }
-  return usdToMicros(usage.cost);
+
+  reportMissingBillingCost({
+    source: 'llm-cost-from-usage',
+    modelId,
+    metadata: { usage },
+  });
+  return ZERO_MICROS;
 }
 
 export type StreamChunk<T = never> =
@@ -590,7 +660,9 @@ export async function* callLLMStream<T>(
 ): AsyncGenerator<StreamChunk<T>> {
   let accumulated = '';
   let parsed: T | undefined;
-  let usage: TokenUsage | undefined;
+  // Structured streaming + multi-hook capture is required for OpenRouter
+  // `usage.cost` (non-stream structuredOutput drops it — TanStack/ai#1076).
+  const usageCapture = createUsageCapture();
 
   const baseOptions = {
     ...baseChatOptions(params),
@@ -606,13 +678,7 @@ export async function* callLLMStream<T>(
         userId: params.userId,
         sessionId: params.sessionId,
       }),
-      // Capture the terminal usage (carries OpenRouter's `cost`) so callers can
-      // bill the call via `llmCostFromUsage`.
-      {
-        onFinish: (_ctx: unknown, info: { usage?: TokenUsage }) => {
-          usage = info.usage;
-        },
-      },
+      ...usageCapture.middleware,
     ],
     stream: true as const,
   };
@@ -638,6 +704,7 @@ export async function* callLLMStream<T>(
         responseFormat: { type: 'json_object' as const },
       },
     })) {
+      usageCapture.noteFromStreamEvent(event);
       if (
         event.type === 'TEXT_MESSAGE_CONTENT' &&
         typeof event.delta === 'string'
@@ -655,6 +722,7 @@ export async function* callLLMStream<T>(
       ...baseOptions,
       outputSchema: responseSchema,
     })) {
+      usageCapture.noteFromStreamEvent(event);
       if (
         event.type === 'TEXT_MESSAGE_CONTENT' &&
         typeof event.delta === 'string'
@@ -676,6 +744,7 @@ export async function* callLLMStream<T>(
     }
   } else {
     for await (const event of chat(baseOptions)) {
+      usageCapture.noteFromStreamEvent(event);
       if (event.type === 'TEXT_MESSAGE_CONTENT') {
         accumulated += event.delta;
         yield { delta: event.delta, accumulated, done: false };
@@ -685,5 +754,11 @@ export async function* callLLMStream<T>(
     }
   }
 
-  yield { delta: '', accumulated, done: true, parsed, usage };
+  yield {
+    delta: '',
+    accumulated,
+    done: true,
+    parsed,
+    usage: usageCapture.get(),
+  };
 }

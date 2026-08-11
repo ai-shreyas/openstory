@@ -45,7 +45,15 @@ const TOKEN_RESOLUTION_DIMENSIONS: Record<
   '480p': { width: 854, height: 480 },
   '720p': { width: 1280, height: 720 },
   '1080p': { width: 1920, height: 1080 },
+  '4k': { width: 3840, height: 2160 },
 };
+
+/**
+ * fal Seedance (and similar token-billed video endpoints) default to 720p
+ * when the client omits `resolution`. Defaulting to 1080p here overstated
+ * pre-flight costs by ~2.2× (#1140).
+ */
+const DEFAULT_TOKEN_RESOLUTION = '720p';
 
 // ============================================================================
 // Actual cost (billing) — unitsBilled × unitPrice
@@ -227,14 +235,22 @@ export function estimateFalCost(
       return multiplyMicros(pricing.unitPrice, Math.ceil(duration / 60));
 
     case 'tokens': {
-      const dims = params.resolution
-        ? TOKEN_RESOLUTION_DIMENSIONS[params.resolution]
-        : undefined;
-      const w = params.widthPx ?? dims?.width ?? 1920;
-      const h = params.heightPx ?? dims?.height ?? 1080;
+      // fal: tokens = (h × w × duration × fps) / 1024, billed per 1000 tokens
+      // (Seedance docs). Prefer explicit width/height, else resolution tier,
+      // else the platform default (720p — not 1080p).
+      const tier =
+        params.resolution && TOKEN_RESOLUTION_DIMENSIONS[params.resolution]
+          ? params.resolution
+          : DEFAULT_TOKEN_RESOLUTION;
+      const dims = TOKEN_RESOLUTION_DIMENSIONS[tier] ?? {
+        width: 1280,
+        height: 720,
+      };
+      const w = params.widthPx ?? dims.width;
+      const h = params.heightPx ?? dims.height;
       const fps = params.fps ?? 24;
-      // fal derives tokens from pixels (≈ w·h·fps·sec / 1024) and prices per
-      // 1000-token unit; ~5% overhead on nominal shots.
+      // ~5% overhead vs the nominal formula — matches observed billable units
+      // slightly above the pure geometric product on real generations.
       const units = ((w * h * fps * duration) / 1024 / 1000) * 1.05;
       return multiplyMicros(pricing.unitPrice, units);
     }

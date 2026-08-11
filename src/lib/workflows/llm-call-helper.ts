@@ -10,6 +10,7 @@
 
 import { createAdapter, getPlatformLlmKey } from '@/lib/ai/create-adapter';
 import {
+  createUsageCapture,
   extractRunError,
   formatRunErrorMessage,
   llmCostFromUsage,
@@ -36,7 +37,7 @@ import {
 } from '@/lib/prompts';
 import { getShotPromptChannel } from '@/lib/realtime';
 import { toVisionImageSource } from '@/lib/storage/external-url';
-import { chat, type TokenUsage } from '@tanstack/ai';
+import { chat } from '@tanstack/ai';
 import type { WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import type { z } from 'zod';
@@ -280,7 +281,9 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
       const abortController = new AbortController();
       const timeout = setTimeout(() => abortController.abort(), 300_000);
 
-      let capturedUsage: TokenUsage | undefined;
+      // Always stream structured output so OpenRouter attaches usage.cost
+      // (TanStack/ai#1076). No live channel here — drain for result + usage.
+      const usageCapture = createUsageCapture();
       // Native strict output when the provider's grammar fits the schema;
       // json_object + schema-in-prompt when it can't (Anthropic large
       // schemas). The trailing responseSchema.parse validates either way.
@@ -289,11 +292,12 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
         const commonOptions = {
           adapter,
           messages: chatMessages,
-          stream: false as const,
+          stream: true as const,
           abortController,
           modelOptions: {
             ...reasoningModelOptions(config.reasoning),
             maxCompletionTokens: Math.floor(getContextWindow(modelId) * 0.5),
+            streamOptions: { includeUsage: true },
           },
           middleware: [
             ...aiObservabilityMiddleware({
@@ -308,37 +312,63 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
               // image-generation.ts.
               userId: callContext.userId ?? callContext.scopedDb?.userId,
             }),
-            {
-              onFinish: (_ctx: unknown, info: { usage?: TokenUsage }) => {
-                capturedUsage = info.usage;
-              },
-            },
+            ...usageCapture.middleware,
           ],
           debug: false,
         };
-        const result =
+        const eventStream =
           plan.mode === 'json-object'
-            ? parseJsonObjectResponse(
-                await chat({
-                  ...commonOptions,
-                  systemPrompts: [...systemPrompts, plan.instruction],
-                  modelOptions: {
-                    ...commonOptions.modelOptions,
-                    responseFormat: { type: 'json_object' as const },
-                  },
-                })
-              )
-            : await chat({
+            ? chat({
+                ...commonOptions,
+                systemPrompts: [...systemPrompts, plan.instruction],
+                modelOptions: {
+                  ...commonOptions.modelOptions,
+                  responseFormat: { type: 'json_object' as const },
+                },
+              })
+            : chat({
                 ...commonOptions,
                 systemPrompts,
                 outputSchema: config.responseSchema,
               });
+
+        let accumulated = '';
+        let structuredObject: unknown;
+        for await (const event of eventStream) {
+          usageCapture.noteFromStreamEvent(event);
+          if (
+            event.type === 'TEXT_MESSAGE_CONTENT' &&
+            typeof event.delta === 'string'
+          ) {
+            accumulated += event.delta;
+            continue;
+          }
+          if (
+            event.type === 'CUSTOM' &&
+            event.name === 'structured-output.complete'
+          ) {
+            structuredObject = event.value.object;
+            continue;
+          }
+          const runError = extractRunError(event);
+          if (runError) {
+            logger.error(`[LLM:${logName}:cf] Call RUN_ERROR`, {
+              runError: runError.event,
+            });
+            throw new Error(formatRunErrorMessage(runError));
+          }
+        }
+
+        const result =
+          plan.mode === 'native' && structuredObject !== undefined
+            ? structuredObject
+            : parseJsonObjectResponse(accumulated);
         logger.info(`[LLM:${logName}:cf] Call succeeded`);
         // Return as JSON string — round-trips through step.do without hitting
         // CF's Rpc.Serializable constraint on the Zod-inferred shape.
         return {
           jsonText: JSON.stringify(result),
-          costMicros: llmCostFromUsage(capturedUsage, modelId),
+          costMicros: llmCostFromUsage(usageCapture.get(), modelId),
           keySource: llmKeyInfo.source,
         };
       } finally {
@@ -456,7 +486,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
       let lastExtracted = '';
       let pendingDelta = '';
       let lastEmitAt = 0;
-      let capturedUsage: TokenUsage | undefined;
+      const usageCapture = createUsageCapture();
 
       const flushDelta = async () => {
         if (!pendingDelta) return;
@@ -477,6 +507,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         modelOptions: {
           ...reasoningModelOptions(config.reasoning),
           maxCompletionTokens: Math.floor(getContextWindow(modelId) * 0.5),
+          streamOptions: { includeUsage: true },
         },
         middleware: [
           ...aiObservabilityMiddleware({
@@ -487,11 +518,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
             // Same scopedDb fallback as the non-streaming path above.
             userId: callContext.userId ?? callContext.scopedDb?.userId,
           }),
-          {
-            onFinish: (_ctx: unknown, info: { usage?: TokenUsage }) => {
-              capturedUsage = info.usage;
-            },
-          },
+          ...usageCapture.middleware,
         ],
         debug: false,
       };
@@ -518,6 +545,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
       let structuredJson: string | null = null;
       try {
         for await (const event of eventStream) {
+          usageCapture.noteFromStreamEvent(event);
           if (
             event.type === 'TEXT_MESSAGE_CONTENT' &&
             typeof event.delta === 'string'
@@ -560,7 +588,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         logger.info(`[LLM:${logName}:cf] Streaming call succeeded`);
         return {
           jsonText: structuredJson ?? accumulated,
-          costMicros: llmCostFromUsage(capturedUsage, modelId),
+          costMicros: llmCostFromUsage(usageCapture.get(), modelId),
           keySource: llmKeyInfo.source,
         };
       } finally {

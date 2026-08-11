@@ -893,7 +893,10 @@ export const ScriptView: FC<{
       imageModel: primaryImage,
       imageModelCount: Math.max(imageModels.length, 1),
       aspectRatio,
-      estimatedSceneCount: estimateSceneCount(scriptValue),
+      // Prefer Scene N headings after Enhance; else words + target duration.
+      estimatedSceneCount: estimateSceneCount(scriptValue, {
+        targetDurationSeconds: targetDuration,
+      }),
       autoGenerateMotion,
       videoModels: autoGenerateMotion ? videoModels : undefined,
       autoGenerateMusic,
@@ -905,6 +908,7 @@ export const ScriptView: FC<{
     imageModels,
     aspectRatio,
     scriptValue,
+    targetDuration,
     autoGenerateMotion,
     videoModels,
     autoGenerateMusic,
@@ -1170,9 +1174,10 @@ export const ScriptView: FC<{
               </span>
             </div>
 
-            {/* Action buttons */}
-            <div className="flex flex-col items-stretch gap-1 w-full sm:w-auto">
-              <div className="flex flex-row items-center gap-3 justify-end">
+            {/* Action buttons + cost: one right-aligned column so ~$ and
+                "N copies" sit under Generate / Generate Copy, not the row. */}
+            <div className="flex w-full flex-col items-stretch gap-1 sm:w-auto sm:items-end">
+              <div className="flex flex-row items-center justify-end gap-3">
                 {sequence?.id && (
                   <Button
                     type="button"
@@ -1182,33 +1187,31 @@ export const ScriptView: FC<{
                     Cancel
                   </Button>
                 )}
-                <div className="flex flex-col items-stretch gap-1">
-                  <Button
-                    type="submit"
-                    disabled={isDisabled}
-                    className="group relative px-6 bg-linear-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold tracking-wide shadow-lg shadow-primary/20 hover:shadow-primary/30 overflow-hidden"
-                  >
-                    <span className="relative z-10 flex items-center justify-center gap-2">
-                      {isSubmitting || isElementBusy ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <GenerateSequenceIcon className="size-4" />
-                      )}
-                      {isSubmitting
-                        ? 'Generating…'
-                        : isElementBusy
-                          ? 'Analyzing elements…'
-                          : isEditing
-                            ? 'Generate Copy'
-                            : 'Generate'}
-                    </span>
-                    {/* Shine effect */}
-                    <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
-                  </Button>
-                  <ActionCost estimate={storyboardCostEstimate} align="end" />
-                </div>
+                <Button
+                  type="submit"
+                  disabled={isDisabled}
+                  className="group relative px-6 bg-linear-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 text-primary-foreground font-semibold tracking-wide shadow-lg shadow-primary/20 hover:shadow-primary/30 overflow-hidden"
+                >
+                  <span className="relative z-10 flex items-center justify-center gap-2">
+                    {isSubmitting || isElementBusy ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <GenerateSequenceIcon className="size-4" />
+                    )}
+                    {isSubmitting
+                      ? 'Generating…'
+                      : isElementBusy
+                        ? 'Analyzing elements…'
+                        : isEditing
+                          ? 'Generate Copy'
+                          : 'Generate'}
+                  </span>
+                  {/* Shine effect */}
+                  <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
+                </Button>
               </div>
-              <span className="hidden sm:block text-xs text-muted-foreground text-right">
+              <ActionCost estimate={storyboardCostEstimate} align="end" />
+              <span className="hidden text-xs text-muted-foreground sm:block sm:text-right">
                 {isEditing
                   ? analysisModels.length === 1
                     ? '1 copy will be created'

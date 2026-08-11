@@ -1125,10 +1125,24 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
       durationMs: shot.durationMs,
       model: effectiveMotionModel,
     });
+    const hasReferenceImages =
+      buildMotionReferenceImages({
+        scene: sceneReference,
+        characters: mentionCharacters ?? [],
+        elements: mentionElements ?? [],
+      }).length > 0;
     return estimateVideoCost(effectiveMotionModel, duration, {
       pricing: falPricing,
+      hasReferenceImages,
     });
-  }, [falPricing, shot, effectiveMotionModel]);
+  }, [
+    falPricing,
+    shot,
+    effectiveMotionModel,
+    sceneReference,
+    mentionCharacters,
+    mentionElements,
+  ]);
 
   // CDN-backed deployments absolutize stored /r2/ URLs at submit (toCdnUrl) —
   // fetch the server-only domain once so the preview shows the same final

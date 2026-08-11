@@ -19,6 +19,7 @@ import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
+import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import {
   loadSceneContextBySequence,
   resolveSceneForShot,
@@ -176,6 +177,7 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
             DEFAULT_IMAGE_MODEL
           ),
           aspectRatio: sequence.aspectRatio,
+          estimatedSceneCount: estimateSceneCount(sequence.script ?? ''),
           videoModels: [
             safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
           ],
@@ -267,6 +269,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
           DEFAULT_IMAGE_MODEL
         ),
         aspectRatio: sequence.aspectRatio,
+        estimatedSceneCount: estimateSceneCount(sequence.script ?? ''),
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],

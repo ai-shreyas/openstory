@@ -13,6 +13,7 @@ import {
   estimateVideoCost,
   gateEstimate,
 } from './cost-estimation';
+import { micros } from './money';
 
 const IMAGE_MODEL: TextToImageModel = 'nano_banana_2';
 const VIDEO_A: ImageToVideoModel = 'kling_v3_pro';
@@ -221,6 +222,37 @@ describe('estimateStoryboardCost', () => {
  * floor IS its production credit gate. Every other test here uses a priced
  * model, so `gateEstimate`'s null branch would otherwise never execute.
  */
+describe('estimateVideoCost endpoint routing', () => {
+  it('prices Seedance reference-to-video when hasReferenceImages is true', () => {
+    // Same unit rate in the fixture; routing must not throw / return null.
+    const i2v = estimateVideoCost('seedance_v2', 5, {
+      pricing: FAL_PRICING,
+      hasReferenceImages: false,
+    });
+    const ref = estimateVideoCost('seedance_v2', 5, {
+      pricing: FAL_PRICING,
+      hasReferenceImages: true,
+    });
+    expect(i2v).not.toBeNull();
+    expect(ref).not.toBeNull();
+    // Fixture keeps both endpoints at the same unit price + token formula.
+    expect(ref).toBe(i2v);
+  });
+
+  it('leaves Kling on image-to-video even with refs (inline elements path)', () => {
+    const withRefs = estimateVideoCost('kling_v3_pro', 5, {
+      pricing: FAL_PRICING,
+      hasReferenceImages: true,
+    });
+    const without = estimateVideoCost('kling_v3_pro', 5, {
+      pricing: FAL_PRICING,
+      hasReferenceImages: false,
+    });
+    expect(withRefs).toBe(without);
+    expect(withRefs).toBe(micros(5 * 70_000));
+  });
+});
+
 describe('gateEstimate', () => {
   const UNPRICED: TextToImageModel = 'grok_imagine_image';
 

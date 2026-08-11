@@ -33,6 +33,7 @@ import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { type Character, type Sequence, type Shot } from '@/lib/db/schema';
 import { analyzeFailures } from '@/lib/failures/failure-analysis';
 import {
@@ -185,6 +186,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       estimateStoryboardCost({
         imageModel,
         aspectRatio: sequence.aspectRatio,
+        estimatedSceneCount: estimateSceneCount(sequence.script ?? ''),
         videoModels: [videoModel],
         pricing: await getEffectiveFalPricing(),
       }),

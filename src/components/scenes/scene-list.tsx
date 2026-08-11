@@ -1,4 +1,5 @@
 import { ActionCost } from '@/components/billing/action-cost';
+import { MotionModelSelector } from '@/components/model/motion-model-selector';
 import { MusicModelSelector } from '@/components/model/music-model-selector';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -6,8 +7,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   DEFAULT_MUSIC_MODEL,
   DEFAULT_VIDEO_MODEL,
-  safeImageToVideoModel,
   type AudioModel,
+  type ImageToVideoModel,
 } from '@/lib/ai/models';
 import {
   estimateAudioCost,
@@ -31,6 +32,8 @@ import { SceneListItem } from './scene-list-item';
 export type BatchGenerateMotionArgs = {
   includeMusic: boolean;
   musicModel: AudioModel;
+  /** Batch override for every eligible shot (server `data.model`). */
+  videoModel: ImageToVideoModel;
   /** Lets the user suppress model-emitted audio (sfx/dialogue/ambient) for the
    *  batch. The flag is honored only by models that produce audio — non-audio
    *  models ignore it downstream during motion-prompt assembly. */
@@ -59,6 +62,12 @@ type SceneListProps = {
   divergentVariants?: ShotVariant[];
   onCompareDivergent?: (variant: ShotVariant) => void;
   initialMusicModel?: AudioModel;
+  /** Sequence default / last batch pick — seeds the motion model dropdown. */
+  initialVideoModel?: ImageToVideoModel;
+  /** Style-category gate for models that require a matching style. */
+  styleCategory?: string;
+  recommendedVideoModel?: string | null;
+  styleName?: string;
   modelMissingShotIds?: Set<string>;
   modelMissingLabel?: string | null;
   /** Shots with stale prompts/image in the in-focus scene (#1077) — amber dots. */
@@ -84,6 +93,10 @@ const SceneListComponent: React.FC<SceneListProps> = ({
   divergentVariants,
   onCompareDivergent,
   initialMusicModel,
+  initialVideoModel,
+  styleCategory,
+  recommendedVideoModel,
+  styleName,
   modelMissingShotIds,
   modelMissingLabel,
   staleShotIds,
@@ -105,6 +118,9 @@ const SceneListComponent: React.FC<SceneListProps> = ({
   const [musicModel, setMusicModel] = useState<AudioModel>(
     initialMusicModel ?? DEFAULT_MUSIC_MODEL
   );
+  const [videoModel, setVideoModel] = useState<ImageToVideoModel>(
+    initialVideoModel ?? DEFAULT_VIDEO_MODEL
+  );
 
   // Sync local selection when the sequence's saved model changes from outside
   // (e.g. after generation completes and the workflow persists the new model).
@@ -112,6 +128,11 @@ const SceneListComponent: React.FC<SceneListProps> = ({
   if (initialMusicModel && initialMusicModel !== prevInitialMusicRef.current) {
     prevInitialMusicRef.current = initialMusicModel;
     setMusicModel(initialMusicModel);
+  }
+  const prevInitialVideoRef = useRef(initialVideoModel);
+  if (initialVideoModel && initialVideoModel !== prevInitialVideoRef.current) {
+    prevInitialVideoRef.current = initialVideoModel;
+    setVideoModel(initialVideoModel);
   }
 
   const totalShots = shots?.length ?? 0;
@@ -148,6 +169,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
       await onBatchGenerateMotion({
         includeMusic,
         musicModel,
+        videoModel,
         generateAudio,
       });
     } finally {
@@ -164,23 +186,23 @@ const SceneListComponent: React.FC<SceneListProps> = ({
     !motionPromptsReady ||
     (includeMusic && !musicPromptsReady);
 
-  // Batch cost = sum of per-shot motion (+ optional music track) (#1140).
+  // Batch cost = sum of per-shot motion at the selected video model
+  // (+ optional music track) (#1140). Matches server `data.model` override.
   const { pricing: falPricing } = useFalPricing();
   const batchCostEstimate = useMemo((): Microdollars | null => {
     if (!falPricing || notStartedShots.length === 0) return null;
     let total: Microdollars = ZERO_MICROS;
     let anyHonest = false;
     for (const shot of notStartedShots) {
-      const model = safeImageToVideoModel(
-        shot.video?.model ?? shot.primaryVideo?.model,
-        DEFAULT_VIDEO_MODEL
-      );
       const duration = resolveShotDuration({
         durationMs: shot.durationMs,
-        model,
+        model: videoModel,
       });
-      const perShot = estimateVideoCost(model, duration, {
+      // Sequences with completed stills almost always have cast/element refs
+      // by motion time; Seedance routes to reference-to-video when they do.
+      const perShot = estimateVideoCost(videoModel, duration, {
         pricing: falPricing,
+        hasReferenceImages: true,
       });
       if (perShot === null) continue;
       anyHonest = true;
@@ -188,12 +210,12 @@ const SceneListComponent: React.FC<SceneListProps> = ({
     }
     if (includeMusic) {
       const audioDuration = notStartedShots.reduce((sum, shot) => {
-        const model = safeImageToVideoModel(
-          shot.video?.model ?? shot.primaryVideo?.model,
-          DEFAULT_VIDEO_MODEL
-        );
         return (
-          sum + resolveShotDuration({ durationMs: shot.durationMs, model })
+          sum +
+          resolveShotDuration({
+            durationMs: shot.durationMs,
+            model: videoModel,
+          })
         );
       }, 0);
       const music = estimateAudioCost(musicModel, Math.max(audioDuration, 5), {
@@ -205,7 +227,7 @@ const SceneListComponent: React.FC<SceneListProps> = ({
       }
     }
     return anyHonest ? total : null;
-  }, [falPricing, notStartedShots, includeMusic, musicModel]);
+  }, [falPricing, notStartedShots, includeMusic, musicModel, videoModel]);
 
   const shotsBySceneId = useMemo(() => {
     const map = new Map<string, ShotView[]>();
@@ -349,15 +371,21 @@ const SceneListComponent: React.FC<SceneListProps> = ({
       {/* Sticky footer with Generate Motion button */}
       {showButton && (
         <div className="sticky bottom-0 border-t bg-background p-4 flex flex-col gap-3">
+          <MotionModelSelector
+            selectedModel={videoModel}
+            onModelChange={setVideoModel}
+            aspectRatio={aspectRatio}
+            styleCategory={styleCategory}
+            recommendedVideoModel={recommendedVideoModel}
+            styleName={styleName}
+            disabled={isGenerating || isMotionInProgress}
+          />
           {includeMusic && (
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Music model</span>
-              <MusicModelSelector
-                selectedModel={musicModel}
-                onModelChange={setMusicModel}
-                disabled={isGenerating || isMotionInProgress}
-              />
-            </div>
+            <MusicModelSelector
+              selectedModel={musicModel}
+              onModelChange={setMusicModel}
+              disabled={isGenerating || isMotionInProgress}
+            />
           )}
           <div className="flex flex-col gap-1">
             <Button
@@ -437,6 +465,10 @@ const areEqual = (
     prevProps.musicPromptsReady !== nextProps.musicPromptsReady ||
     prevProps.hideBatchButton !== nextProps.hideBatchButton ||
     prevProps.initialMusicModel !== nextProps.initialMusicModel ||
+    prevProps.initialVideoModel !== nextProps.initialVideoModel ||
+    prevProps.styleCategory !== nextProps.styleCategory ||
+    prevProps.recommendedVideoModel !== nextProps.recommendedVideoModel ||
+    prevProps.styleName !== nextProps.styleName ||
     prevProps.modelMissingLabel !== nextProps.modelMissingLabel ||
     prevProps.modelMissingShotIds !== nextProps.modelMissingShotIds
   ) {

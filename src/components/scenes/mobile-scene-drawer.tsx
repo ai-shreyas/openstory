@@ -1,3 +1,4 @@
+import { MotionModelSelector } from '@/components/model/motion-model-selector';
 import { MusicModelSelector } from '@/components/model/music-model-selector';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -10,7 +11,12 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import type { SceneWithScript } from '@/hooks/use-scenes';
-import { DEFAULT_MUSIC_MODEL, type AudioModel } from '@/lib/ai/models';
+import {
+  DEFAULT_MUSIC_MODEL,
+  DEFAULT_VIDEO_MODEL,
+  type AudioModel,
+  type ImageToVideoModel,
+} from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
 import type { ShotView } from '@/lib/shots/shot-view';
@@ -35,6 +41,11 @@ type MobileSceneDrawerProps = {
   hideBatchButton?: boolean;
   /** Initial music model for the batch selector (from `sequence.musicModel`). */
   initialMusicModel?: AudioModel;
+  /** Initial video model for the batch selector (from `sequence.videoModel`). */
+  initialVideoModel?: ImageToVideoModel;
+  styleCategory?: string;
+  recommendedVideoModel?: string | null;
+  styleName?: string;
 };
 
 export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
@@ -49,6 +60,10 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   musicPromptsReady,
   hideBatchButton = false,
   initialMusicModel,
+  initialVideoModel,
+  styleCategory,
+  recommendedVideoModel,
+  styleName,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -57,11 +72,19 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
   const [musicModel, setMusicModel] = useState<AudioModel>(
     initialMusicModel ?? DEFAULT_MUSIC_MODEL
   );
+  const [videoModel, setVideoModel] = useState<ImageToVideoModel>(
+    initialVideoModel ?? DEFAULT_VIDEO_MODEL
+  );
 
   const prevInitialMusicRef = useRef(initialMusicModel);
   if (initialMusicModel && initialMusicModel !== prevInitialMusicRef.current) {
     prevInitialMusicRef.current = initialMusicModel;
     setMusicModel(initialMusicModel);
+  }
+  const prevInitialVideoRef = useRef(initialVideoModel);
+  if (initialVideoModel && initialVideoModel !== prevInitialVideoRef.current) {
+    prevInitialVideoRef.current = initialVideoModel;
+    setVideoModel(initialVideoModel);
   }
 
   const totalShots = shots?.length ?? 0;
@@ -110,6 +133,7 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
       await onBatchGenerateMotion({
         includeMusic,
         musicModel,
+        videoModel,
         generateAudio,
       });
     } finally {
@@ -205,17 +229,21 @@ export const MobileSceneDrawer: React.FC<MobileSceneDrawerProps> = ({
 
           {showFooter && (
             <SheetFooter className="border-t pt-4 px-4 flex-col items-stretch gap-3">
+              <MotionModelSelector
+                selectedModel={videoModel}
+                onModelChange={setVideoModel}
+                aspectRatio={aspectRatio}
+                styleCategory={styleCategory}
+                recommendedVideoModel={recommendedVideoModel}
+                styleName={styleName}
+                disabled={isGenerating || isMotionInProgress}
+              />
               {includeMusic && (
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs text-muted-foreground">
-                    Music model
-                  </span>
-                  <MusicModelSelector
-                    selectedModel={musicModel}
-                    onModelChange={setMusicModel}
-                    disabled={isGenerating || isMotionInProgress}
-                  />
-                </div>
+                <MusicModelSelector
+                  selectedModel={musicModel}
+                  onModelChange={setMusicModel}
+                  disabled={isGenerating || isMotionInProgress}
+                />
               )}
               <Button
                 variant="default"

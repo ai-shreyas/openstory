@@ -18,6 +18,7 @@ import {
 } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { aspectRatioToDimensions } from '@/lib/constants/aspect-ratios';
+import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { getLogger } from '@/lib/observability/logger';
 import { reportFlooredEstimate } from './billing-observability';
 import { type Microdollars, addMicros, micros, multiplyMicros } from './money';
@@ -134,14 +135,34 @@ export function estimateImageCost(
 
 /**
  * Estimate provider cost of generating video.
+ *
+ * Prices the **endpoint the run will actually hit** (#873 / #1140): when
+ * cast/element refs will be attached and the model has a dedicated
+ * reference-to-video endpoint (Seedance), use that row; otherwise the base
+ * image-to-video id. Duration + resolution still drive the unit formula —
+ * we do not invent a per-ref surcharge.
  */
 export function estimateVideoCost(
   model: ImageToVideoModel,
   durationSeconds: number,
-  opts: { pricing: FalPricingMap; resolution?: string }
+  opts: {
+    pricing: FalPricingMap;
+    resolution?: string;
+    /**
+     * True when cast/element (or other) reference images will be sent so
+     * `resolveMotionEndpoint` may route to reference-to-video.
+     */
+    hasReferenceImages?: boolean;
+  }
 ): Microdollars | null {
+  const { endpointId } = resolveMotionEndpoint(
+    model,
+    opts.hasReferenceImages === true
+  );
+  // Keep the catalog model id path when unresolved (tests / unknown keys).
+  const falEndpointId = endpointId || IMAGE_TO_VIDEO_MODELS[model].id;
   return estimateFalCost(
-    IMAGE_TO_VIDEO_MODELS[model].id,
+    falEndpointId,
     {
       durationSeconds,
       resolution: opts.resolution,
@@ -184,6 +205,11 @@ const DEFAULT_ESTIMATED_SCENE_COUNT = 8;
  * Includes: LLM analysis, character/location sheet images, per-shot images,
  * and optionally per-shot motion generation.
  *
+ * `estimatedSceneCount` is treated as the number of **shot stills** to bill
+ * (today the pipeline is ~1 still per scene). Callers should pass
+ * `estimateSceneCount(script)` so enhanced scripts with "Scene N — 5s"
+ * headings are counted accurately — not word-density alone (#1140).
+ *
  * Gate-only: components with no honest estimate contribute the conservative
  * `UNKNOWN_ESTIMATE_FLOOR` per call rather than making the total null.
  */
@@ -192,6 +218,10 @@ export function estimateStoryboardCost(opts: {
   /** Number of image models selected (multiplies per-shot image cost) */
   imageModelCount?: number;
   aspectRatio: AspectRatio;
+  /**
+   * Expected still count (≈ scene count today). Prefer labeled Scene N
+   * headings from Enhance over word heuristics.
+   */
   estimatedSceneCount?: number;
   autoGenerateMotion?: boolean;
   /**
@@ -255,9 +285,14 @@ export function estimateStoryboardCost(opts: {
   // count — a mixed selection has genuinely different per-model costs.
   if (opts.autoGenerateMotion && opts.videoModels?.length) {
     const duration = opts.videoDurationSeconds ?? 5;
+    // Storyboard generates cast/location sheets before motion, so Seedance
+    // (and any model with a ref endpoint) almost always hits reference-to-video.
     for (const model of opts.videoModels) {
       const perShotMotion = gateEstimate(
-        estimateVideoCost(model, duration, { pricing }),
+        estimateVideoCost(model, duration, {
+          pricing,
+          hasReferenceImages: true,
+        }),
         { model, operation: 'storyboard:motion' }
       );
       totalCost = addMicros(

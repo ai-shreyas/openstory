@@ -29,6 +29,7 @@ import { estimateStoryboardCost } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { Sequence } from '@/types/database';
+import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import type { CreateSequenceInput } from '@/lib/schemas/sequence.schemas';
 import { copySequenceElements } from '@/lib/sequence-elements/copy-sequence-elements';
 import { promoteTempElements } from '@/lib/sequence-elements/promote-temp-elements';
@@ -64,6 +65,7 @@ export const createSequences = createServerOnlyFn(
     const teamId = context.teamId;
 
     const {
+      script,
       styleId,
       aspectRatio,
       analysisModels,
@@ -148,6 +150,8 @@ export const createSequences = createServerOnlyFn(
         imageModel: primaryImageModel,
         imageModelCount: imageModels.length,
         aspectRatio,
+        // Count Scene N headings after Enhance (not word density alone).
+        estimatedSceneCount: estimateSceneCount(script),
         autoGenerateMotion,
         videoModels,
         // Music only actually generates when motion is also on (it spawns from
