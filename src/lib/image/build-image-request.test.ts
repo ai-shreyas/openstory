@@ -1,10 +1,11 @@
-import { EDIT_ENDPOINTS, type TextToImageModel } from '@/lib/ai/models';
+import { EDIT_ENDPOINTS } from '@/lib/ai/models';
+import { typedEntries } from '@/lib/utils/typed-object';
 import { describe, expect, it } from 'vitest';
 import { buildImageRequest } from './build-image-request';
 
 const REFS = ['https://example.com/a.png', 'https://example.com/b.png'];
 
-const editModels = Object.keys(EDIT_ENDPOINTS) as TextToImageModel[];
+const editModels = typedEntries(EDIT_ENDPOINTS).map(([model]) => model);
 
 describe('buildImageRequest — edit endpoints carry their reference images', () => {
   /**
