@@ -13,9 +13,9 @@
  *   - Reads payload from `event.payload` instead of `context.requestPayload`
  *     and the workflow run id from `event.instanceId` instead of
  *     `context.workflowRunId`.
- *   - The Promise.all over `context.invoke('image', ...)` becomes
- *     wave-bounded (#1126) Pattern 3 `spawnAndAwaitChild` fan-out
- *     (`mapInWaves` + `await-child.ts`). Each child gets a deterministic
+ *   - The Promise.all over `context.invoke('image', ...)` becomes a
+ *     concurrency-bounded (#1126, #1143) Pattern 3 `spawnAndAwaitChild` fan-out
+ *     (`mapWithConcurrency` + `await-child.ts`). Each child gets a deterministic
  *     instance ID (`image:${sequenceId}:${shotId}`) and a unique event-type
  *     qualifier so siblings cannot match each other's completion events.
  *   - Calls the snapshot DTO computer (`computeRegenerateShotsBatchHash`)
@@ -31,7 +31,7 @@ import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
-import { mapInWaves, resolveImageFanout } from '@/lib/workflow/map-in-waves';
+import { mapWithConcurrency, resolveImageFanout } from '@/lib/workflow/fanout';
 import type {
   ImageWorkflowInput,
   RegenerateShotsWorkflowInput,
@@ -129,13 +129,14 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     });
 
     // ============================================================
-    // PHASE: Per-shot image regeneration — Pattern 3 fan-out, wave-bounded
-    // (#1126) so large batches don't stampede Workflow isolates + D1.
-    // Within a wave: allSettled isolation; between waves: sequential.
+    // PHASE: Per-shot image regeneration — Pattern 3 fan-out, held to a
+    // rolling in-flight ceiling (#1143) so large batches don't stampede
+    // Workflow isolates + D1. Per-item settle isolation; the next shot starts
+    // as soon as any finishes, rather than waiting on a wave barrier.
     // ============================================================
-    const settled = await mapInWaves(
+    const settled = await mapWithConcurrency(
       snapshots,
-      fanout.scenes,
+      fanout.images,
       async (snapshot, shotIndex): Promise<ShotResult> => {
         if (!snapshot.imagePrompt) {
           // Per-shot failure — peer shots in the batch should still run.
@@ -208,7 +209,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
       }
     );
 
-    // mapInWaves is allSettled per wave; collect into ShotResult[] for reconcile.
+    // mapWithConcurrency settles per item; collect into ShotResult[] for reconcile.
     const imageResults: ShotResult[] = settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       const snapshot = snapshots[i];
@@ -236,7 +237,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     // from the primary still and would otherwise show the pre-recast subject.
     // Fire-and-forget creates, wave-bounded (#1126). Use Promise.all within
     // each wave (not allSettled) so a failed create fails the durable step
-    // and CF retries — mapInWaves would swallow partial failures.
+    // and CF retries — mapWithConcurrency would swallow partial failures.
     await step.do('trigger-variant-regen', async () => {
       const limit = fanout.variantTrigger;
       for (let i = 0; i < succeeded.length; i += limit) {
