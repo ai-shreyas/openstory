@@ -1,9 +1,12 @@
 /**
- * "What a film really costs" examples for the public pricing page (#1140).
+ * "Typical first film" examples for the public pricing page (#1140).
  *
  * Built from the same estimators the credit gate uses, so marketing numbers
  * cannot drift from pre-flight. Returns null when the default image model has
  * no honest pricing signal — never invent a showcase total from the $0.10 floor.
+ *
+ * Runtime matches the composer Enhance default (30s), not an orphan 8×5s=40s
+ * total that isn't on the duration chip (15s / 30s / 1m / 3m).
  */
 
 import type { EffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
@@ -17,22 +20,31 @@ import {
 } from '@/lib/ai/models';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import {
+  estimateCharacterSheetCount,
   estimateImageCost,
+  estimateLocationSheetCount,
   estimateStoryboardCost,
 } from '@/lib/billing/cost-estimation';
 import { microsToDisplayUsd, type Microdollars } from '@/lib/billing/money';
 import { SIGNUP_GRANT_MICROS } from '@/lib/billing/constants';
 
-const TYPICAL_SCENE_COUNT = 8;
+/**
+ * Composer default target duration (`script-view` duration chip: 15 / 30 / 60 / 180).
+ * Showcase totals use this runtime so pricing matches what users pick on Enhance.
+ */
+const TARGET_DURATION_S = 30;
+/** Typical motion clip length per shot when estimating a 30s board. */
 const TYPICAL_SHOT_DURATION_S = 5;
-
+/** Shots so that sceneCount × shotDuration ≈ target (6 × 5s = 30s). */
+const TYPICAL_SCENE_COUNT = TARGET_DURATION_S / TYPICAL_SHOT_DURATION_S;
 type FilmCostExample = {
   id: string;
   title: string;
-  description: string;
+  /** One short line under the price, e.g. "30s target · defaults". */
+  subtitle: string;
   /** Formatted total, e.g. "~$2.40". */
   cost: string;
-  /** Bullet-level breakdown of what is included. */
+  /** Bullet breakdown aligned with the estimator. */
   breakdown: string[];
   /** Raw micros for tests / comparisons. */
   costMicros: Microdollars;
@@ -45,15 +57,27 @@ export type FilmCostExamples = {
   imageModelName: string;
   videoModelName: string;
   audioModelName: string;
+  /** Enhance target duration used for the showcase (seconds). */
+  targetDurationSeconds: number;
+  sceneCount: number;
+  shotDurationSeconds: number;
 };
 
 function formatEstimate(micros: Microdollars): string {
   return `~${microsToDisplayUsd(micros)}`;
 }
 
+function formatTargetLabel(seconds: number): string {
+  if (seconds >= 60 && seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    return minutes === 1 ? '1m' : `${minutes}m`;
+  }
+  return `${seconds}s`;
+}
+
 /**
- * Three tiers: images-only first sequence, motion short, motion + music.
- * All use product defaults so the welcome-grant comparison stays honest.
+ * Three tiers: images-only, stills + motion, stills + motion + music.
+ * Runtime and defaults align with the Generate / Enhance path (30s target).
  */
 export function buildFilmCostExamples(
   pricing: Record<string, EffectiveFalPricing>
@@ -97,53 +121,60 @@ export function buildFilmCostExamples(
     videoDurationSeconds: TYPICAL_SHOT_DURATION_S,
     autoGenerateMusic: true,
     audioModels: [DEFAULT_MUSIC_MODEL],
-    audioDurationSeconds: TYPICAL_SCENE_COUNT * TYPICAL_SHOT_DURATION_S,
+    audioDurationSeconds: TARGET_DURATION_S,
     pricing,
   });
 
   const imageName = IMAGE_MODELS[DEFAULT_IMAGE_MODEL].name;
   const videoName = IMAGE_TO_VIDEO_MODELS[DEFAULT_VIDEO_MODEL].name;
   const audioName = AUDIO_MODELS[DEFAULT_MUSIC_MODEL].name;
+  const targetLabel = formatTargetLabel(TARGET_DURATION_S);
+  const subtitle = `${targetLabel} target · defaults`;
+  const characterSheets = estimateCharacterSheetCount(TYPICAL_SCENE_COUNT);
+  const locationSheets = estimateLocationSheetCount(TYPICAL_SCENE_COUNT);
 
   return {
     welcomeCredits: microsToDisplayUsd(SIGNUP_GRANT_MICROS),
     imageModelName: imageName,
     videoModelName: videoName,
     audioModelName: audioName,
+    targetDurationSeconds: TARGET_DURATION_S,
+    sceneCount: TYPICAL_SCENE_COUNT,
+    shotDurationSeconds: TYPICAL_SHOT_DURATION_S,
     examples: [
       {
         id: 'images-only',
-        title: 'First sequence — stills',
-        description: `About ${TYPICAL_SCENE_COUNT} scenes as still images with script analysis, cast, and locations. Motion and music off.`,
+        title: 'Stills',
+        subtitle,
         cost: formatEstimate(imagesOnly),
         costMicros: imagesOnly,
         breakdown: [
-          `Script analysis + character & location sheets`,
-          `${TYPICAL_SCENE_COUNT} shot images (${imageName})`,
-          `No motion or music`,
+          // LLM line is a fixed pre-flight stand-in, not live OpenRouter cost.
+          `Script analysis (est.)`,
+          `${characterSheets} character + ${locationSheets} location sheets`,
+          `${TYPICAL_SCENE_COUNT} stills (${imageName})`,
         ],
       },
       {
         id: 'with-motion',
-        title: 'Short film — stills + motion',
-        description: `Same storyboard, plus ~${TYPICAL_SHOT_DURATION_S}s of motion video per shot.`,
+        title: 'Stills + motion',
+        subtitle,
         cost: formatEstimate(withMotion),
         costMicros: withMotion,
         breakdown: [
-          `Everything in “stills”`,
-          `${TYPICAL_SCENE_COUNT} × ~${TYPICAL_SHOT_DURATION_S}s motion (${videoName})`,
+          `Everything in Stills`,
+          `${TYPICAL_SCENE_COUNT} × ${TYPICAL_SHOT_DURATION_S}s ${videoName} (with refs)`,
         ],
       },
       {
         id: 'with-motion-music',
-        title: 'Polished short — motion + music',
-        description:
-          'Full pipeline: stills, per-shot motion, and one soundtrack for the sequence.',
+        title: 'Stills + motion + music',
+        subtitle,
         cost: formatEstimate(withMotionAndMusic),
         costMicros: withMotionAndMusic,
         breakdown: [
-          `Everything in “stills + motion”`,
-          `One music track (${audioName})`,
+          `Everything in Stills + motion`,
+          `One ${targetLabel} track (${audioName})`,
         ],
       },
     ],

@@ -128,8 +128,8 @@ export const WelcomeCreditsDialog: React.FC = () => {
                 {GRANT_DISPLAY}
               </DialogTitle>
               <DialogDescription className="max-w-xs text-sm leading-relaxed">
-                Free credits on us — enough for your first sequence. Generations
-                draw from this balance at provider rates.
+                Free credits on us — enough for a typical 30s short with motion
+                and music. Generations draw from this balance at provider rates.
               </DialogDescription>
             </DialogHeader>
           </div>

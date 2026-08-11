@@ -10,10 +10,16 @@ describe('buildFilmCostExamples', () => {
     expect(buildFilmCostExamples({})).toBeNull();
   });
 
-  it('builds three tiers with increasing cost', () => {
+  it('builds three tiers for a 30s Enhance target, not an orphan 40s runtime', () => {
     const result = buildFilmCostExamples(FAL_PRICING);
     expect(result).not.toBeNull();
     if (!result) return;
+
+    // Align with composer duration chips (15 / 30 / 60 / 180) and default 30s.
+    expect(result.targetDurationSeconds).toBe(30);
+    expect(result.sceneCount * result.shotDurationSeconds).toBe(
+      result.targetDurationSeconds
+    );
 
     expect(result.examples).toHaveLength(3);
     const [images, motion, full] = result.examples;
@@ -25,20 +31,24 @@ describe('buildFilmCostExamples', () => {
     expect(motion.costMicros).toBeGreaterThan(images.costMicros);
     expect(full.costMicros).toBeGreaterThan(motion.costMicros);
     expect(images.cost.startsWith('~')).toBe(true);
+    expect(images.subtitle).toMatch(/30s target/);
+    expect(images.breakdown.some((line) => /est\./i.test(line))).toBe(true);
+    expect(motion.breakdown.some((line) => /refs/i.test(line))).toBe(true);
+    expect(motion.breakdown.some((line) => /6 × 5s/i.test(line))).toBe(true);
   });
 
-  it('keeps the images-only tier within the welcome grant under fixture pricing', () => {
+  it('keeps the full stills+motion+music tier within the welcome grant under fixture pricing', () => {
     const result = buildFilmCostExamples(FAL_PRICING);
     expect(result).not.toBeNull();
     if (!result) return;
 
-    const imagesOnly = result.examples.find((e) => e.id === 'images-only');
-    expect(imagesOnly).toBeDefined();
-    if (!imagesOnly) return;
+    const full = result.examples.find((e) => e.id === 'with-motion-music');
+    expect(full).toBeDefined();
+    if (!full) return;
 
     expect(
-      imagesOnly.costMicros,
-      `images-only ($${microsToUsd(imagesOnly.costMicros).toFixed(2)} with ${DEFAULT_IMAGE_MODEL}) should fit in welcome grant ($${microsToUsd(SIGNUP_GRANT_MICROS)})`
+      full.costMicros,
+      `with-motion-music ($${microsToUsd(full.costMicros).toFixed(2)} with ${DEFAULT_IMAGE_MODEL}) should fit in welcome grant ($${microsToUsd(SIGNUP_GRANT_MICROS)})`
     ).toBeLessThanOrEqual(SIGNUP_GRANT_MICROS);
   });
 });

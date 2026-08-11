@@ -877,9 +877,11 @@ export const ScriptView: FC<{
   });
 
   // Transparent pricing under Generate (#1140). Honest estimate only —
-  // null when the primary image model has no pricing signal.
+  // null with no script (nothing to generate yet), or when the primary
+  // image model has no pricing signal.
   const { pricing: falPricing } = useFalPricing();
   const storyboardCostEstimate = useMemo(() => {
+    if (!scriptValue.trim()) return null;
     if (!falPricing) return null;
     const primaryImage = imageModels[0] ?? DEFAULT_IMAGE_MODEL;
     if (
@@ -889,18 +891,29 @@ export const ScriptView: FC<{
     ) {
       return null;
     }
+    // Prefer Scene N headings after Enhance; else words + target duration.
+    const sceneCount = estimateSceneCount(scriptValue, {
+      targetDurationSeconds: targetDuration,
+    });
+    // Spread the Enhance target across shots for motion; music spans the full
+    // target. Avoids billing every shot at a flat 5s when the user picked 30s/1m.
+    const perShotDurationSeconds = Math.max(
+      5,
+      Math.round(targetDuration / Math.max(sceneCount, 1))
+    );
     return estimateStoryboardCost({
       imageModel: primaryImage,
       imageModelCount: Math.max(imageModels.length, 1),
       aspectRatio,
-      // Prefer Scene N headings after Enhance; else words + target duration.
-      estimatedSceneCount: estimateSceneCount(scriptValue, {
-        targetDurationSeconds: targetDuration,
-      }),
+      estimatedSceneCount: sceneCount,
       autoGenerateMotion,
       videoModels: autoGenerateMotion ? videoModels : undefined,
+      videoDurationSeconds: autoGenerateMotion
+        ? perShotDurationSeconds
+        : undefined,
       autoGenerateMusic,
       audioModels: autoGenerateMusic ? audioModels : undefined,
+      audioDurationSeconds: autoGenerateMusic ? targetDuration : undefined,
       pricing: falPricing,
     });
   }, [

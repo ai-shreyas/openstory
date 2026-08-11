@@ -7,8 +7,10 @@ import {
 } from '@/lib/ai/models';
 import {
   estimateAudioCost,
+  estimateCharacterSheetCount,
   estimateImageCost,
   estimateLLMCost,
+  estimateLocationSheetCount,
   estimateStoryboardCost,
   estimateVideoCost,
   gateEstimate,
@@ -56,7 +58,47 @@ const motionContribution = (model: ImageToVideoModel) =>
 const audioContribution = (model: AudioModel) =>
   Number(estimateAudioCost(model, SCENE_COUNT * 5, { pricing: FAL_PRICING }));
 
+describe('estimateCharacterSheetCount / estimateLocationSheetCount', () => {
+  it('scales sheet counts with board size instead of always billing 3+3', () => {
+    expect(estimateCharacterSheetCount(1)).toBe(1);
+    expect(estimateLocationSheetCount(1)).toBe(1);
+    expect(estimateCharacterSheetCount(6)).toBe(3);
+    expect(estimateLocationSheetCount(6)).toBe(2);
+    expect(estimateCharacterSheetCount(12)).toBe(3);
+    expect(estimateLocationSheetCount(12)).toBe(3);
+  });
+});
+
 describe('estimateStoryboardCost', () => {
+  it('does not pad a one-scene board with three cast and location sheets', () => {
+    const oneScene = Number(
+      estimateStoryboardCost({
+        ...base,
+        estimatedSceneCount: 1,
+        autoGenerateMotion: false,
+        autoGenerateMusic: false,
+      })
+    );
+    const sheetsIfAlwaysThree =
+      Number(
+        estimateImageCost(IMAGE_MODEL, '16:9', 3, { pricing: FAL_PRICING })
+      ) * 2;
+    const sheetsScaled =
+      Number(
+        estimateImageCost(IMAGE_MODEL, '16:9', 1, { pricing: FAL_PRICING })
+      ) * 2;
+    // Total for 1 scene stills-only = llm + 1 char + 1 loc + 1 shot.
+    // If we still billed 3+3 sheets, cost would jump by (3-1)+(3-1) sheet gens.
+    const oneShot = Number(
+      estimateImageCost(IMAGE_MODEL, base.aspectRatio, 1, {
+        pricing: FAL_PRICING,
+      })
+    );
+    const llm = Number(estimateLLMCost(3));
+    expect(oneScene).toBe(llm + sheetsScaled + oneShot);
+    expect(oneScene).toBeLessThan(llm + sheetsIfAlwaysThree + oneShot);
+  });
+
   it('adds exactly one extra per-shot image pass per image model', () => {
     const one = Number(estimateStoryboardCost({ ...base, imageModelCount: 1 }));
     const two = Number(estimateStoryboardCost({ ...base, imageModelCount: 2 }));
@@ -286,12 +328,15 @@ describe('gateEstimate', () => {
   });
 
   it('keeps a storyboard total non-null and floored when the image model is unpriced', () => {
-    // Character sheets (3) + location sheets (3) + one image per scene, each
-    // gated at the floor, plus the flat LLM allowance.
+    // Character + location sheets (scaled by scene count) + one image per
+    // scene, each gated at the floor, plus the flat LLM allowance.
     const total = Number(
       estimateStoryboardCost({ ...base, imageModel: UNPRICED })
     );
-    const flooredImages = (3 + 3 + SCENE_COUNT) * 100_000;
+    const sheets =
+      estimateCharacterSheetCount(SCENE_COUNT) +
+      estimateLocationSheetCount(SCENE_COUNT);
+    const flooredImages = (sheets + SCENE_COUNT) * 100_000;
     const llm = Number(estimateLLMCost(3));
 
     expect(total).toBe(flooredImages + llm);

@@ -3,8 +3,8 @@
  * separator, above the user menu) — account chrome, not product nav (#1090).
  *
  * Visible when:
- * 1. Signed out — welcome-credit preview ($10, green) so new visitors see
- *    the free starting balance before they create an account (#1140)
+ * 1. Signed out — welcome-credit preview (grant amount, green) so new visitors
+ *    see the free starting balance before they create an account (#1140)
  * 2. Low balance with no safety net (amber)
  * 3. Balance topped up — brief green flash
  * 4. User toggled "always show" on the credits page (muted)

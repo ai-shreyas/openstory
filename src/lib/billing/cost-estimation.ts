@@ -201,6 +201,29 @@ export function estimateLLMCost(numCalls: number = 1): Microdollars {
 const DEFAULT_ESTIMATED_SCENE_COUNT = 8;
 
 /**
+ * How many character reference sheets to bill for a pre-flight estimate.
+ * Always charging 3 made a 1-scene Generate quote look absurd (sheets alone
+ * dominated). Scales gently with board size; caps at 3.
+ */
+export function estimateCharacterSheetCount(sceneCount: number): number {
+  const n = Math.max(1, Math.floor(sceneCount));
+  if (n <= 2) return 1;
+  if (n <= 5) return 2;
+  return 3;
+}
+
+/**
+ * How many location reference sheets to bill for a pre-flight estimate.
+ * Same rationale as {@link estimateCharacterSheetCount}.
+ */
+export function estimateLocationSheetCount(sceneCount: number): number {
+  const n = Math.max(1, Math.floor(sceneCount));
+  if (n <= 3) return 1;
+  if (n <= 8) return 2;
+  return 3;
+}
+
+/**
  * Estimate the total cost of a storyboard workflow.
  * Includes: LLM analysis, character/location sheet images, per-shot images,
  * and optionally per-shot motion generation.
@@ -244,22 +267,29 @@ export function estimateStoryboardCost(opts: {
   const sceneCount = opts.estimatedSceneCount ?? DEFAULT_ESTIMATED_SCENE_COUNT;
   const imageModelCount = opts.imageModelCount ?? 1;
   const { pricing } = opts;
+  const characterSheets = estimateCharacterSheetCount(sceneCount);
+  const locationSheets = estimateLocationSheetCount(sceneCount);
 
   // LLM calls: script analysis + character bible + location bible (~3 calls)
   const llmCost = estimateLLMCost(3);
 
-  // Character sheets (~3 characters on average, landscape_16_9)
+  // Character / location sheets — count scales with board size (not a flat 3+3).
   const characterSheetCost = gateEstimate(
-    estimateImageCost(opts.imageModel, '16:9', 3, { pricing }),
-    { model: opts.imageModel, operation: 'storyboard:character-sheets' },
-    3
+    estimateImageCost(opts.imageModel, '16:9', characterSheets, { pricing }),
+    {
+      model: opts.imageModel,
+      operation: 'storyboard:character-sheets',
+    },
+    characterSheets
   );
 
-  // Location sheets (~3 locations on average, landscape_16_9)
   const locationSheetCost = gateEstimate(
-    estimateImageCost(opts.imageModel, '16:9', 3, { pricing }),
-    { model: opts.imageModel, operation: 'storyboard:location-sheets' },
-    3
+    estimateImageCost(opts.imageModel, '16:9', locationSheets, { pricing }),
+    {
+      model: opts.imageModel,
+      operation: 'storyboard:location-sheets',
+    },
+    locationSheets
   );
 
   // Per-shot images (multiplied by number of selected image models)

@@ -7,11 +7,20 @@
  * - estimate is still loading and no value yet
  *
  * Prefixes with `~` — these are pre-flight estimates; billed units may differ.
+ * When the signed-in wallet balance is below the estimate (and generation is
+ * not covered by a team fal key), the amount is amber so over-budget is obvious.
  */
 
+import { useBillingBalance } from '@/hooks/use-billing-balance';
+import { useBillingGateQuery } from '@/hooks/use-billing-gate';
 import { useShowActionCosts } from '@/hooks/use-show-action-costs';
-import { microsToDisplayUsd, type Microdollars } from '@/lib/billing/money';
+import {
+  microsToDisplayUsd,
+  microsToUsd,
+  type Microdollars,
+} from '@/lib/billing/money';
 import { cn } from '@/lib/utils';
+import { AlertTriangle } from 'lucide-react';
 
 type ActionCostProps = {
   /** Honest estimate, or null when pricing is unknown for this action. */
@@ -27,26 +36,47 @@ export function ActionCost({
   align = 'center',
 }: ActionCostProps) {
   const { showActionCosts } = useShowActionCosts();
+  const { balance } = useBillingBalance();
+  const { data: gate } = useBillingGateQuery();
 
   if (!showActionCosts || estimate == null) return null;
 
-  const alignClass =
-    align === 'end'
-      ? 'text-right'
-      : align === 'start'
-        ? 'text-left'
-        : 'text-center';
+  // Wallet path only — team fal key means media (+ LLM via fal) is not
+  // drawn from credits, so "over balance" is not actionable.
+  const walletApplies = !gate?.hasFalKey;
+  const estimateUsd = microsToUsd(estimate);
+  const exceedsBalance =
+    walletApplies &&
+    balance !== null &&
+    Number.isFinite(balance) &&
+    estimateUsd > balance;
+
+  const amount = microsToDisplayUsd(estimate);
+  const label = exceedsBalance
+    ? `Estimated cost about ${amount}, more than your credit balance`
+    : `Estimated cost about ${amount}`;
 
   return (
     <span
       className={cn(
-        'block text-xs tabular-nums text-muted-foreground',
-        alignClass,
+        'flex items-center gap-1 text-xs tabular-nums',
+        align === 'end' && 'justify-end',
+        align === 'start' && 'justify-start',
+        align === 'center' && 'justify-center',
+        exceedsBalance
+          ? 'text-amber-600 dark:text-amber-400'
+          : 'text-muted-foreground',
         className
       )}
-      aria-label={`Estimated cost about ${microsToDisplayUsd(estimate)}`}
+      aria-label={label}
     >
-      ~{microsToDisplayUsd(estimate)}
+      {exceedsBalance ? (
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+      ) : null}
+      <span>
+        ~{amount}
+        {exceedsBalance ? ' · over balance' : null}
+      </span>
     </span>
   );
 }

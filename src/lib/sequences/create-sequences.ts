@@ -73,7 +73,7 @@ export const createSequences = createServerOnlyFn(
       imageModels: imageModelsInput,
       videoModel,
       videoModels: videoModelsInput,
-      autoGenerateMotion = false,
+      autoGenerateMotion = true,
       autoGenerateMusic = true,
       musicModel,
       audioModels: audioModelsInput,
