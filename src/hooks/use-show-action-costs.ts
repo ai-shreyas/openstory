@@ -14,8 +14,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 const STORAGE_KEY = 'openstory:show-action-costs';
-
-/** Default: show costs under actions. */
 const DEFAULT_SHOW_ACTION_COSTS = true;
 
 /** `undefined` = not yet hydrated from localStorage. */

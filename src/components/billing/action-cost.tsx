@@ -3,8 +3,13 @@
  *
  * Renders nothing when:
  * - the user turned action costs off (default is ON)
- * - there is no honest estimate (null) — never invent a number for display
+ * - there is no estimate (null/undefined) — never invent a number here
  * - estimate is still loading and no value yet
+ *
+ * Callers should pass an honest single-action estimate (`estimateImageCost` /
+ * video / audio → null when unknown). Storyboard totals from
+ * `estimateStoryboardCost` may still embed gate floors for unpriced
+ * subcomponents after a primary-image honesty check.
  *
  * Prefixes with `~` — these are pre-flight estimates; billed units may differ.
  * When the signed-in wallet balance is below the estimate (and generation is
@@ -41,8 +46,8 @@ export function ActionCost({
 
   if (!showActionCosts || estimate == null) return null;
 
-  // Wallet path only — team fal key means media (+ LLM via fal) is not
-  // drawn from credits, so "over balance" is not actionable.
+  // Wallet path only — team fal key covers media (and LLM when routed via fal).
+  // OpenRouter-only BYOK is not checked here.
   const walletApplies = !gate?.hasFalKey;
   const estimateUsd = microsToUsd(estimate);
   const exceedsBalance =

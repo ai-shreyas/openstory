@@ -25,11 +25,10 @@ import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
-import { estimateStoryboardCost } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
+import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { Sequence } from '@/types/database';
-import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import type { CreateSequenceInput } from '@/lib/schemas/sequence.schemas';
 import { copySequenceElements } from '@/lib/sequence-elements/copy-sequence-elements';
 import { promoteTempElements } from '@/lib/sequence-elements/promote-temp-elements';
@@ -77,6 +76,7 @@ export const createSequences = createServerOnlyFn(
       autoGenerateMusic = true,
       musicModel,
       audioModels: audioModelsInput,
+      targetDurationSeconds,
       suggestedTalentIds,
       suggestedLocationIds,
       elementUploads,
@@ -146,18 +146,17 @@ export const createSequences = createServerOnlyFn(
 
     await requireCredits(
       context.scopedDb,
-      estimateStoryboardCost({
+      estimateStoryboardPreflightCost({
+        script,
         imageModel: primaryImageModel,
         imageModelCount: imageModels.length,
         aspectRatio,
-        // Count Scene N headings after Enhance (not word density alone).
-        estimatedSceneCount: estimateSceneCount(script),
         autoGenerateMotion,
         videoModels,
-        // Music only actually generates when motion is also on (it spawns from
-        // inside motion-batch), so don't charge for music tracks that won't run.
-        autoGenerateMusic: autoGenerateMotion && autoGenerateMusic,
+        autoGenerateMusic,
         audioModels,
+        // Align with Generate ActionCost (duration chip → scene count + clip length).
+        targetDurationSeconds,
         pricing: await getEffectiveFalPricing(),
       }),
       {

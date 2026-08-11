@@ -40,8 +40,13 @@ const base = {
 
 /** Per-shot motion cost a model contributes across the whole storyboard. */
 const motionContribution = (model: ImageToVideoModel) =>
-  Number(estimateVideoCost(model, DURATION, { pricing: FAL_PRICING })) *
-  SCENE_COUNT;
+  Number(
+    estimateVideoCost(model, DURATION, {
+      pricing: FAL_PRICING,
+      // Storyboard always prices with cast/location refs available.
+      hasReferenceImages: true,
+    })
+  ) * SCENE_COUNT;
 
 /**
  * Per-sequence music cost a single audio model adds to the storyboard.
@@ -265,20 +270,69 @@ describe('estimateStoryboardCost', () => {
  * model, so `gateEstimate`'s null branch would otherwise never execute.
  */
 describe('estimateVideoCost endpoint routing', () => {
-  it('prices Seedance reference-to-video when hasReferenceImages is true', () => {
-    // Same unit rate in the fixture; routing must not throw / return null.
+  it('prices Seedance reference-to-video higher when ref endpoint is more expensive', () => {
+    // Unequal rates prove we hit resolveMotionEndpoint — equal fixture prices
+    // made this assertion tautological (#1140 review).
+    const pricing = {
+      ...FAL_PRICING,
+      'bytedance/seedance-2.0/enterprise/v2/image-to-video': {
+        unitPrice: micros(10_000),
+        unit: 'units',
+      },
+      'bytedance/seedance-2.0/enterprise/v2/reference-to-video': {
+        unitPrice: micros(20_000),
+        unit: 'units',
+      },
+    };
     const i2v = estimateVideoCost('seedance_v2', 5, {
-      pricing: FAL_PRICING,
+      pricing,
       hasReferenceImages: false,
     });
     const ref = estimateVideoCost('seedance_v2', 5, {
-      pricing: FAL_PRICING,
+      pricing,
       hasReferenceImages: true,
     });
     expect(i2v).not.toBeNull();
     expect(ref).not.toBeNull();
-    // Fixture keeps both endpoints at the same unit price + token formula.
-    expect(ref).toBe(i2v);
+    expect(ref).not.toBe(i2v);
+    expect(Number(ref)).toBeGreaterThan(Number(i2v));
+  });
+
+  it('storyboard motion with Seedance tracks the ref endpoint rate', () => {
+    const pricing = {
+      ...FAL_PRICING,
+      'bytedance/seedance-2.0/enterprise/v2/image-to-video': {
+        unitPrice: micros(10_000),
+        unit: 'units',
+      },
+      'bytedance/seedance-2.0/enterprise/v2/reference-to-video': {
+        unitPrice: micros(20_000),
+        unit: 'units',
+      },
+    };
+    const stillsOnly = Number(
+      estimateStoryboardCost({
+        ...base,
+        pricing,
+        autoGenerateMotion: false,
+      })
+    );
+    const withMotion = Number(
+      estimateStoryboardCost({
+        ...base,
+        pricing,
+        autoGenerateMotion: true,
+        videoModels: ['seedance_v2'],
+        videoDurationSeconds: DURATION,
+      })
+    );
+    const refPerShot = Number(
+      estimateVideoCost('seedance_v2', DURATION, {
+        pricing,
+        hasReferenceImages: true,
+      })
+    );
+    expect(withMotion - stillsOnly).toBe(refPerShot * SCENE_COUNT);
   });
 
   it('leaves Kling on image-to-video even with refs (inline elements path)', () => {

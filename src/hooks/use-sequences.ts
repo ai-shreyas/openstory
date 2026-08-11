@@ -191,6 +191,7 @@ export function useCreateSequence() {
           autoGenerateMusic: input.autoGenerateMusic,
           musicModel: input.musicModel,
           audioModels: input.audioModels,
+          targetDurationSeconds: input.targetDurationSeconds,
           suggestedTalentIds: input.suggestedTalentIds,
           suggestedLocationIds: input.suggestedLocationIds,
           elementUploads: input.elementUploads,

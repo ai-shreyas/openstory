@@ -191,6 +191,70 @@ describe('llm-client', () => {
       );
     });
 
+    it('always requests streamOptions.includeUsage (OpenRouter cost wiring)', async () => {
+      mockChat.mockReturnValue(
+        (async function* () {
+          yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'ok' };
+        })()
+      );
+
+      for await (const _chunk of callLLMStream({
+        model: 'anthropic/claude-sonnet-5',
+        messages: [{ role: 'user', content: 'test' }],
+      })) {
+        // drain
+      }
+
+      const firstCall = mockChat.mock.calls[0];
+      if (!firstCall) throw new Error('expected mockChat to have been called');
+      expect(firstCall[0].stream).toBe(true);
+      expect(firstCall[0].modelOptions?.streamOptions?.includeUsage).toBe(true);
+    });
+
+    it('surfaces usage.cost on structured responseSchema streams from RUN_FINISHED', async () => {
+      const schema = z.object({ title: z.string() });
+      mockChat.mockReturnValue(
+        (async function* () {
+          yield {
+            type: 'CUSTOM',
+            name: 'structured-output.complete',
+            value: {
+              object: { title: 'Hello' },
+              raw: '{"title":"Hello"}',
+            },
+          };
+          yield {
+            type: 'RUN_FINISHED',
+            usage: {
+              promptTokens: 3,
+              completionTokens: 2,
+              totalTokens: 5,
+              cost: 0.0123,
+            },
+          };
+        })()
+      );
+
+      let doneUsage: TokenUsage | undefined;
+      let parsed: { title: string } | undefined;
+      for await (const chunk of callLLMStream({
+        model: 'anthropic/claude-sonnet-5',
+        messages: [{ role: 'user', content: 'test' }],
+        responseSchema: schema,
+      })) {
+        if (chunk.done) {
+          doneUsage = chunk.usage;
+          parsed = chunk.parsed;
+        }
+      }
+
+      expect(parsed).toEqual({ title: 'Hello' });
+      expect(doneUsage?.cost).toBe(0.0123);
+      expect(llmCostFromUsage(doneUsage, 'anthropic/claude-sonnet-5')).toBe(
+        usdToMicros(0.0123)
+      );
+    });
+
     const drain = async (gen: AsyncIterable<unknown>) => {
       for await (const _chunk of gen) {
         // exhaust the generator

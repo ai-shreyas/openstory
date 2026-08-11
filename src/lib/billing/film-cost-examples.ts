@@ -1,12 +1,16 @@
 /**
  * "Typical first film" examples for the public pricing page (#1140).
  *
- * Built from the same estimators the credit gate uses, so marketing numbers
- * cannot drift from pre-flight. Returns null when the default image model has
- * no honest pricing signal — never invent a showcase total from the $0.10 floor.
+ * Built from the same estimators as Generate pre-flight, with fixed 30s /
+ * 6×5s defaults for a stable showcase (not live script scene count). Returns
+ * null when the default image model has no honest pricing signal. Other
+ * components may still floor via `estimateStoryboardCost` if those rows are
+ * missing from the pricing map.
  *
  * Runtime matches the composer Enhance default (30s), not an orphan 8×5s=40s
- * total that isn't on the duration chip (15s / 30s / 1m / 3m).
+ * total that isn't on the duration chip (15s / 30s / 1m / 3m). Showcase uses
+ * 6 shots × 5s so wall-clock matches 30s; duration midpoint for a short
+ * unenhanced script is 5 — intentional marketing vs preflight difference.
  */
 
 import type { EffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
@@ -52,7 +56,7 @@ type FilmCostExample = {
 
 export type FilmCostExamples = {
   examples: FilmCostExample[];
-  /** e.g. "$10.00" — welcome grant callout. */
+  /** e.g. "$20.00" — from SIGNUP_GRANT_MICROS. */
   welcomeCredits: string;
   imageModelName: string;
   videoModelName: string;

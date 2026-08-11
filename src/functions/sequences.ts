@@ -1,25 +1,26 @@
 import {
   DEFAULT_IMAGE_MODEL,
+  DEFAULT_MUSIC_MODEL,
   DEFAULT_VIDEO_MODEL,
   isValidAudioModel,
   isValidImageToVideoModel,
   isValidTextToImageModel,
+  safeAudioModel,
   safeImageToVideoModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
 import {
   estimateAudioCost,
   estimateImageCost,
-  estimateStoryboardCost,
   estimateVideoCost,
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
+import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
-import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import {
   loadSceneContextBySequence,
   resolveSceneForShot,
@@ -171,15 +172,20 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
     if (needsRegeneration) {
       await requireCredits(
         context.scopedDb,
-        estimateStoryboardCost({
+        estimateStoryboardPreflightCost({
+          script: sequence.script ?? '',
           imageModel: safeTextToImageModel(
             sequence.imageModel,
             DEFAULT_IMAGE_MODEL
           ),
           aspectRatio: sequence.aspectRatio,
-          estimatedSceneCount: estimateSceneCount(sequence.script ?? ''),
+          autoGenerateMotion: sequence.autoGenerateMotion,
           videoModels: [
             safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
+          ],
+          autoGenerateMusic: sequence.autoGenerateMusic,
+          audioModels: [
+            safeAudioModel(sequence.musicModel, DEFAULT_MUSIC_MODEL),
           ],
           pricing: await getEffectiveFalPricing(),
         }),
@@ -263,16 +269,19 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
 
     await requireCredits(
       context.scopedDb,
-      estimateStoryboardCost({
+      estimateStoryboardPreflightCost({
+        script: sequence.script ?? '',
         imageModel: safeTextToImageModel(
           sequence.imageModel,
           DEFAULT_IMAGE_MODEL
         ),
         aspectRatio: sequence.aspectRatio,
-        estimatedSceneCount: estimateSceneCount(sequence.script ?? ''),
+        autoGenerateMotion: sequence.autoGenerateMotion,
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],
+        autoGenerateMusic: sequence.autoGenerateMusic,
+        audioModels: [safeAudioModel(sequence.musicModel, DEFAULT_MUSIC_MODEL)],
         pricing: await getEffectiveFalPricing(),
       }),
       {

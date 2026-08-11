@@ -115,8 +115,8 @@ export function createUsageCapture(): {
  * Convert a completed LLM call's usage into a charge.
  *
  * Uses OpenRouter's per-request `cost` (USD) only. Missing cost → $0 and a
- * missing-cost report. Do not invent rates — if cost is absent the capture
- * path failed (structured streaming + {@link createUsageCapture}).
+ * missing-cost report. Do not invent rates — usually means capture/stream path
+ * didn't surface OpenRouter `usage.cost` (see {@link createUsageCapture}).
  */
 export function llmCostFromUsage(
   usage: TokenUsage | undefined,

@@ -72,16 +72,14 @@ export function UserSidebarFooter() {
       await authClient.signOut({
         fetchOptions: {
           onSuccess: () => {
-            // Belt-and-braces if the global onSuccess path didn't run
-            // (e.g. response URL shape differs).
+            // Only seed anonymous session after a confirmed sign-out. A
+            // failed network/API call must not flip the UI to "Sign in"
+            // while the cookie is still valid.
             queryClient.setQueryData(sessionQueryOptions.queryKey, null);
             void navigate({ to: '/' });
           },
         },
       });
-      // signOut can resolve without calling onSuccess on some error paths —
-      // still force anonymous UI if the cookie is gone.
-      queryClient.setQueryData(sessionQueryOptions.queryKey, null);
     } finally {
       setIsSigningOut(false);
     }

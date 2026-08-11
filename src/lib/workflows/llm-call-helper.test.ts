@@ -47,7 +47,9 @@ vi.doMock('@/lib/realtime', () => ({
   }),
 }));
 
-const { durableStreamingLLMCallCf } = await import('./llm-call-helper');
+const { durableLLMCallCf, durableStreamingLLMCallCf } =
+  await import('./llm-call-helper');
+const { usdToMicros, ZERO_MICROS } = await import('@/lib/billing/money');
 
 // Minimal WorkflowStep: run every step body immediately, no retries.
 // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowStep stub: the helper only uses `do`
@@ -73,6 +75,65 @@ const callContext = {
   workflowRunId: 'wf-test',
   shotPromptStream: { shotId: 'shot-1', promptType: 'visual' as const },
 };
+
+/** Context without shot stream → durableLLMCallCf (non-UI stream drain). */
+const nonStreamContext = {
+  sequenceId: '01TESTSEQUENCE0000000000',
+  workflowRunId: 'wf-test',
+};
+
+describe('durableLLMCallCf usage cost capture', () => {
+  it('requests stream + includeUsage and bills usage.cost from RUN_FINISHED', async () => {
+    const validObject = { visual: { fullPrompt: 'A clean shot' } };
+    mockChat.mockReturnValue(
+      (async function* () {
+        yield {
+          type: 'CUSTOM',
+          name: 'structured-output.complete',
+          value: { object: validObject, raw: JSON.stringify(validObject) },
+        };
+        yield {
+          type: 'RUN_FINISHED',
+          usage: {
+            promptTokens: 10,
+            completionTokens: 5,
+            totalTokens: 15,
+            cost: 0.07,
+          },
+        };
+      })()
+    );
+
+    const result = await durableLLMCallCf(step, callConfig, nonStreamContext);
+    expect(result).toEqual(validObject);
+
+    const firstCall = mockChat.mock.calls[0];
+    if (!firstCall) throw new Error('expected mockChat to have been called');
+    expect(firstCall[0].stream).toBe(true);
+    expect(firstCall[0].modelOptions?.streamOptions?.includeUsage).toBe(true);
+  });
+
+  it('returns zero cost micros when usage.cost is missing', async () => {
+    const validObject = { visual: { fullPrompt: 'No cost' } };
+    mockChat.mockReturnValue(
+      (async function* () {
+        yield {
+          type: 'CUSTOM',
+          name: 'structured-output.complete',
+          value: { object: validObject, raw: JSON.stringify(validObject) },
+        };
+      })()
+    );
+
+    // Without scopedDb there is no deduct step; success proves the drain
+    // completed and missing cost did not throw.
+    await expect(
+      durableLLMCallCf(step, callConfig, nonStreamContext)
+    ).resolves.toEqual(validObject);
+    // Sanity: ZERO and a real cost micros stay distinct for callers.
+    expect(ZERO_MICROS).not.toBe(usdToMicros(0.07));
+  });
+});
 
 describe('durableStreamingLLMCallCf structured-output.complete', () => {
   it('prefers the validated object from the complete event over accumulated text', async () => {

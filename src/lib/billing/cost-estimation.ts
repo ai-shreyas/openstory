@@ -75,9 +75,15 @@ const reportedUnpriced = new Set<string>();
 
 /**
  * Resolve an estimate for the credit gate: the honest number when one exists,
- * otherwise the conservative floor per call. Display paths should NOT use
- * this — show nothing for null. The log dedupes per model+operation; the
- * PostHog event fires every time so the floor's frequency stays countable.
+ * otherwise the conservative floor per call.
+ *
+ * Prefer null for single-action UI labels (`estimateImageCost` / video / audio).
+ * `estimateStoryboardCost` intentionally floors components for credit gates
+ * and reuses that total for Generate's ActionCost — that dual use is the
+ * exception, not the rule (#1140).
+ *
+ * The log dedupes per model+operation; the PostHog event fires every time so
+ * the floor's frequency stays countable.
  */
 export function gateEstimate(
   estimate: Microdollars | null,
@@ -187,9 +193,9 @@ export function estimateAudioCost(
 }
 
 /**
- * Rough estimate of LLM cost per call for pre-flight credit checks.
- * Based on average token usage for script analysis calls.
- * Only used for client-side gate affordability checks, not actual deduction.
+ * Fixed pre-flight stand-in (~$0.02/call) for script-analysis LLM cost.
+ * Used by credit gates and ActionCost/storyboard estimates — never for actual
+ * deduction (that uses OpenRouter `usage.cost` via `llmCostFromUsage`).
  */
 const AVERAGE_LLM_COST_PER_CALL_MICROS = micros(20_000); // $0.02
 
@@ -197,7 +203,11 @@ export function estimateLLMCost(numCalls: number = 1): Microdollars {
   return multiplyMicros(AVERAGE_LLM_COST_PER_CALL_MICROS, numCalls);
 }
 
-/** Average scene count for a typical script (used when we can't know in advance) */
+/**
+ * Blind fallback when callers omit `estimatedSceneCount`. Prefer
+ * `estimateSceneCount(script, { targetDurationSeconds })` (or labeled Scene N
+ * headings after Enhance). Not the Enhance 30s product default (~5–6 shots).
+ */
 const DEFAULT_ESTIMATED_SCENE_COUNT = 8;
 
 /**
@@ -230,11 +240,15 @@ export function estimateLocationSheetCount(sceneCount: number): number {
  *
  * `estimatedSceneCount` is treated as the number of **shot stills** to bill
  * (today the pipeline is ~1 still per scene). Callers should pass
- * `estimateSceneCount(script)` so enhanced scripts with "Scene N — 5s"
- * headings are counted accurately — not word-density alone (#1140).
+ * `estimateSceneCount(script, { targetDurationSeconds })` so pre-Enhance
+ * duration chips and enhanced "Scene N — 5s" headings both count accurately
+ * (#1140). Prefer `estimateStoryboardPreflightCost` at server gates so
+ * motion/music flags stay aligned with Generate ActionCost.
  *
- * Gate-only: components with no honest estimate contribute the conservative
- * `UNKNOWN_ESTIMATE_FLOOR` per call rather than making the total null.
+ * Always returns a number for gates: components with no honest estimate
+ * contribute `UNKNOWN_ESTIMATE_FLOOR` per call. Generate's ActionCost and
+ * film-cost showcase also use this total after an honest primary-image probe;
+ * unpriced motion/audio lines may still embed floors in that composite.
  */
 export function estimateStoryboardCost(opts: {
   imageModel: TextToImageModel;

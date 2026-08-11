@@ -700,6 +700,7 @@ export const ScriptView: FC<{
         autoGenerateMusic,
         musicModel: audioModels[0] ?? DEFAULT_MUSIC_MODEL,
         audioModels,
+        targetDurationSeconds: targetDuration,
         suggestedTalentIds:
           selectedTalentIds.length > 0 ? selectedTalentIds : undefined,
         suggestedLocationIds:

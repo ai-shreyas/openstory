@@ -78,8 +78,9 @@ function PricingPage() {
               {filmCosts.targetDurationSeconds}s target (Enhance default) with
               product defaults ({filmCosts.imageModelName},{' '}
               {filmCosts.videoModelName}, {filmCosts.audioModelName}). These use
-              the same estimate as Generate — we try to be as accurate as
-              possible; the final charge can differ once generation finishes.
+              the same estimators as Generate (fixed 30s showcase) — we try to
+              be as accurate as possible; the final charge can differ once
+              generation finishes.
             </p>
           </div>
 

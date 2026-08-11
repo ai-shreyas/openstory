@@ -32,8 +32,8 @@ export function getRedirectFromParams(
  * `/?style=<slug>#compose` — path + search seed the composer; `#compose` is
  * only a scroll target and must not go to Google as the callback.
  *
- * Also strips absolute same-origin URLs down to path+search and blocks open
- * redirects (only relative `/…` paths, never `/login…`).
+ * Also reduces absolute URLs to path + search (origin discarded; only relative
+ * `/…` paths are kept) and blocks open redirects (never `/login…`).
  */
 export function sanitizeAuthRedirect(
   redirectTo: string | null | undefined
