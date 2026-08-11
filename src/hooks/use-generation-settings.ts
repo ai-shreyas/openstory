@@ -25,7 +25,9 @@ import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'ui', 'use-generation-settings']);
 
-const STORAGE_KEY = 'openstory:generation-settings:v2';
+// Bump when product defaults change so prior localStorage snapshots are ignored
+// (v2 → v3: motion + music on for the welcome short aha — #1140).
+const STORAGE_KEY = 'openstory:generation-settings:v3';
 
 type GenerationSettings = {
   aspectRatio: AspectRatio;
@@ -47,10 +49,12 @@ const DEFAULT_SETTINGS: GenerationSettings = {
   imageModels: [DEFAULT_IMAGE_MODEL],
   motionModel: DEFAULT_VIDEO_MODEL,
   videoModels: [DEFAULT_VIDEO_MODEL],
-  autoGenerateMotion: false,
+  // Motion + music on by default so the first Generate is a short film aha
+  // (welcome grant sized for a ~30s stills+motion+music board — #1140).
+  autoGenerateMotion: true,
   musicModel: DEFAULT_MUSIC_MODEL,
   audioModels: [DEFAULT_MUSIC_MODEL],
-  autoGenerateMusic: false,
+  autoGenerateMusic: true,
 };
 
 /**

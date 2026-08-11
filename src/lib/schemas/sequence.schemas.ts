@@ -106,10 +106,12 @@ export const createSequenceSchema = createInsertSchema(sequences, {
       )
       .min(1, 'At least one video model must be selected')
       .default([DEFAULT_VIDEO_MODEL]),
-    // Auto-generate motion flag (UI-only, not stored in DB)
-    autoGenerateMotion: z.boolean().default(false).optional(),
-    // Auto-generate music flag (UI-only, not stored in DB)
-    autoGenerateMusic: z.boolean().default(false).optional(),
+    // Product default ON for the aha path (stills + motion + music). Callers
+    // that omit flags get true after parse — keep API v1 explicit if it must
+    // stay opt-in spend. Zod `.default()` runs before handler destructuring, so
+    // handler `= true` alone is not enough when the flag is omitted.
+    autoGenerateMotion: z.boolean().default(true).optional(),
+    autoGenerateMusic: z.boolean().default(true).optional(),
     // Music model selection (model key, not full ID) — primary / first of audioModels
     musicModel: z
       .string()
@@ -127,6 +129,10 @@ export const createSequenceSchema = createInsertSchema(sequences, {
       )
       .min(1, 'At least one audio model must be selected')
       .optional(),
+    // Enhance / Generate duration chip (15 / 30 / 60 / 180). Pre-flight scene
+    // count + per-shot duration use this so client ActionCost and server
+    // requireCredits stay aligned before Scene N headings exist (#1140).
+    targetDurationSeconds: z.number().min(5).max(180).optional(),
     // Suggested talent IDs for AI-assisted casting during generation
     suggestedTalentIds: z.array(z.string()).optional(),
     // Suggested location IDs for visual consistency during generation

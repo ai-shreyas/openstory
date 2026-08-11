@@ -1,5 +1,6 @@
 import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
+import { ActionCost } from '@/components/billing/action-cost';
 import { PremiumCard } from '@/components/cards/premium-card';
 import {
   ElementSelector,
@@ -35,6 +36,7 @@ import { useAutoScroll } from '@/hooks/use-auto-scroll';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { BILLING_TRANSACTIONS_KEY } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGate } from '@/hooks/use-billing-gate';
+import { useFalPricing } from '@/hooks/use-fal-pricing';
 import { useGenerationSettings } from '@/hooks/use-generation-settings';
 import { useComposedScript } from '@/hooks/use-scenes';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
@@ -69,9 +71,14 @@ import {
 } from '@/lib/ai/models.config';
 import { SCRIPT_SHORT_THRESHOLD } from '@/lib/ai/should-enhance';
 import {
+  estimateImageCost,
+  estimateStoryboardCost,
+} from '@/lib/billing/cost-estimation';
+import {
   aspectRatioSchema,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
 import { cn } from '@/lib/utils';
 import {
@@ -693,6 +700,7 @@ export const ScriptView: FC<{
         autoGenerateMusic,
         musicModel: audioModels[0] ?? DEFAULT_MUSIC_MODEL,
         audioModels,
+        targetDurationSeconds: targetDuration,
         suggestedTalentIds:
           selectedTalentIds.length > 0 ? selectedTalentIds : undefined,
         suggestedLocationIds:
@@ -868,6 +876,58 @@ export const ScriptView: FC<{
     enabled: isEnhancing,
     content: scriptValue,
   });
+
+  // Transparent pricing under Generate (#1140). Honest estimate only —
+  // null with no script (nothing to generate yet), or when the primary
+  // image model has no pricing signal.
+  const { pricing: falPricing } = useFalPricing();
+  const storyboardCostEstimate = useMemo(() => {
+    if (!scriptValue.trim()) return null;
+    if (!falPricing) return null;
+    const primaryImage = imageModels[0] ?? DEFAULT_IMAGE_MODEL;
+    if (
+      estimateImageCost(primaryImage, aspectRatio, 1, {
+        pricing: falPricing,
+      }) === null
+    ) {
+      return null;
+    }
+    // Prefer Scene N headings after Enhance; else words + target duration.
+    const sceneCount = estimateSceneCount(scriptValue, {
+      targetDurationSeconds: targetDuration,
+    });
+    // Spread the Enhance target across shots for motion; music spans the full
+    // target. Avoids billing every shot at a flat 5s when the user picked 30s/1m.
+    const perShotDurationSeconds = Math.max(
+      5,
+      Math.round(targetDuration / Math.max(sceneCount, 1))
+    );
+    return estimateStoryboardCost({
+      imageModel: primaryImage,
+      imageModelCount: Math.max(imageModels.length, 1),
+      aspectRatio,
+      estimatedSceneCount: sceneCount,
+      autoGenerateMotion,
+      videoModels: autoGenerateMotion ? videoModels : undefined,
+      videoDurationSeconds: autoGenerateMotion
+        ? perShotDurationSeconds
+        : undefined,
+      autoGenerateMusic,
+      audioModels: autoGenerateMusic ? audioModels : undefined,
+      audioDurationSeconds: autoGenerateMusic ? targetDuration : undefined,
+      pricing: falPricing,
+    });
+  }, [
+    falPricing,
+    imageModels,
+    aspectRatio,
+    scriptValue,
+    targetDuration,
+    autoGenerateMotion,
+    videoModels,
+    autoGenerateMusic,
+    audioModels,
+  ]);
 
   return (
     <PremiumCard
@@ -1128,9 +1188,10 @@ export const ScriptView: FC<{
               </span>
             </div>
 
-            {/* Action buttons */}
-            <div className="flex flex-col items-stretch gap-1 w-full sm:w-auto">
-              <div className="flex flex-row items-center gap-3 justify-end">
+            {/* Action buttons + cost: one right-aligned column so ~$ and
+                "N copies" sit under Generate / Generate Copy, not the row. */}
+            <div className="flex w-full flex-col items-stretch gap-1 sm:w-auto sm:items-end">
+              <div className="flex flex-row items-center justify-end gap-3">
                 {sequence?.id && (
                   <Button
                     type="button"
@@ -1163,7 +1224,8 @@ export const ScriptView: FC<{
                   <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
                 </Button>
               </div>
-              <span className="hidden sm:block text-xs text-muted-foreground text-right">
+              <ActionCost estimate={storyboardCostEstimate} align="end" />
+              <span className="hidden text-xs text-muted-foreground sm:block sm:text-right">
                 {isEditing
                   ? analysisModels.length === 1
                     ? '1 copy will be created'

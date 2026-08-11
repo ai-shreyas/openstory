@@ -277,6 +277,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     sequence?.musicModel,
     DEFAULT_MUSIC_MODEL
   );
+  const sequenceVideoModel = safeImageToVideoModel(
+    sequence?.videoModel,
+    DEFAULT_VIDEO_MODEL
+  );
   const styleName = style?.name ?? undefined;
   const recommendedImageModel = style?.recommendedImageModel ?? null;
   const recommendedVideoModel = style?.recommendedVideoModel ?? null;
@@ -1131,6 +1135,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     async ({
       includeMusic,
       musicModel,
+      videoModel,
       generateAudio,
     }: BatchGenerateMotionArgs) => {
       // Optimistic: compute eligible shots locally (same filter as backend)
@@ -1166,8 +1171,8 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         sequence_id: sequenceId,
         include_music: includeMusic,
         eligible_shot_count: eligibleShotIds.length,
-        // Motion model is resolved per shot server-side, from each shot's
-        // selected video version (#1066).
+        // Explicit batch model overrides per-shot identity (#1066).
+        video_model: videoModel,
         music_model: includeMusic ? musicModel : undefined,
         generate_audio: generateAudio,
       });
@@ -1177,6 +1182,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           data: {
             sequenceId,
             includeMusic,
+            model: videoModel,
             musicModel: includeMusic ? musicModel : undefined,
             generateAudio,
           },
@@ -1289,6 +1295,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             divergentVariants={divergentVariants}
             onCompareDivergent={(variant) => setCompareVariant(variant)}
             initialMusicModel={sequenceMusicModel}
+            initialVideoModel={sequenceVideoModel}
+            styleCategory={styleCategory}
+            recommendedVideoModel={recommendedVideoModel}
+            styleName={styleName}
             modelMissingShotIds={shotsMissingActiveImage}
             modelMissingLabel={activeImageModelLabel}
             staleShotIds={staleShotIds}
@@ -1310,6 +1320,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               phaseConfig.autoGenerateMotion && isGenerationActive
             }
             initialMusicModel={sequenceMusicModel}
+            initialVideoModel={sequenceVideoModel}
+            styleCategory={styleCategory}
+            recommendedVideoModel={recommendedVideoModel}
+            styleName={styleName}
           />
         </div>
 

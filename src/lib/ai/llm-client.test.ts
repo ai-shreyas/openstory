@@ -43,8 +43,14 @@ vi.doMock('@/lib/observability/ai-otel', () => ({
 // Dynamic import so vi.doMock above is in effect when llm-client (and its
 // `./create-adapter` import) resolves. Static imports are hoisted above
 // vi.doMock and would bypass the mocks.
-const { callLLM, callLLMStream, llmCostFromUsage, RECOMMENDED_MODELS } =
-  await import('./llm-client');
+const {
+  callLLM,
+  callLLMStream,
+  createUsageCapture,
+  llmCostFromUsage,
+  preferUsage,
+  RECOMMENDED_MODELS,
+} = await import('./llm-client');
 const { DEFAULT_VISION_MODEL } = await import('./models.config');
 
 const usage = (cost?: number): TokenUsage => ({
@@ -145,11 +151,108 @@ describe('llm-client', () => {
       );
       const firstCall = mockChat.mock.calls[0];
       if (!firstCall) throw new Error('expected mockChat to have been called');
-      // The sentinel must come FIRST, ahead of the usage-capturing onFinish.
+      // The sentinel must come FIRST, ahead of the usage-capturing middleware.
       expect(firstCall[0].middleware).toEqual([
         otelSentinel,
-        { onFinish: expect.any(Function) },
+        {
+          onUsage: expect.any(Function),
+          onFinish: expect.any(Function),
+        },
       ]);
+    });
+
+    it('captures usage.cost from RUN_FINISHED stream events', async () => {
+      mockChat.mockReturnValue(
+        (async function* () {
+          yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'hi' };
+          yield {
+            type: 'RUN_FINISHED',
+            usage: {
+              promptTokens: 10,
+              completionTokens: 5,
+              totalTokens: 15,
+              cost: 0.0042,
+            },
+          };
+        })()
+      );
+
+      let doneUsage: TokenUsage | undefined;
+      for await (const chunk of callLLMStream({
+        model: 'anthropic/claude-sonnet-5',
+        messages: [{ role: 'user', content: 'test' }],
+      })) {
+        if (chunk.done) doneUsage = chunk.usage;
+      }
+
+      expect(doneUsage?.cost).toBe(0.0042);
+      expect(llmCostFromUsage(doneUsage, 'anthropic/claude-sonnet-5')).toBe(
+        usdToMicros(0.0042)
+      );
+    });
+
+    it('always requests streamOptions.includeUsage (OpenRouter cost wiring)', async () => {
+      mockChat.mockReturnValue(
+        (async function* () {
+          yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'ok' };
+        })()
+      );
+
+      for await (const _chunk of callLLMStream({
+        model: 'anthropic/claude-sonnet-5',
+        messages: [{ role: 'user', content: 'test' }],
+      })) {
+        // drain
+      }
+
+      const firstCall = mockChat.mock.calls[0];
+      if (!firstCall) throw new Error('expected mockChat to have been called');
+      expect(firstCall[0].stream).toBe(true);
+      expect(firstCall[0].modelOptions?.streamOptions?.includeUsage).toBe(true);
+    });
+
+    it('surfaces usage.cost on structured responseSchema streams from RUN_FINISHED', async () => {
+      const schema = z.object({ title: z.string() });
+      mockChat.mockReturnValue(
+        (async function* () {
+          yield {
+            type: 'CUSTOM',
+            name: 'structured-output.complete',
+            value: {
+              object: { title: 'Hello' },
+              raw: '{"title":"Hello"}',
+            },
+          };
+          yield {
+            type: 'RUN_FINISHED',
+            usage: {
+              promptTokens: 3,
+              completionTokens: 2,
+              totalTokens: 5,
+              cost: 0.0123,
+            },
+          };
+        })()
+      );
+
+      let doneUsage: TokenUsage | undefined;
+      let parsed: { title: string } | undefined;
+      for await (const chunk of callLLMStream({
+        model: 'anthropic/claude-sonnet-5',
+        messages: [{ role: 'user', content: 'test' }],
+        responseSchema: schema,
+      })) {
+        if (chunk.done) {
+          doneUsage = chunk.usage;
+          parsed = chunk.parsed;
+        }
+      }
+
+      expect(parsed).toEqual({ title: 'Hello' });
+      expect(doneUsage?.cost).toBe(0.0123);
+      expect(llmCostFromUsage(doneUsage, 'anthropic/claude-sonnet-5')).toBe(
+        usdToMicros(0.0123)
+      );
     });
 
     const drain = async (gen: AsyncIterable<unknown>) => {
@@ -828,6 +931,60 @@ describe('llm-client', () => {
 
     it('treats explicit zero cost as zero', () => {
       expect(llmCostFromUsage(usage(0), 'model')).toBe(ZERO_MICROS);
+    });
+
+    it('does not invent a charge from token counts alone', () => {
+      // Token-rate fallback was rejected — missing provider cost means $0.
+      expect(
+        llmCostFromUsage(
+          {
+            promptTokens: 1_000_000,
+            completionTokens: 500_000,
+            totalTokens: 1_500_000,
+          },
+          'anthropic/claude-sonnet-5'
+        )
+      ).toBe(ZERO_MICROS);
+    });
+  });
+
+  describe('preferUsage / createUsageCapture', () => {
+    it('prefers a usage object that carries finite cost', () => {
+      const withCost = usage(0.01);
+      const tokensOnly = {
+        promptTokens: 1,
+        completionTokens: 2,
+        totalTokens: 3,
+      };
+      expect(preferUsage(tokensOnly, withCost)).toBe(withCost);
+      expect(preferUsage(withCost, tokensOnly)).toBe(withCost);
+      expect(preferUsage(undefined, tokensOnly)).toBe(tokensOnly);
+    });
+
+    it('merges onUsage, onFinish, and RUN_FINISHED', () => {
+      const capture = createUsageCapture();
+      capture.middleware[0]?.onUsage?.(null, {
+        promptTokens: 1,
+        completionTokens: 1,
+        totalTokens: 2,
+      });
+      capture.noteFromStreamEvent({
+        type: 'RUN_FINISHED',
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          cost: 0.02,
+        },
+      });
+      capture.middleware[0]?.onFinish?.(null, {
+        usage: {
+          promptTokens: 99,
+          completionTokens: 99,
+          totalTokens: 198,
+        },
+      });
+      expect(capture.get()?.cost).toBe(0.02);
     });
   });
 });

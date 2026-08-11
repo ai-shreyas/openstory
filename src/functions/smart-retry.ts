@@ -10,7 +10,9 @@ import {
 } from '@/lib/scenes/scene-script';
 import {
   DEFAULT_IMAGE_MODEL,
+  DEFAULT_MUSIC_MODEL,
   DEFAULT_VIDEO_MODEL,
+  safeAudioModel,
   safeImageToVideoModel,
   safeTextToImageModel,
 } from '@/lib/ai/models';
@@ -24,13 +26,13 @@ import {
 } from '@/lib/ai/resolve-asset-models';
 import {
   estimateImageCost,
-  estimateStoryboardCost,
   estimateVideoCost,
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
+import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { type Character, type Sequence, type Shot } from '@/lib/db/schema';
@@ -53,7 +55,6 @@ import type {
   MotionWorkflowInput,
   MusicPromptWorkflowInput,
   MusicWorkflowInput,
-  StoryboardTriggerInput,
 } from '@/lib/workflow/types';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
@@ -182,10 +183,14 @@ export async function executeSmartRetry(context: SmartRetryContext) {
 
     await requireCredits(
       context.scopedDb,
-      estimateStoryboardCost({
+      estimateStoryboardPreflightCost({
+        script: sequence.script ?? '',
         imageModel,
         aspectRatio: sequence.aspectRatio,
+        autoGenerateMotion: sequence.autoGenerateMotion,
         videoModels: [videoModel],
+        autoGenerateMusic: sequence.autoGenerateMusic,
+        audioModels: [safeAudioModel(sequence.musicModel, DEFAULT_MUSIC_MODEL)],
         pricing: await getEffectiveFalPricing(),
       }),
       {
@@ -194,7 +199,9 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       }
     );
 
-    const workflowInput: StoryboardTriggerInput = {
+    // Owns the generation mutex, the 'processing' status write, and the
+    // run-id persistence (#839).
+    await triggerStoryboard(context.scopedDb, {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
@@ -205,11 +212,9 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         aiProvider: 'openrouter',
         regenerateAll: true,
       },
-    };
-
-    // Owns the generation mutex, the 'processing' status write, and the
-    // run-id persistence (#839).
-    await triggerStoryboard(context.scopedDb, workflowInput);
+      autoGenerateMotion: sequence.autoGenerateMotion,
+      autoGenerateMusic: sequence.autoGenerateMusic,
+    });
 
     return { retryType: 'full' as const, retriedItems: ['full storyboard'] };
   }
