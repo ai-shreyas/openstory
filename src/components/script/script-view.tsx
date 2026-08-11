@@ -1067,6 +1067,7 @@ export const ScriptView: FC<{
                           }}
                           variant="outline"
                           size="sm"
+                          spacing={0}
                         >
                           {DURATION_PRESETS.map((preset) => (
                             <ToggleGroupItem
@@ -1238,6 +1239,7 @@ export const ScriptView: FC<{
               }}
               variant="outline"
               size="sm"
+              spacing={0}
             >
               {DURATION_PRESETS.map((preset) => (
                 <ToggleGroupItem key={preset.value} value={preset.value}>
