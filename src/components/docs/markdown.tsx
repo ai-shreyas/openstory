@@ -8,7 +8,7 @@ import type { DOMNode } from 'html-dom-parser';
 // and the docs ship an empty <body> (invisible to crawlers, #814). The
 // server build is pure JS, so it runs everywhere and the client parses
 // markup identically to the server (no hydration drift).
-import htmlToDOM from 'html-dom-parser/lib/server/html-to-dom';
+import { HTMLDOMParser as htmlToDOM } from 'html-dom-parser/lib/server/html-to-dom';
 import {
   type HTMLReactParserOptions,
   attributesToProps,
@@ -31,7 +31,7 @@ function childrenToDOMNodes(children: readonly unknown[]): DOMNode[] {
       typeof child === 'object' &&
       child !== null &&
       'type' in child &&
-      typeof (child as { type: unknown }).type === 'string'
+      typeof child.type === 'string'
   );
 }
 

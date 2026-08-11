@@ -11,3 +11,120 @@ updates:
         patterns: ['*']
     commit-message:
       prefix: ci
+
+  # Root app (bun.lock). Weekly version updates keep the stack current between
+  # intentional upgrade PRs. Groups reduce PR noise: one PR per ecosystem area.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      tanstack:
+        patterns:
+          - '@tanstack/*'
+      better-auth:
+        patterns:
+          - 'better-auth'
+          - '@better-auth/*'
+      storybook:
+        patterns:
+          - 'storybook'
+          - '@storybook/*'
+          - 'msw-storybook-addon'
+      tiptap:
+        patterns:
+          - '@tiptap/*'
+          - 'tiptap-markdown'
+      radix:
+        patterns:
+          - '@radix-ui/*'
+          - 'radix-ui'
+      opentelemetry:
+        patterns:
+          - '@opentelemetry/*'
+      posthog:
+        patterns:
+          - 'posthog-*'
+          - '@posthog/*'
+      lint-format:
+        patterns:
+          - 'oxlint'
+          - 'oxfmt'
+          - 'oxlint-tsgolint'
+          - 'knip'
+          - 'lefthook'
+      cloudflare:
+        patterns:
+          - 'wrangler'
+          - '@cloudflare/*'
+      testing:
+        patterns:
+          - 'vitest'
+          - 'playwright'
+          - '@testing-library/*'
+          - 'msw'
+      production-deps:
+        dependency-type: production
+        exclude-patterns:
+          - '@tanstack/*'
+          - 'better-auth'
+          - '@better-auth/*'
+          - '@tiptap/*'
+          - 'tiptap-markdown'
+          - '@radix-ui/*'
+          - 'radix-ui'
+          - '@opentelemetry/*'
+          - 'posthog-*'
+          - '@posthog/*'
+      dev-deps:
+        dependency-type: development
+        exclude-patterns:
+          - 'storybook'
+          - '@storybook/*'
+          - '@chromatic-com/*'
+          - 'msw-storybook-addon'
+          - 'oxlint'
+          - 'oxfmt'
+          - 'oxlint-tsgolint'
+          - 'knip'
+          - 'lefthook'
+          - 'wrangler'
+          - '@cloudflare/*'
+          - 'vitest'
+          - 'playwright'
+          - '@testing-library/*'
+          - 'msw'
+          - '@tanstack/*'
+    ignore:
+      # Engines pin Node 24; types for Node 26 would lie about the runtime.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # Pinned by @tanstack/ai-openrouter until that package adopts 1.x.
+      - dependency-name: '@openrouter/sdk'
+        versions: ['>=1.0.0']
+      # Stay on drizzle 1.0 RC line; do not silently roll back to 0.x.
+      - dependency-name: 'drizzle-orm'
+        versions: ['<1.0.0-0']
+      - dependency-name: 'drizzle-kit'
+        versions: ['<1.0.0-0']
+
+  # Server-side export container (separate package.json + bun.lock).
+  - package-ecosystem: bun
+    directory: /containers/video-export
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      video-export:
+        patterns: ['*']
+    ignore:
+      # Dockerfile is node:22-bookworm-slim — keep types on the Node 22 line.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']

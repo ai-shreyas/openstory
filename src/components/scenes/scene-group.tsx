@@ -97,6 +97,7 @@ const SceneGroupComponent: React.FC<SceneGroupProps> = ({
           type="button"
           className="min-w-0 flex-1 space-y-1.5 text-left"
           onClick={handleSceneClick}
+          aria-label={sceneLabel}
         >
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{sceneLabel}</span>

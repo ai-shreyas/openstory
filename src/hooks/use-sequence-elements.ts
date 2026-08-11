@@ -9,7 +9,6 @@ import {
   renameSequenceElementTokenFn,
   replaceSequenceElementFn,
 } from '@/functions/sequence-elements';
-import type { SequenceElement } from '@/lib/db/schema';
 import type {
   ReplaceElementCompletePayload,
   ReplaceElementFailedPayload,
@@ -55,7 +54,7 @@ export function useSequenceElements(sequenceId: string | undefined) {
       listSequenceElementsFn({ data: { sequenceId: sequenceId ?? '' } }),
     enabled: Boolean(sequenceId),
     refetchInterval: (query) => {
-      const data = query.state.data as SequenceElement[] | undefined;
+      const data = query.state.data;
       if (!data) return false;
       const hasPending = data.some(
         (el) => el.visionStatus === 'pending' || el.visionStatus === 'analyzing'

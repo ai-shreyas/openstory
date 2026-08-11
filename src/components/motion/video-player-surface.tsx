@@ -16,13 +16,15 @@
  * Nothing may import this module statically from a server-reachable path.
  */
 
-import type { Media, Video as VideoMedia } from '@videojs/core';
+import type { Media, Video as VideoMedia } from '@videojs/media';
 import { createPlayer, Poster, useMedia } from '@videojs/react';
 import { MinimalVideoSkin, Video, videoFeatures } from '@videojs/react/video';
 import { useEffect, useRef } from 'react';
 
 // useMedia() returns the base Media capability set; the <Video> component
 // renders an instance with the full Video capability set (seek/source/etc.).
+// Types live in @videojs/media as of v10 beta.26 (no longer re-exported from
+// @videojs/core).
 const isVideoMedia = (media: Media): media is VideoMedia =>
   'duration' in media && 'currentTime' in media;
 
@@ -34,7 +36,7 @@ let playerSingleton: ReturnType<typeof createPlayer> | undefined;
 const getPlayer = () =>
   (playerSingleton ??= createPlayer({ features: videoFeatures }));
 
-export type VideoPlayerSurfaceProps = {
+type VideoPlayerSurfaceProps = {
   src: string;
   chaptersUrl?: string;
   posterSrc?: string | null;
