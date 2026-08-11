@@ -24,9 +24,64 @@ export const FANOUT_CONCURRENCY = {
 } as const;
 
 /**
+ * The three fan-out widths #1126 bounded, resolved together so an arm of the
+ * A/B can't half-apply. `Infinity` is a legal wave width — `mapInWaves`
+ * degenerates to a single `allSettled` over every item, which is exactly the
+ * pre-#1126 shape.
+ */
+export type ImageFanoutShape = {
+  /** Outer fan-out: scenes (shot-images) / shots (regenerate-shots). */
+  scenes: number;
+  /** Inner fan-out: image models per scene. */
+  models: number;
+  /** Fire-and-forget `/variant-image` creates per wave. */
+  variantTrigger: number;
+};
+
+const PRODUCTION_FANOUT: ImageFanoutShape = {
+  scenes: FANOUT_CONCURRENCY.image,
+  models: 1,
+  variantTrigger: FANOUT_CONCURRENCY.variantTrigger,
+};
+
+const UNBOUNDED_FANOUT: ImageFanoutShape = {
+  scenes: Number.POSITIVE_INFINITY,
+  models: Number.POSITIVE_INFINITY,
+  variantTrigger: Number.POSITIVE_INFINITY,
+};
+
+/**
+ * Load-test knob for the #1126 A/B. `FANOUT_IMAGE_CONCURRENCY` lets both arms
+ * run from one build, so the comparison isn't confounded by a second deploy:
+ *
+ *   unset / ''  → production waves (scenes 4, one model at a time)
+ *   '0'         → pre-#1126 shape: every fan-out unbounded
+ *   'N'         → scenes N, one model at a time
+ *
+ * A malformed value falls back to production rather than silently unbounding
+ * the fan-out — the failure mode of a typo here is a stampede.
+ */
+export function resolveImageFanout(env: {
+  FANOUT_IMAGE_CONCURRENCY?: string;
+}): ImageFanoutShape {
+  const raw = env.FANOUT_IMAGE_CONCURRENCY?.trim();
+  // Strict digits-only: `parseInt` would read "12abc" as 12 and "4.9" as 4,
+  // so a typo would quietly pick a width nobody chose.
+  if (!raw || !/^\d+$/.test(raw)) return PRODUCTION_FANOUT;
+
+  const parsed = Number.parseInt(raw, 10);
+  return parsed === 0
+    ? UNBOUNDED_FANOUT
+    : { ...PRODUCTION_FANOUT, scenes: parsed };
+}
+
+/**
  * Run `fn` over `items` in waves of `concurrency`.
  * Within a wave: `Promise.allSettled` (one failure does not reject the wave).
  * Between waves: sequential.
+ *
+ * `Infinity` is a legal width: the first slice takes every item and the
+ * `i += limit` step exits the loop, so the whole set runs as one `allSettled`.
  */
 export async function mapInWaves<T, R>(
   items: readonly T[],

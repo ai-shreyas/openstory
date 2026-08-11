@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FANOUT_CONCURRENCY, mapInWaves } from './map-in-waves';
+import {
+  FANOUT_CONCURRENCY,
+  mapInWaves,
+  resolveImageFanout,
+} from './map-in-waves';
 
 describe('FANOUT_CONCURRENCY', () => {
   it('exposes positive caps', () => {
@@ -7,6 +11,49 @@ describe('FANOUT_CONCURRENCY', () => {
     expect(FANOUT_CONCURRENCY.variantTrigger).toBeGreaterThan(0);
     expect(FANOUT_CONCURRENCY.sheet).toBeGreaterThan(0);
     expect(FANOUT_CONCURRENCY.motion).toBeGreaterThan(0);
+  });
+});
+
+describe('resolveImageFanout', () => {
+  const production = {
+    scenes: FANOUT_CONCURRENCY.image,
+    models: 1,
+    variantTrigger: FANOUT_CONCURRENCY.variantTrigger,
+  };
+
+  it('defaults to production waves when the var is absent or blank', () => {
+    expect(resolveImageFanout({})).toEqual(production);
+    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '' })).toEqual(
+      production
+    );
+    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '   ' })).toEqual(
+      production
+    );
+  });
+
+  it('treats "0" as the pre-#1126 unbounded shape on every axis', () => {
+    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '0' })).toEqual({
+      scenes: Number.POSITIVE_INFINITY,
+      models: Number.POSITIVE_INFINITY,
+      variantTrigger: Number.POSITIVE_INFINITY,
+    });
+  });
+
+  it('widens only the outer scene fan-out for a positive integer', () => {
+    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '8' })).toEqual({
+      ...production,
+      scenes: 8,
+    });
+  });
+
+  // A typo must not silently unbound the fan-out — that is the failure mode
+  // #1126 exists to prevent, so malformed input falls back to production.
+  it('falls back to production for malformed or negative values', () => {
+    for (const raw of ['abc', '-1', '4.9', '12abc', 'Infinity', 'NaN']) {
+      expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: raw })).toEqual(
+        production
+      );
+    }
   });
 });
 

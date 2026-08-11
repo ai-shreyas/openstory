@@ -35,7 +35,7 @@ import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
-import { FANOUT_CONCURRENCY, mapInWaves } from '@/lib/workflow/map-in-waves';
+import { mapInWaves, resolveImageFanout } from '@/lib/workflow/map-in-waves';
 import { NonRetryableError } from 'cloudflare:workflows';
 import type {
   ShotImagesWorkflowInput,
@@ -186,6 +186,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
     );
 
     const imageBinding = this.env.IMAGE_WORKFLOW;
+    const fanout = resolveImageFanout(this.env);
 
     // Fan out one IMAGE_WORKFLOW child per (scene, model). Wave-bounded
     // (#1126) so large sequences don't stampede isolates + D1; allSettled
@@ -194,7 +195,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
     // `result.isFailed` check.
     const sceneResults = await mapInWaves(
       scenesWithVisualPrompts,
-      FANOUT_CONCURRENCY.image,
+      fanout.scenes,
       async (scene) => {
         // The visual prompt is no longer carried on `scene.prompts` (#713); it
         // rides on the per-scene snapshot, which analyze-script populates from
@@ -238,103 +239,107 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
 
         // One model at a time per scene so multi-model doesn't multiply the
         // outer scene-wave concurrency (#1126).
-        const modelResults = await mapInWaves(imageModels, 1, async (model) => {
-          const perShotSnapshotInputHash =
-            snapshotHashByKey[snapshotHashKey(scene.sceneId, model)];
+        const modelResults = await mapInWaves(
+          imageModels,
+          fanout.models,
+          async (model) => {
+            const perShotSnapshotInputHash =
+              snapshotHashByKey[snapshotHashKey(scene.sceneId, model)];
 
-          const childBody: ImageWorkflowInput = {
-            userId: input.userId,
-            teamId: input.teamId,
-            prompt: visualPrompt,
-            model,
-            imageSize,
-            aspectRatio,
-            numImages: 1,
-            shotId: matchedShot?.shotId,
-            // Materialized by scene-split and threaded through the mapping
-            // (#991) — the child never re-resolves the anchor.
-            frameId: matchedShot?.frameId ?? undefined,
-            sequenceId,
-            referenceImages:
-              allReferences.length > 0 ? allReferences : undefined,
-            sceneSnapshot,
-            snapshotInputHash: perShotSnapshotInputHash,
-          };
+            const childBody: ImageWorkflowInput = {
+              userId: input.userId,
+              teamId: input.teamId,
+              prompt: visualPrompt,
+              model,
+              imageSize,
+              aspectRatio,
+              numImages: 1,
+              shotId: matchedShot?.shotId,
+              // Materialized by scene-split and threaded through the mapping
+              // (#991) — the child never re-resolves the anchor.
+              frameId: matchedShot?.frameId ?? undefined,
+              sequenceId,
+              referenceImages:
+                allReferences.length > 0 ? allReferences : undefined,
+              sceneSnapshot,
+              snapshotInputHash: perShotSnapshotInputHash,
+            };
 
-          // Per-spawn unique IDs. Include the model so the per-(scene,
-          // model) fan-out gets distinct CF instance IDs — siblings
-          // would otherwise collide on `image:${sequenceId}:${shotId}`
-          // (CF instance IDs are global per Worker script).
-          const childIdSuffix = matchedShot?.shotId
-            ? `image:${sequenceId ?? 'no-seq'}:${matchedShot.shotId}:${model}`
-            : `image:${sequenceId ?? 'no-seq'}:${scene.sceneId}:${model}`;
+            // Per-spawn unique IDs. Include the model so the per-(scene,
+            // model) fan-out gets distinct CF instance IDs — siblings
+            // would otherwise collide on `image:${sequenceId}:${shotId}`
+            // (CF instance IDs are global per Worker script).
+            const childIdSuffix = matchedShot?.shotId
+              ? `image:${sequenceId ?? 'no-seq'}:${matchedShot.shotId}:${model}`
+              : `image:${sequenceId ?? 'no-seq'}:${scene.sceneId}:${model}`;
 
-          const childOutput = await spawnAndAwaitChild<
-            ImageWorkflowInput,
-            ImageChildResult
-          >(step, {
-            binding: imageBinding,
-            parentBindingName: 'SHOT_IMAGES_WORKFLOW',
-            parentInstanceId,
-            childId: childIdSuffix,
-            childPayload: childBody,
-            spawnStepName: `spawn-image-${scene.sceneId}-${model}`,
-            awaitStepName: `await-image-${scene.sceneId}-${model}`,
-            timeout: '30 minutes',
-          });
+            const childOutput = await spawnAndAwaitChild<
+              ImageWorkflowInput,
+              ImageChildResult
+            >(step, {
+              binding: imageBinding,
+              parentBindingName: 'SHOT_IMAGES_WORKFLOW',
+              parentInstanceId,
+              childId: childIdSuffix,
+              childPayload: childBody,
+              spawnStepName: `spawn-image-${scene.sceneId}-${model}`,
+              awaitStepName: `await-image-${scene.sceneId}-${model}`,
+              timeout: '30 minutes',
+            });
 
-          if (!childOutput.imageUrl) {
-            throw new WorkflowValidationError(
-              `Image generation failed for scene ${scene.sceneId} model ${model}`
-            );
-          }
-
-          // Trigger variant (shot grid) workflow as a separate top-level
-          // run. Fire-and-forget — shot-images shouldn't block on it,
-          // since the variant just enriches the shot after the fact and
-          // its progress is tracked independently via
-          // `shot.variantImageStatus`.
-          await step.do(
-            `trigger-variant-${scene.sceneId}-${model}`,
-            async () => {
-              await triggerWorkflow<ShotVariantWorkflowInput>(
-                '/variant-image',
-                {
-                  userId: input.userId,
-                  teamId: input.teamId,
-                  sequenceId,
-                  shotId: matchedShot?.shotId,
-                  frameId: matchedShot?.frameId ?? undefined,
-                  thumbnailUrl: childOutput.imageUrl,
-                  scenePrompt: visualPrompt,
-                  characterReferences:
-                    characterRefs.length > 0 ? characterRefs : undefined,
-                  locationReferences:
-                    locationRefs.length > 0 ? locationRefs : undefined,
-                  elementReferences:
-                    elementRefs.length > 0 ? elementRefs : undefined,
-                  aspectRatio,
-                  model,
-                },
-                {
-                  label,
-                  retries: 3,
-                  retryDelay: 'pow(2, retried) * 1000',
-                  // Replay-stable: a retry of this step.do must reuse the
-                  // existing variant instance instead of spawning a second
-                  // paid job (see dedup-ids.ts).
-                  deduplicationId: shotVariantDedupId(
-                    parentInstanceId,
-                    matchedShot?.shotId ?? scene.sceneId,
-                    model
-                  ),
-                }
+            if (!childOutput.imageUrl) {
+              throw new WorkflowValidationError(
+                `Image generation failed for scene ${scene.sceneId} model ${model}`
               );
             }
-          );
 
-          return childOutput.imageUrl;
-        });
+            // Trigger variant (shot grid) workflow as a separate top-level
+            // run. Fire-and-forget — shot-images shouldn't block on it,
+            // since the variant just enriches the shot after the fact and
+            // its progress is tracked independently via
+            // `shot.variantImageStatus`.
+            await step.do(
+              `trigger-variant-${scene.sceneId}-${model}`,
+              async () => {
+                await triggerWorkflow<ShotVariantWorkflowInput>(
+                  '/variant-image',
+                  {
+                    userId: input.userId,
+                    teamId: input.teamId,
+                    sequenceId,
+                    shotId: matchedShot?.shotId,
+                    frameId: matchedShot?.frameId ?? undefined,
+                    thumbnailUrl: childOutput.imageUrl,
+                    scenePrompt: visualPrompt,
+                    characterReferences:
+                      characterRefs.length > 0 ? characterRefs : undefined,
+                    locationReferences:
+                      locationRefs.length > 0 ? locationRefs : undefined,
+                    elementReferences:
+                      elementRefs.length > 0 ? elementRefs : undefined,
+                    aspectRatio,
+                    model,
+                  },
+                  {
+                    label,
+                    retries: 3,
+                    retryDelay: 'pow(2, retried) * 1000',
+                    // Replay-stable: a retry of this step.do must reuse the
+                    // existing variant instance instead of spawning a second
+                    // paid job (see dedup-ids.ts).
+                    deduplicationId: shotVariantDedupId(
+                      parentInstanceId,
+                      matchedShot?.shotId ?? scene.sceneId,
+                      model
+                    ),
+                  }
+                );
+              }
+            );
+
+            return childOutput.imageUrl;
+          }
+        );
 
         // Surface per-model failures. The primary (index 0) result is what
         // gets returned as this scene's `imageUrl`; if it failed we throw
