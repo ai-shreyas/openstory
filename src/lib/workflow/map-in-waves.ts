@@ -24,6 +24,22 @@ export const FANOUT_CONCURRENCY = {
 } as const;
 
 /**
+ * `FANOUT_IMAGE_CONCURRENCY` is a runtime-only binding set with
+ * `wrangler secret put`, deliberately absent from wrangler.jsonc so it doesn't
+ * claim the binding name (Cloudflare rejects a secret that collides with a
+ * config var). `wrangler types` therefore can't know about it, so declare it
+ * here rather than hand-editing the generated worker-configuration.d.ts — the
+ * pre-commit typegen hook rewrites that file and would silently drop the edit.
+ */
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      FANOUT_IMAGE_CONCURRENCY?: string;
+    }
+  }
+}
+
+/**
  * The three fan-out widths #1126 bounded, resolved together so an arm of the
  * A/B can't half-apply. `Infinity` is a legal wave width — `mapInWaves`
  * degenerates to a single `allSettled` over every item, which is exactly the

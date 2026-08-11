@@ -4,13 +4,13 @@
   "name": "openstory",
   "compatibility_date": "2025-11-18",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {
-    // Image fan-out width for the #1126 A/B (resolveImageFanout in
-    // src/lib/workflow/map-in-waves.ts). Empty = production waves. Set to
-    // "0" on a PREVIEW deploy to restore the pre-#1126 unbounded shape for
-    // an arm of the load test. Never set on production.
-    "FANOUT_IMAGE_CONCURRENCY": "",
-  },
+  // FANOUT_IMAGE_CONCURRENCY (resolveImageFanout in
+  // src/lib/workflow/map-in-waves.ts) is deliberately NOT declared here.
+  // Declaring it as a var claims the binding name, and Cloudflare rejects a
+  // secret of the same name ("Binding name already in use"), which would force
+  // a full redeploy to flip each arm of the #1126 A/B. Left undeclared, an
+  // arm is one `wrangler secret put FANOUT_IMAGE_CONCURRENCY --name <worker>`
+  // away, and absent = production waves. Never set it on production.
   "triggers": {
     // Sweep stuck generating-status rows every 5 minutes (#727) and refresh
     // the model_pricing table daily (#1069 — the expression must match
