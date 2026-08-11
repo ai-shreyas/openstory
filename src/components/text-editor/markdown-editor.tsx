@@ -1,11 +1,6 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
-import {
-  type Editor,
-  type JSONContent,
-  EditorContent,
-  useEditor,
-} from '@tiptap/react';
+import { type Editor, EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
   Markdown,
@@ -21,12 +16,24 @@ import { PromptMention } from './mention/mention-extension';
 
 type MentionConfigure = Partial<MentionOptions>;
 
+/**
+ * Collapse every line-break form to `\n`. Web/Docs/Word often put U+2028
+ * (LINE SEPARATOR) between lines — that is not matched by `\n` splits, so
+ * multi-line paste looked empty or landed as one run-on line.
+ */
+export const normalizeScreenplayNewlines = (text: string): string =>
+  text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    // LINE SEPARATOR, PARAGRAPH SEPARATOR, NEXT LINE, VT, FF
+    .replace(/[\u2028\u2029\u0085\u000B\u000C]/g, '\n');
+
 // markdown-it parses two trailing spaces + `\n` as a hard break, so converting
 // single newlines (but not paragraph-separating blank lines) keeps a pasted
 // multi-line screenplay block in one paragraph instead of shredding each line
 // into its own paragraph. Exported for unit testing.
 export const toHardBreakMarkdown = (text: string): string =>
-  text.replace(/(?<!\n)\n(?!\n)/g, '  \n');
+  normalizeScreenplayNewlines(text).replace(/(?<!\n)\n(?!\n)/g, '  \n');
 
 // Decide what to insert for a paste. The script editor must only ever ingest
 // plain text — never the arbitrary inline styling (fonts, colours, sizes) that
@@ -38,38 +45,9 @@ export const plainTextPasteAsMarkdown = (
   text: string
 ): string | null => {
   if (!text) return null; // image-only / non-text paste — leave to default
-  // Prefer plain text even when HTML is present (strip rich styling).
   void html;
   return toHardBreakMarkdown(text);
 };
-
-/**
- * Build TipTap JSON for clipboard plain text: single newlines → hardBreak;
- * blank lines → new paragraphs.
- *
- * Exported for unit tests. Used by paste instead of markdown-string
- * `insertContent`, because tiptap-markdown overrides insertContentAt to always
- * `parser.parse(..., { inline: true })`, which drops multi-paragraph pastes
- * after handlePaste has already preventDefault'd (paste appears as a no-op).
- * Non-string JSON content bypasses that markdown re-parse.
- */
-export function screenplayTextToJsonContent(text: string): JSONContent[] {
-  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const paraTexts = normalized.split(/\n{2,}/);
-
-  return paraTexts.map((paraText) => {
-    const lines = paraText.split('\n');
-    const content: JSONContent[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i] ?? '';
-      if (line.length > 0) content.push({ type: 'text', text: line });
-      if (i < lines.length - 1) content.push({ type: 'hardBreak' });
-    }
-    return content.length > 0
-      ? { type: 'paragraph', content }
-      : { type: 'paragraph' };
-  });
-}
 import { createMentionSuggestion } from './mention/mention-suggestion';
 import { tagifyMarkdown } from './mention/tagify';
 
@@ -267,27 +245,37 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           return true;
         },
       },
-      // Always paste plain text only (strip Word/Docs/HTML styling). Insert
-      // as JSONContent so tiptap-markdown does not re-parse with inline:true
-      // (see screenplayTextToJsonContent).
-      handlePaste: (_view, event) => {
+      // Always paste plain text only (strip Word/Docs/HTML styling). Use the
+      // same hard-break insertion path as beforeinput — do not use
+      // insertContent: tiptap-markdown forces inline markdown parse and drops
+      // multi-line pastes after preventDefault. Also normalize U+2028 etc.
+      handlePaste: (view, event) => {
         const clipboard = event.clipboardData;
         if (!clipboard) return false;
-        const text = clipboard.getData('text/plain');
-        if (!text) return false; // image-only / non-text — leave to default
+        const raw = clipboard.getData('text/plain');
+        if (!raw) return false; // image-only / non-text — leave to default
         event.preventDefault();
-        const editor = editorRef.current;
-        if (!editor) return true;
-        const blocks = screenplayTextToJsonContent(text);
-        // Single block mid-paragraph: insert inline nodes only (no nested p).
-        const content =
-          blocks.length === 1 && blocks[0]?.content
-            ? blocks[0].content
-            : blocks;
-        return editor.chain().focus().insertContent(content).run();
+
+        const text = normalizeScreenplayNewlines(raw);
+        const { schema, tr, selection } = view.state;
+        const hardBreak = schema.nodes.hardBreak;
+        if (!hardBreak) return false;
+
+        const lines = text.split('\n');
+        const nodes = lines.flatMap((line, i) => {
+          const out = [];
+          if (line.length > 0) out.push(schema.text(line));
+          if (i < lines.length - 1) out.push(hardBreak.create());
+          return out;
+        });
+        if (nodes.length === 0) return true;
+
+        view.dispatch(
+          tr.replaceWith(selection.from, selection.to, nodes).scrollIntoView()
+        );
+        return true;
       },
-      // Backup path for non-handlePaste clipboard inserts (e.g. some
-      // drag-drop text paths): keep single newlines as hard breaks.
+      // Backup path for non-handlePaste clipboard inserts: normalize + hard breaks.
       transformPastedText: (text) => toHardBreakMarkdown(text),
     },
     onUpdate: ({ editor: e }) => {

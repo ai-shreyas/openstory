@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  normalizeScreenplayNewlines,
   plainTextPasteAsMarkdown,
-  screenplayTextToJsonContent,
   toHardBreakMarkdown,
 } from './markdown-editor';
+
+describe('normalizeScreenplayNewlines', () => {
+  it('converts CRLF and CR to LF', () => {
+    expect(normalizeScreenplayNewlines('a\r\nb\rc')).toBe('a\nb\nc');
+  });
+
+  it('converts Unicode line/paragraph separators to LF', () => {
+    expect(normalizeScreenplayNewlines('Scene 1\u2028Body\u2029Scene 2')).toBe(
+      'Scene 1\nBody\nScene 2'
+    );
+  });
+});
 
 describe('toHardBreakMarkdown', () => {
   it('converts single newlines to markdown hard breaks', () => {
@@ -20,6 +32,10 @@ describe('toHardBreakMarkdown', () => {
 
   it('handles mixed single and double newlines', () => {
     expect(toHardBreakMarkdown('a\nb\n\nc')).toBe('a  \nb\n\nc');
+  });
+
+  it('normalizes Unicode line separators before hard-break conversion', () => {
+    expect(toHardBreakMarkdown('Scene 1\u2028Body')).toBe('Scene 1  \nBody');
   });
 });
 
@@ -42,33 +58,5 @@ describe('plainTextPasteAsMarkdown', () => {
 
   it('defers image-only / non-text paste to the default handler', () => {
     expect(plainTextPasteAsMarkdown('<img src="x">', '')).toBeNull();
-  });
-});
-
-describe('screenplayTextToJsonContent', () => {
-  it('turns single newlines into hardBreak nodes within one paragraph', () => {
-    expect(screenplayTextToJsonContent('INT. ROOM\nA man enters.')).toEqual([
-      {
-        type: 'paragraph',
-        content: [
-          { type: 'text', text: 'INT. ROOM' },
-          { type: 'hardBreak' },
-          { type: 'text', text: 'A man enters.' },
-        ],
-      },
-    ]);
-  });
-
-  it('splits blank lines into separate paragraphs', () => {
-    expect(screenplayTextToJsonContent('Scene one.\n\nScene two.')).toEqual([
-      {
-        type: 'paragraph',
-        content: [{ type: 'text', text: 'Scene one.' }],
-      },
-      {
-        type: 'paragraph',
-        content: [{ type: 'text', text: 'Scene two.' }],
-      },
-    ]);
   });
 });
