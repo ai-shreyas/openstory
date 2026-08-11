@@ -22,11 +22,76 @@
  *     --base-url https://openstory-pr-1234.workers.dev --arm B --sequences 20 --confirm
  */
 
-import {
-  createSampleSequence,
-  waitForSampleSequence,
-  type SampleSequenceState,
-} from './sample-pipeline';
+import { z } from 'zod';
+import { createSampleSequence } from './sample-pipeline';
+
+/**
+ * Sequence state as the API returns it TODAY: `shots` / `counts.shots`.
+ *
+ * We deliberately don't reuse `waitForSampleSequence` from ./sample-pipeline —
+ * its schema still expects the pre-#1067 `frames` / `counts.frames` shape and
+ * throws on every poll against the current API. That staleness is a real bug
+ * in the style-sample renderer, but fixing a shared script is out of scope for
+ * a fan-out load test, so this driver polls with its own narrow schema.
+ */
+const sequenceStateSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  statusError: z.string().nullish(),
+  counts: z.object({
+    shots: z.number(),
+    imagesReady: z.number(),
+  }),
+});
+
+type SequenceState = z.infer<typeof sequenceStateSchema>;
+
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'archived']);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Long-poll one sequence to a terminal state. `?wait=Ns` blocks server-side
+ * (capped at 90s), so this is cheap to hold open across many sequences. A 429
+ * is the per-key 10 req/s limit — every poller fires its first GET at once —
+ * so honour Retry-After rather than hammering.
+ */
+async function pollToTerminal(
+  config: { baseUrl: string; apiKey: string },
+  id: string,
+  timeoutMs: number
+): Promise<SequenceState> {
+  const deadline = Date.now() + timeoutMs;
+  let last: SequenceState | undefined;
+
+  while (Date.now() < deadline) {
+    const res = await fetch(
+      `${config.baseUrl}/api/v1/sequences/${id}?wait=60s`,
+      { headers: { 'x-api-key': config.apiKey } }
+    );
+
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers.get('retry-after'));
+      await sleep(
+        (Number.isFinite(retryAfter) ? retryAfter * 1000 : 2000) +
+          Math.random() * 250
+      );
+      continue;
+    }
+    if (!res.ok) {
+      throw new Error(
+        `Poll failed (${res.status}): ${(await res.text()).slice(0, 300)}`
+      );
+    }
+
+    last = sequenceStateSchema.parse(await res.json());
+    if (TERMINAL_STATUSES.has(last.status)) return last;
+    await sleep(1000);
+  }
+
+  throw new Error(
+    `Timed out after ${Math.round(timeoutMs / 1000)}s (last status: ${last?.status ?? 'unknown'})`
+  );
+}
 
 /** Cheapest image model in the catalog: $0.008/megapixel (~$0.008 at 1MP). */
 const DEFAULT_IMAGE_MODEL = 'flux_2_turbo';
@@ -94,7 +159,7 @@ type Outcome = {
   id?: string;
   ok: boolean;
   ms: number;
-  frames: number;
+  shots: number;
   imagesReady: number;
   error?: string;
 };
@@ -111,8 +176,11 @@ async function runOne(
   index: number
 ): Promise<Outcome> {
   const started = Date.now();
+  // Declared outside the try so a post-create failure still reports which
+  // sequence it was — otherwise every poll error reads as "never created".
+  let createdId: string | undefined;
   try {
-    const { id } = await createSampleSequence(config, {
+    const created = await createSampleSequence(config, {
       script: SCRIPT,
       title: `loadtest-${args.arm}-${index}`,
       enhance: 'off',
@@ -124,27 +192,26 @@ async function runOne(
       videoModel: 'seedance_v2',
       motion: false,
     });
+    createdId = created.id;
 
-    const state: SampleSequenceState = await waitForSampleSequence(config, {
-      id,
-      timeoutMs: 45 * 60 * 1000,
-    });
+    const state = await pollToTerminal(config, createdId, 45 * 60 * 1000);
 
     return {
       index,
-      id,
+      id: createdId,
       ok: state.status === 'completed',
       ms: Date.now() - started,
-      frames: state.counts.frames,
+      shots: state.counts.shots,
       imagesReady: state.counts.imagesReady,
       error: state.statusError ?? undefined,
     };
   } catch (error) {
     return {
       index,
+      id: createdId,
       ok: false,
       ms: Date.now() - started,
-      frames: 0,
+      shots: 0,
       imagesReady: 0,
       error: error instanceof Error ? error.message : String(error),
     };
