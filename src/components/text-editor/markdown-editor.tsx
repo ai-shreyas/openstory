@@ -25,8 +25,8 @@ export const normalizeScreenplayNewlines = (text: string): string =>
   text
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
-    // LINE SEPARATOR, PARAGRAPH SEPARATOR, NEXT LINE, VT, FF
-    .replace(/[\u2028\u2029\u0085\u000B\u000C]/g, '\n');
+    // LINE SEPARATOR, PARAGRAPH SEPARATOR, NEXT LINE (NEL)
+    .replace(/[\u2028\u2029\u0085]/g, '\n');
 
 // markdown-it parses two trailing spaces + `\n` as a hard break, so converting
 // single newlines (but not paragraph-separating blank lines) keeps a pasted
