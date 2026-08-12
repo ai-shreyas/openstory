@@ -579,15 +579,6 @@
         // E2E_TEST gates /api/test/* routes (via testOnlyGuard) and many
         // test-specific branches in storage / workflow client code.
         "E2E_TEST": "true",
-        // Identity verification off for e2e (#1180). Seeded test users hold no
-        // verification, and the default policy gates likeness uploads on one —
-        // so leaving it on would fail every reference-media test with a 403
-        // that says nothing about the flow under test. The policy logic itself
-        // is unit-tested (src/lib/compliance/identity-verification.test.ts);
-        // the portrait-rights ATTESTATION stays required here and is still
-        // exercised by the talent spec. An e2e that drives the gate itself
-        // needs a verified-user fixture — follow-up.
-        "IDENTITY_VERIFICATION_POLICY": "disabled",
         // Note: a developer's .env.local R2_PUBLIC_STORAGE_DOMAIN could leak
         // into this worker env via the env-file merge, but it can't break
         // e2e: isLocalStorageServing() (src/lib/storage/buckets.ts) forces
