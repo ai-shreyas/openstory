@@ -10,10 +10,18 @@
  *
  * The contract asserted here: previews are attempted for every shot, a failing
  * one is swallowed, and the split still returns its scenes and shot mapping.
+ *
+ * Plus the streaming-parse contract (#1161): the accumulated buffer is parsed
+ * on a coalesced schedule rather than once per delta, and the final chunk is
+ * always parsed.
  */
 
-import { describe, expect, test, vi } from 'vitest';
-import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+import type {
+  WorkflowEvent,
+  WorkflowStep,
+  WorkflowStepConfig,
+} from 'cloudflare:workers';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type { SceneSplittingScene } from '@/lib/ai/streaming-scene-parser';
 import type { SceneSplitWorkflowInput } from '@/lib/workflow/types';
@@ -38,31 +46,60 @@ vi.doMock('@/lib/billing/workflow-deduction', () => ({
   deductWorkflowCredits: vi.fn(() => Promise.resolve()),
 }));
 
-// One chunk carrying the whole (already-validated) result; the parser mock
-// below is what turns it into per-scene events.
+type StreamChunk = {
+  done: boolean;
+  accumulated: string;
+  parsed?: typeof PARSED_RESULT;
+  usage?: undefined;
+};
+
+/**
+ * Chunks the mocked stream yields. Defaults to a single `done` chunk carrying
+ * the whole (already-validated) result; the parser mock below is what turns it
+ * into per-scene events. The coalescing test swaps in a long delta stream.
+ */
+let streamChunks: StreamChunk[] = [];
+function singleDoneChunk(): StreamChunk[] {
+  return [
+    { done: true, accumulated: '{}', parsed: PARSED_RESULT, usage: undefined },
+  ];
+}
+
 vi.doMock('@/lib/ai/llm-client', () => ({
   PROMPT_REASONING: undefined,
   llmCostFromUsage: vi.fn(() => 0),
   callLLMStream: vi.fn(() => ({
     async *[Symbol.asyncIterator]() {
-      yield {
-        done: true,
-        accumulated: '{}',
-        parsed: PARSED_RESULT,
-        usage: undefined,
-      };
+      for (const chunk of streamChunks) yield chunk;
     },
   })),
 }));
 
+/**
+ * Scenes are emitted on the FIRST feed only. The real parser tracks how many
+ * scenes it has already emitted; without that here, a multi-feed stream would
+ * re-emit all three every time and inflate the shot mapping.
+ */
+const feed = vi.fn();
 vi.doMock('@/lib/ai/streaming-scene-parser', async () => {
   const real = await vi.importActual('@/lib/ai/streaming-scene-parser');
   return {
     ...real,
-    createStreamingSceneParser: () => ({
-      feed: () =>
-        SCENES.map((scene, index) => ({ type: 'scene', scene, index })),
-    }),
+    createStreamingSceneParser: () => {
+      let emitted = false;
+      return {
+        feed: (accumulated: string) => {
+          feed(accumulated);
+          if (emitted) return [];
+          emitted = true;
+          return SCENES.map((scene, index) => ({
+            type: 'scene',
+            scene,
+            index,
+          }));
+        },
+      };
+    },
   };
 });
 
@@ -183,7 +220,15 @@ function makeEvent(): Readonly<WorkflowEvent<SceneSplitWorkflowInput>> {
 function makeStep(): WorkflowStep {
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowStep stub: runImpl only uses `do`
   return {
-    do: vi.fn((_name: string, fn: () => Promise<unknown>) => fn()),
+    // Both `do` overloads: steps that pass a retry config (the streaming step
+    // caps its budget — see STREAM_STEP_RETRIES) hand the callback third.
+    do: vi.fn(
+      (
+        _name: string,
+        configOrFn: WorkflowStepConfig | (() => Promise<unknown>),
+        maybeFn?: () => Promise<unknown>
+      ) => (typeof configOrFn === 'function' ? configOrFn() : maybeFn?.())
+    ),
   } as unknown as WorkflowStep;
 }
 
@@ -215,6 +260,11 @@ const previewCalls = () =>
   triggerWorkflow.mock.calls.filter((call) => call[0] === '/image');
 
 describe('SceneSplitWorkflow preview fan-out', () => {
+  beforeEach(() => {
+    streamChunks = singleDoneChunk();
+    feed.mockReset();
+  });
+
   test('triggers one preview per shot on the happy path', async () => {
     triggerWorkflow.mockReset();
     triggerWorkflow.mockResolvedValue('run_1');
@@ -274,5 +324,62 @@ describe('SceneSplitWorkflow preview fan-out', () => {
     );
 
     expect(result.scenes).toHaveLength(SCENES.length);
+  });
+});
+
+/**
+ * `parser.feed` re-parses the WHOLE accumulated response and re-validates every
+ * scene emitted so far, so calling it once per delta is O(n²) — the isolate
+ * OOM that failed 2 of 20 sequences in the #1143 load run (#1161).
+ */
+describe('SceneSplitWorkflow stream parsing', () => {
+  const DELTA = 'x'.repeat(4); // one token's worth, as a real stream arrives
+  const DELTA_COUNT = 2_000;
+
+  function deltaStream(): StreamChunk[] {
+    const chunks: StreamChunk[] = [];
+    let accumulated = '';
+    for (let i = 0; i < DELTA_COUNT; i++) {
+      accumulated += DELTA;
+      chunks.push({ done: false, accumulated });
+    }
+    chunks.push({
+      done: true,
+      accumulated,
+      parsed: PARSED_RESULT,
+      usage: undefined,
+    });
+    return chunks;
+  }
+
+  beforeEach(() => {
+    triggerWorkflow.mockReset();
+    triggerWorkflow.mockResolvedValue('run_1');
+    streamChunks = deltaStream();
+    feed.mockReset();
+  });
+
+  test('coalesces feeds instead of re-parsing on every delta', async () => {
+    await makeWorkflow().split(makeEvent(), makeStep(), makeScopedDb());
+
+    const streamedChars = DELTA.length * DELTA_COUNT;
+    // One feed per PARSE_COALESCE_CHARS (256) of stream, plus the forced final
+    // one — not one per delta. Asserted as a bound, not an exact count, so the
+    // threshold can be retuned without rewriting the test.
+    expect(feed.mock.calls.length).toBeLessThanOrEqual(streamedChars / 256 + 2);
+    expect(feed.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  test('always parses the final chunk so a late scene is not dropped', async () => {
+    const result = await makeWorkflow().split(
+      makeEvent(),
+      makeStep(),
+      makeScopedDb()
+    );
+
+    const lastFeed = feed.mock.calls.at(-1)?.[0];
+    expect(lastFeed).toHaveLength(DELTA.length * DELTA_COUNT);
+    expect(result.shotMapping).toHaveLength(SCENES.length);
+    expect(previewCalls()).toHaveLength(SCENES.length);
   });
 });
