@@ -15,9 +15,10 @@
  *   - Calls the snapshot DTO computer directly in a `validate-snapshot`
  *     step instead of going through the `context.snapshot.*` extension.
  *   - Per-scene × per-model fan-out uses Pattern 3 — `spawnAndAwaitChild`
- *     against `IMAGE_WORKFLOW`. Wave-bounded (#1126) allSettled so a single
- *     failing image (or timeout) doesn't kill the rest of the batch, without
- *     stamping every child at once.
+ *     against `IMAGE_WORKFLOW`, flattened into (scene, model) jobs and held to
+ *     a rolling in-flight ceiling (#1126, #1143) so a large batch can't stamp
+ *     every child at once. Per-job settle isolation, so a single failing image
+ *     (or timeout) doesn't kill the rest of the batch.
  *   - The variant-image (shot-grid) fire-and-forget kick remains routed
  *     through `triggerWorkflow('/variant-image', …)` for parity with the
  *     QStash original — the engine registry decides whether that hits CF
@@ -36,7 +37,7 @@ import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
-import { mapWithConcurrency, resolveImageFanout } from '@/lib/workflow/fanout';
+import { FANOUT_CONCURRENCY, mapWithConcurrency } from '@/lib/workflow/fanout';
 import { NonRetryableError } from 'cloudflare:workflows';
 import type {
   ShotImagesWorkflowInput,
@@ -204,7 +205,6 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
     );
 
     const imageBinding = this.env.IMAGE_WORKFLOW;
-    const fanout = resolveImageFanout(this.env);
 
     // Fan out one IMAGE_WORKFLOW child per (scene, model). Wave-bounded
     // (#1126) so large sequences don't stampede isolates + D1; allSettled
@@ -273,7 +273,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
 
     const jobResults = await mapWithConcurrency(
       jobs,
-      fanout.images,
+      FANOUT_CONCURRENCY.image,
       async ({ scene, model }) => {
         const context = sceneContexts.get(scene.sceneId);
         if (context === undefined) {

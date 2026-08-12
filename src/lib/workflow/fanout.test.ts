@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  FANOUT_CONCURRENCY,
-  mapWithConcurrency,
-  resolveImageFanout,
-} from './fanout';
+import { FANOUT_CONCURRENCY, mapWithConcurrency } from './fanout';
 
 describe('FANOUT_CONCURRENCY', () => {
   it('exposes positive caps', () => {
@@ -11,47 +7,6 @@ describe('FANOUT_CONCURRENCY', () => {
     expect(FANOUT_CONCURRENCY.variantTrigger).toBeGreaterThan(0);
     expect(FANOUT_CONCURRENCY.sheet).toBeGreaterThan(0);
     expect(FANOUT_CONCURRENCY.motion).toBeGreaterThan(0);
-  });
-});
-
-describe('resolveImageFanout', () => {
-  const defaults = {
-    images: FANOUT_CONCURRENCY.image,
-    variantTrigger: FANOUT_CONCURRENCY.variantTrigger,
-  };
-
-  it('defaults when the var is absent or blank', () => {
-    expect(resolveImageFanout({})).toEqual(defaults);
-    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '' })).toEqual(
-      defaults
-    );
-    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '   ' })).toEqual(
-      defaults
-    );
-  });
-
-  it('treats "0" as unbounded on every axis', () => {
-    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '0' })).toEqual({
-      images: Number.POSITIVE_INFINITY,
-      variantTrigger: Number.POSITIVE_INFINITY,
-    });
-  });
-
-  it('widens the image ceiling for a positive integer', () => {
-    expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: '12' })).toEqual({
-      ...defaults,
-      images: 12,
-    });
-  });
-
-  // A typo must not silently unbound the fan-out — that is the failure mode
-  // the cap exists to prevent, so malformed input falls back to the default.
-  it('falls back to the default for malformed or negative values', () => {
-    for (const raw of ['abc', '-1', '4.9', '12abc', 'Infinity', 'NaN']) {
-      expect(resolveImageFanout({ FANOUT_IMAGE_CONCURRENCY: raw })).toEqual(
-        defaults
-      );
-    }
   });
 });
 

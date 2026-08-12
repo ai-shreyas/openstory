@@ -31,7 +31,7 @@ import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
-import { mapWithConcurrency, resolveImageFanout } from '@/lib/workflow/fanout';
+import { FANOUT_CONCURRENCY, mapWithConcurrency } from '@/lib/workflow/fanout';
 import type {
   ImageWorkflowInput,
   RegenerateShotsWorkflowInput,
@@ -88,7 +88,6 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     }
 
     const childBinding = this.env.IMAGE_WORKFLOW;
-    const fanout = resolveImageFanout(this.env);
 
     // Validate the snapshot hash inside the workflow body. Mirrors the QStash
     // `validate-snapshot` step but calls the DTO computer directly because CF
@@ -136,7 +135,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     // ============================================================
     const settled = await mapWithConcurrency(
       snapshots,
-      fanout.images,
+      FANOUT_CONCURRENCY.image,
       async (snapshot, shotIndex): Promise<ShotResult> => {
         if (!snapshot.imagePrompt) {
           // Per-shot failure — peer shots in the batch should still run.
@@ -239,7 +238,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     // each wave (not allSettled) so a failed create fails the durable step
     // and CF retries — mapWithConcurrency would swallow partial failures.
     await step.do('trigger-variant-regen', async () => {
-      const limit = fanout.variantTrigger;
+      const limit = FANOUT_CONCURRENCY.variantTrigger;
       for (let i = 0; i < succeeded.length; i += limit) {
         const wave = succeeded.slice(i, i + limit);
         await Promise.all(

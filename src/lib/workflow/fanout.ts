@@ -18,23 +18,7 @@
  * *started* in, never its identity.
  */
 
-/**
- * `FANOUT_IMAGE_CONCURRENCY` is a runtime-only binding set with
- * `wrangler secret put`, deliberately absent from wrangler.jsonc so it doesn't
- * claim the binding name (Cloudflare rejects a secret that collides with a
- * config var). `wrangler types` therefore can't know about it, so declare it
- * here rather than hand-editing the generated worker-configuration.d.ts — the
- * pre-commit typegen hook rewrites that file and would silently drop the edit.
- */
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      FANOUT_IMAGE_CONCURRENCY?: string;
-    }
-  }
-}
-
-/** Starting concurrency caps for parent fan-out phases. Tune via call sites. */
+/** Concurrency caps for parent fan-out phases. Tune via call sites. */
 export const FANOUT_CONCURRENCY = {
   /**
    * Image children (`spawnAndAwaitChild` to IMAGE_WORKFLOW), counted over
@@ -50,53 +34,6 @@ export const FANOUT_CONCURRENCY = {
   /** Motion children in motion-batch. */
   motion: 3,
 } as const;
-
-/**
- * In-flight ceilings for the image fan-out, resolved together so an override
- * can't half-apply. `Infinity` is legal — the window degenerates to "start
- * everything", which is the pre-#1126 shape.
- */
-export type ImageFanoutShape = {
-  /** Concurrent (scene × model) image children. */
-  images: number;
-  /** Concurrent fire-and-forget `/variant-image` creates. */
-  variantTrigger: number;
-};
-
-const DEFAULT_FANOUT: ImageFanoutShape = {
-  images: FANOUT_CONCURRENCY.image,
-  variantTrigger: FANOUT_CONCURRENCY.variantTrigger,
-};
-
-const UNBOUNDED_FANOUT: ImageFanoutShape = {
-  images: Number.POSITIVE_INFINITY,
-  variantTrigger: Number.POSITIVE_INFINITY,
-};
-
-/**
- * Runtime override for the image fan-out ceiling, kept from the #1143 A/B so
- * the decision stays re-testable without a redeploy:
- *
- *   unset / ''  → the tuned default
- *   '0'         → unbounded (pre-#1126 shape)
- *   'N'         → N concurrent image children
- *
- * A malformed value falls back to the default rather than silently unbounding
- * the fan-out — the failure mode of a typo here is a stampede.
- */
-export function resolveImageFanout(env: {
-  FANOUT_IMAGE_CONCURRENCY?: string;
-}): ImageFanoutShape {
-  const raw = env.FANOUT_IMAGE_CONCURRENCY?.trim();
-  // Strict digits-only: `parseInt` would read "12abc" as 12 and "4.9" as 4,
-  // so a typo would quietly pick a ceiling nobody chose.
-  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_FANOUT;
-
-  const parsed = Number.parseInt(raw, 10);
-  return parsed === 0
-    ? UNBOUNDED_FANOUT
-    : { ...DEFAULT_FANOUT, images: parsed };
-}
 
 /**
  * Run `fn` over `items` with at most `concurrency` in flight at any moment,
