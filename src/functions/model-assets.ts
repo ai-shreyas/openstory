@@ -12,6 +12,7 @@
 import { usdToMicros, type Microdollars } from '@/lib/billing/money';
 import { assertModelsEnabled } from '@/lib/flags';
 import { requireCredits } from '@/lib/billing/preflight';
+import { requireGenerationAllowed } from '@/lib/compliance/generation-gate';
 import { getLogger } from '@/lib/observability/logger';
 import type { ScopedDb } from '@/lib/db/scoped';
 import {
@@ -143,6 +144,18 @@ export async function createGeneratedAsset(
   if (!validation.success) {
     return { ok: false, issues: validation.issues };
   }
+
+  // Compliance gate beside the credit gate (#1180). Direct model access is the
+  // path where the caller names an arbitrary endpoint, so it is where the
+  // restricted-model identity check actually bites — a provider whose terms
+  // require verified end users must not be reachable by an unverified account.
+  // `triggerWorkflow` backstops the enforcement half for every other path.
+  await requireGenerationAllowed({
+    userId: scopedDb.userId,
+    teamId: scopedDb.teamId,
+    provider: 'fal',
+    model: data.endpointId,
+  });
 
   await requireCredits(scopedDb, ASSET_COST_ESTIMATES[data.activity], {
     errorMessage: `Insufficient credits for ${data.activity} generation`,

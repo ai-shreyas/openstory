@@ -4,10 +4,61 @@ import {
   triggerCfWorkflow,
 } from '@/lib/workflow/trigger-bindings';
 import type { CloudflareEnv } from '@/lib/workflow/types';
+import {
+  assertCanGenerate,
+  assertCanWrite,
+  resolveEnforcementState,
+} from '@/lib/compliance/enforcement';
+import { loadComplianceRecords } from '@/lib/db/scoped';
 
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'client']);
+
+/**
+ * Triggers that produce nothing new and so survive a generation pause.
+ *
+ * An export stitches assets the account already made and already paid for.
+ * Blocking it under `generation_suspended` would mean a portrait complaint about
+ * one clip also holds the user's unrelated finished work hostage — which is the
+ * disproportionality the separate `generation_suspended` /
+ * `account_suspended` rungs exist to avoid. These still require write access,
+ * so a fully suspended (read-only) account cannot run them.
+ */
+const WRITE_ONLY_TRIGGERS = new Set(['sequence-export']);
+
+/**
+ * Refuse to start durable work for a restricted account.
+ *
+ * Reads the account's enforcement rows and resolves them with the shared
+ * policy, so this agrees with the banner the user sees and with the gate at the
+ * entry points. Throws `AccountRestrictedError` (403).
+ *
+ * **This is a live D1 read, and three workflows call `triggerWorkflow` from
+ * inside a run** (regenerate-shots, scene-split, shot-images), so those fan-outs
+ * now read enforcement mid-run. That is deliberate and is the same category as
+ * the sanctioned spawn-time billing guard: the ban must stop work that has not
+ * started yet, which is only expressible as a live read. The consequence to know
+ * about is that suspending an account mid-fan-out fails the parent run with
+ * children partly spawned — correct for a ban, and the reason enforcement is
+ * applied to accounts rather than to individual runs. Child spawns via
+ * `spawnAndAwaitChild` use `binding.create()` directly and are not gated here.
+ */
+async function assertTriggerAllowed(
+  urlPath: string,
+  userId: string,
+  teamId: string
+): Promise<void> {
+  const { enforcement } = await loadComplianceRecords(userId, teamId);
+  const state = resolveEnforcementState(enforcement);
+
+  const key = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
+  if (WRITE_ONLY_TRIGGERS.has(key)) {
+    assertCanWrite(state);
+    return;
+  }
+  assertCanGenerate(state);
+}
 
 /**
  * Trigger a durable workflow.
@@ -35,6 +86,14 @@ export async function triggerWorkflow<
   }
 ): Promise<string> {
   logger.info('[TriggerWorkflow]', { url: urlPath, body, options });
+
+  // Enforcement backstop (#1180). Every generation in the app funnels through
+  // here, and the payload carries `userId`/`teamId` by contract — so this is the
+  // one place a compliance gate cannot be forgotten by a future endpoint. The
+  // model-aware identity check lives at the entry points that know which model
+  // they are about to run (`requireGenerationAllowed`); this covers the part
+  // that must never be skippable: a restricted account must not start work.
+  await assertTriggerAllowed(urlPath, body.userId, body.teamId);
 
   const env = getEnv();
   if (env.E2E_TEST === 'true' && env.E2E_FULL_PIPELINE !== 'true') {

@@ -110,6 +110,51 @@ export class InsufficientCreditsError extends OpenStoryError {
 }
 
 /**
+ * A live enforcement action blocks what the caller tried to do (#1180).
+ *
+ * 403, not 402: the account is not short of anything it can top up. `details`
+ * carries the action type and the user-facing notice so the client can explain
+ * the block and link to the appeal route instead of showing a bare error.
+ */
+export class AccountRestrictedError extends OpenStoryError {
+  constructor(
+    message: string = 'This account is restricted',
+    details?: Record<string, unknown>
+  ) {
+    super(message, 'ACCOUNT_RESTRICTED', 403, details);
+  }
+}
+
+/**
+ * The action needs a verified real-name identity on the account and there
+ * isn't one (#1180). Distinct from `ACCOUNT_RESTRICTED` because the remedy is
+ * the opposite: nobody is in trouble, the user just has a step to complete, and
+ * the client should route them to verification rather than to an appeal.
+ */
+export class IdentityVerificationRequiredError extends OpenStoryError {
+  constructor(
+    message: string = 'Identity verification is required for this action',
+    details?: Record<string, unknown>
+  ) {
+    super(message, 'IDENTITY_VERIFICATION_REQUIRED', 403, details);
+  }
+}
+
+/**
+ * A rights attestation is required for this upload and was not supplied
+ * (#1180). 400 rather than 403: the request itself is incomplete, and the fix
+ * is to resubmit with the attestation.
+ */
+export class AttestationRequiredError extends OpenStoryError {
+  constructor(
+    message: string = 'A rights attestation is required for this upload',
+    details?: Record<string, unknown>
+  ) {
+    super(message, 'ATTESTATION_REQUIRED', 400, details);
+  }
+}
+
+/**
  * Stable machine-readable code from a thrown value.
  *
  * Structural, not nominal: it reads a string `.code` off anything that has one

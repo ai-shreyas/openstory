@@ -89,6 +89,16 @@ import {
   modelUsageObservations,
 } from './model-pricing';
 
+// Compliance (#1180 — AIGC traceability, real-name verification, rights
+// attestations, abuse reports, enforcement)
+import {
+  contentProvenance,
+  contentReports,
+  enforcementActions,
+  identityVerifications,
+  uploadAttestations,
+} from './compliance';
+
 // Better Auth tables
 export { account, apikey, passkey, session, user, verification };
 
@@ -348,6 +358,24 @@ export type {
 } from './generated-assets';
 
 /**
+ * Compliance (#1180). Each table stays individually exported — drizzle-kit only
+ * diffs top-level exports, and a table reachable only through `schema` below is
+ * treated as deleted, which makes the next `db:generate` emit DROP TABLE for it
+ * (see the creditBatches note above). Consumers import these from
+ * `@/lib/db/schema/compliance` directly, so nothing in the app graph reads them
+ * from here.
+ *
+ * @public used by drizzle-kit generate, not the app graph
+ */
+export {
+  contentProvenance,
+  contentReports,
+  enforcementActions,
+  identityVerifications,
+  uploadAttestations,
+};
+
+/**
  * Complete schema object for Drizzle client initialization (tables only).
  * Relations are defined separately in ./relations.ts using defineRelations().
  */
@@ -435,4 +463,11 @@ export const schema = {
   modelPricing,
   modelPricingHistory,
   modelUsageObservations,
+
+  // Compliance (#1180)
+  contentProvenance,
+  identityVerifications,
+  uploadAttestations,
+  contentReports,
+  enforcementActions,
 };

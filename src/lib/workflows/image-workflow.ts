@@ -34,6 +34,7 @@ import {
   type ImageGenerationParams,
 } from '@/lib/image/image-generation';
 import { uploadImageToStorage } from '@/lib/image/image-storage';
+import { recordProvenanceSafely } from '@/lib/compliance/provenance';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { simpleHash } from '@/lib/utils/hash';
@@ -517,6 +518,30 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         }
       );
       imageUrl = writeResult.imageUrl;
+
+      // Provenance (#1180) — recorded before the cancel check on purpose: a
+      // cancelled render still uploaded bytes to R2, so the object exists and
+      // has to be traceable like any other. Its own step so a retry of the
+      // persist logic can't double-insert, and best-effort inside, so an audit
+      // write never fails a generation the user already paid for.
+      await step.do('record-provenance', async () => {
+        await recordProvenanceSafely(scopedDb.provenance, {
+          teamId,
+          userId: input.userId,
+          assetKind: 'frame_variant',
+          assetId: prep.versionId,
+          storageKey: upload.path,
+          provider: 'fal',
+          model: prep.params.model,
+          providerRequestId: falUsage?.requestId ?? null,
+          workflowRunId: event.instanceId,
+          prompt: prep.params.prompt,
+          sequenceId,
+          shotId,
+          referenceImageCount: prep.params.referenceImageUrls?.length ?? 0,
+        });
+      });
+
       if (writeResult.cancelled) {
         return { imageUrl, shotId, sequenceId, cancelled: true };
       }

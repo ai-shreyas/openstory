@@ -20,6 +20,7 @@ import {
   LogIn,
   LogOut,
   Settings,
+  ShieldAlert,
   Wallet,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -179,6 +180,12 @@ function AdminMenuItem() {
         <Link to="/admin/usage">
           <BarChart3 className="mr-2 h-4 w-4" />
           Usage
+        </Link>
+      </DropdownMenuItem>
+      <DropdownMenuItem asChild>
+        <Link to="/admin/moderation">
+          <ShieldAlert className="mr-2 h-4 w-4" />
+          Moderation
         </Link>
       </DropdownMenuItem>
     </>

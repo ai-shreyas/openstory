@@ -20,6 +20,7 @@ import { Route as AppAdminRouteRouteImport } from './routes/_app/admin/route'
 import { Route as AppCreditsRouteImport } from './routes/_app/credits'
 import { Route as AppPricingRouteImport } from './routes/_app/pricing'
 import { Route as AppPrivacyRouteImport } from './routes/_app/privacy'
+import { Route as AppReportRouteImport } from './routes/_app/report'
 import { Route as AppSettingsRouteRouteImport } from './routes/_app/settings/route'
 import { Route as AppTermsRouteImport } from './routes/_app/terms'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
@@ -35,6 +36,7 @@ import { Route as MetaOgRouteImport } from './routes/meta/og'
 import { Route as MetaOgGithubRouteImport } from './routes/meta/og-github'
 import { Route as MetaOgLinkedinRouteImport } from './routes/meta/og-linkedin'
 import { Route as R2SplatRouteImport } from './routes/r2.$'
+import { Route as AppAdminModerationRouteImport } from './routes/_app/admin/moderation'
 import { Route as AppAdminUsageRouteImport } from './routes/_app/admin/usage'
 import { Route as AppGalleryIndexRouteImport } from './routes/_app/gallery/index'
 import { Route as AppLocationsIndexRouteImport } from './routes/_app/locations/index'
@@ -47,12 +49,14 @@ import { Route as AppSequencesNewRouteImport } from './routes/_app/sequences/new
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsApiKeysRouteImport } from './routes/_app/settings/api-keys'
 import { Route as AppSettingsDeveloperRouteImport } from './routes/_app/settings/developer'
+import { Route as AppSettingsIdentityRouteImport } from './routes/_app/settings/identity'
 import { Route as AppSettingsPasskeysRouteImport } from './routes/_app/settings/passkeys'
 import { Route as AppStylesIndexRouteImport } from './routes/_app/styles/index'
 import { Route as AppTalentIndexRouteImport } from './routes/_app/talent/index'
 import { Route as AppTalentIdRouteImport } from './routes/_app/talent/$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiBillingWebhookRouteImport } from './routes/api/billing/webhook'
+import { Route as ApiComplianceVerificationCallbackRouteImport } from './routes/api/compliance/verification-callback'
 import { Route as ApiDevMemoryRouteImport } from './routes/api/dev/memory'
 import { Route as ApiOpenrouterCallbackRouteImport } from './routes/api/openrouter/callback'
 import { Route as ApiStorageMultipartRouteImport } from './routes/api/storage/multipart'
@@ -137,6 +141,11 @@ const AppPrivacyRoute = AppPrivacyRouteImport.update({
   path: '/privacy',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppReportRoute = AppReportRouteImport.update({
+  id: '/report',
+  path: '/report',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppSettingsRouteRoute = AppSettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -212,6 +221,11 @@ const R2SplatRoute = R2SplatRouteImport.update({
   path: '/r2/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAdminModerationRoute = AppAdminModerationRouteImport.update({
+  id: '/moderation',
+  path: '/moderation',
+  getParentRoute: () => AppAdminRouteRoute,
+} as any)
 const AppAdminUsageRoute = AppAdminUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
@@ -272,6 +286,11 @@ const AppSettingsDeveloperRoute = AppSettingsDeveloperRouteImport.update({
   path: '/developer',
   getParentRoute: () => AppSettingsRouteRoute,
 } as any)
+const AppSettingsIdentityRoute = AppSettingsIdentityRouteImport.update({
+  id: '/identity',
+  path: '/identity',
+  getParentRoute: () => AppSettingsRouteRoute,
+} as any)
 const AppSettingsPasskeysRoute = AppSettingsPasskeysRouteImport.update({
   id: '/passkeys',
   path: '/passkeys',
@@ -302,6 +321,12 @@ const ApiBillingWebhookRoute = ApiBillingWebhookRouteImport.update({
   path: '/api/billing/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiComplianceVerificationCallbackRoute =
+  ApiComplianceVerificationCallbackRouteImport.update({
+    id: '/api/compliance/verification-callback',
+    path: '/api/compliance/verification-callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiDevMemoryRoute = ApiDevMemoryRouteImport.update({
   id: '/api/dev/memory',
   path: '/api/dev/memory',
@@ -468,6 +493,7 @@ export interface FileRoutesByFullPath {
   '/credits': typeof AppCreditsRoute
   '/pricing': typeof AppPricingRoute
   '/privacy': typeof AppPrivacyRoute
+  '/report': typeof AppReportRoute
   '/terms': typeof AppTermsRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
@@ -482,16 +508,19 @@ export interface FileRoutesByFullPath {
   '/r2/$': typeof R2SplatRoute
   '/docs/': typeof DocsIndexRoute
   '/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
+  '/admin/moderation': typeof AppAdminModerationRoute
   '/admin/usage': typeof AppAdminUsageRoute
   '/locations/$locationId': typeof AppLocationsLocationIdRoute
   '/models/$': typeof AppModelsSplatRoute
   '/sequences/new': typeof AppSequencesNewRoute
   '/settings/api-keys': typeof AppSettingsApiKeysRoute
   '/settings/developer': typeof AppSettingsDeveloperRoute
+  '/settings/identity': typeof AppSettingsIdentityRoute
   '/settings/passkeys': typeof AppSettingsPasskeysRoute
   '/talent/$id': typeof AppTalentIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/billing/webhook': typeof ApiBillingWebhookRoute
+  '/api/compliance/verification-callback': typeof ApiComplianceVerificationCallbackRoute
   '/api/dev/memory': typeof ApiDevMemoryRoute
   '/api/openrouter/callback': typeof ApiOpenrouterCallbackRoute
   '/api/storage/multipart': typeof ApiStorageMultipartRoute
@@ -540,6 +569,7 @@ export interface FileRoutesByTo {
   '/credits': typeof AppCreditsRoute
   '/pricing': typeof AppPricingRoute
   '/privacy': typeof AppPrivacyRoute
+  '/report': typeof AppReportRoute
   '/terms': typeof AppTermsRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
@@ -554,16 +584,19 @@ export interface FileRoutesByTo {
   '/r2/$': typeof R2SplatRoute
   '/docs': typeof DocsIndexRoute
   '/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
+  '/admin/moderation': typeof AppAdminModerationRoute
   '/admin/usage': typeof AppAdminUsageRoute
   '/locations/$locationId': typeof AppLocationsLocationIdRoute
   '/models/$': typeof AppModelsSplatRoute
   '/sequences/new': typeof AppSequencesNewRoute
   '/settings/api-keys': typeof AppSettingsApiKeysRoute
   '/settings/developer': typeof AppSettingsDeveloperRoute
+  '/settings/identity': typeof AppSettingsIdentityRoute
   '/settings/passkeys': typeof AppSettingsPasskeysRoute
   '/talent/$id': typeof AppTalentIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/billing/webhook': typeof ApiBillingWebhookRoute
+  '/api/compliance/verification-callback': typeof ApiComplianceVerificationCallbackRoute
   '/api/dev/memory': typeof ApiDevMemoryRoute
   '/api/openrouter/callback': typeof ApiOpenrouterCallbackRoute
   '/api/storage/multipart': typeof ApiStorageMultipartRoute
@@ -616,6 +649,7 @@ export interface FileRoutesById {
   '/_app/credits': typeof AppCreditsRoute
   '/_app/pricing': typeof AppPricingRoute
   '/_app/privacy': typeof AppPrivacyRoute
+  '/_app/report': typeof AppReportRoute
   '/_app/terms': typeof AppTermsRoute
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/verify': typeof AuthVerifyRoute
@@ -631,16 +665,19 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/_app/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
+  '/_app/admin/moderation': typeof AppAdminModerationRoute
   '/_app/admin/usage': typeof AppAdminUsageRoute
   '/_app/locations/$locationId': typeof AppLocationsLocationIdRoute
   '/_app/models/$': typeof AppModelsSplatRoute
   '/_app/sequences/new': typeof AppSequencesNewRoute
   '/_app/settings/api-keys': typeof AppSettingsApiKeysRoute
   '/_app/settings/developer': typeof AppSettingsDeveloperRoute
+  '/_app/settings/identity': typeof AppSettingsIdentityRoute
   '/_app/settings/passkeys': typeof AppSettingsPasskeysRoute
   '/_app/talent/$id': typeof AppTalentIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/billing/webhook': typeof ApiBillingWebhookRoute
+  '/api/compliance/verification-callback': typeof ApiComplianceVerificationCallbackRoute
   '/api/dev/memory': typeof ApiDevMemoryRoute
   '/api/openrouter/callback': typeof ApiOpenrouterCallbackRoute
   '/api/storage/multipart': typeof ApiStorageMultipartRoute
@@ -693,6 +730,7 @@ export interface FileRouteTypes {
     | '/credits'
     | '/pricing'
     | '/privacy'
+    | '/report'
     | '/terms'
     | '/login'
     | '/verify'
@@ -707,16 +745,19 @@ export interface FileRouteTypes {
     | '/r2/$'
     | '/docs/'
     | '/sequences/$id'
+    | '/admin/moderation'
     | '/admin/usage'
     | '/locations/$locationId'
     | '/models/$'
     | '/sequences/new'
     | '/settings/api-keys'
     | '/settings/developer'
+    | '/settings/identity'
     | '/settings/passkeys'
     | '/talent/$id'
     | '/api/auth/$'
     | '/api/billing/webhook'
+    | '/api/compliance/verification-callback'
     | '/api/dev/memory'
     | '/api/openrouter/callback'
     | '/api/storage/multipart'
@@ -765,6 +806,7 @@ export interface FileRouteTypes {
     | '/credits'
     | '/pricing'
     | '/privacy'
+    | '/report'
     | '/terms'
     | '/login'
     | '/verify'
@@ -779,16 +821,19 @@ export interface FileRouteTypes {
     | '/r2/$'
     | '/docs'
     | '/sequences/$id'
+    | '/admin/moderation'
     | '/admin/usage'
     | '/locations/$locationId'
     | '/models/$'
     | '/sequences/new'
     | '/settings/api-keys'
     | '/settings/developer'
+    | '/settings/identity'
     | '/settings/passkeys'
     | '/talent/$id'
     | '/api/auth/$'
     | '/api/billing/webhook'
+    | '/api/compliance/verification-callback'
     | '/api/dev/memory'
     | '/api/openrouter/callback'
     | '/api/storage/multipart'
@@ -840,6 +885,7 @@ export interface FileRouteTypes {
     | '/_app/credits'
     | '/_app/pricing'
     | '/_app/privacy'
+    | '/_app/report'
     | '/_app/terms'
     | '/_auth/login'
     | '/_auth/verify'
@@ -855,16 +901,19 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/docs/'
     | '/_app/sequences/$id'
+    | '/_app/admin/moderation'
     | '/_app/admin/usage'
     | '/_app/locations/$locationId'
     | '/_app/models/$'
     | '/_app/sequences/new'
     | '/_app/settings/api-keys'
     | '/_app/settings/developer'
+    | '/_app/settings/identity'
     | '/_app/settings/passkeys'
     | '/_app/talent/$id'
     | '/api/auth/$'
     | '/api/billing/webhook'
+    | '/api/compliance/verification-callback'
     | '/api/dev/memory'
     | '/api/openrouter/callback'
     | '/api/storage/multipart'
@@ -920,6 +969,7 @@ export interface RootRouteChildren {
   R2SplatRoute: typeof R2SplatRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiBillingWebhookRoute: typeof ApiBillingWebhookRoute
+  ApiComplianceVerificationCallbackRoute: typeof ApiComplianceVerificationCallbackRoute
   ApiDevMemoryRoute: typeof ApiDevMemoryRoute
   ApiOpenrouterCallbackRoute: typeof ApiOpenrouterCallbackRoute
   ApiStorageMultipartRoute: typeof ApiStorageMultipartRoute
@@ -1007,6 +1057,13 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof AppPrivacyRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/report': {
+      id: '/_app/report'
+      path: '/report'
+      fullPath: '/report'
+      preLoaderRoute: typeof AppReportRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/_app/settings': {
@@ -1114,6 +1171,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof R2SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/admin/moderation': {
+      id: '/_app/admin/moderation'
+      path: '/moderation'
+      fullPath: '/admin/moderation'
+      preLoaderRoute: typeof AppAdminModerationRouteImport
+      parentRoute: typeof AppAdminRouteRoute
+    }
     '/_app/admin/usage': {
       id: '/_app/admin/usage'
       path: '/usage'
@@ -1198,6 +1262,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsDeveloperRouteImport
       parentRoute: typeof AppSettingsRouteRoute
     }
+    '/_app/settings/identity': {
+      id: '/_app/settings/identity'
+      path: '/identity'
+      fullPath: '/settings/identity'
+      preLoaderRoute: typeof AppSettingsIdentityRouteImport
+      parentRoute: typeof AppSettingsRouteRoute
+    }
     '/_app/settings/passkeys': {
       id: '/_app/settings/passkeys'
       path: '/passkeys'
@@ -1238,6 +1309,13 @@ declare module '@tanstack/react-router' {
       path: '/api/billing/webhook'
       fullPath: '/api/billing/webhook'
       preLoaderRoute: typeof ApiBillingWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/compliance/verification-callback': {
+      id: '/api/compliance/verification-callback'
+      path: '/api/compliance/verification-callback'
+      fullPath: '/api/compliance/verification-callback'
+      preLoaderRoute: typeof ApiComplianceVerificationCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/dev/memory': {
@@ -1454,10 +1532,12 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppAdminRouteRouteChildren {
+  AppAdminModerationRoute: typeof AppAdminModerationRoute
   AppAdminUsageRoute: typeof AppAdminUsageRoute
 }
 
 const AppAdminRouteRouteChildren: AppAdminRouteRouteChildren = {
+  AppAdminModerationRoute: AppAdminModerationRoute,
   AppAdminUsageRoute: AppAdminUsageRoute,
 }
 
@@ -1468,6 +1548,7 @@ const AppAdminRouteRouteWithChildren = AppAdminRouteRoute._addFileChildren(
 interface AppSettingsRouteRouteChildren {
   AppSettingsApiKeysRoute: typeof AppSettingsApiKeysRoute
   AppSettingsDeveloperRoute: typeof AppSettingsDeveloperRoute
+  AppSettingsIdentityRoute: typeof AppSettingsIdentityRoute
   AppSettingsPasskeysRoute: typeof AppSettingsPasskeysRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
 }
@@ -1475,6 +1556,7 @@ interface AppSettingsRouteRouteChildren {
 const AppSettingsRouteRouteChildren: AppSettingsRouteRouteChildren = {
   AppSettingsApiKeysRoute: AppSettingsApiKeysRoute,
   AppSettingsDeveloperRoute: AppSettingsDeveloperRoute,
+  AppSettingsIdentityRoute: AppSettingsIdentityRoute,
   AppSettingsPasskeysRoute: AppSettingsPasskeysRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
 }
@@ -1516,6 +1598,7 @@ interface AppRouteRouteChildren {
   AppCreditsRoute: typeof AppCreditsRoute
   AppPricingRoute: typeof AppPricingRoute
   AppPrivacyRoute: typeof AppPrivacyRoute
+  AppReportRoute: typeof AppReportRoute
   AppTermsRoute: typeof AppTermsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSequencesIdRouteRoute: typeof AppSequencesIdRouteRouteWithChildren
@@ -1538,6 +1621,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppCreditsRoute: AppCreditsRoute,
   AppPricingRoute: AppPricingRoute,
   AppPrivacyRoute: AppPrivacyRoute,
+  AppReportRoute: AppReportRoute,
   AppTermsRoute: AppTermsRoute,
   AppIndexRoute: AppIndexRoute,
   AppSequencesIdRouteRoute: AppSequencesIdRouteRouteWithChildren,
@@ -1657,6 +1741,8 @@ const rootRouteChildren: RootRouteChildren = {
   R2SplatRoute: R2SplatRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiBillingWebhookRoute: ApiBillingWebhookRoute,
+  ApiComplianceVerificationCallbackRoute:
+    ApiComplianceVerificationCallbackRoute,
   ApiDevMemoryRoute: ApiDevMemoryRoute,
   ApiOpenrouterCallbackRoute: ApiOpenrouterCallbackRoute,
   ApiStorageMultipartRoute: ApiStorageMultipartRoute,

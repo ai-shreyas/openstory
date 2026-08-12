@@ -7,6 +7,7 @@ import {
   listPublicTalent,
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
+import { requirePortraitUploadAllowed } from '@/lib/compliance/generation-gate';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createTalentSchema,
@@ -91,6 +92,18 @@ export const createTalentFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(createTalentSchema))
   .handler(async ({ context, data }) => {
+    // Reference media on a talent record is how a real person's likeness enters
+    // the library, so it is gated on a verified identity (#1180) — the same
+    // condition the client uses to require the portrait-rights attestation.
+    // Under the default policy an unverified account gets a 403 pointing at
+    // /settings/identity rather than a silent success.
+    if (data.referenceImageUrls?.length) {
+      await requirePortraitUploadAllowed({
+        userId: context.user.id,
+        teamId: context.teamId,
+      });
+    }
+
     return createLibraryTalent(data, {
       scopedDb: context.scopedDb,
       user: context.user,
