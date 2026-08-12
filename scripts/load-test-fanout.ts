@@ -7,12 +7,9 @@
  * the original 275 hangs (Aug 5–7) tracked traffic spikes, not steady load,
  * so sequences are created all at once rather than paced.
  *
- * Arms are selected by the `FANOUT_IMAGE_CONCURRENCY` var on the *deployment*
- * (see resolveImageFanout in src/lib/workflow/map-in-waves.ts), NOT by this
- * script — it only generates load and timestamps it:
- *
- *   arm A (production shape) → var unset
- *   arm B (pre-#1126 shape)  → var "0"
+ * This script only generates load and timestamps it; what's under test is
+ * whatever the deployment happens to be running. To compare two shapes, deploy
+ * a preview per shape and run this against each, quoting the windows it prints.
  *
  * Cost control: `motion: false` + `music: false` (images only) on the
  * cheapest image model. Never point this at production without meaning to —
@@ -28,11 +25,10 @@ import { createSampleSequence } from './sample-pipeline';
 /**
  * Sequence state as the API returns it TODAY: `shots` / `counts.shots`.
  *
- * We deliberately don't reuse `waitForSampleSequence` from ./sample-pipeline —
- * its schema still expects the pre-#1067 `frames` / `counts.frames` shape and
- * throws on every poll against the current API. That staleness is a real bug
- * in the style-sample renderer, but fixing a shared script is out of scope for
- * a fan-out load test, so this driver polls with its own narrow schema.
+ * Not `waitForSampleSequence` from ./sample-pipeline: that one asserts every
+ * clip rendered and THROWS on anything else, which is right for a style sample
+ * but wrong here — a load test has to record a terminal failure, not lose the
+ * state by throwing, and these runs are images-only so there are no clips.
  */
 const sequenceStateSchema = z.object({
   id: z.string(),
@@ -45,6 +41,9 @@ const sequenceStateSchema = z.object({
 });
 
 type SequenceState = z.infer<typeof sequenceStateSchema>;
+
+/** Consecutive 5xx polls tolerated before a sequence is called lost. */
+const MAX_TRANSIENT_POLL_ERRORS = 5;
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'archived']);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,6 +61,7 @@ async function pollToTerminal(
 ): Promise<SequenceState> {
   const deadline = Date.now() + timeoutMs;
   let last: SequenceState | undefined;
+  let transientStreak = 0;
 
   while (Date.now() < deadline) {
     const res = await fetch(
@@ -77,11 +77,26 @@ async function pollToTerminal(
       );
       continue;
     }
+    // A 5xx is the edge or the worker blipping, not the sequence failing.
+    // Treating it as fatal cost three false failures in one run — all three
+    // sequences had completed with every image while the poller gave up.
+    if (res.status >= 500) {
+      transientStreak++;
+      if (transientStreak > MAX_TRANSIENT_POLL_ERRORS) {
+        throw new Error(
+          `Poll failed ${transientStreak}× consecutively (last ${res.status}): ${(await res.text()).slice(0, 200)}`
+        );
+      }
+      await sleep(2000 * transientStreak + Math.random() * 250);
+      continue;
+    }
+
     if (!res.ok) {
       throw new Error(
         `Poll failed (${res.status}): ${(await res.text()).slice(0, 300)}`
       );
     }
+    transientStreak = 0;
 
     last = sequenceStateSchema.parse(await res.json());
     if (TERMINAL_STATUSES.has(last.status)) return last;
@@ -113,11 +128,13 @@ const DEFAULT_TARGET_SECONDS = 90;
 const TURBO_USD_PER_IMAGE = 0.008;
 
 /**
- * Fixed script, `enhance: 'off'` — the pipeline scene-splits it verbatim, so
- * every sequence in every arm produces the same scene count. Two recurring
- * characters and two locations so the character/location bible + sheet
- * workflows fire; those LLM workflows carried two-thirds of the original
- * hang triggers and would be missed by an images-only-looking test.
+ * Seed script for the enhancer (see `enhance: 'always'` at the call site —
+ * `off` scene-splits verbatim and condensed this to 3 shots, below the fan-out
+ * ceiling, where nothing under test engages).
+ *
+ * Two recurring characters and two locations so the character/location bible
+ * and sheet workflows fire; those LLM workflows carried most of the original
+ * hang triggers and an images-only script would miss them entirely.
  */
 const SCRIPT = `A courier named Mira steps off a night bus onto a rain-slick street.
 The bus pulls away, its tail lights smearing in the puddles.
