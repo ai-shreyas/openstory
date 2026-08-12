@@ -11,8 +11,8 @@ export type OpenRouterPricing = {
 };
 
 export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
-  'x-ai/grok-4.5': {
-    name: 'xAI: Grok 4.5',
+  'x-ai/grok-4.6': {
+    name: 'xAI: Grok 4.6',
     promptPerMillionTokens: 2,
     completionPerMillionTokens: 6,
     webSearchPerQuery: 0.005,

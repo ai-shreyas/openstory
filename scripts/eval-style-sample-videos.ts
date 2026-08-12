@@ -20,7 +20,7 @@
  *   …--filter <slug> | --model google/gemini-3.1-pro-preview | --frames 8 | --limit 5 | --motion-only
  *
  * Default model: google/gemini-3.5-flash (cheap, strong vision). Override with
- * --model (e.g. google/gemini-3.1-pro-preview, x-ai/grok-4.5).
+ * --model (e.g. google/gemini-3.1-pro-preview, x-ai/grok-4.6).
  */
 
 import { execFile } from 'node:child_process';

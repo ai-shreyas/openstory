@@ -5,8 +5,8 @@
 
 export const SCRIPT_ANALYSIS_MODELS = [
   {
-    id: 'x-ai/grok-4.5',
-    name: 'Grok 4.5',
+    id: 'x-ai/grok-4.6',
+    name: 'Grok 4.6',
     provider: 'xAI',
     license: 'proprietary' as const,
     qualityRank: 1,
@@ -16,7 +16,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     // models known to accept image input are `true`; text-only models fall
     // back to the text-only motion prompt path.
     vision: true,
-    description: 'Frontier xAI reasoning model with 500K context',
+    description: 'Frontier xAI reasoning model, xAI’s smartest, 500K context',
   },
   {
     id: 'anthropic/claude-fable-5',
@@ -236,7 +236,7 @@ export function resolveVisionModel(
 /**
  * Default model to use when none is specified
  */
-export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId = 'x-ai/grok-4.5';
+export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId = 'x-ai/grok-4.6';
 
 /**
  * Image generation models are now in src/lib/ai/models.ts
