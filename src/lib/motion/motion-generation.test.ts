@@ -45,7 +45,8 @@ describe('Motion Service', () => {
             start_image_url: 'https://example.com/image.jpg',
             duration: '5',
             cfg_scale: 0.5,
-            negative_prompt: 'blur, distort, and low quality',
+            negative_prompt:
+              'blur, distort, and low quality, background music, musical score, soundtrack',
           }),
         })
       );

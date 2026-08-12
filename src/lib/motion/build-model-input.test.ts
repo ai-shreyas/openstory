@@ -40,10 +40,19 @@ describe('buildModelInput', () => {
       expect(result).not.toHaveProperty('image_url');
     });
 
-    it('applies schema defaults for cfg_scale and negative_prompt', () => {
+    it('applies the schema default for cfg_scale', () => {
       const result = build('kling_v3_pro');
       expect(result.cfg_scale).toBe(0.5);
-      expect(result.negative_prompt).toBe('blur, distort, and low quality');
+    });
+
+    // Supplying a negative prompt replaces fal's default rather than extending
+    // it, so the quality terms have to be carried over alongside the music
+    // suppression (#1165).
+    it('suppresses music via negative_prompt, keeping the default quality terms', () => {
+      const result = build('kling_v3_pro');
+      expect(result.negative_prompt).toBe(
+        'blur, distort, and low quality, background music, musical score, soundtrack'
+      );
     });
 
     it('sets generate_audio to true from schema default', () => {
@@ -90,6 +99,13 @@ describe('buildModelInput', () => {
       const result = build('veo3_1');
       expect(result).toHaveProperty('image_url', baseOptions.imageUrl);
     });
+
+    it('suppresses music via negative_prompt', () => {
+      const result = build('veo3_1');
+      expect(result.negative_prompt).toBe(
+        'background music, musical score, soundtrack'
+      );
+    });
   });
 
   describe('MiniMax Hailuo 2.3', () => {
@@ -125,6 +141,12 @@ describe('buildModelInput', () => {
     it('sets generate_audio to true from schema default', () => {
       const result = build('seedance_v2');
       expect(result.generate_audio).toBe(true);
+    });
+
+    // Seedance 2.0 has no negative_prompt field — its only music lever is the
+    // in-prompt constraint from assembleMotionPrompt (#1165).
+    it('sends no negative_prompt', () => {
+      expect(build('seedance_v2')).not.toHaveProperty('negative_prompt');
     });
 
     it('forwards generate_audio=false when caller suppresses audio', () => {
