@@ -171,7 +171,9 @@ function makeScopedDb(): WorkflowScopedDb {
 }
 
 function makeEvent(): Readonly<WorkflowEvent<SceneSplitWorkflowInput>> {
-  // Minimal WorkflowEvent stub: runImpl reads payload + instanceId.
+
+  // The stub satisfies WorkflowEvent structurally, so no assertion is needed
+  // — and asserting anyway now trips no-unnecessary-type-assertion.
   return {
     payload: INPUT,
     instanceId: 'split_run_A',

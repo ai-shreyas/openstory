@@ -101,4 +101,51 @@ describe('flushAnalytics', () => {
 
     await expect(flushAnalytics()).resolves.toBeUndefined();
   });
+
+  /**
+   * Never rejecting is not enough if it never SETTLES. Every caller awaits
+   * this — base-workflow in a `finally`, the schedulers directly — and an
+   * awaited promise with no pending I/O is precisely what the Workers runtime
+   * kills as "hung and would never generate a response". Analytics is
+   * expendable; the isolate is not.
+   */
+  describe('when a sink never settles', () => {
+    it('still resolves, and says so', async () => {
+      vi.useFakeTimers();
+      try {
+        // Never resolves, never rejects — the shape allSettled cannot escape.
+        flushAIObservability.mockReturnValueOnce(new Promise<void>(() => {}));
+
+        const flushed = flushAnalytics();
+        let settled = false;
+        void flushed.then(() => {
+          settled = true;
+        });
+
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(2);
+        await expect(flushed).resolves.toBeUndefined();
+        expect(mockLogError).toHaveBeenCalledWith(
+          expect.stringContaining('abandoning the batch')
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not wait for the timeout when both sinks settle', async () => {
+      vi.useFakeTimers();
+      try {
+        const flushed = flushAnalytics();
+        // No timer advance at all: a completed flush must not be gated on the
+        // deadline, or every workflow would pay the timeout on teardown.
+        await expect(flushed).resolves.toBeUndefined();
+        expect(mockLogError).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
