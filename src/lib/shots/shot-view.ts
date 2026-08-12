@@ -17,6 +17,52 @@ import type {
   VideoVariant,
 } from '@/lib/db/schema';
 
+/**
+ * The narrow slice of a shot's sources that readiness tallies are derived from
+ * — a still url and a video lifecycle, nothing else.
+ *
+ * Exists so a caller that only needs counts (`GET /api/v1/sequences`) can read
+ * five scalar columns instead of materialising a full {@link ShotView} per
+ * shot: the wide view carries `shots.metadata`, the visual prompt and the
+ * motion prompt, which together made listing a page of sequences approach the
+ * 128 MB isolate ceiling (#1161). The derivations below are shared with
+ * {@link toShotView}, so the two paths cannot report different readiness.
+ */
+export type ShotReadiness = {
+  /** `frame_variants.url` of the anchor frame's SELECTED image version. */
+  selectedImageUrl: string | null;
+  /** `frame_variants.url` of the anchor frame's newest `kind: 'preview'` row. */
+  previewImageUrl: string | null;
+  /** Whether `render_segments.selectedVideoVersionId` resolves to a version. */
+  hasSelectedVideo: boolean;
+  /** `status` of the newest non-`variantOnly` render, or null if none exists. */
+  primaryVideoStatus: VideoVariant['status'] | null;
+};
+
+/**
+ * The still url a shot exposes, or null while it has none: the selected
+ * variant's stored url, else the fast preview variant's CDN url.
+ */
+export function readinessImageUrl(
+  readiness: Pick<ShotReadiness, 'selectedImageUrl' | 'previewImageUrl'>
+): string | null {
+  return readiness.selectedImageUrl ?? readiness.previewImageUrl ?? null;
+}
+
+/**
+ * A shot's video status. The newest primary render's lifecycle wins; a shot
+ * with no primary render behind its selection reads `completed` (pre-#1067
+ * rows), and one with neither reads `pending` — see {@link ShotView.videoStatus}.
+ */
+export function readinessVideoStatus(
+  readiness: Pick<ShotReadiness, 'hasSelectedVideo' | 'primaryVideoStatus'>
+): VideoVariant['status'] {
+  return (
+    readiness.primaryVideoStatus ??
+    (readiness.hasSelectedVideo ? 'completed' : 'pending')
+  );
+}
+
 export type ShotGridSheet = {
   url: string | null;
   // Sourced from a `frame_variants` row, whose status union is wider than the
@@ -136,7 +182,10 @@ export function toShotView(
     imagePromptVersion,
     video,
     primaryVideo,
-    videoStatus: primaryVideo?.status ?? (video ? 'completed' : 'pending'),
+    videoStatus: readinessVideoStatus({
+      hasSelectedVideo: video !== null,
+      primaryVideoStatus: primaryVideo?.status ?? null,
+    }),
     gridSheet: sources.gridSheet ?? null,
     motionPrompt: sources.motionPrompt ?? null,
   };

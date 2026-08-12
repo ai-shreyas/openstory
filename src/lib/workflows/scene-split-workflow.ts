@@ -61,11 +61,41 @@ import type {
   SceneSplitWorkflowInput,
   SceneSplitWorkflowResult,
 } from '@/lib/workflow/types';
-import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+import type {
+  WorkflowEvent,
+  WorkflowStep,
+  WorkflowStepConfig,
+} from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'scene-split']);
+
+/**
+ * Re-parse the accumulated stream at most once per this many new characters.
+ *
+ * `parser.feed` is O(buffer): it re-parses the WHOLE response so far and
+ * re-validates every scene already emitted. Called on every delta — one token,
+ * ~4 chars — that is O(n²) over a split that reaches ~100 KB, i.e. tens of
+ * thousands of full parses each allocating a complete object graph. That is
+ * what exceeded the 128 MB isolate ceiling and failed whole sequences (#1161).
+ * Coalescing cuts the parse count ~60× and costs under a second of extra
+ * latency before a finished scene appears.
+ */
+const PARSE_COALESCE_CHARS = 256;
+
+/**
+ * Retry budget for `scene-splitting-stream`.
+ *
+ * Lower than the engine default on purpose. This step owns the entire LLM
+ * call, so every retry re-runs and re-bills a full generation — and the
+ * failure that motivated the cap (an isolate OOM) is deterministic, so the
+ * later attempts only spend money and delay the sequence's failure by minutes.
+ * Two retries still cover a genuinely transient provider error.
+ */
+const STREAM_STEP_RETRIES = {
+  retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' },
+} as const satisfies WorkflowStepConfig;
 
 const PHASE = { number: 1, name: 'Analyzing script…' } as const;
 const STEP_NAME = 'scene-splitting';
@@ -224,6 +254,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     // typecheck.
     const streamResultJson = await step.do(
       'scene-splitting-stream',
+      STREAM_STEP_RETRIES,
       async (): Promise<string> => {
         const elementsBlock =
           elements.length > 0
@@ -265,6 +296,8 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         }> = [];
         let finalText = '';
         let chunkCount = 0;
+        /** Buffer length at the last `parser.feed` — see PARSE_COALESCE_CHARS. */
+        let parsedChars = 0;
         let prevScene: SceneSplittingScene | undefined = undefined;
         /**
          * The previous scene's shot AND its anchor frame, as one value: the
@@ -295,13 +328,23 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           }
           chunkCount++;
           finalText = chunk.accumulated;
-          const events = parser.feed(chunk.accumulated);
 
           if (chunkCount % 20 === 0) {
             logger.info(
               `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] chunk #${chunkCount} | ${finalText.length} chars | ${shotMapping.length} shots so far`
             );
           }
+
+          // The final chunk always parses, so a scene finished by the last few
+          // deltas is still emitted (and gets its preview) before the loop ends.
+          if (
+            !chunk.done &&
+            finalText.length - parsedChars < PARSE_COALESCE_CHARS
+          ) {
+            continue;
+          }
+          parsedChars = finalText.length;
+          const events = parser.feed(finalText);
 
           for (const ev of events) {
             if (ev.type === 'title' && sequenceId) {

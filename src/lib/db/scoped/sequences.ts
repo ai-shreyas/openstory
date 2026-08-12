@@ -14,10 +14,19 @@ import {
   selectShotViewRows,
   shotHierarchicalOrder,
 } from './shot-view-query';
-import { sequences, shots } from '@/lib/db/schema';
+import {
+  frames,
+  frameVariants,
+  renderSegments,
+  sequences,
+  shots,
+  videoVariants,
+} from '@/lib/db/schema';
 import type { NewSequence, Sequence } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
-import type { ShotView } from '@/lib/shots/shot-view';
+import type { ShotReadiness, ShotView } from '@/lib/shots/shot-view';
+import { getLatestPreviewByFrameIds } from './frame-variants';
+import { getPrimaryVideoByShotIds } from './video-variants';
 import { ValidationError } from '@/lib/errors';
 import { and, asc, desc, eq, inArray, isNull, lt, not, or } from 'drizzle-orm';
 
@@ -141,6 +150,100 @@ function createSequencesReadMethods(db: Database, teamId: string) {
         )
       );
       return results.flat();
+    },
+
+    /**
+     * Readiness-only twin of {@link listShotsByIds}, for callers that report
+     * `counts` and never touch a shot's content.
+     *
+     * `listShotsByIds` projects ~100 columns per shot — `shots.metadata`, the
+     * visual prompt, the motion prompt, both variant rows. `GET
+     * /api/v1/sequences` paged up to 100 sequences through it to compute four
+     * integers each, and the shots-per-sequence fan-out is unbounded, so the
+     * page's peak footprint had no ceiling — one of the reads that reached the
+     * 128 MB isolate limit (#1161). This selects the five scalars
+     * {@link ShotReadiness} is derived from instead.
+     *
+     * The two group-wise maxes ride the SAME helpers as the full view, so
+     * neither path can drift on which render counts as primary.
+     */
+    listShotReadinessByIds: async (
+      sequenceIds: string[]
+    ): Promise<Array<ShotReadiness & { sequenceId: string }>> => {
+      if (sequenceIds.length === 0) return [];
+      const batches: string[][] = [];
+      for (let i = 0; i < sequenceIds.length; i += SHOTS_BY_IDS_BATCH) {
+        batches.push(sequenceIds.slice(i, i + SHOTS_BY_IDS_BATCH));
+      }
+      const batched = await Promise.all(
+        batches.map((batch) =>
+          db
+            .select({
+              sequenceId: shots.sequenceId,
+              shotId: shots.id,
+              frameId: frames.id,
+              selectedImageUrl: frameVariants.url,
+              selectedVideoId: videoVariants.id,
+            })
+            .from(shots)
+            // teamId is filtered through the join, so caller-supplied ids from
+            // another team return nothing rather than leak.
+            .innerJoin(sequences, eq(shots.sequenceId, sequences.id))
+            // Same anchor-frame and selection joins as `selectShotViewRows`:
+            // all left, with `discardedAt` in the JOIN condition, so a shot
+            // with no frame or a discarded selection still counts as a shot.
+            .leftJoin(
+              frames,
+              and(eq(frames.shotId, shots.id), eq(frames.orderIndex, 0))
+            )
+            .leftJoin(
+              frameVariants,
+              and(
+                eq(frameVariants.id, frames.selectedImageVersionId),
+                isNull(frameVariants.discardedAt)
+              )
+            )
+            .leftJoin(
+              renderSegments,
+              eq(renderSegments.id, shots.renderSegmentId)
+            )
+            .leftJoin(
+              videoVariants,
+              and(
+                eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+                isNull(videoVariants.discardedAt)
+              )
+            )
+            .where(
+              and(
+                inArray(shots.sequenceId, batch),
+                eq(sequences.teamId, teamId)
+              )
+            )
+        )
+      );
+      const rows = batched.flat();
+
+      const [primaryByShot, previewByFrame] = await Promise.all([
+        getPrimaryVideoByShotIds(
+          db,
+          rows.map((row) => row.shotId)
+        ),
+        getLatestPreviewByFrameIds(
+          db,
+          rows.flatMap((row) => (row.frameId ? [row.frameId] : []))
+        ),
+      ]);
+
+      return rows.map((row) => ({
+        sequenceId: row.sequenceId,
+        selectedImageUrl: row.selectedImageUrl ?? null,
+        previewImageUrl: row.frameId
+          ? (previewByFrame.get(row.frameId)?.url ?? null)
+          : null,
+        hasSelectedVideo: row.selectedVideoId !== null,
+        primaryVideoStatus: primaryByShot.get(row.shotId)?.status ?? null,
+      }));
     },
   };
 }
