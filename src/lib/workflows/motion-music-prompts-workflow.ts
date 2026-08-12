@@ -33,7 +33,6 @@ import type {
 } from '@/lib/workflow/types';
 import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-import { NonRetryableError } from 'cloudflare:workflows';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'motion-music-prompts']);
@@ -157,15 +156,10 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
       () =>
         Promise.resolve(
           scenesWithSnappedDurations.map((scene) => {
-            const motionPrompt = motionPrompts.find(
-              (s) => s.sceneId === scene.sceneId
-            );
-            if (!motionPrompt) {
-              throw new NonRetryableError(
-                `Scene ID mismatch in motion prompts: expected "${scene.sceneId}"`,
-                'WorkflowValidationError'
-              );
-            }
+            // A scene with no motion prompt is now an expected outcome, not a
+            // mismatch: the batch returns partial results rather than failing
+            // a whole sequence for one unanchorable scene (#1143). The shot
+            // keeps its still and simply can't be animated until regenerated.
             const musicSceneDesign = musicDesign.scenes.find(
               (s) => s.sceneId === scene.sceneId
             );

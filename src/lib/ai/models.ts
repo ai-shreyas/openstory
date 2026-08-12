@@ -503,6 +503,36 @@ export const EDIT_ENDPOINTS: Partial<Record<TextToImageModel, string>> = {
 };
 
 /**
+ * Per-model ceiling on `image_urls` for the edit endpoints above.
+ *
+ * fal enforces these server-side and REJECTS the request over the limit — it
+ * does not truncate, despite flux-2/turbo/edit's own schema claiming "if more
+ * are provided, only the first 4 will be used". A scene with a couple of
+ * characters in a location plus props clears 4 easily, so an uncapped send
+ * fails the shot outright ("Number of image URLs must be less than or equal
+ * to 4" — 11 of them in the #1143 load test).
+ *
+ * Absent = no known cap; send what we have.
+ */
+const EDIT_REFERENCE_LIMITS: Partial<Record<TextToImageModel, number>> = {
+  flux_2_dev: 4,
+  flux_2_turbo: 4,
+};
+
+/**
+ * Trim reference images to what `model`'s edit endpoint accepts. References
+ * are ordered characters → locations → elements, so truncation drops the
+ * least identity-critical ones last.
+ */
+export function capReferenceImages<T>(
+  model: TextToImageModel,
+  references: T[]
+): T[] {
+  const limit = EDIT_REFERENCE_LIMITS[model];
+  return limit === undefined ? references : references.slice(0, limit);
+}
+
+/**
  * Get the edit endpoint for a model that supports reference images
  * @param model - The text-to-image model key
  * @returns The Fal.ai edit endpoint ID, or null if not supported

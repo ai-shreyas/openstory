@@ -6,6 +6,11 @@
  * other mid-flight, and never rejects itself — analytics failures are
  * swallowed-but-logged so they can't clobber a handler's result via the
  * middleware `finally` that awaits the scheduler.
+ *
+ * Also bounded (#1143): never rejecting is not enough if it never SETTLES,
+ * because every caller awaits it — `base-workflow` in a `finally`, the
+ * scheduler directly, the Cloudflare scheduler inside `waitUntil`. See
+ * FLUSH_TIMEOUT_MS.
  */
 
 import { getPostHogClient } from '@/lib/posthog-server';
@@ -14,7 +19,57 @@ import { getLogger, toErrorPayload } from './logger';
 
 const logger = getLogger(['openstory', 'observability', 'flush-scheduler']);
 
+/**
+ * Upper bound on a flush.
+ *
+ * `Promise.allSettled` below protects against either flush REJECTING, but not
+ * against one that never settles — and awaiting a promise with no pending I/O
+ * behind it is exactly what the Workers runtime reports as "your Worker's code
+ * had hung and would never generate a response". Every hang sampled during the
+ * #1143 load test landed here: the last line logged was the workflow's terminal
+ * outcome, and `base-workflow`'s `finally` awaiting this is the only code that
+ * runs after that point.
+ *
+ * Losing a batch of analytics is strictly better than hanging an isolate, so
+ * the flush is abandoned rather than waited on indefinitely. Deliberately
+ * generous — the flushes demonstrably complete for the overwhelming majority
+ * of invocations, so this should only ever fire on the pathological case.
+ */
+const FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * Flush both sinks, bounded. Never rejects and — unlike the unbounded version
+ * — always settles.
+ */
 export async function flushAnalytics(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(true), FLUSH_TIMEOUT_MS);
+  });
+
+  try {
+    const timedOut = await Promise.race([
+      // `.catch` is belt-and-braces: `flushBoth` already swallows, but once the
+      // race is lost the abandoned promise has no awaiter, so a future change
+      // that let it reject would surface as an unhandled rejection instead.
+      flushBoth().then(
+        () => false,
+        () => false
+      ),
+      deadline,
+    ]);
+
+    if (timedOut) {
+      logger.error(
+        `Analytics flush exceeded ${FLUSH_TIMEOUT_MS}ms; abandoning the batch so the isolate can finish`
+      );
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function flushBoth(): Promise<void> {
   const [events, spans] = await Promise.allSettled([
     // Wrapped in an async thunk so `allSettled` also covers a SYNCHRONOUS
     // throw out of `getPostHogClient()` — it constructs `new PostHog(...)` on
