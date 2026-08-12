@@ -16,26 +16,36 @@ import { PromptMention } from './mention/mention-extension';
 
 type MentionConfigure = Partial<MentionOptions>;
 
+/**
+ * Collapse every line-break form to `\n`. Web/Docs/Word often put U+2028
+ * (LINE SEPARATOR) between lines — that is not matched by `\n` splits, so
+ * multi-line paste looked empty or landed as one run-on line.
+ */
+export const normalizeScreenplayNewlines = (text: string): string =>
+  text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    // LINE SEPARATOR, PARAGRAPH SEPARATOR, NEXT LINE (NEL)
+    .replace(/[\u2028\u2029\u0085]/g, '\n');
+
 // markdown-it parses two trailing spaces + `\n` as a hard break, so converting
 // single newlines (but not paragraph-separating blank lines) keeps a pasted
 // multi-line screenplay block in one paragraph instead of shredding each line
 // into its own paragraph. Exported for unit testing.
 export const toHardBreakMarkdown = (text: string): string =>
-  text.replace(/(?<!\n)\n(?!\n)/g, '  \n');
+  normalizeScreenplayNewlines(text).replace(/(?<!\n)\n(?!\n)/g, '  \n');
 
 // Decide what to insert for a paste. The script editor must only ever ingest
-// markdown — never the arbitrary inline styling (fonts, colours, sizes) that
+// plain text — never the arbitrary inline styling (fonts, colours, sizes) that
 // rich `text/html` clipboard payloads from Word / Google Docs / web pages
-// carry. When HTML is present we ignore it and insert the clipboard's
-// plain-text representation parsed as markdown; a plain-text-only paste returns
-// null so tiptap-markdown's own `clipboardTextParser` handles it. Exported for
-// unit testing.
+// carry. Returns null when there is no usable text (image-only paste). Exported
+// for unit testing.
 export const plainTextPasteAsMarkdown = (
   html: string,
   text: string
 ): string | null => {
-  if (!html) return null; // plain text paste — handled as markdown already
   if (!text) return null; // image-only / non-text paste — leave to default
+  void html;
   return toHardBreakMarkdown(text);
 };
 import { createMentionSuggestion } from './mention/mention-suggestion';
@@ -235,25 +245,37 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           return true;
         },
       },
-      // Strip styling from rich (text/html) paste: insert only the plain-text
-      // representation, parsed as markdown, so the script never accepts fonts,
-      // colours, or other inline styling. Plain-text paste falls through to
-      // tiptap-markdown's clipboardTextParser (transformPastedText below).
-      handlePaste: (_view, event) => {
+      // Always paste plain text only (strip Word/Docs/HTML styling). Use the
+      // same hard-break insertion path as beforeinput — do not use
+      // insertContent: tiptap-markdown forces inline markdown parse and drops
+      // multi-line pastes after preventDefault. Also normalize U+2028 etc.
+      handlePaste: (view, event) => {
         const clipboard = event.clipboardData;
         if (!clipboard) return false;
-        const markdown = plainTextPasteAsMarkdown(
-          clipboard.getData('text/html'),
-          clipboard.getData('text/plain')
-        );
-        if (markdown === null) return false;
+        const raw = clipboard.getData('text/plain');
+        if (!raw) return false; // image-only / non-text — leave to default
         event.preventDefault();
-        editorRef.current?.commands.insertContent(markdown);
+
+        const text = normalizeScreenplayNewlines(raw);
+        const { schema, tr, selection } = view.state;
+        const hardBreak = schema.nodes.hardBreak;
+        if (!hardBreak) return false;
+
+        const lines = text.split('\n');
+        const nodes = lines.flatMap((line, i) => {
+          const out = [];
+          if (line.length > 0) out.push(schema.text(line));
+          if (i < lines.length - 1) out.push(hardBreak.create());
+          return out;
+        });
+        if (nodes.length === 0) return true;
+
+        view.dispatch(
+          tr.replaceWith(selection.from, selection.to, nodes).scrollIntoView()
+        );
         return true;
       },
-      // Same treatment for actual plain-text paste — markdown-it parses two
-      // trailing spaces + \n as a hard break, so the pasted block stays in
-      // one paragraph instead of splitting.
+      // Backup path for non-handlePaste clipboard inserts: normalize + hard breaks.
       transformPastedText: (text) => toHardBreakMarkdown(text),
     },
     onUpdate: ({ editor: e }) => {

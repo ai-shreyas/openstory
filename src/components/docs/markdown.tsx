@@ -8,6 +8,8 @@ import type { DOMNode } from 'html-dom-parser';
 // and the docs ship an empty <body> (invisible to crawlers, #814). The
 // server build is pure JS, so it runs everywhere and the client parses
 // markup identically to the server (no hydration drift).
+// Default import: ESM is `export { HTMLDOMParser as default }` (see
+// src/types/html-dom-parser-server.d.ts). Named import fails at build time.
 import htmlToDOM from 'html-dom-parser/lib/server/html-to-dom';
 import {
   type HTMLReactParserOptions,
@@ -31,7 +33,7 @@ function childrenToDOMNodes(children: readonly unknown[]): DOMNode[] {
       typeof child === 'object' &&
       child !== null &&
       'type' in child &&
-      typeof (child as { type: unknown }).type === 'string'
+      typeof child.type === 'string'
   );
 }
 

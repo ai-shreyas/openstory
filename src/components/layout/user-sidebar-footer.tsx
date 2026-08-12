@@ -11,6 +11,7 @@ import { SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { isSystemAdminFn } from '@/functions/gift-tokens';
 import { useUser } from '@/hooks/use-user';
 import { authClient } from '@/lib/auth/client';
+import { sessionQueryOptions } from '@/lib/auth/session-query';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import {
@@ -29,6 +30,8 @@ export function UserSidebarFooter() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // Initial session resolve only — not after sign-out (we seed null session
+  // so isLoading stays false and "Sign in" shows immediately).
   if (isLoading) {
     return (
       <SidebarMenuItem>
@@ -62,14 +65,24 @@ export function UserSidebarFooter() {
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
-    queryClient.removeQueries({ queryKey: ['session'] });
-    await authClient.signOut({
-      fetchOptions: {
-        onSuccess: () => {
-          void navigate({ to: '/' });
+    try {
+      // Do NOT removeQueries(['session']) first — that puts useUser into
+      // isLoading and flashes the skeleton. authClient.signOut clears caches
+      // then seeds session=null (see client.ts).
+      await authClient.signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            // Only seed anonymous session after a confirmed sign-out. A
+            // failed network/API call must not flip the UI to "Sign in"
+            // while the cookie is still valid.
+            queryClient.setQueryData(sessionQueryOptions.queryKey, null);
+            void navigate({ to: '/' });
+          },
         },
-      },
-    });
+      });
+    } finally {
+      setIsSigningOut(false);
+    }
   };
 
   return (

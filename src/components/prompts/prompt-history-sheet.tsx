@@ -113,7 +113,6 @@ type MediaRow = {
   model: string;
   status: string;
   url: string | null;
-  previewUrl: string | null;
   createdAt: Date;
   selected: boolean;
   kind?: 'model' | 'framing';
@@ -239,7 +238,7 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
         const expanded = expandedId === row.id;
         const panelId = `${kind}-history-panel-${row.id}`;
         const triggerId = `${kind}-history-trigger-${row.id}`;
-        const thumb = row.previewUrl ?? row.url;
+        const thumb = row.url;
         const modelLabel =
           kind === 'image'
             ? imageModelDisplayName(row.model)

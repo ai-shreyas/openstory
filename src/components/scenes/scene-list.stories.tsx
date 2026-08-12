@@ -129,7 +129,6 @@ const psVersion = (id: string, model: string): SegmentVideoVersion => ({
   model,
   status: 'completed',
   url: PS_VIDEO_URL,
-  previewUrl: null,
   createdAt: PS_FIXED_DATE,
 });
 

@@ -174,7 +174,7 @@ function buildFalModelOptions(
           params.imageSize ?? DEFAULT_IMAGE_SIZE
         ),
         // Phota only accepts '1K' or '4K' — map anything else to '1K'
-        resolution: params.resolution === '4K' ? '4K' : ('1K' as '1K' | '4K'),
+        resolution: params.resolution === '4K' ? '4K' : '1K',
         ...(params.numImages !== undefined && { num_images: params.numImages }),
         ...(params.outputFormat && { output_format: params.outputFormat }),
         ...(params.referenceImageUrls?.length && {

@@ -7,7 +7,7 @@ import { shotKeys } from '@/hooks/use-shots';
 import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
-import { sequenceKeys } from '@/hooks/use-sequences';
+import { musicPromptStalenessKey, sequenceKeys } from '@/hooks/use-sequences';
 import type { Sequence } from '@/types/database';
 import type { ShotView } from '@/lib/shots/shot-view';
 import type { QueryClient } from '@tanstack/react-query';
@@ -175,10 +175,13 @@ export function updateQueryCacheFromEvent(
                     thumbnailUrl && f.image
                       ? { ...f.image, url: thumbnailUrl }
                       : f.image,
+                  // Projected from the newest `kind: 'preview'` row (#1101).
+                  // The emit carries the url so the stand-in appears without a
+                  // refetch; the row itself is not in this cache.
+                  previewThumbnailUrl:
+                    previewThumbnailUrl ?? f.previewThumbnailUrl,
                   frame: {
                     ...f.frame,
-                    previewImageUrl:
-                      previewThumbnailUrl ?? f.frame.previewImageUrl,
                     imageStatus: isValidShotStatus(status)
                       ? status
                       : f.frame.imageStatus,
@@ -554,6 +557,17 @@ export function updateQueryCacheFromEvent(
       // intermediate character event was missed.
       void queryClient.invalidateQueries({
         queryKey: sequenceCharacterKeys.list(sequenceId),
+      });
+      // Staleness was deferred for the whole run (#1121: every artifact reads
+      // 'generating' while the sequence is 'processing'). The run ending is
+      // the moment a real verdict becomes computable, and nothing else
+      // invalidates this namespace at that point — without it the deferred
+      // entries sit in cache until something unrelated refetches them.
+      void queryClient.invalidateQueries({
+        queryKey: shotStalenessNamespace,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: musicPromptStalenessKey(sequenceId),
       });
       break;
 

@@ -115,8 +115,9 @@ testWithUser.describe('Full Sequence Pipeline', () => {
   );
 
   // The full pipeline runs many workflow steps end-to-end (script → shots →
-  // motion → music). Each per-step poll below allows up to 10 minutes; the
-  // outer cap accommodates all three running near their limit plus setup.
+  // auto motion → music under product defaults #1140). Each per-step poll
+  // below allows up to 10 minutes; the outer cap accommodates all three
+  // running near their limit plus setup.
   testWithUser.setTimeout(1_800_000);
 
   let testTalents: TestTalent[] = [];
@@ -365,18 +366,12 @@ SUPER:  CORAL.  OUT NOW.
         )
         .toBe(true);
 
-      // 10. Trigger motion generation, then wait on the DB for every shot's
-      //     video + the sequence music to complete. The scene-list footer
-      //     unmounts as soon as shots flip to `generating` (progress moves
-      //     to MotionProgressBanner), so "button gone" is not a completion
-      //     signal — only a start signal (#1072).
-      const motionButton = page
-        .getByRole('button', { name: /Generate \d+ ?\/ ?\d+ shots?/i })
-        .first();
-      await expect(motionButton).toBeVisible({ timeout: t(120_000) });
-      await expect(motionButton).toBeEnabled({ timeout: t(120_000) });
-      await motionButton.click();
-
+      // 10. Wait for auto motion + music to finish. Product defaults (#1140)
+      //     turn autoGenerateMotion + autoGenerateMusic ON, so Generate
+      //     already chains storyboard → motion batch → music — there is no
+      //     "Generate N / M shots" footer when every shot is already
+      //     generating or complete. Poll the DB only; the batch button is
+      //     for the manual (motion-off) path, not this aha flow.
       await expect
         .poll(
           async () => {

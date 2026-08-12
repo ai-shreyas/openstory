@@ -1,9 +1,4 @@
-import {
-  DEFAULT_IMAGE_MODEL,
-  IMAGE_MODELS,
-  isValidTextToImageModel,
-  safeTextToImageModel,
-} from '@/lib/ai/models';
+import { DEFAULT_IMAGE_MODEL, safeTextToImageModel } from '@/lib/ai/models';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
@@ -53,6 +48,7 @@ import {
   shotAccessMiddleware,
   sequenceAccessMiddleware,
 } from './middleware';
+import { ValidationError } from '@/lib/errors';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -83,11 +79,17 @@ export const getShotsFn = createServerFn({ method: 'GET' })
     const shotIds = shotRows.map((s) => s.id);
     const [
       selectedByFrame,
+      previewByFrame,
       selectedPromptByFrame,
       selectedVideoByShot,
       primaryVideoByShot,
     ] = await Promise.all([
       scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+      // The pre-prompt stand-in is a `kind: 'preview'` row too (#1101) —
+      // resolved by frame like the still, not read off a frame column.
+      scopedDb.frameVariants.listLatestPreviewsByFrameIds(
+        anchorRows.map((f) => f.id)
+      ),
       scopedDb.framePromptVersions.getSelectedByFrameIds(
         anchorRows.map((f) => f.id)
       ),
@@ -124,6 +126,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         : null;
       return toShotView(shot, frame, {
         image: selectedByFrame.get(frame.id) ?? null,
+        preview: previewByFrame.get(frame.id) ?? null,
         imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
         video: selectedVideoByShot.get(shot.id) ?? null,
         primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
@@ -167,6 +170,7 @@ export const getShotFn = createServerFn({ method: 'GET' })
       sheet,
       selectedMotion,
       image,
+      preview,
       imagePromptVersion,
       video,
       primaryVideo,
@@ -174,12 +178,14 @@ export const getShotFn = createServerFn({ method: 'GET' })
       context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
       context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
       context.scopedDb.frameVariants.getSelected(context.frame.id),
+      context.scopedDb.frameVariants.getLatestPreview(context.frame.id),
       context.scopedDb.framePromptVersions.getSelected(context.frame.id),
       context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
       context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
     ]);
     return toShotView(context.shot, context.frame, {
       image,
+      preview,
       imagePromptVersion,
       video,
       primaryVideo,
@@ -193,16 +199,14 @@ export const getShotFn = createServerFn({ method: 'GET' })
 export const getSequenceImageModelsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
-    const models = await context.scopedDb.frameVariants.listModelsForSequence(
+    // `listModelsForSequence` is `kind: 'model'` only, and a preview is
+    // `kind: 'preview'` since #1101 — so the preview model drops out by
+    // classification. The `hidden`-model filter that used to sit here was a
+    // workaround for filing previews as `kind: 'model'`, and it would have
+    // broken the moment a second fast model shipped or `flux_2_turbo` was
+    // unhidden.
+    return await context.scopedDb.frameVariants.listModelsForSequence(
       context.sequence.id
-    );
-    // Preview thumbnails are generated with a hidden internal model
-    // (PREVIEW_IMAGE_MODEL = flux_2_turbo) and stored as image variants. Hide
-    // such hidden models from the user-facing sequence image-model list — they
-    // aren't a real choice and only confuse the header dropdown.
-    return models.filter(
-      (model) =>
-        !(isValidTextToImageModel(model) && 'hidden' in IMAGE_MODELS[model])
     );
   });
 
@@ -696,6 +700,16 @@ export const updateStaleShotsFn = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user, scopedDb } = context;
     const depth = data.depth ?? DEFAULT_UPDATE_STALE_DEPTH;
+    // Never race the pipeline (#1121). While a storyboard run owns the
+    // sequence it is rewriting these artifacts anyway, so an Update all run
+    // would bill for work that is about to be overwritten. Staleness reads
+    // 'generating' during this window, so the UI offers no action to get
+    // here — this is the guard for a stale tab or a direct API call.
+    if (sequence.status === 'processing') {
+      throw new ValidationError(
+        'This sequence is still generating — wait for the run to finish before updating out-of-date shots.'
+      );
+    }
     // Deliberately before the plan: this is a floor, not a quote — a run that
     // can't afford even one artifact of its most expensive level should never
     // start, and there's no point planning a whole sequence to tell the user

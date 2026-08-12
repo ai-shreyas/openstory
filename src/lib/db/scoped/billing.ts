@@ -243,7 +243,7 @@ export function createBillingMethods(
       throw new Error(`addCredits: update returned no row for team ${teamId}`);
     }
 
-    const txType = opts.type ?? ('credit_purchase' as TransactionType);
+    const txType = opts.type ?? 'credit_purchase';
 
     const rows = await db
       .insert(transactions)

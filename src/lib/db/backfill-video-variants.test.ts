@@ -82,6 +82,19 @@ function readBackfillStatements(): string[] {
 
 const BACKFILL_STATEMENTS = readBackfillStatements();
 
+/**
+ * Columns the shipped backfill reads/writes that a later migration dropped.
+ * `migrate()` below brings the DB to HEAD, so re-add them to exercise the SQL
+ * against the schema it actually ran on in prod — the same trick
+ * backfill-video-segments.test.ts uses for the `shots.video*` mirror. #1101
+ * dropped both `preview_url` columns: never populated, only ever copied from
+ * one table to the other by this very statement.
+ */
+const LEGACY_PREVIEW_URL = [
+  'ALTER TABLE `shot_variants` ADD COLUMN `preview_url` text',
+  'ALTER TABLE `video_variants` ADD COLUMN `preview_url` text',
+];
+
 // Fail loud if the parser extracted the wrong statement count (e.g. a future
 // db:generate reformat the startsWith filters no longer match). A partial match
 // would let some assertions pass while a whole backfill step goes untested.
@@ -189,6 +202,9 @@ beforeAll(async () => {
   client = createClient({ url: ':memory:' });
   db = drizzle({ client, relations });
   await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
+  for (const stmt of LEGACY_PREVIEW_URL) {
+    await client.execute(stmt);
+  }
 });
 
 afterAll(() => {

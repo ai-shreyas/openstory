@@ -15,22 +15,39 @@ onto `shots.thumbnailUrl` — a hard 1:1 (one shot = one image). That's wrong in
 
 So the still is its own unit. The model is genuinely three levels:
 
-| Level     | Is                                                        | Owns                                                                  |
-| --------- | --------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Scene** | narrative unit (one location/time/beat), free length      | grouping; per-segment render selection (`renderPlan`)                 |
-| **Shot**  | a continuous take = the **video** unit                    | motion prompt (input), per-shot video selection, 1..N frames          |
-| **Frame** | a still keyframe = the **image** unit (1 frame = 1 image) | image selection; `role` first\|last\|key; `source` preview\|generated |
+| Level     | Is                                                        | Owns                                                         |
+| --------- | --------------------------------------------------------- | ------------------------------------------------------------ |
+| **Scene** | narrative unit (one location/time/beat), free length      | grouping; per-segment render selection (`renderPlan`)        |
+| **Shot**  | a continuous take = the **video** unit                    | motion prompt (input), per-shot video selection, 1..N frames |
+| **Frame** | a still keyframe = the **image** unit (1 frame = 1 image) | image selection; `role` first\|last\|key                     |
 
-`source = 'preview'` is the cheap turbo stand-in (shown while a real still is
-pending, or for reference-driven shots that never get a dedicated first frame);
-it upgrades to `'generated'` **in place** so the i2v anchor identity never
-changes underneath motion generation.
+Preview-ness is a third `frame_variants` kind (`'preview'`) — a render of the
+RAW SCENE TEXT rather than of the frame's prompt, so it can appear during script
+analysis, before a prompt version exists. It is never selectable, never
+promotable, and never snapshotted into a render manifest; `ShotView`
+projects the newest non-discarded one as `previewThumbnailUrl`.
+
+> **History (#1101).** This level originally carried a
+> `source preview|generated` column, where `source = 'preview'` was a cheap
+> turbo stand-in that upgraded to `'generated'` **in place** so the i2v anchor
+> identity never changed underneath motion generation. That column was never
+> wired up — every row read `'generated'` — and was dropped by the #1067 dead-
+> column sweep, not by #1101. What #1101 dropped is `frames.previewImageUrl`,
+> which was the last image artifact in the frame's image block still stored as
+> a column rather than projected from a row, along with the never-populated
+> `previewUrl` columns on `frame_variants`, `video_variants` and
+> `shot_variants`. Its values WERE backfilled onto `kind: 'preview'` rows
+> (`20260808010000_backfill_preview_variants`) — the column was their only
+> copy, and fal CDN urls are described as short-lived but do not actually
+> expire, so they are live images rather than dead links.
 
 ## Vocabulary (this is binding — two words, not three)
 
 - **variant** — a parallel candidate you select between. Axis = **model** _or_
   **framing** (the 3×3 is `kind: 'framing'`, derived from a model image — not a
-  separate concept).
+  separate concept). `kind: 'preview'` (#1101) is the one row that is NOT a
+  candidate: it renders the raw scene text rather than the prompt, so it is
+  never selectable.
 - **version** — the stored generation history _within_ a variant, time-ordered.
   Re-rolls accumulate (we keep them); they never overwrite.
 - Prompt history is also **versions**.
@@ -55,15 +72,19 @@ frames
   sequenceId → sequences.id (cascade)   // denormalized for sequence-scoped queries
   orderIndex (0 = first/anchor)
   role:   'first' | 'last' | 'key'
-  source: 'preview' | 'generated'
-  imageUrl                // cached mirror of the selected image version
-  previewImageUrl, imagePath, imageStatus, imageWorkflowRunId,
-  imageGeneratedAt, imageError, imageInputHash
-  imageModel              // SQL default a frozen literal, never a mutable constant
+  imageStatus, imageWorkflowRunId, imageError   // in-flight lifecycle only; a
+                          // failed primary CLEARS pendingPromoteVersionId, so
+                          // no pointer survives to carry 'failed' or its message
   selectedImageVersionId → frame_variants.id (set null)
   selectedImagePromptVersionId → frame_prompt_versions.id (set null)
+  pendingPromoteVersionId // auto-promote claim; last kickoff wins
   timestamps
 ```
+
+The mirror columns this block used to list (`imageUrl`, `imagePath`,
+`imageGeneratedAt`, `imageInputHash`, `imageModel`) were dropped by the #1067
+sweep — the still is read from the selected `frame_variants` row, never mirrored
+onto the frame.
 
 `frame_variants` — **flat**: each row is one image generation (a _version_). A
 "variant" is the emergent group sharing `(frameId, kind, model, sourceVariantId)`;
@@ -74,10 +95,10 @@ frame_variants
   id                      // ULID; the version's stable id
   frameId → frames.id (cascade)
   sequenceId → sequences.id (cascade)
-  kind:   'model' | 'framing'
+  kind:   'model' | 'framing' | 'preview'   // 'preview' added in #1101
   model
   sourceVariantId?        // for 'framing' rows: which model image's 3×3 this came from
-  url, storagePath, previewUrl
+  url, storagePath
   status, workflowRunId, generatedAt, error
   promptHash, inputHash   // staleness of THIS version
   discardedAt?            // soft-hide (undoable)

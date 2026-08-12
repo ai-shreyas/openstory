@@ -62,11 +62,10 @@ export const frames = snakeCase.table(
     orderIndex: integer().notNull().default(0),
     role: text().$type<FrameRole>().notNull().default('first'),
 
-    // The still lives on the SELECTED `frame_variants` row, never here. What
-    // remains is frame-owned: the turbo stand-in shown before any variant
-    // exists, and the primary render's in-flight lifecycle.
-    // DB-Audit: drop with #1101 — a preview is a property of the image, not of the frame, so it belongs in `frame_variants` under a 'preview' kind.
-    previewImageUrl: text(), // URL may expire; column persists
+    // The still lives on the SELECTED `frame_variants` row, never here — and
+    // since #1101 the pre-prompt stand-in lives on a `kind: 'preview'` row
+    // there too. What remains is frame-owned: the primary render's in-flight
+    // lifecycle.
     // DB-Audit: KEEP (re-confirmed) — these three look derivable from the pointers, but a failed primary CLEARS `pendingPromoteVersionId`, so no pointer survives to carry 'failed' or its error message.
     imageStatus: text().$type<FrameGenerationStatus>().default('pending'),
     imageWorkflowRunId: text(),

@@ -22,7 +22,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { openAddCreditsDialog } from '@/hooks/use-add-credits-dialog';
 import { useBillingBalance } from '@/hooks/use-billing-balance';
-import { useShowBalance } from '@/hooks/use-show-balance';
+import { useShowCosts } from '@/hooks/use-show-costs';
 import { useUser } from '@/hooks/use-user';
 import { SIGNUP_GRANT_MICROS } from '@/lib/billing/constants';
 import { microsToDisplayUsd } from '@/lib/billing/money';
@@ -69,7 +69,7 @@ function writeDismissedAt(): void {
 
 export const WelcomeCreditsDialog: React.FC = () => {
   const { data: user } = useUser();
-  const { showBalance, setShowBalance } = useShowBalance();
+  const { showCosts, setShowCosts } = useShowCosts();
   const {
     stripeEnabled,
     hasUsedCredits,
@@ -126,8 +126,8 @@ export const WelcomeCreditsDialog: React.FC = () => {
                 {GRANT_DISPLAY}
               </DialogTitle>
               <DialogDescription className="max-w-xs text-sm leading-relaxed">
-                Free credits on us — enough for your first sequence. Generations
-                draw from this balance at provider rates.
+                Free credits on us — enough for a typical 30s short with motion
+                and music. Generations draw from this balance at provider rates.
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -136,15 +136,15 @@ export const WelcomeCreditsDialog: React.FC = () => {
         <div className="flex flex-col gap-4 px-6 py-5">
           <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/15 bg-primary/[0.04] p-3.5">
             <div className="space-y-0.5">
-              <p className="text-sm font-medium">Show credits in sidebar</p>
+              <p className="text-sm font-medium">Show costs</p>
               <p className="text-xs text-muted-foreground">
-                Keep your balance visible above your account
+                Balance in the sidebar and estimates under Generate
               </p>
             </div>
             <Switch
-              checked={showBalance}
-              onCheckedChange={setShowBalance}
-              aria-label="Show credits in sidebar"
+              checked={showCosts}
+              onCheckedChange={setShowCosts}
+              aria-label="Show costs"
             />
           </div>
 

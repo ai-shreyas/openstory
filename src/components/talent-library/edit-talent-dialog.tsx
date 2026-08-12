@@ -182,7 +182,7 @@ export const EditTalentDialog: React.FC<EditTalentDialogProps> = ({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="outline" size="icon">
+          <Button variant="outline" size="icon" aria-label="Edit talent">
             <Pencil className="h-4 w-4" />
           </Button>
         )}

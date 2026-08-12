@@ -145,6 +145,7 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       gateEstimate(
         estimateVideoCost(model, duration, {
           pricing: await getEffectiveFalPricing(),
+          hasReferenceImages: referenceImages.length > 0,
         }),
         { model, operation: 'motion' }
       ),
@@ -279,6 +280,9 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         ? [
             toShotView(s, frame, {
               image: selectedByFrame.get(frame.id) ?? null,
+              // Eligibility only — nothing here renders a thumbnail, so the
+              // pre-prompt stand-in (#1101) is not resolved.
+              preview: null,
               imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
               video: selectedVideoByShot.get(s.id) ?? null,
               primaryVideo: primaryVideoByShot.get(s.id) ?? null,
@@ -311,6 +315,14 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
     const resolveShotVideoModel = (shot: (typeof allShots)[number]) =>
       resolveBatchShotVideoModel(shot, shotModels, sequence, data.model);
 
+    // Resolve cast/element reference images once for the whole batch (#873) —
+    // before credit pre-flight so Seedance prices the reference-to-video
+    // endpoint when refs will actually be sent.
+    const [characters, elements] = await Promise.all([
+      context.scopedDb.characters.listWithSheets(sequence.id),
+      context.scopedDb.sequenceElements.list(sequence.id),
+    ]);
+
     // Sum per-shot costs — shots may render with different (priced) models.
     const estimatedCost = estimateBatchMotionCost(
       eligibleShots,
@@ -320,6 +332,17 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         explicitModel: data.model,
         duration: data.duration,
         pricing: await getEffectiveFalPricing(),
+        hasReferenceImages: (batchShot) => {
+          const shot = eligibleShots.find((s) => s.id === batchShot.id);
+          if (!shot) return false;
+          return (
+            buildMotionReferenceImages({
+              scene: sceneOf(shot),
+              characters,
+              elements,
+            }).length > 0
+          );
+        },
       }
     );
 
@@ -344,13 +367,6 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
         ...(musicModelChanged ? { musicModel: data.musicModel } : {}),
       });
     }
-
-    // Resolve cast/element reference images once for the whole batch (#873) —
-    // matched per frame below against each frame's continuity tags.
-    const [characters, elements] = await Promise.all([
-      context.scopedDb.characters.listWithSheets(sequence.id),
-      context.scopedDb.sequenceElements.list(sequence.id),
-    ]);
 
     // Build music config if requested
     let musicConfig: BatchMotionMusicWorkflowInput['music'];

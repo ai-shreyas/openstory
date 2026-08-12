@@ -36,6 +36,7 @@ import {
   toShotView,
 } from '@/lib/shots/shot-view';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { getLatestPreviewByFrameIds } from './frame-variants';
 import { getPrimaryVideoByShotIds } from './video-variants';
 
 /**
@@ -47,7 +48,15 @@ export type ShotViewRow = {
   frames: Frame | null;
   frame_variants: FrameVariant | null;
   frame_prompt_versions: FramePromptVersion | null;
-  shot_prompt_versions: ShotPromptVersion | null;
+  /**
+   * Narrowed to what {@link motionPromptFromVersion} reads — the query projects
+   * these three columns rather than the whole row, to stay clear of D1's
+   * 100-column result-set cap (see {@link selectShotViewRows}).
+   */
+  shot_prompt_versions: Pick<
+    ShotPromptVersion,
+    'text' | 'dialogue' | 'audio'
+  > | null;
   video_variants: VideoVariant | null;
 };
 
@@ -72,7 +81,30 @@ export const shotHierarchicalOrder = [
 export function selectShotViewRows(db: Database) {
   return (
     db
-      .select()
+      // Explicit projection, NOT a bare `db.select()`. D1 rejects any result
+      // set wider than 100 columns ("too many columns in result set", #1135),
+      // and a bare select projects every column of every joined table — here
+      // that included `render_segments` and `scenes`, joined only for their
+      // pointers and the ORDER BY, never read. The 8-table walk reached 104
+      // columns and every shot read in prod started failing.
+      //
+      // Naming the tables also caps the cost of a caller's own join:
+      // `listShotsByIds` adds `sequences` for its team filter, and under a bare
+      // select that pushed the same query another ~12 columns wider.
+      .select({
+        shots,
+        frames,
+        frame_variants: frameVariants,
+        frame_prompt_versions: framePromptVersions,
+        // Only the three fields `motionPromptFromVersion` rebuilds a prompt
+        // from — `components`/`parameters` are history, not render input.
+        shot_prompt_versions: {
+          text: shotPromptVersions.text,
+          dialogue: shotPromptVersions.dialogue,
+          audio: shotPromptVersions.audio,
+        },
+        video_variants: videoVariants,
+      })
       .from(shots)
       // Anchor frame holds the image surface (#989) — the shot's first frame
       // (orderIndex 0), joined by shotId (NOT id-reuse).
@@ -110,19 +142,26 @@ export function selectShotViewRows(db: Database) {
 /**
  * Map rows from {@link selectShotViewRows} to views.
  *
- * One follow-up query: the newest PRIMARY render per shot, which is a
- * group-wise max rather than a pointer hop and so cannot ride the join. Grid
- * sheets are optional because only the scenes read path shows them.
+ * Two follow-up queries: the newest PRIMARY render per shot and the newest
+ * `kind: 'preview'` version per anchor frame (#1101). Both are group-wise maxes
+ * rather than pointer hops, so neither can ride the join. Grid sheets are
+ * optional because only the scenes read path shows them.
  */
 export async function assembleShotViews(
   db: Database,
   rows: ShotViewRow[],
   gridSheetByFrameId?: Map<string, ShotGridSheet>
 ): Promise<ShotView[]> {
-  const primaryByShot = await getPrimaryVideoByShotIds(
-    db,
-    rows.map((r) => r.shots.id)
-  );
+  const [primaryByShot, previewByFrame] = await Promise.all([
+    getPrimaryVideoByShotIds(
+      db,
+      rows.map((r) => r.shots.id)
+    ),
+    getLatestPreviewByFrameIds(
+      db,
+      rows.flatMap((r) => (r.frames ? [r.frames.id] : []))
+    ),
+  ]);
   return rows.map((row) => {
     const video = {
       video: row.video_variants,
@@ -134,6 +173,7 @@ export async function assembleShotViews(
     if (!row.frames) return shotViewMissingFrame(row.shots, video);
     return toShotView(row.shots, row.frames, {
       image: row.frame_variants,
+      preview: previewByFrame.get(row.frames.id) ?? null,
       imagePromptVersion: row.frame_prompt_versions,
       gridSheet: gridSheetByFrameId?.get(row.frames.id) ?? null,
       ...video,

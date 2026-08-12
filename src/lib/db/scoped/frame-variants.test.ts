@@ -135,7 +135,6 @@ function variantInput(
     status: 'completed',
     url: 'https://cdn/img.png',
     storagePath: 'r2/img.png',
-    previewUrl: 'https://cdn/preview.png',
     generatedAt: new Date('2026-06-26T00:00:00Z'),
     inputHash: 'hash-1',
     ...overrides,
@@ -171,7 +170,6 @@ describe('frameVariants.appendVersion', () => {
       status: 'generating',
       url: null,
       storagePath: null,
-      previewUrl: null,
       generatedAt: null,
       workflowRunId: 'run-1',
     });
@@ -219,7 +217,6 @@ describe('frameVariants.select', () => {
         model: 'm2',
         url: 'https://cdn/v2.png',
         storagePath: 'r2/v2.png',
-        previewUrl: 'https://cdn/v2-preview.png',
         inputHash: 'hash-2',
       })
     );
@@ -936,5 +933,197 @@ describe('frameVariants pending claims (#1085)', () => {
     expect(holderRow?.pendingInputHash).toBe('shared-hash');
     expect(chainedRow?.status).toBe('pending');
     expect(chainedRow?.pendingInputHash).toBeNull();
+  });
+});
+
+describe("frameVariants kind: 'preview' (#1101)", () => {
+  it('records a preview keyed by scene text, with no prompt version and no storage path', async () => {
+    const m = createFrameVariantsMethods(db);
+
+    const preview = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/preview.png',
+      promptHash: 'scene-text-hash',
+      workflowRunId: 'run-preview-1',
+    });
+
+    expect(preview.kind).toBe('preview');
+    expect(preview.status).toBe('completed');
+    expect(preview.url).toBe('https://fal.media/preview.png');
+    expect(preview.promptHash).toBe('scene-text-hash');
+    // A preview renders the raw scene text, never a prompt version — and it
+    // deliberately skips the R2 upload, so there is no storage path.
+    expect(preview.promptVersionId).toBeNull();
+    expect(preview.storagePath).toBeNull();
+  });
+
+  it('is idempotent per workflow run, so a step retry appends no second row', async () => {
+    const m = createFrameVariantsMethods(db);
+
+    const first = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/preview.png',
+      promptHash: null,
+      workflowRunId: 'run-preview-1',
+    });
+    const replay = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/preview.png',
+      promptHash: null,
+      workflowRunId: 'run-preview-1',
+    });
+
+    expect(replay.id).toBe(first.id);
+    const rows = await db
+      .select()
+      .from(frameVariants)
+      .where(eq(frameVariants.frameId, frameId));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("can never become the frame's still — select rejects it", async () => {
+    const m = createFrameVariantsMethods(db);
+    const preview = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/preview.png',
+      promptHash: null,
+      workflowRunId: 'run-preview-1',
+    });
+
+    await expect(
+      m.select(frameId, preview.id, { actorId: null })
+    ).rejects.toThrow(/preview/);
+
+    const [frame] = await db
+      .select()
+      .from(frames)
+      .where(eq(frames.id, frameId));
+    expect(frame?.selectedImageVersionId).toBeNull();
+  });
+
+  it('projects the newest non-discarded preview, per frame', async () => {
+    const m = createFrameVariantsMethods(db);
+    const other = await seedSecondSequence();
+
+    await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/old.png',
+      promptHash: null,
+      workflowRunId: 'run-1',
+    });
+    const newest = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/new.png',
+      promptHash: null,
+      workflowRunId: 'run-2',
+    });
+    await m.recordPreview({
+      frameId: other.frameId,
+      sequenceId: other.sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/other.png',
+      promptHash: null,
+      workflowRunId: 'run-3',
+    });
+
+    expect((await m.getLatestPreview(frameId))?.id).toBe(newest.id);
+    const byFrame = await m.listLatestPreviewsByFrameIds([
+      frameId,
+      other.frameId,
+    ]);
+    expect(byFrame.get(frameId)?.url).toBe('https://fal.media/new.png');
+    expect(byFrame.get(other.frameId)?.url).toBe('https://fal.media/other.png');
+
+    await m.discard(newest.id, { actorId: null });
+    expect((await m.getLatestPreview(frameId))?.url).toBe(
+      'https://fal.media/old.png'
+    );
+  });
+
+  it("stays out of the model list and the still's variant reads", async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(variantInput({ model: 'nano_banana_2' }));
+    await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/preview.png',
+      promptHash: null,
+      workflowRunId: 'run-preview-1',
+    });
+
+    // This is what lets `getSequenceImageModelsFn` drop its `hidden`-model
+    // filter: the preview model is excluded by classification, not by a
+    // property of the model.
+    expect(await m.listModelsForSequence(sequenceId)).toEqual([
+      'nano_banana_2',
+    ]);
+    const modelVersions = await m.listModelVersionsBySequence(sequenceId);
+    expect(modelVersions.map((v) => v.model)).toEqual(['nano_banana_2']);
+  });
+
+  it('keeps an image-less husk out of the model dropdown (#1133)', async () => {
+    const m = createFrameVariantsMethods(db);
+    await m.appendVersion(variantInput({ model: 'nano_banana_2' }));
+    // The shape the #1101 reclassify could not move because a frame selects it:
+    // kind 'model', completed, but it never produced an image. 58 of these are
+    // live in production and leak `flux_2_turbo` into 15 sequences' dropdown.
+    await db.insert(frameVariants).values({
+      id: 'husk-selected',
+      frameId,
+      sequenceId,
+      kind: 'model',
+      model: 'flux_2_turbo',
+      status: 'completed',
+      url: null,
+      storagePath: null,
+    });
+
+    expect(await m.listModelsForSequence(sequenceId)).toEqual([
+      'nano_banana_2',
+    ]);
+  });
+
+  it('orders by createdAt, so a non-ULID legacy id cannot win (#1132)', async () => {
+    const m = createFrameVariantsMethods(db);
+    const real = await m.recordPreview({
+      frameId,
+      sequenceId,
+      model: 'flux_2_turbo',
+      url: 'https://fal.media/real.png',
+      promptHash: null,
+      workflowRunId: 'run-ordering-1',
+    });
+
+    // A QStash-era row: 26-char hex id that sorts above EVERY ULID, but is
+    // genuinely older. Ordering by id alone hands it the "newest" slot.
+    await db.insert(frameVariants).values({
+      id: 'ffdabf476d92ad8114fb89c8be',
+      frameId,
+      sequenceId,
+      kind: 'preview',
+      model: 'flux_2_turbo',
+      status: 'completed',
+      url: 'https://fal.media/stale-2026-03.png',
+      createdAt: new Date(real.createdAt.getTime() - 60_000),
+    });
+
+    expect((await m.getLatestPreview(frameId))?.url).toBe(
+      'https://fal.media/real.png'
+    );
+    const byFrame = await m.listLatestPreviewsByFrameIds([frameId]);
+    expect(byFrame.get(frameId)?.url).toBe('https://fal.media/real.png');
   });
 });

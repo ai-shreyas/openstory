@@ -94,8 +94,8 @@ export const fixtureStyle: Style = {
   tags: ['commercial', 'beauty', 'macro', 'skincare', 'cosmetics'],
   isPublic: true,
   isTemplate: true,
-  version: null,
   previewUrl: null,
+  version: null,
   usageCount: null,
   createdAt: new Date('2026-06-01T23:19:47.000Z'),
   updatedAt: new Date('2026-06-24T02:27:10.000Z'),
@@ -317,6 +317,11 @@ type FixtureShotSource = {
   shot: Shot;
   frame: Partial<Frame>;
   image?: Partial<FrameVariant>;
+  /**
+   * The pre-prompt stand-in's url (#1101) — a `kind: 'preview'` row, resolved
+   * separately from the selected still because it can never BE the still.
+   */
+  previewUrl?: string;
   imagePromptVersion?: Pick<FramePromptVersion, 'text' | 'inputHash'>;
   /**
    * The segment's newest primary render — its lifecycle IS the shot's video
@@ -341,8 +346,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:19:03.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ072YB92D8NWRQC5W9C6_nano_banana_pro_rewldhr',
@@ -356,6 +359,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         '638094256e60548cf03e763d845424d0891173245acbf1888c7723797e5a76c7',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQ072YB92D8NWRQC5W9C6-p/720/1280',
     imagePromptVersion: {
       text: 'Macro beauty photography extreme close-up of a single luminous serum droplet clinging to the tip of a glass dropper trembling almost imperceptibly against a seamless warm gradient wash from ivory to palest blush the droplet catching discreet edge light that ignites it from within like liquid amber with gentle backlight haloing the glass shaft in translucent gold the frame locked at eye level with the droplet in a poised moment of potential release soft sensual intimate atmosphere captured with probe lens.',
       inputHash:
@@ -391,8 +396,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:14:57.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ2A3VNHR4NKMFZE9XAAC_nano_banana_pro_rewldhr',
@@ -406,6 +409,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         '25f45d2f849554e8ea0304f957cc61ebd97658eac4e24bd098e7ef5bdeed2847',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQ2A3VNHR4NKMFZE9XAAC-p/720/1280',
     imagePromptVersion: {
       text: 'Macro beauty photography in the style of high-end product films like Charlotte Tilbury and La Mer, a flawless bone-white porcelain surface filling the frame with a generous initial curl of dense velvety cream in warm magnolia beginning to coil slowly from below in a perfect sculptural spiral, captured at the very first moment of dispense with potential energy held in the forming ridges and peaks, abstract macro background as a simple gradient wash, intimate and luxurious atmosphere, soft glowing key light raking low across the surface to throw exquisite relief into every fold and peak of the cream texture, subtle edge light and warm backlight creating a luminous sheen on the product, slow macro push-in from directly above with a slight two-degree clockwise rotational implication, shallow depth of field emphasizing the tactile material details while softly blooming highlights, warm luminous color grading with soft pinks and peaches, 9:16 aspect ratio.',
       inputHash:
@@ -441,8 +446,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:15:17.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ4BPDYFBAG7AHWAAY43C_nano_banana_pro_rewldhr',
@@ -456,6 +459,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         'e250b71299008aa923231b7c8cb543f8adfdd955ea7dd30f8135dd2547127818',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQ4BPDYFBAG7AHWAAY43C-p/720/1280',
     imagePromptVersion: {
       text: 'Macro beauty photography in a close-up low-angle view almost parallel to the skin surface showing a fingertip at the exact moment of gentle contact pressing downward into a layer of dense cream, the product surface yielding and beginning to blanch pale under the pressure while the skin beneath starts to flush with a subtle living rose tone spreading outward, set against a simple abstract gradient background wash, soft glowing key light with discreet edge light skimming the thin emerging film of product so it gleams with satin texture, warm luminous color grading with softly bloomed highlights, slight clockwise rotational framing implied in the still capture, 9:16 vertical composition.',
       inputHash:
@@ -491,8 +496,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:15:04.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ6B0MH3VDAXH16G54X33_nano_banana_pro_rewldhr',
@@ -506,6 +509,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         '7569cfba0a472864c2cdcd76aee3ca1f5491d35d70d5f478ecb9d83050337db8',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQ6B0MH3VDAXH16G54X33-p/720/1280',
     imagePromptVersion: {
       text: "Macro beauty photography capturing the starting moment of a deep burnished brown-rose lipstick bullet positioned just above the skin and beginning to glide across the inside of a luminous dewy wrist laying down an impossibly smooth saturated glossy color ribbon the fine hairs along the wrist catching a soft backlight like a delicate halo the skin rendered with realistic pore detail and subtle sheen set against a simple warm gradient abstract macro background soft glowing key light combined with discreet edge light and gentle rear illumination creating luminous depth and texture probe lens positioned low and slightly ahead of the bullet's path with shallow depth of field emphasizing the impending motion in an extreme close-up frame warm luminous color grading highlighting flushed dewy tones and softly bloomed highlights",
       inputHash:
@@ -541,8 +546,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:15:18.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQ8E692CA985WMB9SNXMX_nano_banana_pro_rewldhr',
@@ -556,6 +559,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         '47f18d95f63eb293ecaa35f037f1e92b0807e763081282385f6d90dfde3cd0f2',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQ8E692CA985WMB9SNXMX-p/720/1280',
     imagePromptVersion: {
       text: "Cinematic macro beauty photography in vertical 9:16 frame of a woman's face centered tightly from chin to crown, eyes gently closed with lashes resting softly against luminous dewy skin, lips parted only slightly in deep rose, complete stillness and poised potential as the eyes prepare to open, rendered with realistic pore detail against an abstract soft gradient background shifting from ivory to peach, soft glowing key light from above combined with a subtle warm gold edge and rim light caressing the cheekbones, intimate luxurious mood with warm bloomed highlights and flushed skin tones, high-end editorial color grading, probe lens compression emphasizing texture and dimension, barely perceptible push-in framing suggesting imminent slow reveal.",
       inputHash:
@@ -591,8 +596,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:14:32.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQA9A3SYCK47G14S0YB8Y_nano_banana_pro_rewldhr',
@@ -606,6 +609,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         '9bd2ce2b9f5bd92ffed6f03961595a0a5a653fca894de0a247c3dfd6fa30979d',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQA9A3SYCK47G14S0YB8Y-p/720/1280',
     imagePromptVersion: {
       text: 'Macro beauty photography of the hero product centered on a pure warm-white surface, the product sits still perfect and inevitable, soft glowing key light from upper left with a discreet golden edge light tracing its right silhouette, background gradient from ivory to the softest peach, highly detailed material textures with realistic depth, warm luminous color grading, highlights softly bloomed, locked frame composition with no movement, 9:16 vertical framing, intimate luxurious atmosphere',
       inputHash:
@@ -641,8 +646,6 @@ const fixtureShotSources: FixtureShotSource[] = [
       updatedAt: new Date('2026-06-02T00:14:18.000Z'),
     },
     frame: {
-      previewImageUrl:
-        'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K-p/720/1280',
       imageStatus: 'completed',
       imageWorkflowRunId:
         'image_01KT2TPG5WYQ15H79SAV88EH45_01KT2TQAY2YNXFX1GVKP7HK43K_nano_banana_pro_rewldhr',
@@ -656,6 +659,8 @@ const fixtureShotSources: FixtureShotSource[] = [
       inputHash:
         'e848cc7ba9bea3ea864228edcc0178ee25954c3c9368a835e9e8073eb5b31b6a',
     },
+    previewUrl:
+      'https://picsum.photos/seed/01KT2TQAY2YNXFX1GVKP7HK43K-p/720/1280',
     imagePromptVersion: {
       text: 'Macro beauty photography of a minimal abstract composition on a smooth warm ivory gradient background shifting to soft peach, crisp white brand logo centered and holding perfectly still, soft glowing key light from upper left with subtle bounce filling shadows, delicate edge highlights, luxurious luminous atmosphere, high-end beauty editorial quality, locked frame, vertical composition',
       inputHash:
@@ -705,6 +710,14 @@ function fixtureShotView(source: FixtureShotSource): ShotView {
     : null;
   return toShotView(shot, frame, {
     image,
+    preview: source.previewUrl
+      ? frameVariantFixture({
+          frameId: frame.id,
+          sequenceId: shot.sequenceId,
+          kind: 'preview',
+          url: source.previewUrl,
+        })
+      : null,
     imagePromptVersion: source.imagePromptVersion
       ? {
           id: `${frame.id}-prompt`,

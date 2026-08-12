@@ -96,8 +96,8 @@ export type SequenceState = SequenceSummary & {
 /** The image URL a shot exposes once its still is ready (else null). */
 function shotImageUrl(shot: ShotView): string | null {
   // Readiness is signalled by the presence of a still URL: the selected
-  // variant's stored R2 url, else the frame's fast preview CDN url.
-  return shot.image?.url ?? shot.frame.previewImageUrl ?? null;
+  // variant's stored R2 url, else the fast preview variant's CDN url.
+  return shot.image?.url ?? shot.previewThumbnailUrl ?? null;
 }
 
 /**
@@ -173,7 +173,10 @@ export async function buildSequenceState(
   scopedDb: {
     shots: Pick<ScopedDb['shots'], 'listBySequence'>;
     frames: Pick<ScopedDb['frames'], 'listAnchorsBySequence'>;
-    frameVariants: Pick<ScopedDb['frameVariants'], 'getSelectedByFrameIds'>;
+    frameVariants: Pick<
+      ScopedDb['frameVariants'],
+      'getSelectedByFrameIds' | 'listLatestPreviewsByFrameIds'
+    >;
     framePromptVersions: Pick<
       ScopedDb['framePromptVersions'],
       'getSelectedByFrameIds'
@@ -209,11 +212,16 @@ export async function buildSequenceState(
   // the segment's selected `video_variants` row (#1067).
   const [
     selectedByFrame,
+    previewByFrame,
     selectedPromptByFrame,
     selectedVideoByShot,
     primaryVideoByShot,
   ] = await Promise.all([
     scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
+    // The pre-prompt stand-in is a `kind: 'preview'` row (#1101).
+    scopedDb.frameVariants.listLatestPreviewsByFrameIds(
+      anchorRows.map((f) => f.id)
+    ),
     scopedDb.framePromptVersions.getSelectedByFrameIds(
       anchorRows.map((f) => f.id)
     ),
@@ -226,6 +234,7 @@ export async function buildSequenceState(
       ? [
           toShotView(shot, frame, {
             image: selectedByFrame.get(frame.id) ?? null,
+            preview: previewByFrame.get(frame.id) ?? null,
             imagePromptVersion: selectedPromptByFrame.get(frame.id) ?? null,
             video: selectedVideoByShot.get(shot.id) ?? null,
             primaryVideo: primaryVideoByShot.get(shot.id) ?? null,

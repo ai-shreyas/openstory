@@ -33,6 +33,13 @@ export type ShotGridSheet = {
 export type ShotViewSources = {
   /** The anchor frame's selected `frame_variants` row. */
   image: FrameVariant | null;
+  /**
+   * The anchor frame's newest non-discarded `kind: 'preview'` row (#1101) —
+   * the pre-prompt stand-in shown while the real still is still being made.
+   * Never selectable, so it is resolved as its own source rather than through
+   * `frames.selectedImageVersionId`.
+   */
+  preview: FrameVariant | null;
   /** The anchor frame's selected `frame_prompt_versions` row. */
   imagePromptVersion: FramePromptVersion | null;
   /** The version `render_segments.selectedVideoVersionId` points at. */
@@ -49,10 +56,16 @@ export type ShotViewSources = {
 };
 
 export type ShotView = Shot & {
-  /** The anchor frame — owns the still's lifecycle (status/error/preview). */
+  /** The anchor frame — owns the still's lifecycle (status/error). */
   frame: Frame;
   image: FrameVariant | null;
   imagePromptVersion: FramePromptVersion | null;
+  /**
+   * Derived, not stored: the url of the newest non-discarded `kind: 'preview'`
+   * version (#1101) — what `frames.previewImageUrl` used to hold. A raw fal CDN
+   * url that expires, so it is a fallback BEHIND `image.url`, never a still.
+   */
+  previewThumbnailUrl: string | null;
   video: VideoVariant | null;
   primaryVideo: VideoVariant | null;
   /**
@@ -91,7 +104,6 @@ export function shotViewMissingFrame(
     sequenceId: shot.sequenceId,
     orderIndex: 0,
     role: 'first',
-    previewImageUrl: null,
     imageStatus: null,
     imageWorkflowRunId: null,
     imageError: null,
@@ -104,6 +116,7 @@ export function shotViewMissingFrame(
   // A frameless shot still has a video: video hangs off the segment.
   return toShotView(shot, frame, {
     image: null,
+    preview: null,
     imagePromptVersion: null,
     ...video,
   });
@@ -114,11 +127,12 @@ export function toShotView(
   frame: Frame,
   sources: ShotViewSources
 ): ShotView {
-  const { image, imagePromptVersion, video, primaryVideo } = sources;
+  const { image, preview, imagePromptVersion, video, primaryVideo } = sources;
   return {
     ...shot,
     frame,
     image,
+    previewThumbnailUrl: preview?.url ?? null,
     imagePromptVersion,
     video,
     primaryVideo,

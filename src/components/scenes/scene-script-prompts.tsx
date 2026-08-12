@@ -1,4 +1,5 @@
 import { ThinkingBar } from '@/components/ai/thinking-bar';
+import { ActionCost } from '@/components/billing/action-cost';
 import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
 import { ImageModelSelector } from '@/components/model/image-model-selector';
 import { MotionModelSelector } from '@/components/model/motion-model-selector';
@@ -24,6 +25,7 @@ import { generateShotMotionFn } from '@/functions/motion-functions';
 import { regenerateShotPromptFn } from '@/functions/prompt-variants';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
+import { useFalPricing } from '@/hooks/use-fal-pricing';
 import {
   shotKeys,
   useSelectSegmentVideoVersion,
@@ -61,7 +63,12 @@ import {
   type TextToImageModel,
 } from '@/lib/ai/models';
 import {
+  estimateImageCost,
+  estimateVideoCost,
+} from '@/lib/billing/cost-estimation';
+import {
   aspectRatioToImageSize,
+  DEFAULT_ASPECT_RATIO,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
 import { getStorageDomainFn } from '@/functions/storage-config';
@@ -394,8 +401,8 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   // Image & motion regeneration state
   const [editPrompts, setEditPrompts] = useState({
-    imagePrompt: '' as string,
-    motionPrompt: '' as string,
+    imagePrompt: '',
+    motionPrompt: '',
   });
   const { imagePrompt: editedImagePrompt, motionPrompt: editedMotionPrompt } =
     editPrompts;
@@ -1101,6 +1108,42 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
 
   const motionModel = effectiveMotionModel;
 
+  // Transparent pricing under Generate Image / Generate Motion (#1140).
+  const { pricing: falPricing } = useFalPricing();
+  const imageCostEstimate = useMemo(() => {
+    if (!falPricing) return null;
+    return estimateImageCost(
+      regenImageModel,
+      aspectRatio ?? DEFAULT_ASPECT_RATIO,
+      1,
+      { pricing: falPricing }
+    );
+  }, [falPricing, regenImageModel, aspectRatio]);
+  const motionCostEstimate = useMemo(() => {
+    if (!falPricing || !shot) return null;
+    const duration = resolveShotDuration({
+      durationMs: shot.durationMs,
+      model: effectiveMotionModel,
+    });
+    const hasReferenceImages =
+      buildMotionReferenceImages({
+        scene: sceneReference,
+        characters: mentionCharacters ?? [],
+        elements: mentionElements ?? [],
+      }).length > 0;
+    return estimateVideoCost(effectiveMotionModel, duration, {
+      pricing: falPricing,
+      hasReferenceImages,
+    });
+  }, [
+    falPricing,
+    shot,
+    effectiveMotionModel,
+    sceneReference,
+    mentionCharacters,
+    mentionElements,
+  ]);
+
   // CDN-backed deployments absolutize stored /r2/ URLs at submit (toCdnUrl) —
   // fetch the server-only domain once so the preview shows the same final
   // URLs. Locally it's null and the preview keeps the stored relative URLs
@@ -1712,26 +1755,29 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               {setImageFromVariant.isPending ? 'Setting…' : 'Set Image'}
             </Button>
           ) : (
-            <Button
-              onClick={() => {
-                if (falNeedsBillingSetup) {
-                  showFalGate();
-                  return;
-                }
-                void handleRegenerate();
-              }}
-              disabled={isGenerating || variantIsGenerating || !shot}
-              className="w-full"
-            >
-              {(isGenerating || variantIsGenerating) && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              {isGenerating || variantIsGenerating
-                ? 'Generating…'
-                : imageModelGenerated
-                  ? 'Regenerate Image'
-                  : 'Generate Image'}
-            </Button>
+            <div className="flex flex-col gap-1">
+              <Button
+                onClick={() => {
+                  if (falNeedsBillingSetup) {
+                    showFalGate();
+                    return;
+                  }
+                  void handleRegenerate();
+                }}
+                disabled={isGenerating || variantIsGenerating || !shot}
+                className="w-full"
+              >
+                {(isGenerating || variantIsGenerating) && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {isGenerating || variantIsGenerating
+                  ? 'Generating…'
+                  : imageModelGenerated
+                    ? 'Regenerate Image'
+                    : 'Generate Image'}
+              </Button>
+              <ActionCost estimate={imageCostEstimate} />
+            </div>
           )}
         </div>
       </TabsContent>
@@ -1999,31 +2045,34 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
               {setVideoFromVariant.isPending ? 'Setting…' : 'Set Video'}
             </Button>
           ) : (
-            <Button
-              onClick={() => {
-                if (falNeedsBillingSetup) {
-                  showFalGate();
-                  return;
+            <div className="flex flex-col gap-1">
+              <Button
+                onClick={() => {
+                  if (falNeedsBillingSetup) {
+                    showFalGate();
+                    return;
+                  }
+                  void handleRegenerateMotion();
+                }}
+                disabled={
+                  isGenerating ||
+                  isGeneratingMotion ||
+                  videoVariantIsGenerating ||
+                  !shot
                 }
-                void handleRegenerateMotion();
-              }}
-              disabled={
-                isGenerating ||
-                isGeneratingMotion ||
-                videoVariantIsGenerating ||
-                !shot
-              }
-              className="w-full"
-            >
-              {(isGeneratingMotion || videoVariantIsGenerating) && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              {isGeneratingMotion || videoVariantIsGenerating
-                ? 'Generating…'
-                : videoModelGenerated
-                  ? 'Regenerate Motion'
-                  : 'Generate Motion'}
-            </Button>
+                className="w-full"
+              >
+                {(isGeneratingMotion || videoVariantIsGenerating) && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
+                {isGeneratingMotion || videoVariantIsGenerating
+                  ? 'Generating…'
+                  : videoModelGenerated
+                    ? 'Regenerate Motion'
+                    : 'Generate Motion'}
+              </Button>
+              <ActionCost estimate={motionCostEstimate} />
+            </div>
           )}
         </div>
       </TabsContent>

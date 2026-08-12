@@ -41,7 +41,7 @@ function makeStyle(overrides: Partial<Style> = {}): Style {
     updatedAt: new Date('2026-01-01'),
     createdBy: null,
     ...overrides,
-  } as Style;
+  };
 }
 
 describe('styleHoverVideoUrl', () => {

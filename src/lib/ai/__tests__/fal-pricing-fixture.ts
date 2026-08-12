@@ -46,6 +46,11 @@ export const TEST_FAL_PRICING: Record<string, EffectiveFalPricing> = {
     unitPrice: micros(14_000),
     unit: 'units',
   },
+  // Same unit rate as i2v today; listed so reference-route estimates resolve.
+  'bytedance/seedance-2.0/enterprise/v2/reference-to-video': {
+    unitPrice: micros(14_000),
+    unit: 'units',
+  },
   'xai/grok-imagine-video/v1.5/image-to-video': {
     unitPrice: micros(50_000),
     unit: 'videos',

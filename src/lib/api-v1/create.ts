@@ -201,6 +201,8 @@ export async function runOneShotCreate(
     autoGenerateMotion: input.motion,
     autoGenerateMusic: input.music,
     audioModels: input.audioModels,
+    // Same duration chip as Enhance / dashboard Generate ActionCost (#1140).
+    targetDurationSeconds: input.targetSeconds,
     suggestedTalentIds: suggestedTalentIds.length
       ? suggestedTalentIds
       : undefined,

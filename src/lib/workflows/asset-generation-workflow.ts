@@ -24,6 +24,10 @@
  * the create fn's `requireCredits` gate is the only billing control today.
  */
 
+import {
+  createDeadlineFetch,
+  FAL_REQUEST_TIMEOUT_MS,
+} from '@/lib/ai/fal-deadline-fetch';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type {
@@ -189,7 +193,16 @@ export type AssetPersistScopedDb = {
  */
 async function configureFalForTeam(scopedDb: WorkflowScopedDb): Promise<void> {
   const keyInfo = await scopedDb.credentials.resolveKey('fal');
-  fal.config({ credentials: keyInfo.key });
+  // Bound each queue HTTP call so a hung fal connection fails the step and
+  // can retry rather than stalling asset generation forever (#826). Total
+  // poll wall-clock is still controlled by the MAX_BATCHES loop above.
+  fal.config({
+    credentials: keyInfo.key,
+    fetch: createDeadlineFetch(
+      FAL_REQUEST_TIMEOUT_MS,
+      'Asset generation request'
+    ),
+  });
 }
 
 export class AssetGenerationWorkflow extends OpenStoryWorkflowEntrypoint<AssetGenerationWorkflowInput> {

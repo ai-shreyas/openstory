@@ -252,12 +252,10 @@ testWithUser.describe('Edit Talent with Reference Media', () => {
       // Click on the talent to view details
       await openLibraryCard(page, testTalent.name, TALENT_DETAIL_URL);
 
-      // Click the edit button (pencil icon)
-      await page
-        .getByRole('button', { name: /edit/i })
-        .or(page.locator('button:has(svg.lucide-pencil)'))
-        .first()
-        .click();
+      // Pencil trigger only — do NOT use name /edit/i. With "Show costs" on
+      // (#1140), the sidebar wallet button is labeled "Credit balance …" and
+      // "Credit" matches /edit/i, so .first() would open Add Credits instead.
+      await page.locator('button:has(svg.lucide-pencil)').first().click();
 
       // Edit dialog should open
       await expect(

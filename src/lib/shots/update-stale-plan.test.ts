@@ -125,7 +125,6 @@ type VideoFixture = {
     model: string;
     status: string;
     url: string | null;
-    previewUrl: string | null;
     createdAt: Date;
     manifest: Array<{
       shotId: string;
@@ -336,7 +335,6 @@ describe("computePlan — depth 'video' (#1085)", () => {
         model: 'kling',
         status: 'completed',
         url: 'https://example.com/v.mp4',
-        previewUrl: null,
         createdAt: new Date(0),
         manifest: [
           {
@@ -354,7 +352,6 @@ describe("computePlan — depth 'video' (#1085)", () => {
               model: 'kling',
               status: 'generating',
               url: null,
-              previewUrl: null,
               createdAt: new Date(0),
               manifest: [],
             },

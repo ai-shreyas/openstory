@@ -786,6 +786,15 @@ export const getMusicPromptStalenessFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const { sequence, scopedDb } = context;
 
+    // Mid-run (#1121): the hash is taken over the scene summaries, and a
+    // storyboard run is still writing scenes — the divergence is the pipeline
+    // working, not the user's edit. Same short-circuit as
+    // `computeShotStaleness`, for the same reason: no verdict while the
+    // sequence is being built.
+    if (sequence.status === 'processing') {
+      return { musicPrompt: 'generating' as const };
+    }
+
     // No stored hash: legacy sequence or never generated. Surface explicitly
     // so the UI can suppress the "regenerate" prompt without claiming
     // freshness.

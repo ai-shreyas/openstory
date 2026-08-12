@@ -289,11 +289,11 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
   const displayImage =
     overrideImageUrl ??
     currentShot.image?.url ??
-    currentShot.frame.previewImageUrl ??
+    currentShot.previewThumbnailUrl ??
     posterUrl ??
     null;
   const isPreviewImage =
-    !!currentShot.frame.previewImageUrl && !currentShot.image?.url;
+    !!currentShot.previewThumbnailUrl && !currentShot.image?.url;
   const isVariantPreview =
     !!overrideImageUrl && overrideImageUrl !== currentShot.image?.url;
 

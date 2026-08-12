@@ -25,8 +25,8 @@ import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
-import { estimateStoryboardCost } from '@/lib/billing/cost-estimation';
 import { requireCredits } from '@/lib/billing/preflight';
+import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { Sequence } from '@/types/database';
 import type { CreateSequenceInput } from '@/lib/schemas/sequence.schemas';
@@ -64,6 +64,7 @@ export const createSequences = createServerOnlyFn(
     const teamId = context.teamId;
 
     const {
+      script,
       styleId,
       aspectRatio,
       analysisModels,
@@ -71,10 +72,11 @@ export const createSequences = createServerOnlyFn(
       imageModels: imageModelsInput,
       videoModel,
       videoModels: videoModelsInput,
-      autoGenerateMotion = false,
+      autoGenerateMotion = true,
       autoGenerateMusic = true,
       musicModel,
       audioModels: audioModelsInput,
+      targetDurationSeconds,
       suggestedTalentIds,
       suggestedLocationIds,
       elementUploads,
@@ -144,16 +146,17 @@ export const createSequences = createServerOnlyFn(
 
     await requireCredits(
       context.scopedDb,
-      estimateStoryboardCost({
+      estimateStoryboardPreflightCost({
+        script,
         imageModel: primaryImageModel,
         imageModelCount: imageModels.length,
         aspectRatio,
         autoGenerateMotion,
         videoModels,
-        // Music only actually generates when motion is also on (it spawns from
-        // inside motion-batch), so don't charge for music tracks that won't run.
-        autoGenerateMusic: autoGenerateMotion && autoGenerateMusic,
+        autoGenerateMusic,
         audioModels,
+        // Align with Generate ActionCost (duration chip → scene count + clip length).
+        targetDurationSeconds,
         pricing: await getEffectiveFalPricing(),
       }),
       {

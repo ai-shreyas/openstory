@@ -33,6 +33,9 @@ const sequence = {
   styleId: 'style-1',
   aspectRatio: '16:9',
   analysisModel: 'model-1',
+  // Settled sequence — the mid-run short-circuit (#1121) is exercised by its
+  // own test below, and must not silence any of the others.
+  status: 'completed',
 } as const;
 
 /** `null` cached hashes force the `getLatestWithInputHash` fallback path. */
@@ -217,4 +220,78 @@ describe('computeShotStaleness', () => {
       thumbnail: 'updating',
     });
   });
+
+  it("defers to 'generating' while the sequence is mid-run (#1121)", async () => {
+    // Every hash diverges — this shot would read fully stale on a settled
+    // sequence, which is exactly the false "Out of date since your edit"
+    // banner the initial-generation run used to raise.
+    buildRegenerateShotSnapshot.mockResolvedValue({
+      snapshotInputHash: 'image-live',
+    });
+    loadNarrowShotPromptContext.mockResolvedValue({});
+    computeVisualPromptInputHash.mockResolvedValue('visual-live');
+    computeMotionPromptInputHash.mockResolvedValue('motion-live');
+    const scopedDb = makeScopedDb({
+      motionSelectedHash: 'motion-old',
+      visualSelected: { inputHash: 'visual-old' },
+    });
+    // The hash mocks are module-level and shared across tests; only calls made
+    // by THIS one may count towards the assertions below.
+    buildRegenerateShotSnapshot.mockClear();
+    computeVisualPromptInputHash.mockClear();
+
+    const result = await computeShotStaleness({
+      scopedDb,
+      sequence: { ...sequence, status: 'processing' },
+      shot,
+      frame,
+      selectedImage: selectedImage('image-old'),
+      scene,
+    });
+
+    expect(result).toEqual({
+      thumbnail: 'generating',
+      visualPrompt: 'generating',
+      motionPrompt: 'generating',
+      liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
+    });
+    // Short-circuits before any work: the batch fn runs this for every shot in
+    // the sequence, on the poll loop that runs hardest during generation.
+    expect(scopedDb.framePromptVersions.getSelected).not.toHaveBeenCalled();
+    expect(computeVisualPromptInputHash).not.toHaveBeenCalled();
+    expect(buildRegenerateShotSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each(['draft', 'completed', 'failed', 'archived'] as const)(
+    'still reports staleness when the sequence is %s',
+    async (status) => {
+      buildRegenerateShotSnapshot.mockResolvedValue({
+        snapshotInputHash: 'image-live',
+      });
+      loadNarrowShotPromptContext.mockResolvedValue({});
+      computeVisualPromptInputHash.mockResolvedValue('visual-live');
+      computeMotionPromptInputHash.mockResolvedValue('motion-live');
+
+      const result = await computeShotStaleness({
+        scopedDb: makeScopedDb({
+          motionSelectedHash: 'motion-old',
+          visualSelected: { inputHash: 'visual-old' },
+        }),
+        sequence: { ...sequence, status },
+        shot,
+        frame,
+        selectedImage: selectedImage('image-old'),
+        scene,
+      });
+
+      // Only 'processing' defers — a shot regenerate or an Update all run
+      // never moves the sequence status, so a real post-edit verdict is never
+      // suppressed.
+      expect(result).toMatchObject({
+        thumbnail: 'stale',
+        visualPrompt: 'stale',
+        motionPrompt: 'stale',
+      });
+    }
+  );
 });

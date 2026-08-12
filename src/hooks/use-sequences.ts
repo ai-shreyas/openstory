@@ -30,6 +30,16 @@ export const sequenceKeys = {
   detail: (id?: string) => [...sequenceKeys.details(), id] as const,
 };
 
+/**
+ * Music-prompt staleness — its own key rather than a member of
+ * `sequenceKeys`, since it is a computed verdict rather than a slice of the
+ * sequence row and must not be swept by a `sequenceKeys.all` invalidation.
+ * Shared with the realtime cache updater, which refreshes it when a
+ * generation run ends and its verdict becomes computable again (#1121).
+ */
+export const musicPromptStalenessKey = (sequenceId: string) =>
+  ['music-prompt-staleness', sequenceId] as const;
+
 // All music variant rows for a sequence (#546). Used by the music tab to
 // resolve playback through the active model's track.
 export function useSequenceAudioVariants(sequenceId?: string) {
@@ -181,6 +191,7 @@ export function useCreateSequence() {
           autoGenerateMusic: input.autoGenerateMusic,
           musicModel: input.musicModel,
           audioModels: input.audioModels,
+          targetDurationSeconds: input.targetDurationSeconds,
           suggestedTalentIds: input.suggestedTalentIds,
           suggestedLocationIds: input.suggestedLocationIds,
           elementUploads: input.elementUploads,

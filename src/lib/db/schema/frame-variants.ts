@@ -12,6 +12,11 @@
  *   - 'model'   → a model's take on the prompt (compare across models)
  *   - 'framing' → a composition pick derived from a model image's 3×3 grid,
  *                 `sourceVariantId` = the model version it came from
+ *   - 'preview' → a render of the RAW SCENE TEXT, not of the prompt (#1101).
+ *                 It exists so something can appear during script analysis,
+ *                 before a prompt version exists, so it carries no
+ *                 `promptVersionId` and is never selectable / promotable /
+ *                 snapshotted into a render manifest.
  *
  * Versions are immutable once completed (we soft-hide with `discardedAt`, never
  * hard-delete), so other rows — e.g. a video render manifest — can reference a
@@ -42,8 +47,34 @@ const FRAME_VARIANT_STATUSES = [
 type FrameGenerationStatus = (typeof FRAME_VARIANT_STATUSES)[number];
 
 /** @public consumed from #988+ */
-export const FRAME_VARIANT_KINDS = ['model', 'framing'] as const;
+export const FRAME_VARIANT_KINDS = ['model', 'framing', 'preview'] as const;
 export type FrameVariantKind = (typeof FRAME_VARIANT_KINDS)[number];
+
+/**
+ * Kinds that may become a frame's primary still. A `'preview'` renders the raw
+ * scene text rather than the frame's prompt (#1101), so promoting one would
+ * pair a still with a prompt it was never rendered from — and its fal CDN url
+ * expires, which is only harmless because nothing durable ever points at it.
+ */
+const SELECTABLE_FRAME_VARIANT_KINDS = [
+  'model',
+  'framing',
+] as const satisfies readonly FrameVariantKind[];
+
+export type SelectableFrameVariantKind =
+  (typeof SELECTABLE_FRAME_VARIANT_KINDS)[number];
+
+/**
+ * Narrows rather than returning `boolean`, so a checked row carries the proof
+ * into {@link PromotableFrameVariant} instead of every caller re-asserting it.
+ */
+export function isSelectableFrameVariantKind(
+  kind: FrameVariantKind
+): kind is SelectableFrameVariantKind {
+  return SELECTABLE_FRAME_VARIANT_KINDS.some(
+    (selectable) => selectable === kind
+  );
+}
 
 export const frameVariants = snakeCase.table(
   'frame_variants',
@@ -60,7 +91,7 @@ export const frameVariants = snakeCase.table(
       .references(() => sequences.id, { onDelete: 'cascade' }),
 
     // Variant axis. 'model' = a model's output; 'framing' = a 3×3 composition
-    // pick derived from a model image.
+    // pick derived from a model image; 'preview' = the pre-prompt stand-in.
     kind: text().$type<FrameVariantKind>().notNull().default('model'),
     model: text({ length: 100 }).notNull(),
     // For kind='framing': the frame_variants.id of the model image whose 3×3
@@ -68,10 +99,10 @@ export const frameVariants = snakeCase.table(
     // self-referential cycle; app-level integrity, rows are soft-deleted anyway.
     sourceVariantId: text(),
 
-    // Output
+    // Output. A `kind: 'preview'` row carries a raw fal CDN `url` and no
+    // `storagePath` — the preview path skips the R2 upload on purpose (#1091).
     url: text(),
     storagePath: text(),
-    previewUrl: text(),
 
     // Generation tracking
     status: text().$type<FrameGenerationStatus>().default('pending').notNull(),

@@ -26,9 +26,14 @@ import {
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
 import { NotFoundError } from '@/lib/errors';
-import { getLogger, toErrorPayload } from '@/lib/observability/logger';
+import {
+  errorHeadline,
+  getLogger,
+  toErrorPayload,
+} from '@/lib/observability/logger';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import type { Frame } from '@/lib/db/schema';
+import type { SequenceStatus } from '@/lib/db/schema/sequences';
 import type { Shot, Sequence } from '@/types/database';
 import { createMiddleware } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
@@ -71,7 +76,9 @@ type PartialSequence = {
   id: string;
   teamId: string;
   title: string;
-  status: string;
+  /** Narrow, not `string`: staleness defers while the sequence is
+   * 'processing' (#1121), and that check must not be a string compare. */
+  status: SequenceStatus;
   styleId: string | null;
   imageModel: string;
   videoModel: string;
@@ -183,7 +190,10 @@ export const loggerMiddleware = createMiddleware({ type: 'function' }).server(
         fnName,
         durationMs,
         errCode: err.code,
-        errMessage: err.message,
+        // Reason-first and length-capped: a raw driver message (drizzle puts
+        // the whole SQL statement there) would otherwise fill the body's
+        // truncation budget and evict the cause — see errorHeadline (#1135).
+        errMessage: errorHeadline(err),
         err,
       };
       // Expected business rejections are outcomes, not failures: warn, so prod
