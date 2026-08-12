@@ -8,6 +8,7 @@
  */
 
 import {
+  capReferenceImages,
   getEditEndpoint,
   getTextToImageModelId,
   IMAGE_MODELS,
@@ -254,17 +255,31 @@ export function buildImageRequest(params: ImageGenerationParams): {
   endpointId: string;
   input: { prompt: string } & Record<string, unknown>;
 } {
-  const editEndpoint = getEditEndpoint(params.model);
+  // Capped once here rather than in each `case` of buildFalModelOptions —
+  // every model spreads `referenceImageUrls` itself, so a per-case cap is a
+  // rule each new model has to remember, and fal rejects the whole request
+  // when it's exceeded rather than truncating.
+  const capped: ImageGenerationParams = params.referenceImageUrls?.length
+    ? {
+        ...params,
+        referenceImageUrls: capReferenceImages(
+          params.model,
+          params.referenceImageUrls
+        ),
+      }
+    : params;
+
+  const editEndpoint = getEditEndpoint(capped.model);
   const endpointId =
-    editEndpoint && params.referenceImageUrls?.length
+    editEndpoint && capped.referenceImageUrls?.length
       ? editEndpoint
-      : getTextToImageModelId(params.model);
+      : getTextToImageModelId(capped.model);
 
   return {
     endpointId,
     input: {
-      prompt: truncatePromptForModel(params.prompt, params.model),
-      ...buildFalModelOptions(params),
+      prompt: truncatePromptForModel(capped.prompt, capped.model),
+      ...buildFalModelOptions(capped),
     },
   };
 }

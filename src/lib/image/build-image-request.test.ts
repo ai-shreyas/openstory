@@ -30,6 +30,42 @@ describe('buildImageRequest — edit endpoints carry their reference images', ()
     }
   );
 
+  /**
+   * fal rejects an over-limit request outright — flux-2/turbo/edit's schema
+   * claims "only the first 4 will be used", but the API answers "Number of
+   * image URLs must be less than or equal to 4" and fails the shot. A scene
+   * with two characters, a location and a prop clears 4 without trying.
+   */
+  it('caps reference images at the model limit', () => {
+    const many = Array.from(
+      { length: 7 },
+      (_, i) => `https://example.com/${i}.png`
+    );
+
+    const { input } = buildImageRequest({
+      model: 'flux_2_turbo',
+      prompt: 'a lighthouse at dusk',
+      referenceImageUrls: many,
+    });
+
+    expect(input.image_urls).toEqual(many.slice(0, 4));
+  });
+
+  it('leaves references untouched for a model with no known cap', () => {
+    const many = Array.from(
+      { length: 7 },
+      (_, i) => `https://example.com/${i}.png`
+    );
+
+    const { input } = buildImageRequest({
+      model: 'nano_banana_2',
+      prompt: 'a lighthouse at dusk',
+      referenceImageUrls: many,
+    });
+
+    expect(input.image_urls).toEqual(many);
+  });
+
   it.each(editModels)(
     '%s omits image_urls and stays on text-to-image without references',
     (model) => {

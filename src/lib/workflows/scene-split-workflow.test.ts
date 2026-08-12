@@ -171,12 +171,13 @@ function makeScopedDb(): WorkflowScopedDb {
 }
 
 function makeEvent(): Readonly<WorkflowEvent<SceneSplitWorkflowInput>> {
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowEvent stub: runImpl reads payload + instanceId
+  // The stub satisfies WorkflowEvent structurally, so no assertion is needed
+  // — and asserting anyway now trips no-unnecessary-type-assertion.
   return {
     payload: INPUT,
     instanceId: 'split_run_A',
     timestamp: new Date(0),
-  } as unknown as Readonly<WorkflowEvent<SceneSplitWorkflowInput>>;
+  };
 }
 
 function makeStep(): WorkflowStep {
