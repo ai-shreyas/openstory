@@ -14,8 +14,8 @@
  *     and the workflow run id from `event.instanceId` instead of
  *     `context.workflowRunId`.
  *   - The Promise.all over `context.invoke('image', ...)` becomes a
- *     concurrency-bounded (#1126, #1143) Pattern 3 `spawnAndAwaitChild` fan-out
- *     (`mapWithConcurrency` + `await-child.ts`). Each child gets a deterministic
+ *     Pattern 3 `spawnAndAwaitChild` fan-out (`await-child.ts`), unbounded
+ *     since #1143. Each child gets a deterministic
  *     instance ID (`image:${sequenceId}:${shotId}`) and a unique event-type
  *     qualifier so siblings cannot match each other's completion events.
  *   - Calls the snapshot DTO computer (`computeRegenerateShotsBatchHash`)
@@ -31,7 +31,6 @@ import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
-import { FANOUT_CONCURRENCY, mapWithConcurrency } from '@/lib/workflow/fanout';
 import type {
   ImageWorkflowInput,
   RegenerateShotsWorkflowInput,
@@ -46,6 +45,16 @@ import {
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'regenerate-shots']);
+
+/**
+ * Concurrent fire-and-forget `/variant-image` creates.
+ *
+ * Kept when the image fan-out ceiling went away (#1143): these are
+ * `binding.create()` calls rather than awaited children, and Cloudflare rate
+ * limits instance creation at 100/second per workflow — so this bounds a
+ * documented platform limit, not isolate pressure.
+ */
+const VARIANT_TRIGGER_CONCURRENCY = 8;
 
 type ShotResult =
   | { shotId: string; success: true; imageUrl: string }
@@ -128,15 +137,12 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     });
 
     // ============================================================
-    // PHASE: Per-shot image regeneration — Pattern 3 fan-out, held to a
-    // rolling in-flight ceiling (#1143) so large batches don't stampede
-    // Workflow isolates + D1. Per-item settle isolation; the next shot starts
-    // as soon as any finishes, rather than waiting on a wave barrier.
+    // PHASE: Per-shot image regeneration — Pattern 3 fan-out, unbounded
+    // (#1143: the per-run ceiling measured no benefit and was never global).
+    // allSettled so one failing shot doesn't poison its peers.
     // ============================================================
-    const settled = await mapWithConcurrency(
-      snapshots,
-      FANOUT_CONCURRENCY.image,
-      async (snapshot, shotIndex): Promise<ShotResult> => {
+    const settled = await Promise.allSettled(
+      snapshots.map(async (snapshot, shotIndex): Promise<ShotResult> => {
         if (!snapshot.imagePrompt) {
           // Per-shot failure — peer shots in the batch should still run.
           return {
@@ -205,10 +211,10 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
             error: `Image generation failed: ${reason}`,
           };
         }
-      }
+      })
     );
 
-    // mapWithConcurrency settles per item; collect into ShotResult[] for reconcile.
+    // allSettled preserves input order; collect into ShotResult[] for reconcile.
     const imageResults: ShotResult[] = settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       const snapshot = snapshots[i];
@@ -234,11 +240,10 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
 
     // Regenerate the 3×3 grid sheet for each (re)imaged shot — it is derived
     // from the primary still and would otherwise show the pre-recast subject.
-    // Fire-and-forget creates, wave-bounded (#1126). Use Promise.all within
-    // each wave (not allSettled) so a failed create fails the durable step
-    // and CF retries — mapWithConcurrency would swallow partial failures.
+    // Fire-and-forget creates, wave-bounded. Promise.all within each wave (not
+    // allSettled) so a failed create fails the durable step and CF retries.
     await step.do('trigger-variant-regen', async () => {
-      const limit = FANOUT_CONCURRENCY.variantTrigger;
+      const limit = VARIANT_TRIGGER_CONCURRENCY;
       for (let i = 0; i < succeeded.length; i += limit) {
         const wave = succeeded.slice(i, i + limit);
         await Promise.all(

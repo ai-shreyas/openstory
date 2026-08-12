@@ -15,10 +15,10 @@
  *   - Calls the snapshot DTO computer directly in a `validate-snapshot`
  *     step instead of going through the `context.snapshot.*` extension.
  *   - Per-scene × per-model fan-out uses Pattern 3 — `spawnAndAwaitChild`
- *     against `IMAGE_WORKFLOW`, flattened into (scene, model) jobs and held to
- *     a rolling in-flight ceiling (#1126, #1143) so a large batch can't stamp
- *     every child at once. Per-job settle isolation, so a single failing image
- *     (or timeout) doesn't kill the rest of the batch.
+ *     against `IMAGE_WORKFLOW`, flattened into (scene, model) jobs and spawned
+ *     unbounded (#1143; the per-run ceiling #1126 added measured no benefit).
+ *     Per-job settle isolation, so a single failing image (or timeout) doesn't
+ *     kill the rest of the batch.
  *   - The variant-image (shot-grid) fire-and-forget kick remains routed
  *     through `triggerWorkflow('/variant-image', …)` for parity with the
  *     QStash original — the engine registry decides whether that hits CF
@@ -37,7 +37,6 @@ import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
-import { FANOUT_CONCURRENCY, mapWithConcurrency } from '@/lib/workflow/fanout';
 import { NonRetryableError } from 'cloudflare:workflows';
 import type {
   ShotImagesWorkflowInput,
@@ -271,10 +270,14 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
       }))
     );
 
-    const jobResults = await mapWithConcurrency(
-      jobs,
-      FANOUT_CONCURRENCY.image,
-      async ({ scene, model }) => {
+    // Unbounded (#1143). The per-run ceiling #1126 added measured no benefit —
+    // 20 concurrent sequences with the fan-out unbounded produced the same
+    // hang count and the same p95 as with it capped — and it was never real
+    // admission control anyway: the limit was per workflow run, so N
+    // concurrent sequences multiplied straight through it. Rate limiting
+    // belongs somewhere that can see the whole system, not here.
+    const jobResults = await Promise.allSettled(
+      jobs.map(async ({ scene, model }) => {
         const context = sceneContexts.get(scene.sceneId);
         if (context === undefined) {
           throw new WorkflowValidationError(
@@ -382,7 +385,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
         });
 
         return childOutput.imageUrl;
-      }
+      })
     );
 
     // Regroup the flat job results back per scene, model order preserved, so
