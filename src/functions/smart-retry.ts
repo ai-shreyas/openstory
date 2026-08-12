@@ -482,5 +482,5 @@ export async function executeSmartRetry(context: SmartRetryContext) {
 
 export const smartRetryFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(z.object({ sequenceId: ulidSchema })))
+  .validator(zodValidator(z.object({ sequenceId: ulidSchema })))
   .handler(({ context }) => executeSmartRetry(context));

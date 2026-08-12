@@ -134,7 +134,7 @@ const shortenPromptInputSchema = z.object({
 
 export const shortenPromptFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(shortenPromptInputSchema))
+  .validator(zodValidator(shortenPromptInputSchema))
   .handler(async ({ data, context }) => {
     enforceRateLimit(promptShorteningRateLimiter, getClientIP());
 
@@ -227,7 +227,7 @@ const estimateSceneDurationInputSchema = z.object({
 
 export const estimateSceneDurationFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(estimateSceneDurationInputSchema))
+  .validator(zodValidator(estimateSceneDurationInputSchema))
   .handler(async ({ data, context }) => {
     enforceRateLimit(sceneDurationEstimationRateLimiter, getClientIP());
 
@@ -462,7 +462,7 @@ export const enhanceScriptToString = createServerOnlyFn(
 
 export const enhanceScriptStreamFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(enhanceScriptInputSchema))
+  .validator(zodValidator(enhanceScriptInputSchema))
   .handler(async function* ({ data, context }) {
     // IP rate-limit the dashboard path here (kept out of the shared core so the
     // core stays free of request-scoped server-only APIs — see note above).
@@ -616,7 +616,7 @@ export function rankStyleRecommendations(
  */
 export const recommendStylesForScriptFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(recommendStylesInputSchema))
+  .validator(zodValidator(recommendStylesInputSchema))
   .handler(async ({ data, context }) => {
     enforceRateLimit(recommendStylesRateLimiter, getClientIP());
 

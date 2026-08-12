@@ -81,7 +81,7 @@ export const getSequencesFn = createServerFn({ method: 'GET' })
 
 export const getSequenceFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(z.object({ sequenceId: ulidSchema })))
+  .validator(zodValidator(z.object({ sequenceId: ulidSchema })))
   .handler(async ({ context }) => {
     return context.sequence;
   });
@@ -96,7 +96,7 @@ export const getSequenceFn = createServerFn({ method: 'GET' })
  */
 export const createSequenceFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(createSequenceSchema))
+  .validator(zodValidator(createSequenceSchema))
   .handler(async ({ data, context }) => {
     const { sequences } = await createSequences(data, {
       scopedDb: context.scopedDb,
@@ -125,7 +125,7 @@ export const musicWithoutMotion = (
  */
 export const updateSequenceFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(updateSequenceSchema.extend({ sequenceId: ulidSchema }))
   )
   .handler(async ({ data, context }) => {
@@ -237,7 +237,7 @@ const setSequenceMusicInputSchema = z.object({
  */
 export const setSequenceMusicFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(setSequenceMusicInputSchema))
+  .validator(zodValidator(setSequenceMusicInputSchema))
   .handler(async ({ data, context }) => {
     return await context.scopedDb.sequences.update({
       id: data.sequenceId,
@@ -259,7 +259,7 @@ const retryStoryboardInputSchema = z.object({
  */
 export const retryStoryboardFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(retryStoryboardInputSchema))
+  .validator(zodValidator(retryStoryboardInputSchema))
   .handler(async ({ context }) => {
     const { sequence, user, teamId } = context;
 
@@ -315,7 +315,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
 /** Archive a sequence (hides from list, lets in-flight workflows finish) */
 export const archiveSequenceFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(z.object({ sequenceId: ulidSchema })))
+  .validator(zodValidator(z.object({ sequenceId: ulidSchema })))
   .handler(async ({ context }) => {
     await context.scopedDb
       .sequence(context.sequence.id)
@@ -424,7 +424,7 @@ export function buildAddAudioMusicInput(args: {
  */
 export const addModelToSequenceFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -815,7 +815,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
  */
 export const setSequenceModelFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -965,7 +965,7 @@ function musicRunDedupId(args: {
  */
 export const generateMusicFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,

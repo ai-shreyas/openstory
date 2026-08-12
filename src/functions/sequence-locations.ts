@@ -65,7 +65,7 @@ const getShotIdsForLocationInputSchema = z.object({
 
 export const getShotIdsForLocationFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(getShotIdsForLocationInputSchema))
+  .validator(zodValidator(getShotIdsForLocationInputSchema))
   .handler(async ({ context, data }) => {
     const shotIds =
       await context.scopedDb.sequenceLocations.getShotIdsForLocation(
@@ -88,7 +88,7 @@ const recastLocationInputSchema = z.object({
  */
 export const recastLocationFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(recastLocationInputSchema))
+  .validator(zodValidator(recastLocationInputSchema))
   .handler(async ({ context, data }) => {
     const location = await context.scopedDb.sequenceLocations.getById(
       data.locationId

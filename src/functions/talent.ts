@@ -39,7 +39,7 @@ const characterIdSchema = z.object({ characterId: ulidSchema });
 
 export const getTalentFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(listTalentFilterSchema.optional()))
+  .validator(zodValidator(listTalentFilterSchema.optional()))
   .handler(async ({ context, data }): Promise<TalentWithSheets[]> => {
     return context.scopedDb.talent.list({
       favoritesOnly: data?.favoritesOnly,
@@ -49,7 +49,7 @@ export const getTalentFn = createServerFn({ method: 'GET' })
 // List Public ("system") Talent — no auth, for anonymous visitors
 
 export const getPublicTalentFn = createServerFn({ method: 'GET' })
-  .inputValidator(zodValidator(listTalentFilterSchema.optional()))
+  .validator(zodValidator(listTalentFilterSchema.optional()))
   .handler(async ({ data }): Promise<TalentWithSheets[]> => {
     return listPublicTalent({ favoritesOnly: data?.favoritesOnly });
   });
@@ -58,7 +58,7 @@ export const getPublicTalentFn = createServerFn({ method: 'GET' })
 
 export const getTalentByIdFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(talentIdSchema))
+  .validator(zodValidator(talentIdSchema))
   .handler(async ({ context, data }) => {
     const talentRecord = await context.scopedDb.talent.getWithRelations(
       data.talentId
@@ -74,7 +74,7 @@ export const getTalentByIdFn = createServerFn({ method: 'GET' })
 // Get Single Public ("system") Talent — no auth, for anonymous visitors
 
 export const getPublicTalentByIdFn = createServerFn({ method: 'GET' })
-  .inputValidator(zodValidator(talentIdSchema))
+  .validator(zodValidator(talentIdSchema))
   .handler(async ({ data }) => {
     const talentRecord = await getPublicTalentWithRelations(data.talentId);
 
@@ -89,7 +89,7 @@ export const getPublicTalentByIdFn = createServerFn({ method: 'GET' })
 
 export const createTalentFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(createTalentSchema))
+  .validator(zodValidator(createTalentSchema))
   .handler(async ({ context, data }) => {
     return createLibraryTalent(data, {
       scopedDb: context.scopedDb,
@@ -106,7 +106,7 @@ const updateTalentInputSchema = updateTalentSchema.extend({
 
 export const updateTalentFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(updateTalentInputSchema))
+  .validator(zodValidator(updateTalentInputSchema))
   .handler(async ({ context, data }) => {
     const { talentId, ...updateData } = data;
 
@@ -123,7 +123,7 @@ export const updateTalentFn = createServerFn({ method: 'POST' })
 
 export const deleteTalentFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(talentIdSchema))
+  .validator(zodValidator(talentIdSchema))
   .handler(async ({ context, data }) => {
     await requireTeamAdminAccess(context.user.id, context.teamId);
 
@@ -141,7 +141,7 @@ export const deleteTalentFn = createServerFn({ method: 'POST' })
 
 export const toggleTalentFavoriteFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(talentIdSchema))
+  .validator(zodValidator(talentIdSchema))
   .handler(async ({ context, data }) => {
     const updated = await context.scopedDb.talent.toggleFavorite(data.talentId);
 
@@ -156,7 +156,7 @@ export const toggleTalentFavoriteFn = createServerFn({ method: 'POST' })
 
 export const createTalentSheetFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(createTalentSheetSchema))
+  .validator(zodValidator(createTalentSheetSchema))
   .handler(async ({ context, data }) => {
     return context.scopedDb.talent.sheets.create({
       talentId: data.talentId,
@@ -178,7 +178,7 @@ export const createTalentSheetFn = createServerFn({ method: 'POST' })
 
 export const deleteTalentSheetFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(sheetIdSchema))
+  .validator(zodValidator(sheetIdSchema))
   .handler(async ({ context, data }) => {
     const sheet = await context.scopedDb.talent.sheets.getById(data.sheetId);
     if (!sheet) {
@@ -197,7 +197,7 @@ export const deleteTalentSheetFn = createServerFn({ method: 'POST' })
 
 export const setDefaultSheetFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(sheetIdSchema))
+  .validator(zodValidator(sheetIdSchema))
   .handler(async ({ context, data }) => {
     const sheet = await context.scopedDb.talent.sheets.getById(data.sheetId);
     if (!sheet) {
@@ -218,7 +218,7 @@ export const setDefaultSheetFn = createServerFn({ method: 'POST' })
 
 export const deleteTalentMediaFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(mediaIdSchema))
+  .validator(zodValidator(mediaIdSchema))
   .handler(async ({ context, data }) => {
     const media = await context.scopedDb.talent.media.getById(data.mediaId);
     if (!media) {
@@ -250,7 +250,7 @@ const mediaTypeSchema = z.enum(['image', 'video', 'recording']);
 
 export const presignTalentUploadFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         filename: z.string().min(1),
@@ -291,7 +291,7 @@ export const presignTalentUploadFn = createServerFn({ method: 'POST' })
 
 export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         talentId: ulidSchema,
@@ -327,7 +327,7 @@ const generateSheetInputSchema = z.object({
 
 export const generateTalentSheetFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(generateSheetInputSchema))
+  .validator(zodValidator(generateSheetInputSchema))
   .handler(async ({ context, data }) => {
     const talentRecord = await context.scopedDb.talent.getWithRelations(
       data.talentId
@@ -376,7 +376,7 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
 
 export const addCharacterToLibraryFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(characterIdSchema))
+  .validator(zodValidator(characterIdSchema))
   .handler(async ({ context, data }) => {
     const character = await context.scopedDb.characters.getById(
       data.characterId

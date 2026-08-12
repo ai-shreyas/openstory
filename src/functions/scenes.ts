@@ -64,7 +64,7 @@ const updateSceneScriptSchema = z.object({
  */
 export const updateSceneScriptFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(updateSceneScriptSchema))
+  .validator(zodValidator(updateSceneScriptSchema))
   .handler(async ({ data, context }) => {
     const { sequence, scopedDb, user } = context;
 

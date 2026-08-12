@@ -40,7 +40,7 @@ const checkoutInputSchema = z.object({
 
 export const createCheckoutSessionFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(checkoutInputSchema))
+  .validator(zodValidator(checkoutInputSchema))
   .handler(async ({ data, context }) => {
     if (!isStripeEnabled()) {
       throw new ValidationError('Stripe is not configured');
@@ -148,7 +148,7 @@ const purchaseInputSchema = z.object({
  */
 export const purchaseCreditsFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(purchaseInputSchema))
+  .validator(zodValidator(purchaseInputSchema))
   .handler(async ({ data, context }) => {
     if (!isStripeEnabled()) {
       throw new ValidationError('Stripe is not configured');
@@ -328,7 +328,7 @@ const founderCreditsInputSchema = z.object({
 
 export const requestFounderCreditsFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(founderCreditsInputSchema))
+  .validator(zodValidator(founderCreditsInputSchema))
   .handler(async ({ data, context }) => {
     const balance = await context.scopedDb.billing.getBalance();
     const balanceDisplay = microsToDisplayUsd(balance);
@@ -410,7 +410,7 @@ type Transaction = {
 
 export const getTransactionsFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(transactionsInputSchema))
+  .validator(zodValidator(transactionsInputSchema))
   .handler(
     async ({
       data,
@@ -457,7 +457,7 @@ const autoTopUpInputSchema = z.object({
 
 export const updateAutoTopUpFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(autoTopUpInputSchema))
+  .validator(zodValidator(autoTopUpInputSchema))
   .handler(async ({ data, context }) => {
     if (!isStripeEnabled()) {
       throw new ValidationError('Stripe is not configured');

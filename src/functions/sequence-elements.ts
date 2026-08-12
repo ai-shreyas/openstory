@@ -82,7 +82,7 @@ async function triggerElementVision(params: {
 
 export const presignDraftElementUploadFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(z.object({ filename: z.string().min(1) })))
+  .validator(zodValidator(z.object({ filename: z.string().min(1) })))
   .handler(async ({ context, data }) => {
     const ext = getExtensionFromUrl(data.filename);
     const uploadId = generateId();
@@ -98,7 +98,7 @@ export const presignDraftElementUploadFn = createServerFn({ method: 'POST' })
 
 export const presignElementUploadFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -132,7 +132,7 @@ export const presignElementUploadFn = createServerFn({ method: 'POST' })
 
 export const analyzeDraftElementFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         publicUrl: mediaUrlSchema,
@@ -192,7 +192,7 @@ export const analyzeDraftElementFn = createServerFn({ method: 'POST' })
 
 export const finalizeElementUploadFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -254,14 +254,14 @@ export const finalizeElementUploadFn = createServerFn({ method: 'POST' })
 
 export const listSequenceElementsFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(z.object({ sequenceId: ulidSchema })))
+  .validator(zodValidator(z.object({ sequenceId: ulidSchema })))
   .handler(async ({ context }) => {
     return context.scopedDb.sequenceElements.list(context.sequence.id);
   });
 
 export const deleteSequenceElementFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(z.object({ sequenceId: ulidSchema, elementId: ulidSchema }))
   )
   .handler(async ({ context, data }) => {
@@ -277,7 +277,7 @@ export const deleteSequenceElementFn = createServerFn({ method: 'POST' })
 
 export const renameSequenceElementTokenFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -331,7 +331,7 @@ export const renameSequenceElementTokenFn = createServerFn({ method: 'POST' })
 /** Get shot IDs for all shots that reference an element by token */
 export const getShotIdsForElementFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(z.object({ sequenceId: ulidSchema, elementId: ulidSchema }))
   )
   .handler(async ({ context, data }) => {
@@ -349,7 +349,7 @@ export const getShotIdsForElementFn = createServerFn({ method: 'GET' })
  */
 export const getShotCountsByElementFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(z.object({ sequenceId: ulidSchema })))
+  .validator(zodValidator(z.object({ sequenceId: ulidSchema })))
   .handler(async ({ context }) => {
     return await context.scopedDb.sequenceElements.getShotCountsByElement(
       context.sequence.id
@@ -364,7 +364,7 @@ export const getShotCountsByElementFn = createServerFn({ method: 'GET' })
  */
 export const replaceSequenceElementFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
