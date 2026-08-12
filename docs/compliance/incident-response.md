@@ -53,8 +53,9 @@ supplied:
 
 - our own reference (`OS-01J…`),
 - the asset URL or R2 object key,
-- a SHA-256 of the file's bytes,
-- the model provider's request id.
+- the model provider's request id,
+- a SHA-256 of the file's bytes — accepted, but matches nothing until the column
+  is populated (see below).
 
 A match returns the `content_provenance` row: **team, user, provider, model,
 provider request id, prompt hash, whether reference images were used and how
