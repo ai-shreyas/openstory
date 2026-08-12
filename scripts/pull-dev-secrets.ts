@@ -49,13 +49,13 @@ function main() {
 
   if (result.status !== 0) {
     console.error(
-      `doppler secrets download failed (exit ${result.status ?? '?'}).` +
+      `doppler secrets download failed (exit ${result.status ?? 'signal'}).` +
         ` Run \`doppler login\` and confirm you can access project "${PROJECT}".`
     );
-    process.exit(result.status ?? 1);
+    process.exit(1);
   }
 
-  const body = result.stdout ?? '';
+  const body = result.stdout;
   if (!body.trim()) {
     console.error(
       'Doppler returned an empty secret set — refusing to overwrite .env.local'
