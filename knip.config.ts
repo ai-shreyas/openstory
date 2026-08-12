@@ -58,5 +58,6 @@ export default {
     'printf',
     'open', // macOS URL/file opener (bun explorer)
     'openssl', // used by scripts/env-file.ts for secret generation
+    'doppler', // scripts/pull-dev-secrets.ts + scripts/push-secrets.ts
   ],
 } satisfies KnipConfig;
