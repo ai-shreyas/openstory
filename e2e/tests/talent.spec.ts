@@ -134,6 +134,17 @@ testWithUser.describe('Add Talent with Reference Media', () => {
 
       await waitForUploadComplete(page);
 
+      // Reference media means a real person's likeness might be entering the
+      // library, so the portrait-rights attestation is mandatory from here on
+      // (#1180) — the dialog refuses to submit without it. Matched by regex
+      // because the statement label contains a typographic apostrophe.
+      await page
+        .getByRole('checkbox', { name: /authorization to use this person/i })
+        .check();
+      await page
+        .getByLabel('Basis for authorization')
+        .fill('E2E fixture image — synthetic, depicts no real person');
+
       // Submit the form (exercises the create path through the dialog)
       await page.getByRole('button', { name: 'Add Talent' }).click();
 
