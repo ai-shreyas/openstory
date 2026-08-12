@@ -106,19 +106,6 @@ export default defineConfig({
       ...(process.env.E2E_RECORD === '1' ? ['E2E_RECORD=1'] : []),
       'PORT=3001',
       'VITE_APP_URL=http://localhost:3001',
-      // Identity verification off for e2e (#1180). Seeded test users hold no
-      // verification, and the default policy gates likeness uploads on one, so
-      // every reference-media spec would 403 on something unrelated to the flow
-      // under test. Set here rather than in wrangler.jsonc's [env.test] `vars`
-      // deliberately: editing wrangler.jsonc fires the typegen-regen pre-commit
-      // hook, which rewrites the committed worker-configuration.d.ts against
-      // whatever wrangler/workerd and .env files the committing machine happens
-      // to have — a 1.3k-line diff that breaks typecheck for everyone else.
-      // The policy logic is unit-tested
-      // (src/lib/compliance/identity-verification.test.ts); the portrait-rights
-      // ATTESTATION stays required here and is exercised by the talent spec.
-      // Driving the gate end-to-end needs a verified-user fixture — follow-up.
-      'IDENTITY_VERIFICATION_POLICY=disabled',
       'OPENROUTER_BASE_URL=http://localhost:4010',
       'VITE_DISABLE_DEVTOOLS=true',
     ].join(' ');
