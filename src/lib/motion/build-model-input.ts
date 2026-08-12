@@ -34,6 +34,21 @@ const QUALITY_OVERRIDES: Partial<
   seedance_v2: { resolution: '720p' },
 };
 
+/**
+ * Second lever against model-generated music (#1165) for the two endpoints
+ * that expose `negative_prompt`; the in-prompt direction from
+ * `assembleMotionPrompt` covers every audio-capable model, and is Seedance
+ * 2.0's only lever since its schema has no negative prompt.
+ *
+ * Kling's `negative_prompt` defaults to 'blur, distort, and low quality' when
+ * absent — supplying our own replaces it, so those terms are carried over.
+ */
+const NO_MUSIC_NEGATIVE_PROMPTS: Partial<Record<ImageToVideoModel, string>> = {
+  kling_v3_pro:
+    'blur, distort, and low quality, background music, musical score, soundtrack',
+  veo3_1: 'background music, musical score, soundtrack',
+};
+
 type ModelOutputMap = {
   [K in ImageToVideoModel]: z.output<
     (typeof MOTION_TRANSFORMS)[(typeof IMAGE_TO_VIDEO_MODELS)[K]['id']]
@@ -89,6 +104,9 @@ export function buildModelInput<T extends ImageToVideoModel>(
     imageUrl: options.imageUrl,
     aspectRatio: options.aspectRatio,
     ...QUALITY_OVERRIDES[modelKey],
+    ...(NO_MUSIC_NEGATIVE_PROMPTS[modelKey] && {
+      negative_prompt: NO_MUSIC_NEGATIVE_PROMPTS[modelKey],
+    }),
     ...(elements && { elements }),
     // Pass-through `generate_audio` for audio-capable models. The schema-driven
     // transform forwards unknown keys; models without `generate_audio` strip

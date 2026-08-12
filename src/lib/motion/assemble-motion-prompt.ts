@@ -21,6 +21,24 @@ import {
   videoModelSupportsAudio,
 } from '@/lib/ai/models';
 
+/**
+ * Music is a sequence-level track (`sequences.music*`) the user can mute, swap
+ * or regenerate; a score the video model bakes into the clip cannot be removed
+ * and fights the real one on playback (#1165). Dialogue and diegetic sound are
+ * still wanted, so `generate_audio: false` is the wrong lever — every
+ * audio-capable model gets this direction in its audio section instead.
+ *
+ * Phrasing follows Seedance 2.5's documented negative-audio control, which
+ * pairs the exclusion with a whitelist ("No BGM; generate only environmental
+ * sounds and action sounds") — dialogue is added to that whitelist since a
+ * bare negation risks damping the audio we do want. "no music" rides along
+ * for the Google/OpenAI models, which don't share ByteDance's BGM vocabulary.
+ * Guides: https://docs.byteplus.com/en/docs/ModelArk/2607689 (2.5),
+ * https://docs.byteplus.com/en/docs/ModelArk/2222480 (2.0)
+ */
+const NO_MUSIC_DIRECTION =
+  'No BGM, no music. Generate only dialogue, environmental sounds, and action sounds.';
+
 type AssembleOptions = {
   motionPrompt: AssemblableMotionPrompt;
   model: ImageToVideoModel;
@@ -102,15 +120,15 @@ function buildKlingPrompt(
   }
 
   // Ambient sound woven into the prompt (Kling generates audio natively)
-  if (audio) {
-    const ambientParts: string[] = [];
-    if (audio.ambientSound) ambientParts.push(audio.ambientSound);
-    if (audio.soundEffects.length > 0)
-      ambientParts.push(audio.soundEffects.join(', '));
-    if (ambientParts.length > 0) {
-      parts.push(`Ambient sounds: ${ambientParts.join('. ')}.`);
-    }
-  }
+  const ambientParts: string[] = [];
+  if (audio?.ambientSound) ambientParts.push(audio.ambientSound);
+  if (audio && audio.soundEffects.length > 0)
+    ambientParts.push(audio.soundEffects.join(', '));
+  parts.push(
+    ambientParts.length > 0
+      ? `Ambient sounds: ${ambientParts.join('. ')}. ${NO_MUSIC_DIRECTION}`
+      : NO_MUSIC_DIRECTION
+  );
 
   return parts.join('\n\n');
 }
@@ -160,8 +178,10 @@ function buildSeedancePrompt(
     parts.push(dialogueProse);
   }
 
-  // Seedance invents edits otherwise, conflicting with one-scene-one-take.
-  const guards = ['Single continuous shot, no cuts.'];
+  // Constraint words, which the ByteDance guide asks for at the end of the
+  // prompt. Seedance invents edits otherwise, conflicting with
+  // one-scene-one-take.
+  const guards = [NO_MUSIC_DIRECTION, 'Single continuous shot, no cuts.'];
   // Standard guard from the ByteDance prompt guide for scenes with characters
   if (characterTags && characterTags.length > 0) {
     guards.push('Avoid jitter and bent limbs.');
@@ -201,15 +221,15 @@ function buildVeoPrompt(
   }
 
   // Separate Audio: section (Veo guide recommendation)
-  if (audio) {
-    const audioParts: string[] = [];
-    if (audio.ambientSound) audioParts.push(audio.ambientSound);
-    if (audio.soundEffects.length > 0)
-      audioParts.push(audio.soundEffects.join(', '));
-    if (audioParts.length > 0) {
-      parts.push(`Audio: ${audioParts.join('. ')}`);
-    }
-  }
+  const audioParts: string[] = [];
+  if (audio?.ambientSound) audioParts.push(audio.ambientSound);
+  if (audio && audio.soundEffects.length > 0)
+    audioParts.push(audio.soundEffects.join(', '));
+  parts.push(
+    audioParts.length > 0
+      ? `Audio: ${audioParts.join('. ')}. ${NO_MUSIC_DIRECTION}`
+      : `Audio: ${NO_MUSIC_DIRECTION}`
+  );
 
   return parts.join('\n\n');
 }

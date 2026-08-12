@@ -576,7 +576,8 @@ If the scene has dialogue (check \`originalScript.dialogue\`):
 ### AUDIO DESIGN
 Always populate the \`audio\` field:
 - \`ambientSound\`: Background environmental audio appropriate to the scene (e.g., "rain on windows, distant thunder", "quiet office hum with keyboard clicks", "bustling city street")
-- \`soundEffects\`: Specific sounds tied to on-screen actions (e.g., "door slam", "chair scrape", "glass set down on table", "footsteps on gravel")`,
+- \`soundEffects\`: Specific sounds tied to on-screen actions (e.g., "door slam", "chair scrape", "glass set down on table", "footsteps on gravel")
+- **NO MUSIC**: Never describe music, score, songs, or a soundtrack — not in \`audio\`, not in \`fullPrompt\`. Music is one continuous track added at the sequence level; a per-scene score would fight it. Diegetic sound only.`,
     },
     {
       role: 'user',
