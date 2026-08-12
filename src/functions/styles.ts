@@ -25,7 +25,7 @@ import { authWithTeamMiddleware } from './middleware';
  */
 export const getStylesFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z
         .object({ orderBy: z.enum(['popular', 'sortOrder']).optional() })
@@ -66,7 +66,7 @@ const getStyleInputSchema = z.object({
  */
 export const getStyleFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(getStyleInputSchema))
+  .validator(zodValidator(getStyleInputSchema))
   .handler(async ({ data, context }) => {
     // Style lookup doesn't require team scoping (styles can be public)
     const style = await context.scopedDb.styles.getById(data.styleId);
@@ -88,7 +88,7 @@ export const getStyleFn = createServerFn({ method: 'GET' })
  */
 export const createStyleFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(createStyleSchema))
+  .validator(zodValidator(createStyleSchema))
   .handler(async ({ data, context }) => {
     return context.scopedDb.styles.create(data);
   });
@@ -107,7 +107,7 @@ const updateStyleInputSchema = updateStyleSchema.extend({
  */
 export const updateStyleFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(updateStyleInputSchema))
+  .validator(zodValidator(updateStyleInputSchema))
   .handler(async ({ data, context }) => {
     const { styleId, ...updateData } = data;
 
@@ -135,7 +135,7 @@ const deleteStyleInputSchema = z.object({
  */
 export const deleteStyleFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(deleteStyleInputSchema))
+  .validator(zodValidator(deleteStyleInputSchema))
   .handler(async ({ data, context }) => {
     // Style lookup without team scoping (need to discover the team first)
     const style = await context.scopedDb.styles.getById(data.styleId);

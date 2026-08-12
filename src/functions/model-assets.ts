@@ -199,7 +199,7 @@ export async function createGeneratedAsset(
 
 export const createGeneratedAssetFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(createGeneratedAssetInputSchema))
+  .validator(zodValidator(createGeneratedAssetInputSchema))
   .handler(async ({ context, data }) => {
     assertModelsEnabled();
     return createGeneratedAsset(context.scopedDb, data);
@@ -220,7 +220,7 @@ const listGeneratedAssetsInputSchema = z.object({
 /** Team-scoped newest-first list, filterable by activity / endpoint. */
 export const listGeneratedAssetsFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(listGeneratedAssetsInputSchema.optional()))
+  .validator(zodValidator(listGeneratedAssetsInputSchema.optional()))
   .handler(async ({ context, data }) => {
     assertModelsEnabled();
     return context.scopedDb.generatedAssets.list({
@@ -238,7 +238,7 @@ const getGeneratedAssetInputSchema = z.object({
 /** Single run row — the client polls this while a run is in flight. */
 export const getGeneratedAssetFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(getGeneratedAssetInputSchema))
+  .validator(zodValidator(getGeneratedAssetInputSchema))
   .handler(async ({ context, data }) => {
     assertModelsEnabled();
     const asset = await context.scopedDb.generatedAssets.getById(data.id);

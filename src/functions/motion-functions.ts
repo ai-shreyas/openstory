@@ -47,7 +47,7 @@ const generateMotionInputSchema = generateMotionSchema.extend({
 
 export const generateShotMotionFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(generateMotionInputSchema))
+  .validator(zodValidator(generateMotionInputSchema))
   .handler(async ({ data, context }) => {
     const { shot, frame, sequence, teamId } = context;
 
@@ -237,7 +237,7 @@ const batchGenerateMotionInputSchema = z.object({
 
 export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(batchGenerateMotionInputSchema))
+  .validator(zodValidator(batchGenerateMotionInputSchema))
   .handler(async ({ data, context }) => {
     const { sequence, teamId, user } = context;
 

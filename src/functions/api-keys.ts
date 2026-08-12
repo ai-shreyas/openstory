@@ -25,7 +25,7 @@ const listApiKeysInputSchema = z.object({
  */
 export const listApiKeysFn = createServerFn({ method: 'GET' })
   .middleware([teamAdminAccessMiddleware])
-  .inputValidator(zodValidator(listApiKeysInputSchema))
+  .validator(zodValidator(listApiKeysInputSchema))
   .handler(async ({ context }) => {
     return context.scopedDb.apiKeys.listKeys();
   });
@@ -46,7 +46,7 @@ const saveApiKeyInputSchema = z.object({
  */
 export const saveApiKeyFn = createServerFn({ method: 'POST' })
   .middleware([teamAdminAccessMiddleware])
-  .inputValidator(zodValidator(saveApiKeyInputSchema))
+  .validator(zodValidator(saveApiKeyInputSchema))
   .handler(async ({ data, context }) => {
     // Validate the key first
     const validation = await context.scopedDb.apiKeys.validateKey(
@@ -81,7 +81,7 @@ const deleteApiKeyInputSchema = z.object({
  */
 export const deleteApiKeyFn = createServerFn({ method: 'POST' })
   .middleware([teamAdminAccessMiddleware])
-  .inputValidator(zodValidator(deleteApiKeyInputSchema))
+  .validator(zodValidator(deleteApiKeyInputSchema))
   .handler(async ({ data, context }) => {
     await context.scopedDb.apiKeys.deleteKey(data.provider);
   });
@@ -99,7 +99,7 @@ const checkApiKeyStatusInputSchema = z.object({
  */
 export const checkApiKeyStatusFn = createServerFn({ method: 'GET' })
   .middleware([teamAdminAccessMiddleware])
-  .inputValidator(zodValidator(checkApiKeyStatusInputSchema))
+  .validator(zodValidator(checkApiKeyStatusInputSchema))
   .handler(async ({ context }) => {
     const [hasOpenRouter, hasFal] = await Promise.all([
       context.scopedDb.apiKeys.hasKey('openrouter'),
@@ -128,7 +128,7 @@ const revalidateApiKeyInputSchema = z.object({
  */
 export const revalidateApiKeyFn = createServerFn({ method: 'POST' })
   .middleware([teamAdminAccessMiddleware])
-  .inputValidator(zodValidator(revalidateApiKeyInputSchema))
+  .validator(zodValidator(revalidateApiKeyInputSchema))
   .handler(async ({ data, context }) => {
     return context.scopedDb.apiKeys.revalidateStoredKey(data.provider);
   });

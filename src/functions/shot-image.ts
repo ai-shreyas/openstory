@@ -103,7 +103,7 @@ const generateImageInputSchema = regenerateShotSchema.extend({
 
 export const generateShotImageFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(generateImageInputSchema))
+  .validator(zodValidator(generateImageInputSchema))
   .handler(async ({ context, data }) => {
     const {
       shot,
@@ -233,7 +233,7 @@ const generateVariantsInputSchema = generateVariantSchema.extend({
 
 export const generateShotVariantsFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(generateVariantsInputSchema))
+  .validator(zodValidator(generateVariantsInputSchema))
   .handler(async ({ context, data }) => {
     const { shot, frame, sequence, user, scene } = context;
 
@@ -335,7 +335,7 @@ function indexToRowCol(
 
 export const selectShotVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(selectVariantInputSchema))
+  .validator(zodValidator(selectVariantInputSchema))
   .handler(async ({ context, data }) => {
     const { shot, frame, sequence, user, scene } = context;
 
@@ -461,7 +461,7 @@ const setImageFromVariantInputSchema = z.object({
 
 export const setImageFromVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(setImageFromVariantInputSchema))
+  .validator(zodValidator(setImageFromVariantInputSchema))
   .handler(async ({ context, data }) => {
     const { shot, frame } = context;
 
@@ -506,7 +506,7 @@ const setVideoFromVariantInputSchema = z.object({
  */
 export const setVideoFromVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(setVideoFromVariantInputSchema))
+  .validator(zodValidator(setVideoFromVariantInputSchema))
   .handler(async ({ context, data }) => {
     const { shot, scopedDb } = context;
     // No render segment ⇒ the shot was never rendered, so no version to select.
@@ -548,7 +548,7 @@ const selectSegmentVideoVersionInputSchema = z.object({
  */
 export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(selectSegmentVideoVersionInputSchema))
+  .validator(zodValidator(selectSegmentVideoVersionInputSchema))
   .handler(async ({ context, data }) => {
     const { shot, scopedDb } = context;
     const version = await scopedDb.videoVariants.select(
@@ -606,7 +606,7 @@ const shotHistoryListInputSchema = z.object({
  */
 export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(shotHistoryListInputSchema))
+  .validator(zodValidator(shotHistoryListInputSchema))
   .handler(async ({ context }): Promise<ShotImageVersionRow[]> => {
     const { frame, scopedDb } = context;
     const versions = await scopedDb.frameVariants.listByFrame(frame.id);
@@ -631,7 +631,7 @@ export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
  */
 export const listShotVideoVersionsFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(shotHistoryListInputSchema))
+  .validator(zodValidator(shotHistoryListInputSchema))
   .handler(async ({ context }): Promise<ShotVideoVersionRow[]> => {
     const { shot, scopedDb } = context;
     if (!shot.renderSegmentId) return [];
@@ -667,7 +667,7 @@ const selectFrameImageVersionInputSchema = z.object({
  */
 export const selectFrameImageVersionFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(selectFrameImageVersionInputSchema))
+  .validator(zodValidator(selectFrameImageVersionInputSchema))
   .handler(async ({ context, data }) => {
     const { shot, frame, scopedDb } = context;
 

@@ -17,7 +17,7 @@ const channelInputSchema = z.object({ channel: z.string().min(1) });
  */
 export const getChannelHistoryFn = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
-  .inputValidator(zodValidator(channelInputSchema))
+  .validator(zodValidator(channelInputSchema))
   .handler(async ({ data }) => {
     const messages = await getChannelHistory(data.channel);
 

@@ -21,7 +21,7 @@ const feedbackInputSchema = z.object({
 
 export const submitFeedbackFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(zodValidator(feedbackInputSchema))
+  .validator(zodValidator(feedbackInputSchema))
   .handler(async ({ data, context }) => {
     const result = await sendFeedbackEmail({
       to: CONTACT_EMAIL,

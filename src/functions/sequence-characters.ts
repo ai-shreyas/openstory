@@ -44,7 +44,7 @@ export const getSequenceCharactersFn = createServerFn({ method: 'GET' })
 /** Get shot IDs for all shots containing a specific character */
 export const getShotIdsForCharacterFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(zodValidator(z.object({ characterId: z.string().min(1) })))
+  .validator(zodValidator(z.object({ characterId: z.string().min(1) })))
   .handler(async ({ context, data }) => {
     const shotIds = await context.scopedDb.characters.getShotIdsForCharacter(
       context.sequence.id,
@@ -56,7 +56,7 @@ export const getShotIdsForCharacterFn = createServerFn({ method: 'GET' })
 /** Recast a character with different talent, triggering sheet regeneration */
 export const recastCharacterFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({ characterId: z.string().min(1), talentId: ulidSchema })
     )

@@ -152,7 +152,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
  */
 export const getShotsForSequencesFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceIds: z.array(ulidSchema).max(5000),
@@ -246,7 +246,7 @@ export const getDivergentVariantsFn = createServerFn({ method: 'GET' })
  */
 export const promoteVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -263,7 +263,7 @@ export const promoteVariantFn = createServerFn({ method: 'POST' })
 
 export const discardVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -283,7 +283,7 @@ export const discardVariantFn = createServerFn({ method: 'POST' })
 
 export const undiscardVariantFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -363,16 +363,14 @@ export const getSequenceSelectedModelsFn = createServerFn({ method: 'GET' })
 
 export const createShotFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
-    zodValidator(singleShotSchema.extend({ sequenceId: ulidSchema }))
-  )
+  .validator(zodValidator(singleShotSchema.extend({ sequenceId: ulidSchema })))
   .handler(async ({ data, context }) => {
     return context.scopedDb.shots.create(data);
   });
 
 export const createShotsBulkFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -390,7 +388,7 @@ export const createShotsBulkFn = createServerFn({ method: 'POST' })
 
 export const updateShotFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       updateShotSchema.extend({ sequenceId: ulidSchema, shotId: ulidSchema })
     )
@@ -510,7 +508,7 @@ const updateShotDurationSchema = z.object({
  */
 export const updateShotDurationFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(updateShotDurationSchema))
+  .validator(zodValidator(updateShotDurationSchema))
   .handler(async ({ data, context }) => {
     const { shot, scopedDb } = context;
     const updated = await scopedDb.shots.update(shot.id, {
@@ -521,7 +519,7 @@ export const updateShotDurationFn = createServerFn({ method: 'POST' })
 
 export const deleteShotFn = createServerFn({ method: 'POST' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(shotIdInputSchema))
+  .validator(zodValidator(shotIdInputSchema))
   .handler(async ({ data, context }) => {
     await context.scopedDb.shots.delete(data.shotId);
     return { success: true, sequenceId: data.sequenceId };
@@ -542,7 +540,7 @@ export const deleteShotsBySequenceFn = createServerFn({ method: 'POST' })
  */
 export const getShotStalenessFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(shotIdInputSchema))
+  .validator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
     const { shot, frame, sequence, scopedDb, scene } = context;
     return toWireStaleness(
@@ -576,7 +574,7 @@ const toWireStaleness = ({
  */
 export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({ sequenceId: ulidSchema, sceneId: ulidSchema.optional() })
     )
@@ -687,7 +685,7 @@ export const getShotStalenessBatchFn = createServerFn({ method: 'GET' })
  */
 export const updateStaleShotsFn = createServerFn({ method: 'POST' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         sequenceId: ulidSchema,
@@ -790,7 +788,7 @@ const updateStaleShotsResultSchema = z.object({
  */
 export const getUpdateStaleShotsRunFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({ sequenceId: ulidSchema, workflowRunId: z.string().min(1) })
     )
@@ -827,7 +825,7 @@ export const getUpdateStaleShotsRunFn = createServerFn({ method: 'GET' })
  */
 export const getShotDownloadUrlFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
-  .inputValidator(zodValidator(shotIdInputSchema))
+  .validator(zodValidator(shotIdInputSchema))
   .handler(async ({ context }) => {
     const { shot, scopedDb } = context;
 
