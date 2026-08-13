@@ -74,7 +74,7 @@ let loggedRetryMode = false;
  * `createModel('vendor/model-id', { input: [...], features: [...] })`.
  */
 export const CATALOG_LAG_MODELS = [
-  createModel('x-ai/grok-4.5', {
+  createModel('x-ai/grok-4.6', {
     input: ['text', 'image'],
     features: ['reasoning', 'structured_outputs'],
   }),

@@ -66,7 +66,7 @@ const callConfig = {
   phase: { number: 3, name: 'Visual prompts' },
   promptName: 'phase/visual-prompt-scene-generation-chat',
   promptVariables: {},
-  modelId: 'x-ai/grok-4.5' as const,
+  modelId: 'x-ai/grok-4.6' as const,
   responseSchema: schema,
 };
 
