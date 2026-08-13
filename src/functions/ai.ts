@@ -25,7 +25,8 @@ import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
 import { estimateLLMCost } from '@/lib/billing/cost-estimation';
 import type { Microdollars } from '@/lib/billing/money';
 import { aspectRatioSchema } from '@/lib/constants/aspect-ratios';
-import { StyleConfigSchema, type Style } from '@/lib/db/schema/libraries';
+import { type Style } from '@/lib/db/schema/libraries';
+import { parseStyleConfig, StyleConfigSchema } from '@/lib/style/style-config';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { ResolvedLlmKey } from '@/lib/db/scoped/api-keys';
 import { InsufficientCreditsError } from '@/lib/errors';
@@ -296,13 +297,15 @@ const enhanceScriptInputSchema = z.object({
   // The chosen style, narrowed to what the enhancer reads: the aesthetic recipe
   // (`config`) drives the LOOK; name/category/tags drive WHAT HAPPENS. One
   // cohesive object — built by `toEnhanceInputs` so the UI and API match.
+  // Mirrors `EnhanceStyle`: config is whole-or-absent (parsed v2 — the client
+  // up-converts via `toEnhanceInputs`), tags always an array.
   style: z
     .object({
-      config: StyleConfigSchema.partial().optional(),
+      config: StyleConfigSchema.optional(),
       name: z.string().optional(),
       category: z.string().nullable().optional(),
       description: z.string().nullable().optional(),
-      tags: z.array(z.string()).nullable().optional(),
+      tags: z.array(z.string()).default([]),
     })
     .optional(),
   analysisModel: z.string().optional(),
@@ -550,18 +553,17 @@ export function buildStyleCatalog(styles: Style[]): {
   const orderedStyleIds: string[] = [];
   const lines = styles.map((style, index) => {
     orderedStyleIds.push(style.id);
-    const c = style.config;
+    const { look, motion, references } = parseStyleConfig(style.config);
     const parts = [
       truncateField(style.description, 200),
-      c.mood && `mood: ${truncateField(c.mood, 100)}`,
-      c.artStyle && `art: ${truncateField(c.artStyle, 100)}`,
-      c.lighting && `lighting: ${truncateField(c.lighting, 100)}`,
-      c.cameraWork && `camera: ${truncateField(c.cameraWork, 100)}`,
-      c.colorGrading && `grade: ${truncateField(c.colorGrading, 100)}`,
-      c.colorPalette.length > 0 &&
-        `palette: ${c.colorPalette.slice(0, 6).join(', ')}`,
-      c.referenceFilms.length > 0 &&
-        `refs: ${c.referenceFilms.slice(0, 4).join(', ')}`,
+      `mood: ${truncateField(look.mood, 100)}`,
+      `art: ${truncateField(look.artStyle, 100)}`,
+      `lighting: ${truncateField(look.lighting, 100)}`,
+      `camera: ${truncateField(motion.camera, 100)}`,
+      `grade: ${truncateField(look.colorGrading, 100)}`,
+      look.colorPalette.length > 0 &&
+        `palette: ${look.colorPalette.slice(0, 6).join(', ')}`,
+      references.length > 0 && `refs: ${references.slice(0, 4).join(', ')}`,
       `popularity: ${style.usageCount}`,
     ].filter(Boolean);
     return `[${index}] ${style.name} — ${parts.join(' · ')}`;

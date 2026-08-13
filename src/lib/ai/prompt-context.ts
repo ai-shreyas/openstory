@@ -16,7 +16,7 @@ import type {
 import type { ScopedDb } from '@/lib/db/scoped';
 import { ValidationError } from '@/lib/errors';
 import type { StyleConfig } from '@/lib/db/schema';
-import { StyleConfigSchema } from '@/lib/db/schema';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import {
   matchCharactersToScene,
   matchElementsToScene,
@@ -115,7 +115,7 @@ export async function loadShotPromptContext(args: {
 
   return {
     scene,
-    styleConfig: StyleConfigSchema.parse(style.config),
+    styleConfig: parseStyleConfig(style.config),
     characterBible: charactersToBible(characters),
     locationBible: sequenceLocationsToBible(locations),
     elementBible: sequenceElementsToBible(elements),

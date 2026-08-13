@@ -8,7 +8,7 @@ import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 
 import { safeTextToImageModel } from '@/lib/ai/models';
-import { StyleConfigSchema } from '@/lib/db/schema';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import { buildCastingAttributes } from '@/lib/prompts/character-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -76,9 +76,7 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
     const style = sequence.styleId
       ? await context.scopedDb.styles.getById(sequence.styleId)
       : null;
-    const styleConfig = style
-      ? StyleConfigSchema.parse(style.config)
-      : undefined;
+    const styleConfig = style ? parseStyleConfig(style.config) : undefined;
 
     const talentWithSheets = await context.scopedDb.talent.getWithRelations(
       data.talentId

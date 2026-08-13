@@ -11,6 +11,7 @@
  * step can re-derive it from a row the user edited in the meantime.
  */
 
+import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
 import { describe, expect, test, vi } from 'vitest';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
 import { DEFAULT_ANALYSIS_MODEL } from '@/lib/ai/models.config';
@@ -49,7 +50,7 @@ const INPUT: StoryboardTriggerInput = {
   },
 };
 
-const STYLE_CONFIG: StyleConfig = {
+const STYLE_CONFIG: StyleConfig = migrateStyleConfigV1ToV2({
   mood: 'tense and hopeful',
   artStyle: 'photoreal cinematic',
   lighting: 'hard key, deep shadows',
@@ -57,7 +58,7 @@ const STYLE_CONFIG: StyleConfig = {
   cameraWork: 'handheld, tight lenses',
   referenceFilms: ['Children of Men'],
   colorGrading: 'cool shadows, warm highlights',
-};
+});
 
 function makeScopedDb(opts: {
   workflowRunId: string | null;

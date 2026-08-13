@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
 import { toEnhanceInputs } from '../enhance-inputs';
 import { createUserPrompt } from '../script-enhancer';
+
+const NEO_NOIR_V1 = {
+  mood: 'tense and paranoid',
+  artStyle: 'high-contrast neo-noir',
+  lighting: 'low-key with hard shadows',
+  colorPalette: ['#0a0a14', '#e8322f'],
+  cameraWork: 'slow dolly, dutch angles',
+  referenceFilms: ['rain-slicked neon-noir cityscapes'],
+  colorGrading: 'crushed blacks, neon accents',
+};
 
 describe('createUserPrompt (issue #855)', () => {
   it('carries the per-request payload (script, duration, injection guard)', () => {
@@ -53,14 +64,44 @@ describe('createUserPrompt (issue #855)', () => {
   it('renders aesthetic config and genre identity from the one style object', () => {
     const prompt = createUserPrompt('a brief', {
       style: {
-        config: { mood: 'tense', lighting: 'low-key' },
+        config: migrateStyleConfigV1ToV2(NEO_NOIR_V1),
         name: 'Neo-Noir',
+        tags: [],
       },
     });
     expect(prompt).toContain('apply these aesthetics throughout');
-    expect(prompt).toContain('Mood: tense');
-    expect(prompt).toContain('Lighting: low-key');
+    expect(prompt).toContain('Mood: tense and paranoid');
+    expect(prompt).toContain('Lighting: low-key with hard shadows');
+    expect(prompt).toContain('Camera work: slow dolly, dutch angles');
     expect(prompt).toContain('Style: Neo-Noir');
+    // Optional refinements are absent from this config — no dangling labels.
+    expect(prompt).not.toContain('undefined');
+    expect(prompt).not.toContain('Shot selection:');
+    expect(prompt).not.toContain('Energy:');
+  });
+
+  it('renders authored motion refinements when present', () => {
+    const config = migrateStyleConfigV1ToV2(NEO_NOIR_V1);
+    const prompt = createUserPrompt('a brief', {
+      style: {
+        config: {
+          ...config,
+          motion: {
+            ...config.motion,
+            shots: 'wide establishing, then tight inserts',
+            pace: 'measured',
+            energy: 2,
+          },
+        },
+        name: 'Neo-Noir',
+        tags: [],
+      },
+    });
+    expect(prompt).toContain(
+      'Shot selection: wide establishing, then tight inserts'
+    );
+    expect(prompt).toContain('Pace: measured');
+    expect(prompt).toContain('Energy: 2/5');
   });
 });
 
@@ -68,7 +109,7 @@ describe('toEnhanceInputs (UI/API parity, issue #855)', () => {
   it('narrows a style row to the one object the UI and API both send', () => {
     const result = toEnhanceInputs({
       style: {
-        config: { mood: 'tense' },
+        config: NEO_NOIR_V1,
         name: 'Action',
         category: 'film',
         description: 'Kinetic chases',
@@ -76,12 +117,23 @@ describe('toEnhanceInputs (UI/API parity, issue #855)', () => {
       },
     });
     expect(result.style).toEqual({
-      config: { mood: 'tense' },
+      // Stored v1 blobs are up-converted here, so downstream sees one shape.
+      config: migrateStyleConfigV1ToV2(NEO_NOIR_V1),
       name: 'Action',
       category: 'film',
       description: 'Kinetic chases',
       tags: ['action', 'blockbuster'],
     });
+  });
+
+  it('defaults null tags to [] and rejects a corrupt config loudly', () => {
+    const result = toEnhanceInputs({
+      style: { config: migrateStyleConfigV1ToV2(NEO_NOIR_V1), name: 'X' },
+    });
+    expect(result.style?.tags).toEqual([]);
+    expect(() =>
+      toEnhanceInputs({ style: { config: { mood: 'corrupt-fragment' } } })
+    ).toThrow();
   });
 
   it('maps tokened elements to the enhancer shape and drops tokenless ones', () => {

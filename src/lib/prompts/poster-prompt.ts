@@ -9,12 +9,12 @@ const NO_TEXT_SUFFIX =
 
 function formatStyleDetails(styleConfig: StyleConfig): string {
   const details = [
-    styleConfig.artStyle && `Art style: ${styleConfig.artStyle}`,
-    styleConfig.mood && `Mood: ${styleConfig.mood}`,
-    styleConfig.lighting && `Lighting: ${styleConfig.lighting}`,
-  ].filter(Boolean);
+    `Art style: ${styleConfig.look.artStyle}`,
+    `Mood: ${styleConfig.look.mood}`,
+    `Lighting: ${styleConfig.look.lighting}`,
+  ];
 
-  return details.length > 0 ? details.join('. ') + '.' : '';
+  return details.join('. ') + '.';
 }
 
 function clampPrompt(prompt: string): string {

@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { getStyleGradient } from './style-gradient';
+import { getConfigColorPalette } from '@/lib/style/style-config';
 
 const StyleTileBackground: React.FC<{ style: Style }> = ({ style }) => {
   const [imgError, setImgError] = useState(false);
@@ -21,7 +22,7 @@ const StyleTileBackground: React.FC<{ style: Style }> = ({ style }) => {
     <div
       className="h-full w-full"
       style={{
-        background: getStyleGradient(style.config.colorPalette),
+        background: getStyleGradient(getConfigColorPalette(style.config)),
       }}
     />
   );

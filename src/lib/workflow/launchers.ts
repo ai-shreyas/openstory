@@ -49,7 +49,8 @@ import {
 import { generateId } from '@/lib/db/id';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import type { ScopedDb } from '@/lib/db/scoped';
-import { StyleConfigSchema, type Sequence } from '@/lib/db/schema';
+import { type Sequence } from '@/lib/db/schema';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { resolveRunState } from '@/lib/workflow/reconcile';
@@ -175,7 +176,7 @@ async function resolveStoryboardPayload(
     title: sequence.title,
     script: sequence.script,
     aspectRatio: sequence.aspectRatio,
-    styleConfig: StyleConfigSchema.parse(style.config),
+    styleConfig: parseStyleConfig(style.config),
     analysisModelId:
       getAnalysisModelById(sequence.analysisModel)?.id ??
       DEFAULT_ANALYSIS_MODEL,

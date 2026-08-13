@@ -1,3 +1,7 @@
+import {
+  migrateStyleConfigV1ToV2,
+  type StyleConfigV1,
+} from '@/lib/style/style-config';
 import { styleSlug } from '@/lib/style/style-slug';
 import { getPublicAssetsDomain } from '@/lib/storage/public-assets';
 import type { Style } from '@/types/database';
@@ -23,8 +27,11 @@ type StyleTemplateEntry = Omit<
   | 'recommendedVideoModel'
   | 'defaultAspectRatio'
   | 'useCases'
-> &
-  Partial<
+  | 'config'
+> & {
+  /** Authored flat (v1); the DEFAULT_SYSTEM_STYLES mapper converts to v2. */
+  config: StyleConfigV1;
+} & Partial<
     Pick<
       Style,
       | 'recommendedImageModel'
@@ -2831,10 +2838,15 @@ export const DEFAULT_STYLE_TEMPLATES: StyleTemplateEntry[] = [
   },
 ];
 
-// System styles without teamId - teamId will be added during seeding
+// System styles without teamId - teamId will be added during seeding.
+// Templates are still authored in the flat v1 config shape (one file, one
+// authoring convention); the seed converts through the same validated
+// `migrateStyleConfigV1ToV2` the runtime and backfill use, so seeded rows are
+// always v2. A test in style-config.test.ts runs every template through it.
 export const DEFAULT_SYSTEM_STYLES: Omit<Style, 'id' | 'teamId'>[] =
   DEFAULT_STYLE_TEMPLATES.map((style) => ({
     ...style,
+    config: migrateStyleConfigV1ToV2(style.config),
     createdAt: new Date(),
     updatedAt: new Date(),
     createdBy: 'system',

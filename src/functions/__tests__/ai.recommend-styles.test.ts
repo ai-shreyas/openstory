@@ -60,7 +60,9 @@ describe('buildStyleCatalog', () => {
     expect(catalog).toContain('[2] Gamma —');
   });
 
-  it('omits empty palette/refs and a null description without dangling separators', () => {
+  it('omits empty refs and a null description without dangling separators', () => {
+    // An empty colorPalette is unrepresentable in a valid config (min 1), so
+    // only refs and description have an empty case to pin.
     const styles = [
       makeStyle({
         id: 'a',
@@ -70,7 +72,7 @@ describe('buildStyleCatalog', () => {
           mood: 'tense',
           artStyle: 'noir',
           lighting: 'hard',
-          colorPalette: [],
+          colorPalette: ['#111'],
           cameraWork: 'static',
           referenceFilms: [],
           colorGrading: 'desaturated',
@@ -82,7 +84,6 @@ describe('buildStyleCatalog', () => {
 
     expect(catalog).toContain('[0] Alpha — mood: tense');
     expect(catalog).toContain('popularity: 0');
-    expect(catalog).not.toContain('palette:');
     expect(catalog).not.toContain('refs:');
     // No dangling " · " from the dropped description/array fields.
     expect(catalog).not.toContain('—  ·');

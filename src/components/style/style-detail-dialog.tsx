@@ -20,6 +20,10 @@ import {
   styleCategoryLabel,
   stylePreviewImageUrls,
 } from '@/lib/style/style-assets';
+import {
+  getConfigColorPalette,
+  getConfigDisplayFields,
+} from '@/lib/style/style-config';
 import { styleSlug } from '@/lib/style/style-slug';
 import type { Style } from '@/types/database';
 import { Link } from '@tanstack/react-router';
@@ -165,15 +169,18 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
   const bespokePoster = bespokeUrl ? videoPosterUrl(bespokeUrl) : undefined;
   const slug = styleSlug(style.name);
   const stills = stylePreviewImageUrls(style);
-  const { config } = style;
+  // Total accessors: a malformed legacy row renders as empty fields, not a
+  // ZodError blanking the dialog.
+  const display = getConfigDisplayFields(style.config);
+  const palette = getConfigColorPalette(style.config);
   const tags = style.tags ?? [];
 
   const configRows: Array<{ label: string; value: string }> = [
-    { label: 'Mood', value: config.mood },
-    { label: 'Art style', value: config.artStyle },
-    { label: 'Lighting', value: config.lighting },
-    { label: 'Camera', value: config.cameraWork },
-    { label: 'Color grading', value: config.colorGrading },
+    { label: 'Mood', value: display.mood ?? '' },
+    { label: 'Art style', value: display.artStyle ?? '' },
+    { label: 'Lighting', value: display.lighting ?? '' },
+    { label: 'Camera', value: display.camera ?? '' },
+    { label: 'Color grading', value: display.colorGrading ?? '' },
   ].filter((row) => row.value.trim());
 
   return (
@@ -211,7 +218,7 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
           ) : (
             <div
               className="aspect-video w-full overflow-hidden rounded-lg border"
-              style={{ background: getStyleGradient(config.colorPalette) }}
+              style={{ background: getStyleGradient(palette) }}
             />
           )}
           {bespokeSrc && (
@@ -239,13 +246,13 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
 
         {/* Visual config */}
         <div className="flex flex-col gap-4">
-          {config.colorPalette.length > 0 && (
+          {palette.length > 0 && (
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Palette
               </span>
               <div className="flex flex-wrap gap-1.5">
-                {config.colorPalette.map((color) => (
+                {palette.map((color) => (
                   <span
                     key={color}
                     className="h-6 w-6 rounded-full border"
@@ -263,7 +270,7 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
             ))}
           </dl>
 
-          {config.referenceFilms.length > 0 && (
+          {display.references.length > 0 && (
             <>
               <Separator />
               <div className="flex flex-col gap-1.5">
@@ -271,7 +278,7 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
                   Reference films
                 </span>
                 <div className="flex flex-wrap gap-1.5">
-                  {config.referenceFilms.map((film) => (
+                  {display.references.map((film) => (
                     <Badge key={film} variant="outline">
                       {film}
                     </Badge>

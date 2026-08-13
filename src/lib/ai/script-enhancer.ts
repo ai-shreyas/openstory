@@ -91,18 +91,27 @@ Target video duration: ${formatDuration(durationSeconds)} (about ${sceneRange} s
   }
 
   if (style?.config) {
-    const s = style.config;
+    // Config is a whole parsed StyleConfig (never partial): the required core
+    // is emitted unconditionally, only the optional refinements are guarded.
+    const { look, motion, references, summary, tone } = style.config;
     const lines = ['Style context (apply these aesthetics throughout):'];
-    if (s.mood) lines.push(`- Mood: ${s.mood}`);
-    if (s.artStyle) lines.push(`- Art style: ${s.artStyle}`);
-    if (s.lighting) lines.push(`- Lighting: ${s.lighting}`);
-    if (s.colorPalette?.length)
-      lines.push(`- Color palette: ${s.colorPalette.join(', ')}`);
-    if (s.cameraWork) lines.push(`- Camera work: ${s.cameraWork}`);
-    if (s.referenceFilms?.length)
-      lines.push(`- Reference films: ${s.referenceFilms.join(', ')}`);
-    if (s.colorGrading) lines.push(`- Color grading: ${s.colorGrading}`);
-    if (lines.length > 1) parts.push(`\n${lines.join('\n')}`);
+    if (summary) lines.push(`- Essence: ${summary}`);
+    if (tone) lines.push(`- Tone: ${tone}`);
+    lines.push(`- Mood: ${look.mood}`);
+    lines.push(`- Art style: ${look.artStyle}`);
+    if (look.medium) lines.push(`- Medium: ${look.medium}`);
+    lines.push(`- Lighting: ${look.lighting}`);
+    lines.push(`- Color palette: ${look.colorPalette.join(', ')}`);
+    lines.push(`- Color grading: ${look.colorGrading}`);
+    if (look.texture) lines.push(`- Texture: ${look.texture}`);
+    if (look.composition) lines.push(`- Composition: ${look.composition}`);
+    lines.push(`- Camera work: ${motion.camera}`);
+    if (motion.shots) lines.push(`- Shot selection: ${motion.shots}`);
+    if (motion.pace) lines.push(`- Pace: ${motion.pace}`);
+    if (motion.energy !== undefined) lines.push(`- Energy: ${motion.energy}/5`);
+    if (references.length)
+      lines.push(`- Reference works: ${references.join(', ')}`);
+    parts.push(`\n${lines.join('\n')}`);
   }
 
   if (options?.aspectRatio) {

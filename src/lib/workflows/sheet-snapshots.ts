@@ -22,6 +22,7 @@ import {
   type LocationBibleHashFields,
 } from '@/lib/ai/input-hash';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/models';
+import { styleConfigHashBody } from '@/lib/style/style-config';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type {
   CharacterMinimal,
@@ -104,15 +105,11 @@ export async function computeStyleConfigHash(
   styleConfig: StyleConfig | null | undefined
 ): Promise<string> {
   if (!styleConfig) return 'no-style';
+  // styleConfigHashBody keeps the legacy flat key names, so hashes stored
+  // before the v2 reshape stay valid — see its doc comment.
   return sha256Hex({
     artifact: 'style-config',
-    mood: styleConfig.mood,
-    artStyle: styleConfig.artStyle,
-    lighting: styleConfig.lighting,
-    colorPalette: styleConfig.colorPalette,
-    cameraWork: styleConfig.cameraWork,
-    referenceFilms: styleConfig.referenceFilms,
-    colorGrading: styleConfig.colorGrading,
+    ...styleConfigHashBody(styleConfig),
   });
 }
 

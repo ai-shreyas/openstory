@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
 import type { StyleConfig } from '@/lib/db/schema/libraries';
 import { deriveMotionPrompt, deriveShots } from './shot-list.derive';
 import type { SceneWithShots } from './shot-list.schema';
 
-const styleConfig: StyleConfig = {
+const styleConfig: StyleConfig = migrateStyleConfigV1ToV2({
   mood: 'tense',
   artStyle: 'neo-noir cinematic',
   lighting: 'low key',
@@ -11,7 +12,7 @@ const styleConfig: StyleConfig = {
   cameraWork: 'handheld',
   referenceFilms: ['Blade Runner'],
   colorGrading: 'teal and orange',
-};
+});
 
 function makeScene(overrides: Partial<SceneWithShots> = {}): SceneWithShots {
   return {
