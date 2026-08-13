@@ -92,8 +92,8 @@ export function AuthGateProvider({ children }: { children: ReactNode }) {
   const { data: user, error: sessionError } = useUser();
   // A failed session lookup must NOT be conflated with "anonymous" — rethrow
   // to the route errorComponent instead of silently popping the login dialog
-  // at a signed-in user whose session refetch blipped (see getSessionFn,
-  // which throws on lookup failure for exactly this reason).
+  // at a signed-in user whose session refetch blipped (`getSessionFn`
+  // throws on lookup failure for exactly this reason).
   if (sessionError) {
     throw new Error(`Failed to fetch session: ${sessionError.message}`, {
       cause: sessionError,

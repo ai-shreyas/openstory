@@ -4,7 +4,7 @@ import {
 } from '@/functions/ai';
 import { getPublicStylesFn, getStyleFn, getStylesFn } from '@/functions/styles';
 import { usePublicOrTeamQuery } from '@/hooks/use-public-or-team-query';
-import { useSession } from '@/lib/auth/client';
+import { useAuthSession } from '@/lib/auth/session-query';
 import { simpleHash } from '@/lib/utils/hash';
 import type { Style } from '@/types/database';
 import { useQuery } from '@tanstack/react-query';
@@ -68,7 +68,7 @@ export function useRecommendedStyles(
   script: string | null | undefined,
   options?: { enabled?: boolean; limit?: number }
 ) {
-  const { data: session, isPending } = useSession();
+  const { data: session } = useAuthSession();
   const isAuthenticated = !!session;
 
   const trimmed = (script ?? '').trim();
@@ -82,7 +82,6 @@ export function useRecommendedStyles(
     enabled:
       (options?.enabled ?? true) &&
       isAuthenticated &&
-      !isPending &&
       trimmed.length >= MIN_RECOMMEND_SCRIPT_LENGTH,
     staleTime: Infinity,
   });
