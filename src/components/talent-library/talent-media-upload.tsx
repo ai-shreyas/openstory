@@ -23,6 +23,11 @@ type TalentMediaUploadProps = {
   onUploadedUrlsChange?: (urls: string[]) => void;
   /** If provided, uploads directly to this talent instead of temp storage */
   talentId?: string;
+  /** Required by finalize when uploading onto an existing talent. */
+  portraitAttestation?: {
+    statementVersion: string;
+    authorizationBasis: string;
+  };
   /** Called when all uploads complete (for talentId mode) */
   onComplete?: () => void;
   disabled?: boolean;
@@ -33,6 +38,7 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
   onFilesChange,
   onUploadedUrlsChange,
   talentId,
+  portraitAttestation,
   onComplete,
   disabled = false,
 }) => {
@@ -89,6 +95,7 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
               file,
               type,
               onProgress: (percent) => onProgress(file, percent),
+              portraitAttestation,
             });
           } else {
             const result = await uploadTempMedia.mutateAsync({
@@ -117,7 +124,14 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
         onComplete?.();
       }
     },
-    [requireAuth, talentId, uploadTempMedia, uploadTalentMedia, onComplete]
+    [
+      requireAuth,
+      talentId,
+      portraitAttestation,
+      uploadTempMedia,
+      uploadTalentMedia,
+      onComplete,
+    ]
   );
 
   return (

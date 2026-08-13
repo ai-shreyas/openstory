@@ -157,6 +157,7 @@ export async function runOneShotCreate(
                 STORAGE_BUCKETS.TALENT,
                 ctx.teamId
               ),
+              portraitAttestation: item.portraitAttestation,
             },
             ctx
           ),

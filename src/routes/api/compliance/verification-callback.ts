@@ -103,6 +103,7 @@ export const Route = createFileRoute('/api/compliance/verification-callback')({
             subjectNameSha256,
             subjectCountry: result.subjectCountry ?? null,
             rejectionReason: result.rejectionReason ?? null,
+            providerRef: result.providerRef ?? null,
           });
 
           // No name, no document data, no raw body — only the outcome.

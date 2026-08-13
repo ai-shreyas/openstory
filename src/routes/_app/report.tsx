@@ -1,9 +1,10 @@
 /**
  * Public content report / takedown channel (#1180).
  *
- * Reachable without an account, and linked from the footer alongside Terms and
- * Privacy. The person whose likeness was misused does not have a login here, so
- * a report form behind auth would be a report form nobody who needs it can use.
+ * Reachable without an account. Linked from Terms, the sign-in legal line,
+ * and the sitemap. The person whose likeness was misused does not have a
+ * login here, so a report form behind auth would be a report form nobody
+ * who needs it can use.
  */
 
 import { Button } from '@/components/ui/button';

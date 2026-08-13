@@ -200,20 +200,28 @@ export function parseProviderCallback(body: unknown): ProviderCallbackResult {
     throw new ValidationError('Verification callback is missing its status');
   }
 
-  // Allowlist the passing values rather than treating "not failed" as passed:
-  // an unrecognized status must never resolve to `verified`.
-  const verified = [
+  const PASSED = new Set([
     'success',
     'succeeded',
     'passed',
     'verified',
     'true',
-  ].includes(status);
+  ]);
+  const FAILED = new Set(['failed', 'rejected', 'declined', 'error', 'false']);
+
+  if (!PASSED.has(status) && !FAILED.has(status)) {
+    // In-flight or unknown values must not decide the row — a `processing`
+    // callback treated as rejected would fail a real person permanently.
+    throw new ValidationError(`Unrecognized verification status: ${status}`);
+  }
+
+  const verified = PASSED.has(status);
 
   return {
     verificationId,
     verified,
-    providerRef: str('verification_id', 'request_id', 'task_id'),
+    // Do not reuse `verification_id` here: that alias is our row id above.
+    providerRef: str('request_id', 'task_id', 'provider_ref'),
     subjectName: str('name', 'real_name', 'subject_name'),
     subjectCountry: str('country', 'country_code'),
     rejectionReason: verified

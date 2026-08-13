@@ -14,6 +14,7 @@ const SITEMAP_PAGES = [
   '/docs/faq',
   '/terms',
   '/privacy',
+  '/report',
 ] as const;
 
 function buildSitemap(): string {

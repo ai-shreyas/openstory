@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getVerificationPolicy,
   requiresVerifiedIdentity,
   resolveVerificationState,
   type VerificationRow,
@@ -13,7 +14,11 @@ import {
   statementFor,
   statementHash,
 } from './attestations';
-import { formatTraceId, parseTraceId } from './provenance';
+import {
+  formatReportReference,
+  formatTraceId,
+  parseTraceId,
+} from './provenance';
 
 const NOW = new Date('2026-08-12T12:00:00Z');
 const DAY = 24 * 60 * 60 * 1000;
@@ -283,5 +288,17 @@ describe('trace ids', () => {
     expect(parseTraceId('')).toBeNull();
     // ULID's alphabet excludes I, L, O, and U to avoid transcription errors.
     expect(parseTraceId('01JAVQZ8XK9YB2H3M4N5P6Q7RI')).toBeNull();
+  });
+
+  it('does not parse a report reference as a provenance id', () => {
+    expect(parseTraceId(formatReportReference(ulid))).toBeNull();
+  });
+});
+
+describe('getVerificationPolicy', () => {
+  it('defaults to portrait_and_restricted when unset or unrecognized', () => {
+    // Vitest does not load wrangler [env.test] vars. An unrecognized value
+    // must fail closed to the default, never to `disabled`.
+    expect(getVerificationPolicy()).toBe('portrait_and_restricted');
   });
 });

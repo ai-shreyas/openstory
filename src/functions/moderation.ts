@@ -32,7 +32,7 @@ const logger = getLogger(['openstory', 'compliance', 'moderation']);
 
 export const listContentReportsFn = createServerFn({ method: 'GET' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         statuses: z.array(z.enum(CONTENT_REPORT_STATUSES)).optional(),
@@ -50,7 +50,7 @@ export const listContentReportsFn = createServerFn({ method: 'GET' })
 
 export const resolveContentReportFn = createServerFn({ method: 'POST' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         reportId: ulidSchema,
@@ -77,7 +77,7 @@ export const resolveContentReportFn = createServerFn({ method: 'POST' })
 /** Attach the resolved owner of the reported content to the report. */
 export const attributeContentReportFn = createServerFn({ method: 'POST' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         reportId: ulidSchema,
@@ -109,7 +109,7 @@ export const attributeContentReportFn = createServerFn({ method: 'POST' })
  */
 export const traceContentFn = createServerFn({ method: 'GET' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         /** Trace id (`OS-…`), R2 key, asset URL, content hash, or request id. */
@@ -181,7 +181,7 @@ function extractStorageKey(input: string): string | null {
 /** Everything an account generated — evidence for an enforcement decision. */
 export const listTeamProvenanceFn = createServerFn({ method: 'GET' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         teamId: ulidSchema,
@@ -207,7 +207,7 @@ export const listTeamProvenanceFn = createServerFn({ method: 'GET' })
 
 export const applyEnforcementFn = createServerFn({ method: 'POST' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         subjectUserId: z.string().max(200).optional(),
@@ -261,7 +261,7 @@ export const applyEnforcementFn = createServerFn({ method: 'POST' })
 
 export const revokeEnforcementFn = createServerFn({ method: 'POST' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         enforcementId: ulidSchema,
@@ -284,7 +284,7 @@ export const revokeEnforcementFn = createServerFn({ method: 'POST' })
 
 export const listEnforcementFn = createServerFn({ method: 'GET' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         subjectUserId: z.string().max(200).optional(),
@@ -321,7 +321,7 @@ export const listPendingVerificationsFn = createServerFn({ method: 'GET' })
  */
 export const decideVerificationFn = createServerFn({ method: 'POST' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         verificationId: ulidSchema,
@@ -387,7 +387,7 @@ export const decideVerificationFn = createServerFn({ method: 'POST' })
 
 export const revokeVerificationFn = createServerFn({ method: 'POST' })
   .middleware([systemAdminMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         verificationId: ulidSchema,

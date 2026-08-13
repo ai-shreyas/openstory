@@ -6,11 +6,10 @@
  * holds the pure parts — trace-id formatting and building the row payload — so
  * the workflow call sites stay one line and the DB layer stays dumb.
  *
- * Recording is **best-effort by design**. The write happens after a generation
- * the user has already been charged for; failing their video because an audit
- * insert hit a constraint would be the wrong trade. `recordProvenanceSafely`
- * therefore logs and swallows, and gaps are visible: every asset table keeps
- * its own ids, so a sweep can reconcile what provenance missed.
+ * Recording runs inside a workflow `step.do`. A throw lets Cloudflare retry a
+ * transient D1 blip; after retries are exhausted the run fails rather than
+ * leaving a silent hole in the audit trail. Callers must not swallow that
+ * throw inside the step.
  */
 
 import { sha256Hex } from '@/lib/compliance/hash';
@@ -30,10 +29,16 @@ const logger = getLogger(['openstory', 'compliance', 'provenance']);
  * indistinguishable from every other id and comes back to us unusable.
  */
 const TRACE_PREFIX = 'OS';
+const REPORT_PREFIX = 'OR';
 
 /** Public trace id for a provenance row, e.g. `OS-01JAV…`. */
 export function formatTraceId(provenanceId: string): string {
   return `${TRACE_PREFIX}-${provenanceId}`;
+}
+
+/** Public reference for a content report, e.g. `OR-01JAV…`. */
+export function formatReportReference(reportId: string): string {
+  return `${REPORT_PREFIX}-${reportId}`;
 }
 
 /**
@@ -131,34 +136,30 @@ export type ProvenanceRecorder = {
 };
 
 /**
- * Record provenance without ever failing the caller.
+ * Record provenance, throwing on insert failure so the surrounding
+ * `step.do` retries.
  *
- * Returns the trace id on success and null on failure, so a call site that
- * wants to surface the id can, and the many that don't can ignore it. A failure
- * logs at `error` with the asset's identity: that log line is the difference
- * between a silent hole in the audit trail and a known one.
+ * Returns the public trace id. An empty `.returning()` is treated as failure
+ * and logged before the throw — that is the difference between a silent hole
+ * and a known, retryable one.
  */
-export async function recordProvenanceSafely(
+export async function recordProvenance(
   recorder: ProvenanceRecorder,
   facts: ProvenanceFacts
-): Promise<string | null> {
-  try {
-    const row = await buildProvenanceRow(facts);
-    const inserted = await recorder.record(row);
-    // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- insert may return nothing at runtime
-    if (!inserted?.id) return null;
-    return formatTraceId(inserted.id);
-  } catch (error) {
-    logger.error(
-      'provenance record failed for {assetKind} {assetId} — audit gap',
-      {
-        assetKind: facts.assetKind,
-        assetId: facts.assetId,
-        teamId: facts.teamId,
-        model: facts.model,
-        err: error,
-      }
+): Promise<string> {
+  const row = await buildProvenanceRow(facts);
+  const inserted = await recorder.record(row);
+  // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- insert may return nothing at runtime
+  if (!inserted?.id) {
+    logger.error('provenance insert returned no id for {assetKind} {assetId}', {
+      assetKind: facts.assetKind,
+      assetId: facts.assetId,
+      teamId: facts.teamId,
+      model: facts.model,
+    });
+    throw new Error(
+      `provenance insert returned no id for ${facts.assetKind} ${facts.assetId}`
     );
-    return null;
   }
+  return formatTraceId(inserted.id);
 }

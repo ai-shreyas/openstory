@@ -22,7 +22,7 @@ import {
   STORAGE_BUCKETS,
   toShareableUrl,
 } from '@/lib/storage/buckets';
-import { recordProvenanceSafely } from '@/lib/compliance/provenance';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import type {
   CloudflareEnv,
@@ -185,7 +185,7 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
     // "model" say exactly that: this file was stitched from assets that have
     // provenance rows of their own, which the sequenceId links to.
     await step.do('record-provenance', async () => {
-      await recordProvenanceSafely(scopedDb.provenance, {
+      await recordProvenance(scopedDb.provenance, {
         teamId: event.payload.teamId,
         userId: event.payload.userId,
         assetKind: 'sequence_export',

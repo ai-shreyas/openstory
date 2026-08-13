@@ -132,9 +132,13 @@ falls back to an unsalted digest.
    `account_terminated`, recorded in `enforcement_actions` with actor, reason,
    optional expiry, and revocation.
 5. **Enforce** — the gate in `triggerWorkflow` blocks restricted accounts from
-   starting durable work. Every generation funnels through it.
-6. **Notify and appeal** — the restriction notice tells the user what happened
-   and links to the appeal route; a successful appeal revokes without erasing.
+   starting durable work and, under `all_generation`, requires a verified
+   identity. Portrait uploads and talent media attaches are gated on the
+   server (`requireLikenessAttachment`), not only in the dialog.
+6. **Notify and appeal** — `ComplianceRestrictionBanner` shows the restriction
+   notice and links to `/report`. If `ABUSE_REPORT_NOTIFY_EMAIL` is set, intake
+   emails the operator (and fails the request if the send fails). A successful
+   appeal revokes without erasing.
 
 ---
 
@@ -150,7 +154,7 @@ documented in `.env.example`.
 | `IDENTITY_HASH_SALT`             | Enables duplicate-identity detection. Unset ⇒ off.                         |
 | `BYTEPLUS_RPV_BASE_URL`          | Hosted verification flow base URL                                          |
 | `BYTEPLUS_RPV_CALLBACK_SECRET`   | Shared secret for the callback; without it the callback route fails closed |
-| `ABUSE_REPORT_NOTIFY_EMAIL`      | Where report notifications go. Unset ⇒ queue-only.                         |
+| `ABUSE_REPORT_NOTIFY_EMAIL`      | Where report notifications go. Unset ⇒ queue-only. Set ⇒ send on intake.   |
 
 ---
 

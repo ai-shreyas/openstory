@@ -79,7 +79,8 @@ many, the workflow run id, and the timestamp.**
 
 Provenance recording is instrumented at these points today:
 
-- still images (`frame_variant`) — image workflow, including preview-mode runs
+- still images (`frame_variant`) — image workflow, persisted stills only
+  (`skipStorage` previews are not recorded; there is no R2 object)
 - video clips (`video_variant`) — motion workflow, and therefore motion batches
 - direct model access (`generated_asset`) — one row per output file
 - sequence exports (`sequence_export`) — the stitched MP4 that gets shared
@@ -91,10 +92,9 @@ the follow-up; until then, trace them through the sequence graph directly
 team/user attribution. **Assets generated before this shipped have no provenance
 row at all** and must be traced the same way.
 
-Provenance writes are best-effort by design — an audit insert must never fail a
-generation the user already paid for. A failure logs at `error` with the asset's
-identity, so a gap is known rather than silent. Search logs for
-`provenance record failed` to find them.
+Provenance writes run in their own workflow step and retry on transient D1
+failure. A failed insert after retries fails the run rather than leaving a
+silent gap. Search logs for `provenance insert returned no id` to find them.
 
 ---
 

@@ -72,10 +72,11 @@ export type ProvenanceAssetKind = (typeof PROVENANCE_ASSET_KINDS)[number];
  * sequence or user identifiers.
  *
  * Written from generation workflows via `WorkflowScopedDb.provenance.record()`.
- * Best-effort at the call site: a provenance write must never fail a
- * generation the user already paid for, so the helper logs and swallows. The
- * hourly reconcile sweep backfills gaps from `generated_assets` /
- * `video_variants`, and `recordProvenanceGap` reports them.
+ * The write lives in its own `step.do` so a transient D1 failure retries; a
+ * failed insert after retries fails the run rather than leaving a silent gap.
+ * `contentSha256` is not populated yet — look up by `storageKey` or
+ * `providerRequestId`. Gaps surface as `provenance insert returned no id`
+ * error logs.
  */
 export const contentProvenance = snakeCase.table(
   'content_provenance',
@@ -595,8 +596,9 @@ export const enforcementActions = snakeCase.table(
     }),
 
     /**
-     * Admin who applied it. Nullable for automated actions (the CSAM
-     * auto-takedown path), which record `appliedBySystem` instead.
+     * Admin who applied it. Nullable for reserved automated actions,
+     * which would record `appliedBySystem` instead. Nothing sets that
+     * column yet — CSAM only forces intake priority to 0.
      */
     actorUserId: text().references(() => user.id, { onDelete: 'restrict' }),
     appliedBySystem: text({ length: 100 }),

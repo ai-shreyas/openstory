@@ -210,12 +210,15 @@ function TermsPage() {
           <a href={`mailto:${CONTACT_EMAIL}`} className="underline">
             {CONTACT_EMAIL}
           </a>
-          . We record the account, model, and prompt behind every asset the
-          Service generates, so that reported content can be traced to its
-          origin. Reports of child sexual abuse material and of non-consensual
-          use of a person&rsquo;s likeness are treated as urgent. Where a report
-          is substantiated we remove the content and apply restrictions to the
-          responsible account, up to and including closure.
+          . For instrumented generations we record the account, the model, and a
+          hash of the prompt (not the prompt text) so reported content can be
+          traced to its origin. Coverage is partial: stills, motion clips,
+          direct model-access assets, and sequence exports are recorded; sheets,
+          music, shot variants, and upscales are not yet. Reports of child
+          sexual abuse material and of non-consensual use of a person&rsquo;s
+          likeness are treated as urgent. Where a report is substantiated we
+          remove the content and apply restrictions to the responsible account,
+          up to and including closure.
         </p>
       </section>
 

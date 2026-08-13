@@ -107,7 +107,7 @@ const IdentityVerificationContent: React.FC = () => {
           description:
             result.next.kind === 'verified'
               ? undefined
-              : 'We’ll email you when the review completes.',
+              : 'Check back here — an admin will review the request.',
         }
       );
     },

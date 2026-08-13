@@ -34,7 +34,7 @@ import {
   type ImageGenerationParams,
 } from '@/lib/image/image-generation';
 import { uploadImageToStorage } from '@/lib/image/image-storage';
-import { recordProvenanceSafely } from '@/lib/compliance/provenance';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { simpleHash } from '@/lib/utils/hash';
@@ -522,10 +522,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
       // Provenance (#1180) — recorded before the cancel check on purpose: a
       // cancelled render still uploaded bytes to R2, so the object exists and
       // has to be traceable like any other. Its own step so a retry of the
-      // persist logic can't double-insert, and best-effort inside, so an audit
-      // write never fails a generation the user already paid for.
+      // persist logic can't double-insert. Throws so a transient D1 failure
+      // retries instead of leaving a silent audit gap.
       await step.do('record-provenance', async () => {
-        await recordProvenanceSafely(scopedDb.provenance, {
+        await recordProvenance(scopedDb.provenance, {
           teamId,
           userId: input.userId,
           assetKind: 'frame_variant',

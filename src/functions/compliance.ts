@@ -40,8 +40,9 @@ function requestContext(): {
 
 /**
  * The account's compliance standing: any restriction, and verification status.
- * Read by the account banner and the verification settings panel, and computed
- * by the same code the generation gate uses so the two cannot disagree.
+ * Read by `ComplianceRestrictionBanner` and the verification settings panel,
+ * and computed by the same code the generation gate uses so the two cannot
+ * disagree.
  */
 export const getComplianceStatusFn = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
@@ -74,12 +75,18 @@ export const startIdentityVerificationFn = createServerFn({ method: 'POST' })
       // Re-entering the flow is normal (the user closed the tab, the redirect
       // failed). Reuse the open attempt rather than stacking pending rows, so
       // the reviewer queue shows one item per person.
+      const next = adapter.start({
+        verificationId: alreadyPending.id,
+        appUrl: getServerAppUrl(getRequest()),
+      });
+      if (next.kind === 'verified') {
+        await context.scopedDb.compliance.verifications.markVerifiedIfPending(
+          alreadyPending.id
+        );
+      }
       return {
         verificationId: alreadyPending.id,
-        next: adapter.start({
-          verificationId: alreadyPending.id,
-          appUrl: getServerAppUrl(getRequest()),
-        }),
+        next,
         manualDecision: adapter.manualDecision,
       };
     }
@@ -92,12 +99,19 @@ export const startIdentityVerificationFn = createServerFn({ method: 'POST' })
       userAgent,
     });
 
+    const next = adapter.start({
+      verificationId: row.id,
+      appUrl: getServerAppUrl(getRequest()),
+    });
+    if (next.kind === 'verified') {
+      await context.scopedDb.compliance.verifications.markVerifiedIfPending(
+        row.id
+      );
+    }
+
     return {
       verificationId: row.id,
-      next: adapter.start({
-        verificationId: row.id,
-        appUrl: getServerAppUrl(getRequest()),
-      }),
+      next,
       manualDecision: adapter.manualDecision,
     };
   });
@@ -133,7 +147,7 @@ export const listMyVerificationsFn = createServerFn({ method: 'GET' })
  */
 export const recordUploadAttestationFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         subjectType: z.enum(ATTESTATION_SUBJECT_TYPES),

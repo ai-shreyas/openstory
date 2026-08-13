@@ -10,17 +10,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { useCreateTalent } from '@/hooks/use-talent';
-import { recordUploadAttestationFn } from '@/functions/compliance';
 import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
 import type { Talent } from '@/lib/db/schema';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
+import { PortraitAttestationFields } from './portrait-attestation-fields';
 import { TalentMediaUpload } from './talent-media-upload';
 
 type AddTalentDialogProps = {
@@ -99,29 +98,15 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
         description: description.trim() || undefined,
         isHuman: depictsRealPerson,
         referenceImageUrls: uploadedUrls,
+        portraitAttestation: depictsRealPerson
+          ? {
+              statementVersion: PORTRAIT_RIGHTS_V1.version,
+              authorizationBasis: authorizationBasis.trim(),
+            }
+          : undefined,
       },
       {
         onSuccess: (talent) => {
-          if (depictsRealPerson) {
-            // Recorded after creation because the attestation is keyed to the
-            // talent's id. Failure is surfaced but does not roll back the
-            // talent: the upload already happened, and losing the record of
-            // what the user declared is worse than having it arrive late — the
-            // toast tells them to retry so the gap is not silent.
-            void recordUploadAttestationFn({
-              data: {
-                subjectType: 'talent',
-                subjectId: talent.id,
-                statementVersion: PORTRAIT_RIGHTS_V1.version,
-                depictsRealPerson: true,
-                authorizationBasis: authorizationBasis.trim(),
-              },
-            }).catch(() => {
-              toast.error(
-                'Talent saved, but the rights confirmation was not recorded. Please re-save it.'
-              );
-            });
-          }
           onCreated?.(talent);
           closeAndReset();
         },
@@ -204,44 +189,12 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
             </div>
 
             {uploadedUrls.length > 0 ? (
-              <div className="flex flex-col gap-3 rounded-lg border border-destructive/40 p-4">
-                <div className="flex items-start gap-3">
-                  <Checkbox
-                    id="portrait-attestation"
-                    checked={attested}
-                    onCheckedChange={(checked) => setAttested(checked === true)}
-                    aria-describedby="portrait-attestation-text"
-                  />
-                  <div className="flex flex-col gap-2">
-                    <Label
-                      htmlFor="portrait-attestation"
-                      className="leading-snug"
-                    >
-                      {PORTRAIT_RIGHTS_V1.label}
-                    </Label>
-                    <p
-                      id="portrait-attestation-text"
-                      className="text-xs leading-relaxed text-muted-foreground"
-                    >
-                      {PORTRAIT_RIGHTS_V1.text}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="authorization-basis">
-                    Basis for authorization
-                  </Label>
-                  <Input
-                    id="authorization-basis"
-                    value={authorizationBasis}
-                    onChange={(event) =>
-                      setAuthorizationBasis(event.target.value)
-                    }
-                    placeholder="e.g. signed release on file, this is me, contract #123"
-                    autoComplete="off"
-                  />
-                </div>
-              </div>
+              <PortraitAttestationFields
+                attested={attested}
+                onAttestedChange={setAttested}
+                authorizationBasis={authorizationBasis}
+                onAuthorizationBasisChange={setAuthorizationBasis}
+              />
             ) : null}
           </div>
 

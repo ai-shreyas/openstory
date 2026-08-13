@@ -24,9 +24,14 @@ import {
   CONTENT_REPORT_REASONS,
   CONTENT_REPORT_TARGET_TYPES,
 } from '@/lib/db/schema/compliance';
-import { formatTraceId, parseTraceId } from '@/lib/compliance/provenance';
+import { complianceEnv } from '@/lib/compliance/config';
+import {
+  formatReportReference,
+  parseTraceId,
+} from '@/lib/compliance/provenance';
 import { submitPublicContentReport } from '@/lib/db/scoped';
 import { getLogger } from '@/lib/observability/logger';
+import { sendAbuseReportNotifyEmail } from '@/lib/services/email-service';
 import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { zodValidator } from '@tanstack/zod-adapter';
@@ -35,7 +40,7 @@ import { z } from 'zod';
 const logger = getLogger(['openstory', 'compliance', 'reports']);
 
 export const submitContentReportFn = createServerFn({ method: 'POST' })
-  .inputValidator(
+  .validator(
     zodValidator(
       z.object({
         targetType: z.enum(CONTENT_REPORT_TARGET_TYPES),
@@ -80,8 +85,27 @@ export const submitContentReportFn = createServerFn({ method: 'POST' })
       hasTrace: Boolean(traceId),
     });
 
+    const reference = formatReportReference(report.id);
+
+    const notifyTo = complianceEnv('ABUSE_REPORT_NOTIFY_EMAIL');
+    if (notifyTo) {
+      const sent = await sendAbuseReportNotifyEmail({
+        to: notifyTo,
+        reference,
+        reason: report.reason,
+        targetType: data.targetType,
+        hasTrace: Boolean(traceId),
+      });
+      if (!sent.success) {
+        throw new Error(
+          `Report ${reference} was filed but the operator notification failed. Email ${notifyTo} and quote this reference.`
+        );
+      }
+    }
+
     // The reference is what the reporter quotes when following up. Deliberately
     // returned even to anonymous reporters — a complaint you cannot chase is a
-    // complaint you have to file again.
-    return { reference: formatTraceId(report.id) };
+    // complaint you have to file again. Prefixed `OR-` so it cannot be parsed
+    // as a provenance trace id (`OS-`).
+    return { reference };
   });

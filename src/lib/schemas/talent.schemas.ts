@@ -1,3 +1,4 @@
+import { portraitAttestationSchema } from '@/lib/compliance/likeness-upload';
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import { characterBibleEntrySchema } from '@/lib/ai/scene-analysis.schema';
 import { talent, talentSheets } from '@/lib/db/schema';
@@ -36,6 +37,8 @@ export const createTalentSchema = createInsertSchema(talent, {
   .omit(SERVER_MANAGED_TALENT_COLUMNS)
   .extend({
     referenceImageUrls: z.array(mediaUrlSchema).optional(),
+    /** Required by the server when `referenceImageUrls` is non-empty. */
+    portraitAttestation: portraitAttestationSchema.optional(),
   });
 
 export const updateTalentSchema = createUpdateSchema(talent).omit(

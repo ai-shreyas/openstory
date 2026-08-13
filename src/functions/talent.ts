@@ -8,6 +8,12 @@ import {
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
 import { requirePortraitUploadAllowed } from '@/lib/compliance/generation-gate';
+import {
+  portraitAttestationSchema,
+  recordPortraitAttestation,
+  requireLikenessAttachment,
+} from '@/lib/compliance/likeness-upload';
+import { getRequest } from '@tanstack/react-start/server';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createTalentSchema,
@@ -92,22 +98,15 @@ export const createTalentFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(createTalentSchema))
   .handler(async ({ context, data }) => {
-    // Reference media on a talent record is how a real person's likeness enters
-    // the library, so it is gated on a verified identity (#1180) — the same
-    // condition the client uses to require the portrait-rights attestation.
-    // Under the default policy an unverified account gets a 403 pointing at
-    // /settings/identity rather than a silent success.
-    if (data.referenceImageUrls?.length) {
-      await requirePortraitUploadAllowed({
-        userId: context.user.id,
-        teamId: context.teamId,
-      });
-    }
-
+    const request = getRequest();
     return createLibraryTalent(data, {
       scopedDb: context.scopedDb,
       user: context.user,
       teamId: context.teamId,
+      request: {
+        ipAddress: request.headers.get('cf-connecting-ip'),
+        userAgent: request.headers.get('user-agent'),
+      },
     });
   });
 
@@ -273,6 +272,14 @@ export const presignTalentUploadFn = createServerFn({ method: 'POST' })
     )
   )
   .handler(async ({ context, data }) => {
+    // Identity first: refuse the signed URL rather than accept bytes we will
+    // reject at finalize. Attestation is checked at finalize, once the talent
+    // id is known for sure.
+    await requirePortraitUploadAllowed({
+      userId: context.user.id,
+      teamId: context.teamId,
+    });
+
     if (data.talentId) {
       const talentRecord = await context.scopedDb.talent.getById(data.talentId);
       if (
@@ -312,6 +319,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         mediaId: ulidSchema,
         publicUrl: mediaUrlSchema,
         path: z.string().min(1),
+        portraitAttestation: portraitAttestationSchema.optional(),
       })
     )
   )
@@ -319,6 +327,22 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
     if (!data.path.startsWith(`talent/${context.teamId}/`)) {
       throw new Error('Invalid storage path');
     }
+
+    const attestation = await requireLikenessAttachment({
+      userId: context.user.id,
+      teamId: context.teamId,
+      attestation: data.portraitAttestation,
+    });
+    const request = getRequest();
+    await recordPortraitAttestation({
+      scopedDb: context.scopedDb,
+      subjectId: data.talentId,
+      attestation,
+      request: {
+        ipAddress: request.headers.get('cf-connecting-ip'),
+        userAgent: request.headers.get('user-agent'),
+      },
+    });
 
     await context.scopedDb.talent.media.create({
       id: data.mediaId,

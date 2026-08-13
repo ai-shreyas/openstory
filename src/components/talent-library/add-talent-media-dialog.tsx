@@ -10,6 +10,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
+import { toast } from 'sonner';
+import { PortraitAttestationFields } from './portrait-attestation-fields';
 import { TalentMediaUpload } from './talent-media-upload';
 
 type AddTalentMediaDialogProps = {
@@ -24,12 +27,18 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [uploadCount, setUploadCount] = useState(0);
+  const [attested, setAttested] = useState(false);
+  const [authorizationBasis, setAuthorizationBasis] = useState('');
 
   const handleClose = () => {
     setFiles([]);
     setUploadCount(0);
+    setAttested(false);
+    setAuthorizationBasis('');
     setOpen(false);
   };
+
+  const canUpload = attested && authorizationBasis.trim().length > 0;
 
   const isUploading = files.length > uploadCount;
 
@@ -49,10 +58,34 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
           </DialogDescription>
         </DialogHeader>
 
+        <PortraitAttestationFields
+          attested={attested}
+          onAttestedChange={setAttested}
+          authorizationBasis={authorizationBasis}
+          onAuthorizationBasisChange={setAuthorizationBasis}
+        />
+
         <TalentMediaUpload
           files={files}
-          onFilesChange={setFiles}
+          onFilesChange={(next) => {
+            if (!canUpload) {
+              toast.error(
+                'Confirm you have authorization for this person’s likeness'
+              );
+              return;
+            }
+            setFiles(next);
+          }}
           talentId={talentId}
+          portraitAttestation={
+            canUpload
+              ? {
+                  statementVersion: PORTRAIT_RIGHTS_V1.version,
+                  authorizationBasis: authorizationBasis.trim(),
+                }
+              : undefined
+          }
+          disabled={!canUpload}
           onComplete={() => setUploadCount((c) => c + 1)}
         />
 

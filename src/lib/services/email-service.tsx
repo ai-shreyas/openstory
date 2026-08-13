@@ -7,6 +7,7 @@
 
 import { getEnv } from '#env';
 import { env as workerEnv } from 'cloudflare:workers';
+import { AbuseReportEmail } from '@/lib/emails/abuse-report-email';
 import { FeedbackEmail } from '@/lib/emails/feedback-email';
 import { FounderCreditRequestEmail } from '@/lib/emails/founder-credit-request-email';
 import { OtpEmail } from '@/lib/emails/otp-email';
@@ -134,6 +135,29 @@ export async function sendFounderCreditRequestEmail(params: {
         teamId={params.teamId}
         balanceDisplay={params.balanceDisplay}
         message={params.message}
+      />
+    ),
+  });
+}
+
+/** Queue watcher for `/report` intake. Lands on `ABUSE_REPORT_NOTIFY_EMAIL`. */
+export async function sendAbuseReportNotifyEmail(params: {
+  to: string;
+  reference: string;
+  reason: string;
+  targetType: string;
+  hasTrace: boolean;
+}): Promise<{ success: boolean; error?: string }> {
+  return sendEmail({
+    to: params.to,
+    subject: `[${params.reason}] content report ${params.reference}`,
+    body: (
+      <AbuseReportEmail
+        appName={getAppName()}
+        reference={params.reference}
+        reason={params.reason}
+        targetType={params.targetType}
+        hasTrace={params.hasTrace}
       />
     ),
   });

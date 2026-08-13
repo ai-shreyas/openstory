@@ -25,7 +25,12 @@ import {
 } from '@/lib/db/scoped';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import { resolveSceneForShotFromDb } from '@/lib/scenes/scene-script';
-import { NotFoundError } from '@/lib/errors';
+import {
+  assertCanWrite,
+  restrictionNotice,
+} from '@/lib/compliance/enforcement';
+import { loadComplianceState } from '@/lib/compliance/generation-gate';
+import { AccountRestrictedError, NotFoundError } from '@/lib/errors';
 import {
   errorHeadline,
   getLogger,
@@ -487,6 +492,27 @@ export const authWithTeamMiddleware = createMiddleware({ type: 'function' })
 
     if (!team) {
       throw new Error('No team found for user');
+    }
+
+    const compliance = await loadComplianceState(context.user.id, team.teamId);
+    if (!compliance.enforcement.canAccess) {
+      throw new AccountRestrictedError(
+        restrictionNotice(compliance.enforcement) ??
+          'This account may not use the service',
+        {
+          action: compliance.enforcement.mostSevere?.action,
+          reason: compliance.enforcement.mostSevere?.reason,
+          enforcementId: compliance.enforcement.mostSevere?.id,
+          appealPath: '/report',
+        }
+      );
+    }
+    // Server fns: GET stays readable under account_suspended; POST/PUT/etc.
+    // are writes. `getComplianceStatusFn` uses authMiddleware only so a
+    // terminated account can still see the restriction banner.
+    const request = getRequest();
+    if (request.method !== 'GET') {
+      assertCanWrite(compliance.enforcement);
     }
 
     return next({

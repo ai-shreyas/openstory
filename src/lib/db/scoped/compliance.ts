@@ -46,7 +46,7 @@ import type {
   AttestationSubjectType,
 } from '@/lib/db/schema/compliance';
 import { teams, user } from '@/lib/db/schema';
-import { ValidationError } from '@/lib/errors';
+import { NotFoundError, ValidationError } from '@/lib/errors';
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
@@ -202,6 +202,35 @@ export function createComplianceMethods(
           throw new Error('verifications.start: insert returned nothing');
         }
         return inserted;
+      },
+
+      /**
+       * Local `dev_stub` only: flip our own pending row to verified in the
+       * same request that opened it. Scoped to this user so a team caller
+       * cannot verify someone else.
+       */
+      async markVerifiedIfPending(
+        verificationId: string
+      ): Promise<IdentityVerification> {
+        const [updated] = await db
+          .update(identityVerifications)
+          .set({
+            status: 'verified',
+            verifiedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(identityVerifications.id, verificationId),
+              eq(identityVerifications.userId, userId),
+              eq(identityVerifications.status, 'pending')
+            )
+          )
+          .returning();
+        if (!updated) {
+          throw new NotFoundError(`No pending verification ${verificationId}`);
+        }
+        return updated;
       },
     },
 
@@ -665,8 +694,9 @@ export function createModerationMethods(db: Database) {
     subjectCountry?: string | null;
     rejectionReason?: string | null;
     expiresAt?: Date | null;
+    providerRef?: string | null;
   }): Promise<void> {
-    await db
+    const [updated] = await db
       .update(identityVerifications)
       .set({
         status: input.verified ? 'verified' : 'rejected',
@@ -679,8 +709,20 @@ export function createModerationMethods(db: Database) {
         verifiedAt: input.verified ? new Date() : null,
         expiresAt: input.expiresAt ?? null,
         updatedAt: new Date(),
+        ...(input.providerRef ? { providerRef: input.providerRef } : {}),
       })
-      .where(eq(identityVerifications.id, input.verificationId));
+      .where(
+        and(
+          eq(identityVerifications.id, input.verificationId),
+          eq(identityVerifications.status, 'pending')
+        )
+      )
+      .returning({ id: identityVerifications.id });
+    if (!updated) {
+      throw new NotFoundError(
+        `No pending verification ${input.verificationId}`
+      );
+    }
   }
 
   async function revokeVerification(input: {

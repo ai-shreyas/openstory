@@ -1,18 +1,17 @@
 /**
  * The generation gate (#1180).
  *
- * One call, made from every generation entry point right beside the credit
- * preflight: may this account generate this thing right now? Two ways the answer
- * is no — a live enforcement action, or a missing identity verification the
- * model's terms require — and they raise different errors because they have
- * opposite remedies (appeal vs. complete a step).
+ * May this account generate this thing right now? Two ways the answer is no —
+ * a live enforcement action, or a missing identity verification the model's
+ * terms require — and they raise different errors because they have opposite
+ * remedies (appeal vs. complete a step).
  *
- * Placed beside `requireCredits` rather than inside it: the credit preflight is
- * also handed the narrowed workflow read surface, and conflating "can they pay"
- * with "are they allowed" would make both harder to reason about. Pairing is
- * enforced by `generation-gate.wiring.test.ts`, which fails if a server function
- * calls `requireCredits` without also calling a gate — the failure mode being
- * guarded against is a new generation endpoint that quietly skips compliance.
+ * Enforcement + identity run in `triggerWorkflow` (every durable generation
+ * funnels through it). Portrait uploads call `requirePortraitUploadAllowed`
+ * directly. Direct model access also calls `requireGenerationAllowed` beside
+ * the credit preflight so the restricted-model check sees the endpoint id.
+ * `generation-gate.wiring.test.ts` fails if a `requireCredits` site has
+ * neither a gate nor a `triggerWorkflow` call.
  */
 
 import { loadComplianceRecords } from '@/lib/db/scoped';
@@ -129,7 +128,8 @@ function assertVerified(
 
 /**
  * Summary for the client: what is restricted, and what the user can do about
- * it. Returned by `getComplianceStatusFn` and rendered by the account banner.
+ * it. Returned by `getComplianceStatusFn` and rendered by
+ * `ComplianceRestrictionBanner`.
  */
 export function summarizeCompliance(state: ComplianceState) {
   return {

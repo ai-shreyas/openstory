@@ -41,7 +41,7 @@ import { gateEstimate } from '@/lib/billing/cost-estimation';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
-import { recordProvenanceSafely } from '@/lib/compliance/provenance';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -738,13 +738,14 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       // Provenance (#1180). Recorded even when the shot was deleted mid-render:
       // the video is in R2 either way, and an untraceable object is exactly what
       // this record exists to prevent. No content hash — a 1080p clip would have
-      // to be buffered whole to compute one (see MAX_CONTENT_HASH_BYTES); the
-      // storage key and fal request id carry the trace.
+      // to be buffered whole to compute one; contentSha256 is unpopulated
+      // until we hash the small kinds. The storage key and fal request id
+      // carry the trace.
       if (videoVersionId && input.teamId) {
         const provenanceVersionId = videoVersionId;
         const provenanceTeamId = input.teamId;
         await step.do('record-provenance', async () => {
-          await recordProvenanceSafely(scopedDb.provenance, {
+          await recordProvenance(scopedDb.provenance, {
             teamId: provenanceTeamId,
             userId: input.userId,
             assetKind: 'video_variant',

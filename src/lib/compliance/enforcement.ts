@@ -158,10 +158,8 @@ export function restrictionNotice(state: EnforcementState): string | null {
 }
 
 /**
- * Throw if the account may not generate. Called from every generation entry
- * point beside the credit preflight — see `requireGenerationAllowed` in
- * `@/lib/compliance/generation-gate`, which composes this with the identity
- * check and is what server fns actually call.
+ * Throw if the account may not generate. Used by `requireGenerationAllowed`
+ * (identity + enforcement) and, via that, by `triggerWorkflow`.
  */
 export function assertCanGenerate(state: EnforcementState): void {
   if (state.canGenerate) return;
