@@ -1,29 +1,25 @@
 /**
- * Compliance Schema — AIGC traceability, real-name verification, portrait-rights
- * attestation, abuse reports, and enforcement actions.
+ * Compliance Schema — AIGC traceability, portrait-rights attestation, abuse
+ * reports, and enforcement actions.
  *
- * These five tables are the record-keeping half of the platform-operator
+ * These four tables are the record-keeping half of the platform-operator
  * obligations we take on by serving third-party generative models to external
  * users (BytePlus/ModelArk activation, #1180). Each maps to a specific
  * commitment — see `docs/compliance/README.md`:
  *
  *   content_provenance      → trace any circulating asset back to its origin
- *   identity_verifications  → real-name authentication for end users
  *   upload_attestations     → portrait-rights authorization evidence
  *   content_reports         → intake for violation reports
  *   enforcement_actions     → what we did about them
  *
+ * Real-name authentication for an overseas tool platform is email login plus
+ * a card on file (BytePlus GTM confirmed). There is no identity-document
+ * table.
+ *
  * Design constraints, all deliberate:
  *
  *  - **Append-only.** Nothing here is updated in place except a report's triage
- *    columns and a verification's status. Evidence you can rewrite is not
- *    evidence, and a regulator or arbitration panel asking "what did you know
- *    and when" needs rows that only ever grew.
- *  - **No raw identity PII.** `identity_verifications` stores the provider's
- *    reference and the OUTCOME, never a document number, scan, or date of
- *    birth. The provider is the system of record for the underlying identity
- *    data; we hold the proof that a check passed. Keeps a D1 breach from being
- *    an identity-document breach.
+ *    columns. Evidence you can rewrite is not evidence.
  *  - **`onDelete: 'restrict'` on every FK, never CASCADE.** `user` and `teams`
  *    are long-lived parent tables, and a D1 table rebuild fires inbound
  *    CASCADEs even with `PRAGMA foreign_keys = OFF` (the #612 incident — see
@@ -175,142 +171,6 @@ export const contentProvenance = snakeCase.table(
 );
 
 export type NewContentProvenance = InferInsertModel<typeof contentProvenance>;
-
-// ============================================================================
-// Identity Verification (real-name authentication)
-// ============================================================================
-
-/**
- * How an identity was checked. `byteplus_rpv` is BytePlus's own Real Person
- * Verification H5/API — the provider whose usage rules the ModelArk activation
- * binds us to, and the one to prefer for ModelArk-served models.
- * `manual_review` is a human check of documents supplied out-of-band (used for
- * enterprise accounts and for appeals); `dev_stub` only ever resolves outside
- * production and is rejected by the provider factory when deployed.
- */
-const IDENTITY_VERIFICATION_PROVIDERS = [
-  'byteplus_rpv',
-  'manual_review',
-  'dev_stub',
-] as const;
-export type IdentityVerificationProvider =
-  (typeof IDENTITY_VERIFICATION_PROVIDERS)[number];
-
-const IDENTITY_VERIFICATION_STATUSES = [
-  'pending',
-  'verified',
-  'rejected',
-  'expired',
-  'revoked',
-] as const;
-export type IdentityVerificationStatus =
-  (typeof IDENTITY_VERIFICATION_STATUSES)[number];
-
-/**
- * What the check actually proved. `liveness` alone establishes a live human but
- * not a legal name; `document` alone establishes a name but not that the holder
- * is present. Real-name authentication in the sense platform rules mean it
- * wants `document_and_liveness`, which is what BytePlus RPV returns.
- */
-export const IDENTITY_VERIFICATION_METHODS = [
-  'document',
-  'liveness',
-  'document_and_liveness',
-] as const;
-export type IdentityVerificationMethod =
-  (typeof IDENTITY_VERIFICATION_METHODS)[number];
-
-/**
- * One identity check on one user. Append a new row per attempt; never rewrite
- * history. `status` is the only mutable column (pending → verified/rejected,
- * verified → expired/revoked), because the provider's answer arrives
- * asynchronously and a verification can later lapse.
- *
- * **Stores no identity documents and no raw identifiers.** The provider holds
- * those. We keep: which provider, their reference, what the check proved,
- * whether it passed, and when. `subjectNameSha256` lets us detect one legal
- * identity farming many accounts without our ever holding the name — the
- * abuse pattern behind most portrait-rights violations.
- */
-export const identityVerifications = snakeCase.table(
-  'identity_verifications',
-  {
-    id: text()
-      .$defaultFn(() => generateId())
-      .primaryKey()
-      .notNull(),
-    userId: text()
-      .notNull()
-      .references(() => user.id, { onDelete: 'restrict' }),
-    /** Team the user was acting for when they verified, for audit context. */
-    teamId: text().references(() => teams.id, { onDelete: 'restrict' }),
-
-    provider: text({ length: 40 })
-      .$type<IdentityVerificationProvider>()
-      .notNull(),
-    /** The provider's verification id — our handle for a re-check or dispute. */
-    providerRef: text({ length: 200 }),
-    status: text({ length: 20 })
-      .$type<IdentityVerificationStatus>()
-      .default('pending')
-      .notNull(),
-    method: text({ length: 30 }).$type<IdentityVerificationMethod>(),
-
-    /**
-     * SHA-256 of the normalized verified legal name, salted with
-     * `IDENTITY_HASH_SALT`. Not reversible to a name; equality-comparable, so
-     * "how many accounts has this identity verified?" is answerable. Absent the
-     * salt env var the field stays null and duplicate detection is simply off —
-     * it never falls back to an unsalted hash, which would be a rainbow-table
-     * target on a small name space.
-     */
-    subjectNameSha256: text({ length: 64 }),
-    /** ISO 3166-1 alpha-2 of the issuing country, for jurisdiction routing. */
-    subjectCountry: text({ length: 2 }),
-
-    /** Provider-supplied failure code/message. Never contains document data. */
-    rejectionReason: text({ length: 500 }),
-
-    verifiedAt: integer({ mode: 'timestamp' }),
-    /** Re-verification deadline, where the provider or a rule imposes one. */
-    expiresAt: integer({ mode: 'timestamp' }),
-
-    /** Set when an admin revokes a previously-good verification (fraud). */
-    revokedAt: integer({ mode: 'timestamp' }),
-    revokedByUserId: text().references(() => user.id, {
-      onDelete: 'restrict',
-    }),
-    revokedReason: text({ length: 500 }),
-
-    /** Request context at submission — evidence for a disputed verification. */
-    ipAddress: text({ length: 45 }),
-    userAgent: text({ length: 500 }),
-
-    createdAt: integer({ mode: 'timestamp' })
-      .$defaultFn(() => new Date())
-      .notNull(),
-    updatedAt: integer({ mode: 'timestamp' })
-      .$defaultFn(() => new Date())
-      .notNull(),
-  },
-  (table) => [
-    // Hot path: "is this user verified right now?" on every gated action.
-    index('idx_identity_verifications_user_status').on(
-      table.userId,
-      table.status
-    ),
-    // Provider callback resolves its own row by reference.
-    index('idx_identity_verifications_provider_ref').on(table.providerRef),
-    // Duplicate-identity sweep.
-    index('idx_identity_verifications_subject_hash').on(
-      table.subjectNameSha256
-    ),
-  ]
-);
-
-export type IdentityVerification = InferSelectModel<
-  typeof identityVerifications
->;
 
 // ============================================================================
 // Upload Attestations (portrait rights)

@@ -18,18 +18,8 @@ import { getEnv } from '#env';
 
 /** Optional compliance env keys. Documented in `.env.example`. */
 type ComplianceEnvKey =
-  /** `disabled` | `portrait_and_restricted` | `all_generation`. */
-  | 'IDENTITY_VERIFICATION_POLICY'
-  /** Which adapter performs checks: `manual_review` | `byteplus_rpv` | `dev_stub`. */
-  | 'IDENTITY_VERIFICATION_PROVIDER'
-  /** Salt for the verified-name hash. Unset ⇒ no duplicate-identity detection. */
-  | 'IDENTITY_HASH_SALT'
-  /** Base URL of the provider-hosted verification flow. */
-  | 'BYTEPLUS_RPV_BASE_URL'
-  /** Shared secret the provider's callback must present. */
-  | 'BYTEPLUS_RPV_CALLBACK_SECRET'
   /** Where abuse reports are emailed. Unset ⇒ queue-only, no notification. */
-  | 'ABUSE_REPORT_NOTIFY_EMAIL';
+  'ABUSE_REPORT_NOTIFY_EMAIL';
 
 export function complianceEnv(key: ComplianceEnvKey): string | undefined {
   // `Reflect.get` rather than a cast: the key is not on the generated `Env`

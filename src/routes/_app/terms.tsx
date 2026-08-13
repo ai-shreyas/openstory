@@ -187,18 +187,6 @@ function TermsPage() {
           of serious or repeated violations.
         </p>
 
-        <h3 className="mt-6 text-lg font-semibold">Identity verification</h3>
-        <p className="mt-4 leading-relaxed">
-          Some features require you to complete identity verification before
-          use, including uploading the likeness of a real person and using
-          models provided to us under terms that require verified end users. We
-          store only the outcome of that verification and a reference supplied
-          by the verification provider; we do not store your identity documents.
-          We may suspend access to those features while verification is
-          outstanding, and we may revoke a verification we have reason to
-          believe was obtained fraudulently.
-        </p>
-
         <h3 className="mt-6 text-lg font-semibold">Reporting violations</h3>
         <p className="mt-4 leading-relaxed">
           Anyone &mdash; including people who do not hold an account with us

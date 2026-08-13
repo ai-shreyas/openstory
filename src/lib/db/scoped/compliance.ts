@@ -5,11 +5,10 @@
  *
  *  - `createComplianceMethods(db, teamId, userId)` — team-scoped. What a normal
  *    request may do: record provenance for its own generations, attest to its
- *    own uploads, read its own verification state, file a report.
- *  - `createComplianceReadMethods(db)` — unscoped reads for the request path
- *    (enforcement + verification state for a given user). Not team-scoped
- *    because enforcement follows the person, and the gate has to work before we
- *    know which team they are acting for.
+ *    own uploads, file a report.
+ *  - `createComplianceReadMethods(db)` — unscoped enforcement reads for the
+ *    request path. Not team-scoped because enforcement follows the person, and
+ *    the gate has to work before we know which team they are acting for.
  *  - `createModerationMethods(db)` — cross-team, admin only. The triage queue,
  *    enforcement, and trace lookup. Reached via `createSystemAdminScopedDb`,
  *    so a team-scoped caller cannot get at it.
@@ -28,7 +27,6 @@ import {
   contentProvenance,
   contentReports,
   enforcementActions,
-  identityVerifications,
   uploadAttestations,
 } from '@/lib/db/schema/compliance';
 import type {
@@ -38,15 +36,12 @@ import type {
   ContentReportTargetType,
   EnforcementAction,
   EnforcementActionType,
-  IdentityVerification,
-  IdentityVerificationMethod,
-  IdentityVerificationProvider,
   NewContentProvenance,
   UploadAttestation,
   AttestationSubjectType,
 } from '@/lib/db/schema/compliance';
 import { teams, user } from '@/lib/db/schema';
-import { NotFoundError, ValidationError } from '@/lib/errors';
+import { ValidationError } from '@/lib/errors';
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
@@ -166,74 +161,6 @@ export function createComplianceMethods(
       },
     },
 
-    verifications: {
-      /** Every verification attempt for the acting user, newest first. */
-      async listForUser(): Promise<IdentityVerification[]> {
-        return db
-          .select()
-          .from(identityVerifications)
-          .where(eq(identityVerifications.userId, userId))
-          .orderBy(desc(identityVerifications.createdAt));
-      },
-
-      /** Open a pending verification attempt. */
-      async start(input: {
-        provider: IdentityVerificationProvider;
-        method?: IdentityVerificationMethod | null;
-        providerRef?: string | null;
-        ipAddress?: string | null;
-        userAgent?: string | null;
-      }): Promise<IdentityVerification> {
-        const [inserted] = await db
-          .insert(identityVerifications)
-          .values({
-            id: generateId(),
-            userId,
-            teamId,
-            provider: input.provider,
-            method: input.method ?? null,
-            providerRef: input.providerRef ?? null,
-            status: 'pending',
-            ipAddress: input.ipAddress ?? null,
-            userAgent: input.userAgent ?? null,
-          })
-          .returning();
-        if (!inserted) {
-          throw new Error('verifications.start: insert returned nothing');
-        }
-        return inserted;
-      },
-
-      /**
-       * Local `dev_stub` only: flip our own pending row to verified in the
-       * same request that opened it. Scoped to this user so a team caller
-       * cannot verify someone else.
-       */
-      async markVerifiedIfPending(
-        verificationId: string
-      ): Promise<IdentityVerification> {
-        const [updated] = await db
-          .update(identityVerifications)
-          .set({
-            status: 'verified',
-            verifiedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(identityVerifications.id, verificationId),
-              eq(identityVerifications.userId, userId),
-              eq(identityVerifications.status, 'pending')
-            )
-          )
-          .returning();
-        if (!updated) {
-          throw new NotFoundError(`No pending verification ${verificationId}`);
-        }
-        return updated;
-      },
-    },
-
     reports: {
       /** File a report as a signed-in member of this team. */
       async create(input: {
@@ -260,7 +187,7 @@ export function createComplianceMethods(
 // ============================================================================
 
 /**
- * Enforcement + verification reads used by the generation gate.
+ * Enforcement reads used by the generation gate.
  *
  * Not team-scoped: an action against a person applies wherever they are acting,
  * and pretending otherwise would let a suspended user open a second team and
@@ -289,17 +216,6 @@ export function createComplianceReadMethods(db: Database) {
         .from(enforcementActions)
         .where(and(subjectMatch, isNull(enforcementActions.revokedAt)))
         .orderBy(desc(enforcementActions.createdAt));
-    },
-
-    /** Verification attempts for a user, newest first. */
-    async listVerificationsFor(
-      subjectUserId: string
-    ): Promise<IdentityVerification[]> {
-      return db
-        .select()
-        .from(identityVerifications)
-        .where(eq(identityVerifications.userId, subjectUserId))
-        .orderBy(desc(identityVerifications.createdAt));
     },
   };
 }
@@ -668,109 +584,6 @@ export function createModerationMethods(db: Database) {
       .limit(opts?.limit ?? 100);
   }
 
-  // ---- Identity verification review ----
-
-  async function listPendingVerifications(): Promise<
-    (IdentityVerification & { userEmail: string | null })[]
-  > {
-    const rows = await db
-      .select({ verification: identityVerifications, userEmail: user.email })
-      .from(identityVerifications)
-      .leftJoin(user, eq(identityVerifications.userId, user.id))
-      .where(eq(identityVerifications.status, 'pending'))
-      .orderBy(asc(identityVerifications.createdAt));
-
-    return rows.map(({ verification, userEmail }) => ({
-      ...verification,
-      userEmail,
-    }));
-  }
-
-  async function decideVerification(input: {
-    verificationId: string;
-    verified: boolean;
-    method?: IdentityVerificationMethod | null;
-    subjectNameSha256?: string | null;
-    subjectCountry?: string | null;
-    rejectionReason?: string | null;
-    expiresAt?: Date | null;
-    providerRef?: string | null;
-  }): Promise<void> {
-    const [updated] = await db
-      .update(identityVerifications)
-      .set({
-        status: input.verified ? 'verified' : 'rejected',
-        method: input.method ?? null,
-        subjectNameSha256: input.subjectNameSha256 ?? null,
-        subjectCountry: input.subjectCountry ?? null,
-        rejectionReason: input.verified
-          ? null
-          : (input.rejectionReason ?? 'Rejected on review'),
-        verifiedAt: input.verified ? new Date() : null,
-        expiresAt: input.expiresAt ?? null,
-        updatedAt: new Date(),
-        ...(input.providerRef ? { providerRef: input.providerRef } : {}),
-      })
-      .where(
-        and(
-          eq(identityVerifications.id, input.verificationId),
-          eq(identityVerifications.status, 'pending')
-        )
-      )
-      .returning({ id: identityVerifications.id });
-    if (!updated) {
-      throw new NotFoundError(
-        `No pending verification ${input.verificationId}`
-      );
-    }
-  }
-
-  async function revokeVerification(input: {
-    verificationId: string;
-    revokedByUserId: string;
-    revokedReason?: string | null;
-  }): Promise<void> {
-    await db
-      .update(identityVerifications)
-      .set({
-        status: 'revoked',
-        revokedAt: new Date(),
-        revokedByUserId: input.revokedByUserId,
-        revokedReason: input.revokedReason ?? null,
-        updatedAt: new Date(),
-      })
-      .where(eq(identityVerifications.id, input.verificationId));
-  }
-
-  /**
-   * Other accounts a verified identity has been used on. The duplicate-identity
-   * sweep: one legal person farming many accounts is the pattern behind most
-   * repeat portrait-rights abuse, and the salted name hash makes it findable
-   * without our ever storing the name.
-   */
-  async function findSharedIdentities(
-    subjectNameSha256: string
-  ): Promise<
-    { userId: string; userEmail: string | null; verifiedAt: Date | null }[]
-  > {
-    const rows = await db
-      .select({
-        userId: identityVerifications.userId,
-        userEmail: user.email,
-        verifiedAt: identityVerifications.verifiedAt,
-      })
-      .from(identityVerifications)
-      .leftJoin(user, eq(identityVerifications.userId, user.id))
-      .where(
-        and(
-          eq(identityVerifications.subjectNameSha256, subjectNameSha256),
-          eq(identityVerifications.status, 'verified')
-        )
-      )
-      .orderBy(desc(identityVerifications.verifiedAt));
-    return rows;
-  }
-
   return {
     listReports,
     countReportsByStatus,
@@ -783,9 +596,5 @@ export function createModerationMethods(db: Database) {
     findProvenance,
     listProvenanceForTeam,
     listAttestationsForTeam,
-    listPendingVerifications,
-    decideVerification,
-    revokeVerification,
-    findSharedIdentities,
   };
 }

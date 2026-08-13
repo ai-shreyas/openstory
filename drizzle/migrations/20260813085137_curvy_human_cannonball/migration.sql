@@ -71,31 +71,6 @@ CREATE TABLE `enforcement_actions` (
 	CONSTRAINT `fk_enforcement_actions_revoked_by_user_id_user_id_fk` FOREIGN KEY (`revoked_by_user_id`) REFERENCES `user`(`id`) ON DELETE RESTRICT
 );
 --> statement-breakpoint
-CREATE TABLE `identity_verifications` (
-	`id` text PRIMARY KEY,
-	`user_id` text NOT NULL,
-	`team_id` text,
-	`provider` text(40) NOT NULL,
-	`provider_ref` text(200),
-	`status` text(20) DEFAULT 'pending' NOT NULL,
-	`method` text(30),
-	`subject_name_sha256` text(64),
-	`subject_country` text(2),
-	`rejection_reason` text(500),
-	`verified_at` integer,
-	`expires_at` integer,
-	`revoked_at` integer,
-	`revoked_by_user_id` text,
-	`revoked_reason` text(500),
-	`ip_address` text(45),
-	`user_agent` text(500),
-	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL,
-	CONSTRAINT `fk_identity_verifications_user_id_user_id_fk` FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON DELETE RESTRICT,
-	CONSTRAINT `fk_identity_verifications_team_id_teams_id_fk` FOREIGN KEY (`team_id`) REFERENCES `teams`(`id`) ON DELETE RESTRICT,
-	CONSTRAINT `fk_identity_verifications_revoked_by_user_id_user_id_fk` FOREIGN KEY (`revoked_by_user_id`) REFERENCES `user`(`id`) ON DELETE RESTRICT
-);
---> statement-breakpoint
 CREATE TABLE `upload_attestations` (
 	`id` text PRIMARY KEY,
 	`user_id` text NOT NULL,
@@ -128,9 +103,6 @@ CREATE INDEX `idx_enforcement_subject_user` ON `enforcement_actions` (`subject_u
 CREATE INDEX `idx_enforcement_subject_team` ON `enforcement_actions` (`subject_team_id`,`revoked_at`);--> statement-breakpoint
 CREATE INDEX `idx_enforcement_created` ON `enforcement_actions` (`created_at`);--> statement-breakpoint
 CREATE INDEX `idx_enforcement_report` ON `enforcement_actions` (`report_id`);--> statement-breakpoint
-CREATE INDEX `idx_identity_verifications_user_status` ON `identity_verifications` (`user_id`,`status`);--> statement-breakpoint
-CREATE INDEX `idx_identity_verifications_provider_ref` ON `identity_verifications` (`provider_ref`);--> statement-breakpoint
-CREATE INDEX `idx_identity_verifications_subject_hash` ON `identity_verifications` (`subject_name_sha256`);--> statement-breakpoint
 CREATE INDEX `idx_upload_attestations_subject` ON `upload_attestations` (`subject_type`,`subject_id`);--> statement-breakpoint
 CREATE INDEX `idx_upload_attestations_user` ON `upload_attestations` (`user_id`,`attested_at`);--> statement-breakpoint
 CREATE INDEX `idx_upload_attestations_team` ON `upload_attestations` (`team_id`,`attested_at`);

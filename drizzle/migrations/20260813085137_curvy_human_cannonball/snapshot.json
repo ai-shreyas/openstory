@@ -1,7 +1,7 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "be908bec-110f-4093-9ee1-b91f0c5d4bb0",
+  "id": "b5556388-9f7f-45f3-8a9f-b29450afb1ed",
   "prevIds": ["9f881084-3dc5-4d13-9db9-34a6ce013d39"],
   "ddl": [
     {
@@ -70,10 +70,6 @@
     },
     {
       "name": "gift_tokens",
-      "entityType": "tables"
-    },
-    {
-      "name": "identity_verifications",
       "entityType": "tables"
     },
     {
@@ -2433,196 +2429,6 @@
       "name": "created_at",
       "entityType": "columns",
       "table": "gift_tokens"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "id",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "team_id",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(40)",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "provider",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(200)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "provider_ref",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(20)",
-      "notNull": true,
-      "autoincrement": false,
-      "default": "'pending'",
-      "generated": null,
-      "name": "status",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(30)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "method",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(64)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "subject_name_sha256",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(2)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "subject_country",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(500)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "rejection_reason",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "verified_at",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revoked_at",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revoked_by_user_id",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(500)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "revoked_reason",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(45)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "ip_address",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "text(500)",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "user_agent",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "table": "identity_verifications"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "table": "identity_verifications"
     },
     {
       "type": "text",
@@ -7427,39 +7233,6 @@
       "table": "gift_tokens"
     },
     {
-      "columns": ["user_id"],
-      "tableTo": "user",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "nameExplicit": false,
-      "name": "fk_identity_verifications_user_id_user_id_fk",
-      "entityType": "fks",
-      "table": "identity_verifications"
-    },
-    {
-      "columns": ["team_id"],
-      "tableTo": "teams",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "nameExplicit": false,
-      "name": "fk_identity_verifications_team_id_teams_id_fk",
-      "entityType": "fks",
-      "table": "identity_verifications"
-    },
-    {
-      "columns": ["revoked_by_user_id"],
-      "tableTo": "user",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "nameExplicit": false,
-      "name": "fk_identity_verifications_revoked_by_user_id_user_id_fk",
-      "entityType": "fks",
-      "table": "identity_verifications"
-    },
-    {
       "columns": ["team_id"],
       "tableTo": "teams",
       "columnsTo": ["id"],
@@ -8162,13 +7935,6 @@
       "nameExplicit": false,
       "name": "gift_tokens_pk",
       "table": "gift_tokens",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "identity_verifications_pk",
-      "table": "identity_verifications",
       "entityType": "pks"
     },
     {
@@ -9163,52 +8929,6 @@
       "name": "idx_gift_tokens_created_by",
       "entityType": "indexes",
       "table": "gift_tokens"
-    },
-    {
-      "columns": [
-        {
-          "value": "user_id",
-          "isExpression": false
-        },
-        {
-          "value": "status",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "idx_identity_verifications_user_status",
-      "entityType": "indexes",
-      "table": "identity_verifications"
-    },
-    {
-      "columns": [
-        {
-          "value": "provider_ref",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "idx_identity_verifications_provider_ref",
-      "entityType": "indexes",
-      "table": "identity_verifications"
-    },
-    {
-      "columns": [
-        {
-          "value": "subject_name_sha256",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "idx_identity_verifications_subject_hash",
-      "entityType": "indexes",
-      "table": "identity_verifications"
     },
     {
       "columns": [

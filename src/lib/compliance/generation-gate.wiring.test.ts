@@ -25,14 +25,14 @@ function walk(dir: string): string[] {
 }
 
 const GATE =
-  /requireGenerationAllowed|requirePortraitUploadAllowed|requireLikenessAttachment/;
+  /requireGenerationAllowed|requireLikenessAttachment|assertCanGenerate/;
 const TRIGGER = /triggerWorkflow/;
 const CREDITS_CALL = /requireCredits\s*\(/;
 
 describe('generation-gate wiring', () => {
   test('triggerWorkflow runs the generation gate', () => {
     const source = readFileSync('src/lib/workflow/client.ts', 'utf8');
-    expect(source).toMatch(/requireGenerationAllowed/);
+    expect(source).toMatch(/assertCanGenerate/);
     expect(source).toMatch(/assertCanWrite/);
   });
 

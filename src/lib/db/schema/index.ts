@@ -89,13 +89,12 @@ import {
   modelUsageObservations,
 } from './model-pricing';
 
-// Compliance (#1180 — AIGC traceability, real-name verification, rights
-// attestations, abuse reports, enforcement)
+// Compliance (#1180 — AIGC traceability, rights attestations, abuse
+// reports, enforcement)
 import {
   contentProvenance,
   contentReports,
   enforcementActions,
-  identityVerifications,
   uploadAttestations,
 } from './compliance';
 
@@ -371,7 +370,6 @@ export {
   contentProvenance,
   contentReports,
   enforcementActions,
-  identityVerifications,
   uploadAttestations,
 };
 
@@ -466,7 +464,6 @@ export const schema = {
 
   // Compliance (#1180)
   contentProvenance,
-  identityVerifications,
   uploadAttestations,
   contentReports,
   enforcementActions,

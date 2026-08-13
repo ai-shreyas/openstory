@@ -12,10 +12,7 @@ import {
   CONTENT_REPORT_REASONS,
   CONTENT_REPORT_STATUSES,
   ENFORCEMENT_ACTIONS,
-  IDENTITY_VERIFICATION_METHODS,
 } from '@/lib/db/schema/compliance';
-import { hashSubjectName } from '@/lib/compliance/hash';
-import { complianceEnv } from '@/lib/compliance/config';
 import { parseTraceId } from '@/lib/compliance/provenance';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { ValidationError } from '@/lib/errors';
@@ -295,115 +292,4 @@ export const listEnforcementFn = createServerFn({ method: 'GET' })
   )
   .handler(async ({ context, data }) => {
     return context.adminScopedDb.moderation.listEnforcement(data);
-  });
-
-// ============================================================================
-// Identity verification review
-// ============================================================================
-
-export const listPendingVerificationsFn = createServerFn({ method: 'GET' })
-  .middleware([systemAdminMiddleware])
-  .handler(async ({ context }) => {
-    const rows =
-      await context.adminScopedDb.moderation.listPendingVerifications();
-    // Strip the identity hash before it reaches a browser (see the note in
-    // listMyVerificationsFn).
-    return rows.map(({ subjectNameSha256: _hash, ...row }) => row);
-  });
-
-/**
- * Decide a manual-review verification.
- *
- * The reviewer types the legal name they saw on the document; it is hashed here
- * and the plaintext is discarded with the request. That is the whole point of
- * the salted hash — duplicate detection without our database ever holding a
- * name — so the name must not be stored, logged, or echoed back.
- */
-export const decideVerificationFn = createServerFn({ method: 'POST' })
-  .middleware([systemAdminMiddleware])
-  .validator(
-    zodValidator(
-      z.object({
-        verificationId: ulidSchema,
-        verified: z.boolean(),
-        method: z.enum(IDENTITY_VERIFICATION_METHODS).optional(),
-        subjectName: z.string().max(300).optional(),
-        subjectCountry: z.string().length(2).optional(),
-        rejectionReason: z.string().max(500).optional(),
-        expiresInDays: z.number().int().min(1).max(3650).optional(),
-      })
-    )
-  )
-  .handler(async ({ context, data }) => {
-    const subjectNameSha256 = data.subjectName
-      ? await hashSubjectName(
-          data.subjectName,
-          complianceEnv('IDENTITY_HASH_SALT')
-        )
-      : null;
-
-    await context.adminScopedDb.moderation.decideVerification({
-      verificationId: data.verificationId,
-      verified: data.verified,
-      method: data.method ?? null,
-      subjectNameSha256,
-      subjectCountry: data.subjectCountry?.toUpperCase() ?? null,
-      rejectionReason: data.rejectionReason ?? null,
-      expiresAt: data.expiresInDays
-        ? new Date(Date.now() + data.expiresInDays * 24 * 60 * 60 * 1000)
-        : null,
-    });
-
-    // Duplicate-identity signal, surfaced at decision time rather than in a
-    // nightly sweep — the moment it is useful is while the reviewer is still
-    // looking at the account.
-    const sharedWith = subjectNameSha256
-      ? await context.adminScopedDb.moderation.findSharedIdentities(
-          subjectNameSha256
-        )
-      : [];
-
-    logger.info('verification {verificationId} decided: {verified}', {
-      verificationId: data.verificationId,
-      verified: data.verified,
-      reviewerId: context.user.id,
-      sharedAccountCount: sharedWith.length,
-    });
-
-    return {
-      ok: true,
-      /**
-       * How many OTHER accounts this legal identity has verified. The query
-       * includes the row just decided, so distinct users minus one; a user with
-       * several verified attempts must not count as several accounts, hence the
-       * Set.
-       */
-      sharedAccounts: Math.max(
-        0,
-        new Set(sharedWith.map((row) => row.userId)).size - 1
-      ),
-    };
-  });
-
-export const revokeVerificationFn = createServerFn({ method: 'POST' })
-  .middleware([systemAdminMiddleware])
-  .validator(
-    zodValidator(
-      z.object({
-        verificationId: ulidSchema,
-        revokedReason: z.string().max(500).optional(),
-      })
-    )
-  )
-  .handler(async ({ context, data }) => {
-    await context.adminScopedDb.moderation.revokeVerification({
-      verificationId: data.verificationId,
-      revokedByUserId: context.user.id,
-      revokedReason: data.revokedReason ?? null,
-    });
-    logger.warn('verification {verificationId} revoked', {
-      verificationId: data.verificationId,
-      actorUserId: context.user.id,
-    });
-    return { ok: true };
   });

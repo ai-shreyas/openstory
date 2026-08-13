@@ -1,9 +1,8 @@
 /**
  * Compliance server functions — the user's own side (#1180).
  *
- * Identity verification and rights attestations. Nothing here is admin-facing:
- * moderation lives in `./moderation`, and public report intake in
- * `./content-reports`.
+ * Rights attestations and the account restriction banner. Admin moderation
+ * lives in `./moderation`; public report intake in `./content-reports`.
  */
 
 import { authMiddleware, authWithTeamMiddleware } from './middleware';
@@ -13,9 +12,6 @@ import {
 } from '@/lib/compliance/generation-gate';
 import { ATTESTATION_SUBJECT_TYPES } from '@/lib/db/schema/compliance';
 import { statementFor, statementHash } from '@/lib/compliance/attestations';
-import { getVerificationPolicy } from '@/lib/compliance/identity-verification';
-import { resolveVerificationAdapter } from '@/lib/compliance/verification-providers';
-import { getServerAppUrl } from '@/lib/utils/environment';
 import { AttestationRequiredError, ValidationError } from '@/lib/errors';
 import { resolveUserTeam } from '@/lib/db/scoped';
 import { createServerFn } from '@tanstack/react-start';
@@ -23,7 +19,7 @@ import { getRequest } from '@tanstack/react-start/server';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 
-/** Client context for an attestation or verification — evidence, not telemetry. */
+/** Client context for an attestation — evidence, not telemetry. */
 function requestContext(): {
   ipAddress: string | null;
   userAgent: string | null;
@@ -39,8 +35,7 @@ function requestContext(): {
 }
 
 /**
- * The account's compliance standing: any restriction, and verification status.
- * Read by `ComplianceRestrictionBanner` and the verification settings panel,
+ * The account's enforcement standing. Read by `ComplianceRestrictionBanner`,
  * and computed by the same code the generation gate uses so the two cannot
  * disagree.
  */
@@ -49,92 +44,7 @@ export const getComplianceStatusFn = createServerFn({ method: 'GET' })
   .handler(async ({ context }) => {
     const team = await resolveUserTeam(context.user.id);
     const state = await loadComplianceState(context.user.id, team?.teamId);
-    return {
-      ...summarizeCompliance(state),
-      policy: getVerificationPolicy(),
-    };
-  });
-
-/**
- * Begin an identity check.
- *
- * Opens the `pending` row first, then asks the adapter what the user should do
- * next — in that order, because the row's id is the reference the provider
- * quotes in its callback. Returns whatever the adapter decided: a redirect to a
- * hosted flow, or "submitted for review".
- */
-export const startIdentityVerificationFn = createServerFn({ method: 'POST' })
-  .middleware([authWithTeamMiddleware])
-  .handler(async ({ context }) => {
-    const adapter = resolveVerificationAdapter();
-
-    const existing =
-      await context.scopedDb.compliance.verifications.listForUser();
-    const alreadyPending = existing.find((row) => row.status === 'pending');
-    if (alreadyPending) {
-      // Re-entering the flow is normal (the user closed the tab, the redirect
-      // failed). Reuse the open attempt rather than stacking pending rows, so
-      // the reviewer queue shows one item per person.
-      const next = adapter.start({
-        verificationId: alreadyPending.id,
-        appUrl: getServerAppUrl(getRequest()),
-      });
-      if (next.kind === 'verified') {
-        await context.scopedDb.compliance.verifications.markVerifiedIfPending(
-          alreadyPending.id
-        );
-      }
-      return {
-        verificationId: alreadyPending.id,
-        next,
-        manualDecision: adapter.manualDecision,
-      };
-    }
-
-    const { ipAddress, userAgent } = requestContext();
-    const row = await context.scopedDb.compliance.verifications.start({
-      provider: adapter.id,
-      method: adapter.method,
-      ipAddress,
-      userAgent,
-    });
-
-    const next = adapter.start({
-      verificationId: row.id,
-      appUrl: getServerAppUrl(getRequest()),
-    });
-    if (next.kind === 'verified') {
-      await context.scopedDb.compliance.verifications.markVerifiedIfPending(
-        row.id
-      );
-    }
-
-    return {
-      verificationId: row.id,
-      next,
-      manualDecision: adapter.manualDecision,
-    };
-  });
-
-/** Verification attempts on the acting account, newest first. */
-export const listMyVerificationsFn = createServerFn({ method: 'GET' })
-  .middleware([authWithTeamMiddleware])
-  .handler(async ({ context }) => {
-    const rows = await context.scopedDb.compliance.verifications.listForUser();
-    // Never return `subjectNameSha256` to the client. It is an equality handle
-    // for internal duplicate detection, and shipping it to the browser would
-    // make one user's identity hash comparable by anyone who can read a
-    // response body.
-    return rows.map((row) => ({
-      id: row.id,
-      provider: row.provider,
-      status: row.status,
-      method: row.method,
-      verifiedAt: row.verifiedAt,
-      expiresAt: row.expiresAt,
-      rejectionReason: row.rejectionReason,
-      createdAt: row.createdAt,
-    }));
+    return summarizeCompliance(state);
   });
 
 /**
@@ -165,9 +75,6 @@ export const recordUploadAttestationFn = createServerFn({ method: 'POST' })
     });
 
     if (statement.version !== data.statementVersion) {
-      // The client rendered different wording than the rule says applies —
-      // usually a stale tab after a statement version bump. Refuse: an
-      // attestation to the wrong statement is not evidence of anything.
       throw new ValidationError(
         `Attestation version mismatch: expected ${statement.version}`
       );

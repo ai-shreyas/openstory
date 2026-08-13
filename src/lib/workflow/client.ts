@@ -5,10 +5,10 @@ import {
 } from '@/lib/workflow/trigger-bindings';
 import type { CloudflareEnv } from '@/lib/workflow/types';
 import {
+  assertCanGenerate,
   assertCanWrite,
   resolveEnforcementState,
 } from '@/lib/compliance/enforcement';
-import { requireGenerationAllowed } from '@/lib/compliance/generation-gate';
 import { loadComplianceRecords } from '@/lib/db/scoped';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -44,39 +44,18 @@ const WRITE_ONLY_TRIGGERS = new Set(['sequence-export']);
  * applied to accounts rather than to individual runs. Child spawns via
  * `spawnAndAwaitChild` use `binding.create()` directly and are not gated here.
  */
-function optionalPayloadString(body: object, key: string): string | undefined {
-  const value: unknown = Reflect.get(body, key);
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
 async function assertTriggerAllowed(
   urlPath: string,
   body: { userId: string; teamId: string }
 ): Promise<void> {
+  const { enforcement } = await loadComplianceRecords(body.userId, body.teamId);
+  const state = resolveEnforcementState(enforcement);
   const key = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
   if (WRITE_ONLY_TRIGGERS.has(key)) {
-    const { enforcement } = await loadComplianceRecords(
-      body.userId,
-      body.teamId
-    );
-    assertCanWrite(resolveEnforcementState(enforcement));
+    assertCanWrite(state);
     return;
   }
-
-  // Enforcement + identity. Under `all_generation` this is what makes the
-  // policy real for every trigger; under the default policy only restricted
-  // (provider, model) pairs require a verified identity. Unknown payload
-  // shapes omit those fields and stay unrestricted — same fail-open as
-  // `isRestrictedModel`.
-  await requireGenerationAllowed({
-    userId: body.userId,
-    teamId: body.teamId,
-    provider: optionalPayloadString(body, 'provider'),
-    model:
-      optionalPayloadString(body, 'model') ??
-      optionalPayloadString(body, 'endpointId') ??
-      optionalPayloadString(body, 'modelKey'),
-  });
+  assertCanGenerate(state);
 }
 
 /**
@@ -108,10 +87,7 @@ export async function triggerWorkflow<
 
   // Enforcement backstop (#1180). Every generation in the app funnels through
   // here, and the payload carries `userId`/`teamId` by contract — so this is the
-  // one place a compliance gate cannot be forgotten by a future endpoint. The
-  // model-aware identity check lives at the entry points that know which model
-  // they are about to run (`requireGenerationAllowed`); this covers the part
-  // that must never be skippable: a restricted account must not start work.
+  // one place a restricted account cannot start durable work.
   await assertTriggerAllowed(urlPath, body);
 
   const env = getEnv();

@@ -160,26 +160,23 @@ where practical. A successful appeal is a **revocation**, not a deletion.
 
 ## 7. Preventive controls
 
-| Control                                                           | Where                                                          |
-| ----------------------------------------------------------------- | -------------------------------------------------------------- |
-| Terms prohibit likeness use without authorization                 | `/terms` § Acceptable Use                                      |
-| Portrait-rights attestation required on likeness upload           | Add-talent dialog → `upload_attestations`                      |
-| Real-name verification for likeness uploads and restricted models | `/settings/identity`, `IDENTITY_VERIFICATION_POLICY`           |
-| Provider content filters, with rejections logged and queryable    | `src/lib/ai/content-rejection.ts`, PostHog `content_rejection` |
-| Duplicate-identity detection across accounts                      | Salted name hash, surfaced at verification review              |
+| Control                                                        | Where                                                          |
+| -------------------------------------------------------------- | -------------------------------------------------------------- |
+| Terms prohibit likeness use without authorization              | `/terms` § Acceptable Use                                      |
+| Portrait-rights attestation required on likeness upload        | Add-talent dialog → `upload_attestations`                      |
+| Email login + card on file (accepted real-name auth)           | Better Auth session; Stripe customer on the team               |
+| Provider content filters, with rejections logged and queryable | `src/lib/ai/content-rejection.ts`, PostHog `content_rejection` |
 
 ---
 
 ## 8. Records and retention
 
-| Record                | Table                    | Retention                     |
-| --------------------- | ------------------------ | ----------------------------- |
-| Provenance            | `content_provenance`     | Life of the account + 2 years |
-| Reports               | `content_reports`        | 5 years                       |
-| Enforcement           | `enforcement_actions`    | 5 years                       |
-| Attestations          | `upload_attestations`    | Life of the asset + 2 years   |
-| Verification outcomes | `identity_verifications` | Life of the account + 2 years |
+| Record       | Table                 | Retention                     |
+| ------------ | --------------------- | ----------------------------- |
+| Provenance   | `content_provenance`  | Life of the account + 2 years |
+| Reports      | `content_reports`     | 5 years                       |
+| Enforcement  | `enforcement_actions` | 5 years                       |
+| Attestations | `upload_attestations` | Life of the asset + 2 years   |
 
-All five are append-only apart from narrow triage/status columns. Identity
-documents are never stored — the verification provider is the system of record
-for those, and we hold only the outcome and their reference.
+All four are append-only apart from narrow triage/status columns. We do not
+store identity documents or legal names.

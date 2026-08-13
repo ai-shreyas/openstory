@@ -126,21 +126,6 @@ export class AccountRestrictedError extends OpenStoryError {
 }
 
 /**
- * The action needs a verified real-name identity on the account and there
- * isn't one (#1180). Distinct from `ACCOUNT_RESTRICTED` because the remedy is
- * the opposite: nobody is in trouble, the user just has a step to complete, and
- * the client should route them to verification rather than to an appeal.
- */
-export class IdentityVerificationRequiredError extends OpenStoryError {
-  constructor(
-    message: string = 'Identity verification is required for this action',
-    details?: Record<string, unknown>
-  ) {
-    super(message, 'IDENTITY_VERIFICATION_REQUIRED', 403, details);
-  }
-}
-
-/**
  * A rights attestation is required for this upload and was not supplied
  * (#1180). 400 rather than 403: the request itself is incomplete, and the fix
  * is to resubmit with the attestation.

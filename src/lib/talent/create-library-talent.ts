@@ -55,9 +55,7 @@ export async function createLibraryTalent(
 ): Promise<Talent> {
   const tempUrls = input.referenceImageUrls ?? [];
   const attestation = tempUrls.length
-    ? await requireLikenessAttachment({
-        userId: ctx.user.id,
-        teamId: ctx.teamId,
+    ? requireLikenessAttachment({
         attestation: input.portraitAttestation,
       })
     : null;

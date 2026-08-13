@@ -44,10 +44,9 @@ through the sequence graph in the meantime.
 2. A portrait-rights attestation is required at the upload surface where a
    likeness can enter (`upload_attestations`), recording the exact wording
    agreed to, the declared basis for authorization, and request context.
-3. Real-name identity verification gates likeness uploads.
-4. Provider content filters reject prohibited output; rejections are logged and
+3. Provider content filters reject prohibited output; rejections are logged and
    queryable (`src/lib/ai/content-rejection.ts`).
-5. Reported content is traced and the responsible account restricted.
+4. Reported content is traced and the responsible account restricted.
 
 **Emergency response plan:** [`incident-response.md`](./incident-response.md),
 with a P0/P1/P2 severity ladder, response targets, and CSAM-specific escalation
@@ -94,32 +93,10 @@ are built on that basis.
 > _Have you established a real-name authentication mechanism and a
 > violation-handling capability for end users?_
 
-**Real-name authentication.** `identity_verifications`, with a provider-agnostic
-adapter layer:
-
-| Adapter         | Status                                   | Notes                                                                                                                                                                                         |
-| --------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manual_review` | Working, default                         | User submits; an admin decides in Admin → Moderation → Verifications. Documents are exchanged out-of-band and never stored.                                                                   |
-| `byteplus_rpv`  | Flow implemented; one mapping to confirm | Hosted document + liveness capture, resolved by signed callback. The provider's callback field names must be confirmed against their live docs before enabling — see `parseProviderCallback`. |
-| `dev_stub`      | Local only                               | Refuses to load outside `vite dev`.                                                                                                                                                           |
-
-Policy is configurable via `IDENTITY_VERIFICATION_POLICY`:
-
-- `disabled` — for self-hosted or internal-only deployments, where no external
-  end users exist and the obligation does not arise.
-- `portrait_and_restricted` (default) — verification required to upload a real
-  person's likeness, and to use models whose provider terms require verified end
-  users (`src/lib/compliance/restricted-models.ts`).
-- `all_generation` — required for every generation.
-
-**What we store:** the provider, their reference, what the check proved
-(document / liveness / both), pass or fail, country, timestamps, and a _salted
-hash_ of the verified legal name. **Never** an identity document, a document
-number, or the name in plaintext. The salted hash makes "has this legal identity
-verified other accounts?" answerable — the pattern behind most repeat
-portrait-rights abuse — without our database holding anyone's name. With no salt
-configured the field stays null and duplicate detection is simply off; it never
-falls back to an unsalted digest.
+**Real-name authentication** (overseas tool platform, confirmed with BytePlus
+GTM 2026-08-13): users are email-authenticated; paying teams have a card on
+file via Stripe (cardholder name + last 4). We do **not** collect government
+IDs or run liveness checks.
 
 **Violation handling.** End-to-end, not just a policy:
 
@@ -132,9 +109,8 @@ falls back to an unsalted digest.
    `account_terminated`, recorded in `enforcement_actions` with actor, reason,
    optional expiry, and revocation.
 5. **Enforce** — the gate in `triggerWorkflow` blocks restricted accounts from
-   starting durable work and, under `all_generation`, requires a verified
-   identity. Portrait uploads and talent media attaches are gated on the
-   server (`requireLikenessAttachment`), not only in the dialog.
+   starting durable work. Portrait uploads require a server-recorded likeness
+   warrant (`requireLikenessAttachment`), not only the dialog checkbox.
 6. **Notify and appeal** — `ComplianceRestrictionBanner` shows the restriction
    notice and links to `/report`. If `ABUSE_REPORT_NOTIFY_EMAIL` is set, intake
    emails the operator (and fails the request if the send fails). A successful
@@ -147,14 +123,9 @@ falls back to an unsalted digest.
 All optional; resolved in one place (`src/lib/compliance/config.ts`) and
 documented in `.env.example`.
 
-| Variable                         | Purpose                                                                    |
-| -------------------------------- | -------------------------------------------------------------------------- |
-| `IDENTITY_VERIFICATION_POLICY`   | `disabled` \| `portrait_and_restricted` \| `all_generation`                |
-| `IDENTITY_VERIFICATION_PROVIDER` | `manual_review` \| `byteplus_rpv` \| `dev_stub`                            |
-| `IDENTITY_HASH_SALT`             | Enables duplicate-identity detection. Unset ⇒ off.                         |
-| `BYTEPLUS_RPV_BASE_URL`          | Hosted verification flow base URL                                          |
-| `BYTEPLUS_RPV_CALLBACK_SECRET`   | Shared secret for the callback; without it the callback route fails closed |
-| `ABUSE_REPORT_NOTIFY_EMAIL`      | Where report notifications go. Unset ⇒ queue-only. Set ⇒ send on intake.   |
+| Variable                    | Purpose                                                                  |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `ABUSE_REPORT_NOTIFY_EMAIL` | Where report notifications go. Unset ⇒ queue-only. Set ⇒ send on intake. |
 
 ---
 
@@ -166,9 +137,8 @@ document:
 - ✅ Traceability infrastructure, lookup console, and response plan — built and
   tested. **Partial asset coverage**, documented above.
 - ✅ Portrait attestation, terms, and liability pass-through — built.
-- ✅ Real-name verification mechanism — built, working via manual review. A
-  hosted provider needs its callback payload mapping confirmed and credentials
-  set.
+- ✅ Real-name authentication as accepted by BytePlus: email login + card on
+  file. No government-ID flow.
 - ✅ Report intake, triage, enforcement, and the generation gate — built.
 - ⚠️ **Operational, not code:** someone must actually watch the queue and meet
   the response targets; `ABUSE_REPORT_NOTIFY_EMAIL` should be set and routed to

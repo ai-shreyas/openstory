@@ -8,7 +8,6 @@
  */
 
 import { statementFor, statementHash } from '@/lib/compliance/attestations';
-import { requirePortraitUploadAllowed } from '@/lib/compliance/generation-gate';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { AttestationRequiredError, ValidationError } from '@/lib/errors';
 import { z } from 'zod';
@@ -28,18 +27,13 @@ export type LikenessRequestContext = {
 };
 
 /**
- * Throw unless the account may attach a likeness and the request carries
- * the attestation fields the stored evidence needs.
+ * Throw unless the request carries the attestation fields the stored
+ * evidence needs. Enforcement (can this account write?) is the
+ * team-middleware's job; this is only the likeness warrant.
  */
-export async function requireLikenessAttachment(opts: {
-  userId: string;
-  teamId: string;
+export function requireLikenessAttachment(opts: {
   attestation: PortraitAttestationInput | undefined;
-}): Promise<PortraitAttestationInput> {
-  await requirePortraitUploadAllowed({
-    userId: opts.userId,
-    teamId: opts.teamId,
-  });
+}): PortraitAttestationInput {
   if (!opts.attestation?.authorizationBasis.trim()) {
     throw new AttestationRequiredError(
       'A rights attestation is required for this upload'

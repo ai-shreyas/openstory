@@ -18,9 +18,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
   applyEnforcementFn,
-  decideVerificationFn,
   listContentReportsFn,
-  listPendingVerificationsFn,
   resolveContentReportFn,
   traceContentFn,
 } from '@/functions/moderation';
@@ -32,7 +30,7 @@ import { Suspense, useState } from 'react';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
-const TAB_VALUES = ['reports', 'trace', 'verifications'] as const;
+const TAB_VALUES = ['reports', 'trace'] as const;
 
 const searchSchema = z.object({
   tab: z.enum(TAB_VALUES).optional().default('reports'),
@@ -70,14 +68,12 @@ function ModerationPage() {
         <TabsList>
           <TabsTrigger value="reports">Reports</TabsTrigger>
           <TabsTrigger value="trace">Trace content</TabsTrigger>
-          <TabsTrigger value="verifications">Verifications</TabsTrigger>
         </TabsList>
       </Tabs>
 
       <Suspense fallback={<Skeleton className="h-64 w-full" />}>
         {tab === 'reports' ? <ReportsTab /> : null}
         {tab === 'trace' ? <TraceTab /> : null}
-        {tab === 'verifications' ? <VerificationsTab /> : null}
       </Suspense>
     </div>
   );
@@ -401,110 +397,6 @@ const TraceTab: React.FC = () => {
               Prompt hash {row.promptSha256 ?? '—'} · workflow{' '}
               {row.workflowRunId ?? '—'}
             </p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-};
-
-// ============================================================================
-// Verifications
-// ============================================================================
-
-const VerificationsTab: React.FC = () => {
-  const queryClient = useQueryClient();
-  const [names, setNames] = useState<Record<string, string>>({});
-
-  const { data: pending = [] } = useQuery({
-    queryKey: ['moderation-verifications'],
-    queryFn: () => listPendingVerificationsFn(),
-  });
-
-  const decideMutation = useMutation({
-    mutationFn: (input: {
-      verificationId: string;
-      verified: boolean;
-      subjectName?: string;
-    }) => decideVerificationFn({ data: input }),
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({
-        queryKey: ['moderation-verifications'],
-      });
-      toast.success('Verification decided', {
-        description:
-          result.sharedAccounts > 0
-            ? `Heads up: this identity has verified ${result.sharedAccounts} other account(s).`
-            : undefined,
-      });
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : 'Decision failed'),
-  });
-
-  if (pending.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-10 text-center text-sm text-muted-foreground">
-          No verifications awaiting review.
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted-foreground">
-        Review the documents supplied out-of-band, then record the outcome. The
-        legal name is hashed on submit for duplicate detection and is never
-        stored — do not paste it anywhere else.
-      </p>
-      {pending.map((row) => (
-        <Card key={row.id}>
-          <CardContent className="flex flex-col gap-3 py-6">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-medium">{row.userEmail ?? row.userId}</span>
-              <Badge variant="secondary">{row.provider}</Badge>
-              <span className="ml-auto text-sm text-muted-foreground">
-                {new Date(row.createdAt).toLocaleString()}
-              </span>
-            </div>
-            <Input
-              placeholder="Legal name as shown on the document"
-              value={names[row.id] ?? ''}
-              onChange={(event) =>
-                setNames((prev) => ({ ...prev, [row.id]: event.target.value }))
-              }
-              autoComplete="off"
-            />
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                disabled={decideMutation.isPending || !names[row.id]?.trim()}
-                onClick={() =>
-                  decideMutation.mutate({
-                    verificationId: row.id,
-                    verified: true,
-                    subjectName: names[row.id],
-                  })
-                }
-              >
-                Approve
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={decideMutation.isPending}
-                onClick={() =>
-                  decideMutation.mutate({
-                    verificationId: row.id,
-                    verified: false,
-                  })
-                }
-              >
-                Reject
-              </Button>
-            </div>
           </CardContent>
         </Card>
       ))}

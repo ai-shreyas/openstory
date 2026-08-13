@@ -7,7 +7,6 @@ import {
   listPublicTalent,
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
-import { requirePortraitUploadAllowed } from '@/lib/compliance/generation-gate';
 import {
   portraitAttestationSchema,
   recordPortraitAttestation,
@@ -272,14 +271,6 @@ export const presignTalentUploadFn = createServerFn({ method: 'POST' })
     )
   )
   .handler(async ({ context, data }) => {
-    // Identity first: refuse the signed URL rather than accept bytes we will
-    // reject at finalize. Attestation is checked at finalize, once the talent
-    // id is known for sure.
-    await requirePortraitUploadAllowed({
-      userId: context.user.id,
-      teamId: context.teamId,
-    });
-
     if (data.talentId) {
       const talentRecord = await context.scopedDb.talent.getById(data.talentId);
       if (
@@ -328,9 +319,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       throw new Error('Invalid storage path');
     }
 
-    const attestation = await requireLikenessAttachment({
-      userId: context.user.id,
-      teamId: context.teamId,
+    const attestation = requireLikenessAttachment({
       attestation: data.portraitAttestation,
     });
     const request = getRequest();

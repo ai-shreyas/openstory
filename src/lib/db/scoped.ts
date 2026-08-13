@@ -363,25 +363,20 @@ export function createSystemAdminScopedDb() {
 }
 
 /**
- * Enforcement + verification rows for one user (#1180).
+ * Enforcement rows for one user (#1180).
  *
  * Module-level and unscoped, like `resolveUserTeam` above, for the same reason:
  * the generation gate runs before any team scope is meaningful, and an
  * enforcement action follows the person rather than the workspace. Returns raw
- * rows; interpretation lives in `@/lib/compliance/enforcement` and
- * `@/lib/compliance/identity-verification` so the policy stays pure and
- * testable.
+ * rows; interpretation lives in `@/lib/compliance/enforcement`.
  */
 export async function loadComplianceRecords(
   userId: string,
   teamId?: string | null
 ) {
   const reads = createComplianceReadMethods(getDb());
-  const [enforcement, verifications] = await Promise.all([
-    reads.listEnforcementFor(userId, teamId),
-    reads.listVerificationsFor(userId),
-  ]);
-  return { enforcement, verifications };
+  const enforcement = await reads.listEnforcementFor(userId, teamId);
+  return { enforcement };
 }
 
 /**

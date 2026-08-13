@@ -159,7 +159,7 @@ export function restrictionNotice(state: EnforcementState): string | null {
 
 /**
  * Throw if the account may not generate. Used by `requireGenerationAllowed`
- * (identity + enforcement) and, via that, by `triggerWorkflow`.
+ * and, via that, by `triggerWorkflow`.
  */
 export function assertCanGenerate(state: EnforcementState): void {
   if (state.canGenerate) return;

@@ -579,21 +579,6 @@
         // E2E_TEST gates /api/test/* routes (via testOnlyGuard) and many
         // test-specific branches in storage / workflow client code.
         "E2E_TEST": "true",
-        // Identity verification off for e2e (#1180). Seeded test users hold no
-        // verification, and the default policy gates likeness uploads on one, so
-        // reference-media specs would 403 on something unrelated to the flow
-        // under test. It must live HERE and not in playwright.config's envPrefix
-        // — that route does not reach the worker's getEnv() (tried in efcf41c,
-        // e2e still 403'd). The policy logic is unit-tested; the portrait-rights
-        // ATTESTATION stays required and is exercised by the talent spec.
-        // Driving the gate end-to-end needs a verified-user fixture — follow-up.
-        //
-        // NOTE: editing this file fires the typegen-regen pre-commit hook, which
-        // rewrites the committed worker-configuration.d.ts from the committing
-        // machine's wrangler/workerd and .env files. If that file shows up in
-        // your diff with hundreds of changed lines, restore it from main in a
-        // separate commit that stages only that file.
-        "IDENTITY_VERIFICATION_POLICY": "disabled",
         // Note: a developer's .env.local R2_PUBLIC_STORAGE_DOMAIN could leak
         // into this worker env via the env-file merge, but it can't break
         // e2e: isLocalStorageServing() (src/lib/storage/buckets.ts) forces

@@ -145,16 +145,10 @@ export async function createGeneratedAsset(
     return { ok: false, issues: validation.issues };
   }
 
-  // Compliance gate beside the credit gate (#1180). Direct model access is the
-  // path where the caller names an arbitrary endpoint, so it is where the
-  // restricted-model identity check actually bites — a provider whose terms
-  // require verified end users must not be reachable by an unverified account.
-  // `triggerWorkflow` backstops the enforcement half for every other path.
+  // Enforcement gate beside the credit gate (#1180).
   await requireGenerationAllowed({
     userId: scopedDb.userId,
     teamId: scopedDb.teamId,
-    provider: 'fal',
-    model: data.endpointId,
   });
 
   await requireCredits(scopedDb, ASSET_COST_ESTIMATES[data.activity], {
