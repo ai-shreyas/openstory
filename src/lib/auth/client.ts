@@ -1,6 +1,7 @@
 /**
  * BetterAuth client configuration for React components
- * Provides client-side authentication methods and hooks
+ * Provides client-side sign-in methods (OTP, Google, passkeys).
+ * Session *reads* use `useAuthSession` / `getSessionFn`, not `useSession`.
  */
 
 import { passkeyClient } from '@better-auth/passkey/client';
@@ -53,9 +54,5 @@ export const authClient = createAuthClient({
   ],
 });
 
-// Export hooks and methods for easy use
-export const {
-  useSession,
-
-  // useListSessions,
-} = authClient;
+// Sign-in / OTP / Google / passkeys only. Session *reads* go through
+// `useAuthSession` / `sessionQueryOptions` (see `src/lib/auth/server.ts`).
