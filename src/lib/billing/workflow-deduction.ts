@@ -8,6 +8,10 @@
  * need (#1069). Use `recordFalUsage` in its own workflow step instead.
  */
 
+import {
+  NATIVE_GROK_IMAGE_MODEL,
+  NATIVE_GROK_VIDEO_MODEL,
+} from '@/lib/ai/grok-native';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { reportMissingBillingCost } from './billing-observability';
 import { type Microdollars, microsToUsd, ZERO_MICROS } from './money';
@@ -134,6 +138,14 @@ export async function recordFalUsage(
   // Observations are platform-global telemetry with no teamId (see
   // model_usage_observations), but the write still needs a db handle.
   if (!scopedDb) return;
+  // Native xAI units are a different denomination — sampling them under the
+  // fal endpoint id would corrupt the median the pricing cron reads (#1167).
+  if (
+    usage.endpointId === NATIVE_GROK_IMAGE_MODEL ||
+    usage.endpointId === NATIVE_GROK_VIDEO_MODEL
+  ) {
+    return;
+  }
   const { unitsBilled } = usage;
   if (
     unitsBilled == null ||

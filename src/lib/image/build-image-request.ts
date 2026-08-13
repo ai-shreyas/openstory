@@ -46,15 +46,21 @@ export type ImageGenerationParams = {
   referenceImageUrls?: string[];
 };
 
-const ASPECT_RATIO_MAP: Record<ImageSize, string> = {
+const ASPECT_RATIO_MAP = {
   square_hd: '1:1',
   portrait_16_9: '9:16',
   landscape_16_9: '16:9',
-};
+} as const satisfies Record<ImageSize, string>;
 
-function imageSizeToAspectRatio(imageSize: ImageSize): string {
+type AspectRatioValue = (typeof ASPECT_RATIO_MAP)[ImageSize];
+
+function imageSizeToAspectRatio(imageSize: ImageSize): AspectRatioValue {
   return ASPECT_RATIO_MAP[imageSize];
 }
+
+/** xAI's `aspectRatio_resolution` template, narrowed to the ratios we offer.
+ *  Declared here, not imported, so this module stays adapter-free. */
+export type GrokImagineImageSize = `${AspectRatioValue}_${'1k' | '2k'}`;
 
 function truncatePromptForModel(
   prompt: string,
@@ -243,6 +249,35 @@ function buildFalModelOptions(
       throw new Error(`Unsupported model: ${String(_exhaustive)}`);
     }
   }
+}
+
+/**
+ * {@link buildImageRequest} for xAI-native Grok Imagine (#1167). Aspect-ratio
+ * sized rather than pixel sized; the fal-only knobs (seed, inference steps,
+ * safety tolerance, output format) have no Imagine counterpart and are dropped
+ * rather than faked.
+ */
+export function buildGrokImageRequest(params: ImageGenerationParams): {
+  prompt: string;
+  size: GrokImagineImageSize;
+  numImages: number;
+  referenceImageUrls: string[];
+} {
+  const aspectRatio = imageSizeToAspectRatio(
+    params.imageSize ?? DEFAULT_IMAGE_SIZE
+  );
+  // Imagine has no 4K tier — 4K lands on the highest it serves.
+  const resolution = params.resolution === '1K' ? '1k' : '2k';
+
+  return {
+    prompt: truncatePromptForModel(params.prompt, params.model),
+    size: `${aspectRatio}_${resolution}`,
+    numImages: params.numImages ?? 1,
+    referenceImageUrls: capReferenceImages(
+      params.model,
+      params.referenceImageUrls ?? []
+    ),
+  };
 }
 
 /**

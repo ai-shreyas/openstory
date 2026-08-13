@@ -38,4 +38,14 @@ describe('resolveMotionEndpoint', () => {
       references: 'none',
     });
   });
+
+  it('stamps xAI-native Grok as via xai with no reference URLs', () => {
+    expect(
+      resolveMotionEndpoint('grok_imagine_video_1_5', true, 'xai')
+    ).toEqual({
+      via: 'xai',
+      endpointId: 'grok-imagine-video-1.5',
+      references: 'none',
+    });
+  });
 });

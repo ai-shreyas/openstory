@@ -24,9 +24,12 @@ vi.doMock('@tanstack/ai', () => ({
   chat: mockChat,
 }));
 
-// Mock create-adapter to avoid real adapter creation
+// Mock create-adapter to avoid real adapter creation. `resolveNativeGrokModel`
+// returns undefined so these tests exercise the OpenRouter request shape;
+// native xAI routing has its own coverage in create-adapter.test.ts.
 vi.doMock('./create-adapter', () => ({
   createAdapter: () => ({ kind: 'text', name: 'mock' }),
+  resolveNativeGrokModel: () => undefined,
 }));
 
 // Mock the PostHog OTel middleware factory — observability hints are
@@ -921,6 +924,30 @@ describe('llm-client', () => {
           'anthropic/claude-sonnet-5'
         )
       ).toBe(ZERO_MICROS);
+    });
+
+    it('prices a Grok model from xAI’s published rates (issue #1167)', () => {
+      // xAI reports tokens but never a cost, so a Grok model arriving here
+      // without one is by construction a natively-routed call. $0 would be a
+      // silent revenue hole on every native render.
+      expect(
+        llmCostFromUsage(
+          {
+            promptTokens: 100_000,
+            completionTokens: 100_000,
+            totalTokens: 200_000,
+          },
+          'x-ai/grok-4.6'
+        )
+      ).toBe(800_000);
+    });
+
+    it('still prefers OpenRouter’s reported cost for a Grok model', () => {
+      // A Grok call that DID go through OpenRouter carries the real bill —
+      // the published-rate path must not override it.
+      expect(llmCostFromUsage(usage(0.0123), 'x-ai/grok-4.6')).toBe(
+        usdToMicros(0.0123)
+      );
     });
   });
 

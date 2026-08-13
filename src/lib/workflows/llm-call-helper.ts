@@ -8,7 +8,12 @@
  *     re-wraps at the runImpl boundary).
  */
 
-import { createAdapter, getPlatformLlmKey } from '@/lib/ai/create-adapter';
+import {
+  createAdapter,
+  getPlatformLlmKey,
+  resolveNativeGrokModel,
+  type LlmKeyInfo,
+} from '@/lib/ai/create-adapter';
 import {
   createUsageCapture,
   extractRunError,
@@ -152,6 +157,31 @@ function reasoningModelOptions(reasoning: boolean | undefined): {
   return reasoning ? { reasoning: PROMPT_REASONING } : {};
 }
 
+/** OpenRouter vs xAI Responses sampling options. xAI rejects `streamOptions`
+ *  and uses `max_output_tokens`; omitting reasoning on grok-4.6 falls through
+ *  to xAI's `high` default, so unrequested reasoning is sent as `low`. */
+function chatModelOptionsForCall(
+  modelId: TextModel,
+  llmKeyInfo: LlmKeyInfo,
+  reasoning: boolean | undefined
+) {
+  const native = !!resolveNativeGrokModel(modelId, llmKeyInfo);
+  const maxTokens = Math.floor(getContextWindow(modelId) * 0.5);
+  if (native) {
+    return {
+      ...(reasoning
+        ? { reasoning: { effort: PROMPT_REASONING.effort } }
+        : { reasoning: { effort: 'low' as const } }),
+      max_output_tokens: maxTokens,
+    };
+  }
+  return {
+    ...reasoningModelOptions(reasoning),
+    maxCompletionTokens: maxTokens,
+    streamOptions: { includeUsage: true },
+  };
+}
+
 export type DurableLLMCallContext = {
   sequenceId?: string;
   userId?: string;
@@ -184,11 +214,14 @@ type LlmKeySource = 'team' | 'platform';
  * returns the non-secret `source`/`via` so the deduction bills exactly the key
  * the call was made with; the decrypted key never crosses a step boundary.
  */
-async function resolveCallKey(callContext: DurableLLMCallContext) {
+async function resolveCallKey(
+  callContext: DurableLLMCallContext,
+  model?: string
+) {
   if (callContext.scopedDb) {
-    return callContext.scopedDb.credentials.resolveLlmKey();
+    return callContext.scopedDb.credentials.resolveLlmKey(model);
   }
-  const platform = getPlatformLlmKey();
+  const platform = getPlatformLlmKey(model);
   if (!platform) {
     throw new NonRetryableError(
       'No platform LLM key available (set OPENROUTER_KEY or FAL_KEY)',
@@ -246,7 +279,7 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
       costMicros: Microdollars;
       keySource: LlmKeySource;
     }> => {
-      const llmKeyInfo = await resolveCallKey(callContext);
+      const llmKeyInfo = await resolveCallKey(callContext, modelId);
       const adapter = createAdapter(modelId, llmKeyInfo);
 
       logger.info(`[LLM:${logName}:cf] Starting call`, {
@@ -288,11 +321,11 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
           messages: chatMessages,
           stream: true as const,
           abortController,
-          modelOptions: {
-            ...reasoningModelOptions(config.reasoning),
-            maxCompletionTokens: Math.floor(getContextWindow(modelId) * 0.5),
-            streamOptions: { includeUsage: true },
-          },
+          modelOptions: chatModelOptionsForCall(
+            modelId,
+            llmKeyInfo,
+            config.reasoning
+          ),
           middleware: [
             ...aiObservabilityMiddleware({
               observationName: logName,
@@ -426,7 +459,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
       costMicros: Microdollars;
       keySource: LlmKeySource;
     }> => {
-      const llmKeyInfo = await resolveCallKey(callContext);
+      const llmKeyInfo = await resolveCallKey(callContext, modelId);
       const adapter = createAdapter(modelId, llmKeyInfo);
 
       logger.info(`[LLM:${logName}:cf] Starting streaming call`, {
@@ -478,11 +511,11 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         messages: chatMessages,
         stream: true as const,
         abortController,
-        modelOptions: {
-          ...reasoningModelOptions(config.reasoning),
-          maxCompletionTokens: Math.floor(getContextWindow(modelId) * 0.5),
-          streamOptions: { includeUsage: true },
-        },
+        modelOptions: chatModelOptionsForCall(
+          modelId,
+          llmKeyInfo,
+          config.reasoning
+        ),
         middleware: [
           ...aiObservabilityMiddleware({
             observationName: logName,

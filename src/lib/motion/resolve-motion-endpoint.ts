@@ -14,6 +14,7 @@
  *   - `none` — URLs are not sent; tokens become descriptions in the prompt
  */
 
+import { NATIVE_GROK_VIDEO_MODEL } from '@/lib/ai/grok-native';
 import {
   IMAGE_TO_VIDEO_MODELS,
   attachesInlineReferences,
@@ -40,8 +41,16 @@ export type MotionEndpointResolution =
 
 export function resolveMotionEndpoint(
   modelKey: ImageToVideoModel,
-  hasReferenceImages: boolean
+  hasReferenceImages: boolean,
+  via: MediaVia = 'fal'
 ): MotionEndpointResolution {
+  if (via === 'xai') {
+    return {
+      via: 'xai',
+      endpointId: NATIVE_GROK_VIDEO_MODEL,
+      references: 'none',
+    };
+  }
   if (hasReferenceImages) {
     const referenceConfig = getMotionReferenceEndpoint(modelKey);
     if (referenceConfig) {

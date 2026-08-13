@@ -1,7 +1,10 @@
 import { EDIT_ENDPOINTS } from '@/lib/ai/models';
 import { typedEntries } from '@/lib/utils/typed-object';
 import { describe, expect, it } from 'vitest';
-import { buildImageRequest } from './build-image-request';
+import {
+  buildGrokImageRequest,
+  buildImageRequest,
+} from './build-image-request';
 
 const REFS = ['https://example.com/a.png', 'https://example.com/b.png'];
 
@@ -78,4 +81,45 @@ describe('buildImageRequest — edit endpoints carry their reference images', ()
       expect(input).not.toHaveProperty('image_urls');
     }
   );
+});
+
+describe('buildGrokImageRequest (issue #1167)', () => {
+  const BASE = {
+    model: 'grok_imagine_image',
+    prompt: 'a lighthouse at dusk',
+  } as const;
+
+  it('renders the aspect-ratio_resolution size template xAI expects', () => {
+    expect(
+      buildGrokImageRequest({ ...BASE, imageSize: 'landscape_16_9' }).size
+    ).toBe('16:9_2k');
+    expect(
+      buildGrokImageRequest({ ...BASE, imageSize: 'portrait_16_9' }).size
+    ).toBe('9:16_2k');
+    expect(
+      buildGrokImageRequest({ ...BASE, imageSize: 'square_hd' }).size
+    ).toBe('1:1_2k');
+  });
+
+  it('maps our resolution names onto the two tiers xAI serves', () => {
+    expect(buildGrokImageRequest({ ...BASE, resolution: '1K' }).size).toBe(
+      '16:9_1k'
+    );
+    expect(buildGrokImageRequest({ ...BASE, resolution: '2K' }).size).toBe(
+      '16:9_2k'
+    );
+    // xAI has no 4K tier — asking for one lands on the highest it does serve
+    // rather than being rejected outright.
+    expect(buildGrokImageRequest({ ...BASE, resolution: '4K' }).size).toBe(
+      '16:9_2k'
+    );
+  });
+
+  it('truncates the prompt to the model’s limit, as the fal path does', () => {
+    const longPrompt = 'x'.repeat(5000);
+    const { prompt } = buildGrokImageRequest({ ...BASE, prompt: longPrompt });
+
+    expect(prompt.length).toBeLessThanOrEqual(4000);
+    expect(prompt.endsWith('...')).toBe(true);
+  });
 });

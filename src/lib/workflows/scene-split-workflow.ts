@@ -342,7 +342,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           script: gutteredScript,
         });
 
-        const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
+        const llmKeyInfo = await scopedDb.credentials.resolveLlmKey(modelId);
 
         logger.info(
           `[SceneSplitWorkflow:cf] [LLM:${LOG_NAME}] Starting streaming call`,
@@ -653,7 +653,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         script: gutteredScript,
         elements: elementsBlock,
       });
-      const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
+      const llmKeyInfo = await scopedDb.credentials.resolveLlmKey(modelId);
 
       logger.info(
         `[SceneSplitWorkflow:cf] [LLM:${BIBLES_LOG_NAME}] Starting call`,

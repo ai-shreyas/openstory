@@ -1,13 +1,22 @@
 /**
- * Shared OpenRouter adapter factory
- * Creates TanStack AI adapters for OpenRouter models. Calls route either to
- * OpenRouter directly or through fal's OpenAI-compatible OpenRouter endpoint
- * (so a team with only a fal key still covers LLM calls — issue #895).
+ * Shared text adapter factory.
+ *
+ * Creates TanStack AI adapters for our chat models. Grok models go to xAI
+ * directly when an xAI key is resolvable (issue #1167); everything else — and
+ * Grok with no xAI key — goes to OpenRouter, either directly or through fal's
+ * OpenAI-compatible OpenRouter endpoint (so a team with only a fal key still
+ * covers LLM calls — issue #895).
  */
 
 import { getEnv } from '#env';
+import {
+  nativeGrokTextModel,
+  type NativeGrokTextModel,
+} from '@/lib/ai/grok-native';
 import type { TextModel } from '@/lib/ai/models';
 import { HTTPClient } from '@openrouter/sdk/lib/http';
+import { createModel, extendAdapter } from '@tanstack/ai';
+import { createGrokText } from '@tanstack/ai-grok';
 import { createOpenRouterText, openRouterText } from '@tanstack/ai-openrouter';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -25,9 +34,10 @@ export type LlmKeyInfo = {
   /**
    * Which API the key belongs to: 'openrouter' calls OpenRouter directly
    * (Bearer auth), 'fal' routes through fal's OpenRouter endpoint (`Key`
-   * auth — fal rejects Bearer there).
+   * auth — fal rejects Bearer there), 'xai' calls xAI's own Responses API
+   * (Bearer auth, Grok models only — issue #1167).
    */
-  via: 'openrouter' | 'fal';
+  via: 'openrouter' | 'fal' | 'xai';
 };
 
 // fal's endpoint authenticates with `Authorization: Key <FAL_KEY>` while the
@@ -42,15 +52,21 @@ function falAuthHttpClient(falKey: string): HTTPClient {
 }
 
 /**
- * Resolve the platform-level LLM key from env. Prefers OPENROUTER_KEY; with
- * only FAL_KEY set, LLM calls route through fal's OpenRouter endpoint — the
- * platform can run on a single fal key (issue #895). Returns undefined when
- * neither is configured.
+ * Resolve the platform-level LLM key from env. A Grok model prefers
+ * XAI_API_KEY (#1167); otherwise OPENROUTER_KEY, and with only FAL_KEY set LLM
+ * calls route through fal's OpenRouter endpoint — the platform can run on a
+ * single fal key (issue #895). Returns undefined when none is configured.
+ *
+ * Omitting `model` keeps the OpenRouter-first order, which every model
+ * supports — a caller that can't name the model can't promise it's a Grok one.
  */
-export function getPlatformLlmKey():
-  | (LlmKeyInfo & { source: 'platform' })
-  | undefined {
+export function getPlatformLlmKey(
+  model?: string
+): (LlmKeyInfo & { source: 'platform' }) | undefined {
   const env = getEnv();
+  if (model && nativeGrokTextModel(model) && env.XAI_API_KEY) {
+    return { key: env.XAI_API_KEY, via: 'xai', source: 'platform' };
+  }
   if (env.OPENROUTER_KEY) {
     return { key: env.OPENROUTER_KEY, via: 'openrouter', source: 'platform' };
   }
@@ -80,14 +96,57 @@ let loggedRetryMode = false;
  */
 export const CATALOG_LAG_MODELS = [] as const;
 
+/** {@link CATALOG_LAG_MODELS} for the Grok adapter, whose generated catalog
+ *  knows only `grok-4.3` / `grok-build-0.1`. Same contract: prune as it
+ *  catches up. */
+const GROK_CATALOG_LAG_MODELS = [
+  createModel('grok-4.6', {
+    input: ['text', 'image'],
+    features: ['reasoning', 'structured_outputs'],
+  }),
+  createModel('grok-4.20-0309-reasoning', {
+    input: ['text', 'image'],
+    features: ['reasoning', 'structured_outputs'],
+  }),
+] as const;
+
+const createGrokTextExtended = extendAdapter(
+  createGrokText,
+  GROK_CATALOG_LAG_MODELS
+);
+
+/**
+ * Whether a request goes to xAI directly, and under which model name. The
+ * request body differs by route (xAI speaks the Responses API), so `llm-client`
+ * asks this too rather than deciding for itself — that's what stops a
+ * Responses-shaped body reaching OpenRouter, or the reverse.
+ */
+export function resolveNativeGrokModel(
+  model: TextModel,
+  keyInfo?: LlmKeyInfo
+): NativeGrokTextModel | undefined {
+  const resolved = keyInfo ?? getPlatformLlmKey(model);
+  if (resolved?.via !== 'xai' || !resolved.key) return undefined;
+  return nativeGrokTextModel(model);
+}
+
 // Callers must say which API a key belongs to (`via`) — a bare string can't:
 // a fal key mistaken for an OpenRouter key gets Bearer auth against
 // openrouter.ai and 401s at runtime, invisibly to the compiler.
 export function createAdapter(model: TextModel, keyInfo?: LlmKeyInfo) {
   const env = getEnv();
-  const resolved = keyInfo ?? getPlatformLlmKey();
+  const resolved = keyInfo ?? getPlatformLlmKey(model);
   const key = resolved?.key;
   const via = resolved?.via ?? 'openrouter';
+
+  const nativeModel = resolveNativeGrokModel(model, resolved);
+  if (nativeModel && key) {
+    return createGrokTextExtended(nativeModel, key, {
+      // XAI_BASE_URL points aimock at the native path in e2e, mirroring what
+      // OPENROUTER_BASE_URL does for the OpenRouter path below.
+      ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
+    });
+  }
 
   // During E2E recording, aimock proxies our OpenRouter calls upstream and
   // *buffers* the entire SSE response before relaying — see
