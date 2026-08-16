@@ -334,6 +334,27 @@ export const authWithTeamRequestMiddleware = createMiddleware().server(
         );
       }
 
+      const compliance = await loadComplianceState(
+        session.user.id,
+        team.teamId
+      );
+      if (!compliance.enforcement.canAccess) {
+        throw authErrorResponse(
+          403,
+          'ACCOUNT_RESTRICTED',
+          restrictionNotice(compliance.enforcement) ??
+            'This account may not use the service'
+        );
+      }
+      if (request.method !== 'GET' && !compliance.enforcement.canWrite) {
+        throw authErrorResponse(
+          403,
+          'ACCOUNT_RESTRICTED',
+          restrictionNotice(compliance.enforcement) ??
+            'This account is read-only'
+        );
+      }
+
       return await next({
         context: {
           user: session.user,

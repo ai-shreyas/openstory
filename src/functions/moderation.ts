@@ -13,7 +13,7 @@ import {
   CONTENT_REPORT_STATUSES,
   ENFORCEMENT_ACTIONS,
 } from '@/lib/db/schema/compliance';
-import { parseTraceId } from '@/lib/compliance/provenance';
+import { extractStorageKey, parseTraceId } from '@/lib/compliance/provenance';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { ValidationError } from '@/lib/errors';
 import { getLogger } from '@/lib/observability/logger';
@@ -135,45 +135,6 @@ export const traceContentFn = createServerFn({ method: 'GET' })
 
     return { results };
   });
-
-/**
- * Reduce a pasted asset reference to the R2 key provenance stores.
- *
- * Handles the three forms an asset URL takes in this app — an origin-relative
- * `/r2/<key>`, an absolute URL on the app or CDN domain, and a bare key — and
- * returns null for anything else so the caller can fall through to other
- * lookups. Deliberately does not guess: a wrong key silently returns "no
- * provenance found", which reads as "we cannot trace our own content".
- */
-function extractStorageKey(input: string): string | null {
-  const withoutQuery = input.split('?')[0] ?? input;
-
-  const r2Marker = '/r2/';
-  const markerIndex = withoutQuery.indexOf(r2Marker);
-  if (markerIndex >= 0) {
-    const key = withoutQuery.slice(markerIndex + r2Marker.length);
-    return key || null;
-  }
-
-  if (
-    withoutQuery.startsWith('http://') ||
-    withoutQuery.startsWith('https://')
-  ) {
-    try {
-      const path = new URL(withoutQuery).pathname.replace(/^\/+/, '');
-      return path || null;
-    } catch {
-      return null;
-    }
-  }
-
-  // A bare key: has a path separator and an extension, no scheme. Distinguishes
-  // `sequences/abc/shot-1.mp4` from a trace id or a free-text search.
-  if (withoutQuery.includes('/') && /\.[a-z0-9]{2,5}$/i.test(withoutQuery)) {
-    return withoutQuery;
-  }
-  return null;
-}
 
 /** Everything an account generated — evidence for an enforcement decision. */
 export const listTeamProvenanceFn = createServerFn({ method: 'GET' })

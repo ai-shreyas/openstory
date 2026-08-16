@@ -227,8 +227,7 @@ export const uploadAttestations = snakeCase.table(
 
     /**
      * True when the user declared the upload depicts a real, identifiable
-     * person — the trigger for the portrait-authorization requirement and for
-     * requiring a verified identity on the account.
+     * person — the trigger for the portrait-authorization requirement.
      */
     depictsRealPerson: integer({ mode: 'boolean' }).default(false).notNull(),
     /**

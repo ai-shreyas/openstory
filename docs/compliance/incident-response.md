@@ -41,8 +41,9 @@ re-prioritised at triage.
 Every route lands in the same place: a `content_reports` row, visible in
 **Admin → Moderation → Reports**, worst-priority-first then oldest-first.
 
-Reports are acknowledged with a reference (`OS-<ulid>`) that the reporter can
-quote on follow-up.
+Reports are acknowledged with a reference (`OR-<ulid>`) that the reporter can
+quote on follow-up. The `OR-` prefix is deliberate so a report id cannot be
+parsed as a provenance trace (`OS-`).
 
 ---
 

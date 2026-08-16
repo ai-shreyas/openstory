@@ -190,9 +190,7 @@ export class SequenceExportWorkflow extends OpenStoryWorkflowEntrypoint<Sequence
         userId: event.payload.userId,
         assetKind: 'sequence_export',
         assetId: exportId,
-        // The bucket-prefixed key, not the bare path: `uploadFile` prefixes the
-        // bucket internally, and provenance lookups match on the full key that
-        // every other asset kind stores.
+        // Bucket-prefixed key so a pasted `/r2/videos/…` URL matches.
         storageKey: buildR2Key(STORAGE_BUCKETS.VIDEOS, storagePath),
         provider: 'openstory',
         model: 'video-export-container',

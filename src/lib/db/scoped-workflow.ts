@@ -158,6 +158,11 @@ type WorkflowLiveReads = Pick<ScopedDb, 'teamId' | 'userId'> & {
     ScopedDb['videoVariants'],
     'getSelectedByShot' | 'listBySegment'
   >;
+  /**
+   * Spawn-time enforcement — a ban applied after the parent started must
+   * stop work that has not started yet. Same class as a billing guard.
+   */
+  compliance: Pick<ScopedDb['compliance'], 'listEnforcementFor'>;
 };
 
 export type WorkflowScopedDb = WorkflowDomains & {

@@ -36,6 +36,16 @@ describe('generation-gate wiring', () => {
     expect(source).toMatch(/assertCanWrite/);
   });
 
+  test('request-path API middleware applies enforcement', () => {
+    const source = readFileSync('src/functions/middleware.ts', 'utf8');
+    const start = source.indexOf('export const authWithTeamRequestMiddleware');
+    const end = source.indexOf('export const stripeWebhookMiddleware');
+    const block = source.slice(start, end);
+    expect(block).toMatch(/loadComplianceState/);
+    expect(block).toMatch(/canAccess/);
+    expect(block).toMatch(/canWrite/);
+  });
+
   test('every request-path requireCredits call has a gate or triggerWorkflow', () => {
     // Request-path only: mid-run `requireCredits` inside a workflow is a
     // spawn-time billing guard, and the parent already passed the trigger gate.

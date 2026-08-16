@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   extractPromptForProvenance,
+  extractStorageKey,
   formatReportReference,
   formatTraceId,
   parseTraceId,
@@ -20,6 +21,32 @@ describe('trace ids', () => {
     const id = '01JAV000000000000000000002';
     expect(formatReportReference(id)).toBe(`OR-${id}`);
     expect(parseTraceId(`OR-${id}`)).toBeNull();
+  });
+});
+
+describe('extractStorageKey', () => {
+  it('uses r2KeyFromUrl for /r2/ paths', () => {
+    expect(extractStorageKey('/r2/thumbnails/team/shot.png')).toBe(
+      'thumbnails/team/shot.png'
+    );
+    expect(
+      extractStorageKey('https://app.example.com/r2/videos/team/clip.mp4')
+    ).toBe('videos/team/clip.mp4');
+  });
+
+  it('accepts a CDN URL or bare key that starts with a known bucket', () => {
+    expect(
+      extractStorageKey('https://storage.example.com/thumbnails/team/shot.png')
+    ).toBe('thumbnails/team/shot.png');
+    expect(extractStorageKey('videos/teams/abc/shot.mp4')).toBe(
+      'videos/teams/abc/shot.mp4'
+    );
+  });
+
+  it('does not treat a fal URL as a storage key', () => {
+    expect(
+      extractStorageKey('https://v3.fal.media/files/b/abc/out.png')
+    ).toBeNull();
   });
 });
 

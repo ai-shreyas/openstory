@@ -18,6 +18,7 @@ import type {
   ProvenanceAssetKind,
 } from '@/lib/db/schema/compliance';
 import { getLogger } from '@/lib/observability/logger';
+import { r2KeyFromUrl, STORAGE_BUCKETS } from '@/lib/storage/buckets';
 
 const logger = getLogger(['openstory', 'compliance', 'provenance']);
 
@@ -39,6 +40,37 @@ export function formatTraceId(provenanceId: string): string {
 /** Public reference for a content report, e.g. `OR-01JAV…`. */
 export function formatReportReference(reportId: string): string {
   return `${REPORT_PREFIX}-${reportId}`;
+}
+
+/**
+ * Reduce a pasted asset reference to the R2 key provenance stores.
+ *
+ * `/r2/<key>` and legacy absolute `/r2/` URLs go through `r2KeyFromUrl`. A
+ * CDN shareable URL (`https://<cdn>/<bucket>/…`) or a bare bucket-prefixed
+ * key is accepted only when the path starts with a known bucket — a fal URL
+ * must not become a storage-key lookup.
+ */
+export function extractStorageKey(input: string): string | null {
+  const withoutQuery = input.split('?')[0] ?? input;
+  const fromUrl = r2KeyFromUrl(withoutQuery);
+  if (fromUrl) return fromUrl;
+
+  let candidate = withoutQuery;
+  if (/^https?:\/\//i.test(withoutQuery)) {
+    try {
+      candidate = new URL(withoutQuery).pathname.replace(/^\/+/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  if (!candidate.includes('/') || !/\.[a-z0-9]{2,5}$/i.test(candidate)) {
+    return null;
+  }
+  const knownBucket = Object.values(STORAGE_BUCKETS).some((bucket) =>
+    candidate.startsWith(`${bucket}/`)
+  );
+  return knownBucket ? candidate : null;
 }
 
 /**
@@ -67,7 +99,7 @@ export type ProvenanceFacts = {
   userId?: string | null;
   assetKind: ProvenanceAssetKind;
   assetId: string;
-  /** R2 key. Derived from the upload result's `path`. */
+  /** Bucket-prefixed R2 key (`thumbnails/…`, `videos/…`). */
   storageKey?: string | null;
   contentSha256?: string | null;
   provider: string;

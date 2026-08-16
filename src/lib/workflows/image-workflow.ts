@@ -35,6 +35,7 @@ import {
 } from '@/lib/image/image-generation';
 import { uploadImageToStorage } from '@/lib/image/image-storage';
 import { recordProvenance } from '@/lib/compliance/provenance';
+import { buildR2Key, STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import { simpleHash } from '@/lib/utils/hash';
@@ -530,7 +531,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           userId: input.userId,
           assetKind: 'frame_variant',
           assetId: prep.versionId,
-          storageKey: upload.path,
+          storageKey: buildR2Key(STORAGE_BUCKETS.THUMBNAILS, upload.path),
           provider: 'fal',
           model: prep.params.model,
           providerRequestId: falUsage?.requestId ?? null,

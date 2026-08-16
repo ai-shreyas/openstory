@@ -355,9 +355,9 @@ export function createSystemAdminScopedDb() {
 
   return {
     admin: createAdminMethods(db),
-    // Cross-team moderation (#1180): the report queue, enforcement, trace
-    // lookup, and verification review. Only reachable through the system-admin
-    // scope, so a team-scoped caller cannot read another team's reports.
+    // Cross-team moderation (#1180): the report queue, enforcement, and
+    // trace lookup. Only reachable through the system-admin scope, so a
+    // team-scoped caller cannot read another team's reports.
     moderation: createModerationMethods(db),
   };
 }

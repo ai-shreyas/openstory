@@ -76,4 +76,15 @@ describe('triggerWorkflow enforcement backstop', () => {
       triggerWorkflow('/image', { userId: USER_ID, teamId: TEAM_ID })
     ).resolves.toMatch(/^mock-/);
   });
+
+  it('uses caller-supplied enforcement rows without a live load', async () => {
+    await expect(
+      triggerWorkflow(
+        '/image',
+        { userId: USER_ID, teamId: TEAM_ID },
+        { enforcement: [row('generation_suspended')] }
+      )
+    ).rejects.toBeInstanceOf(AccountRestrictedError);
+    expect(mockLoadComplianceRecords).not.toHaveBeenCalled();
+  });
 });

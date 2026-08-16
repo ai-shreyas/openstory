@@ -18,11 +18,16 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
   applyEnforcementFn,
+  attributeContentReportFn,
   listContentReportsFn,
   resolveContentReportFn,
   traceContentFn,
 } from '@/functions/moderation';
-import type { ContentReportReason } from '@/lib/db/schema/compliance';
+import { formatReportReference } from '@/lib/compliance/provenance';
+import {
+  CONTENT_REPORT_REASONS,
+  type ContentReportReason,
+} from '@/lib/db/schema/compliance';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { Search, ShieldAlert } from 'lucide-react';
@@ -34,6 +39,9 @@ const TAB_VALUES = ['reports', 'trace'] as const;
 
 const searchSchema = z.object({
   tab: z.enum(TAB_VALUES).optional().default('reports'),
+  q: z.string().optional(),
+  reportId: z.string().optional(),
+  reason: z.enum(CONTENT_REPORT_REASONS).optional(),
 });
 
 export const Route = createFileRoute('/_app/admin/moderation')({
@@ -84,6 +92,7 @@ function ModerationPage() {
 // ============================================================================
 
 const ReportsTab: React.FC = () => {
+  const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const [notes, setNotes] = useState<Record<string, string>>({});
 
@@ -168,7 +177,7 @@ const ReportsTab: React.FC = () => {
                     {new Date(report.createdAt).toLocaleString()}
                   </span>
                   <code className="ml-auto text-xs text-muted-foreground">
-                    OS-{report.id}
+                    {formatReportReference(report.id)}
                   </code>
                 </div>
 
@@ -208,6 +217,22 @@ const ReportsTab: React.FC = () => {
                 />
 
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void navigate({
+                        search: {
+                          tab: 'trace',
+                          q: report.targetId,
+                          reportId: report.id,
+                          reason: report.reason,
+                        },
+                      })
+                    }
+                  >
+                    Trace target
+                  </Button>
                   <Button
                     size="sm"
                     variant="outline"
@@ -309,8 +334,12 @@ const ReportsTab: React.FC = () => {
 // ============================================================================
 
 const TraceTab: React.FC = () => {
-  const [query, setQuery] = useState('');
-  const [submitted, setSubmitted] = useState('');
+  const { q, reportId, reason } = Route.useSearch();
+  const queryClient = useQueryClient();
+  const [query, setQuery] = useState(q ?? '');
+  const [submitted, setSubmitted] = useState(
+    q && q.trim().length >= 3 ? q.trim() : ''
+  );
 
   const { data, isFetching } = useQuery({
     queryKey: ['moderation-trace', submitted],
@@ -318,7 +347,42 @@ const TraceTab: React.FC = () => {
     enabled: submitted.length >= 3,
   });
 
+  const attributeMutation = useMutation({
+    mutationFn: (input: {
+      reportId: string;
+      subjectTeamId?: string;
+      subjectUserId?: string;
+    }) => attributeContentReportFn({ data: input }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['moderation-reports'] });
+      toast.success('Report attributed to this account');
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error ? error.message : 'Attribution failed'
+      ),
+  });
+
+  const enforceMutation = useMutation({
+    mutationFn: (input: {
+      subjectUserId?: string;
+      subjectTeamId?: string;
+      reason: ContentReportReason;
+      action: 'generation_suspended' | 'account_suspended';
+      reportId?: string;
+    }) => applyEnforcementFn({ data: input }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['moderation-reports'] });
+      toast.success('Enforcement recorded');
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error ? error.message : 'Enforcement failed'
+      ),
+  });
+
   const results = data?.results ?? [];
+  const enforcementReason: ContentReportReason = reason ?? 'other';
 
   return (
     <div className="flex flex-col gap-4">
@@ -397,6 +461,62 @@ const TraceTab: React.FC = () => {
               Prompt hash {row.promptSha256 ?? '—'} · workflow{' '}
               {row.workflowRunId ?? '—'}
             </p>
+            <div className="flex flex-wrap gap-2">
+              {reportId ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    attributeMutation.isPending || (!row.userId && !row.teamId)
+                  }
+                  onClick={() =>
+                    attributeMutation.mutate({
+                      reportId,
+                      subjectUserId: row.userId ?? undefined,
+                      subjectTeamId: row.teamId,
+                    })
+                  }
+                >
+                  Attribute to this account
+                </Button>
+              ) : null}
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={
+                  enforceMutation.isPending || (!row.userId && !row.teamId)
+                }
+                onClick={() =>
+                  enforceMutation.mutate({
+                    subjectUserId: row.userId ?? undefined,
+                    subjectTeamId: row.teamId,
+                    reason: enforcementReason,
+                    action: 'generation_suspended',
+                    reportId,
+                  })
+                }
+              >
+                Pause generation
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={
+                  enforceMutation.isPending || (!row.userId && !row.teamId)
+                }
+                onClick={() =>
+                  enforceMutation.mutate({
+                    subjectUserId: row.userId ?? undefined,
+                    subjectTeamId: row.teamId,
+                    reason: enforcementReason,
+                    action: 'account_suspended',
+                    reportId,
+                  })
+                }
+              >
+                Suspend account
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ))}

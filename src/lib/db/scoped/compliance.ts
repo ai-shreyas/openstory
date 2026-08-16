@@ -161,6 +161,22 @@ export function createComplianceMethods(
       },
     },
 
+    /**
+     * Live enforcement rows for this user + team. On the request path the
+     * unscoped `createComplianceReadMethods` version is used (the gate may
+     * run before a team is resolved). Workflows reach this one through
+     * `scopedDb.liveRead` as a spawn-time billing-guard analogue.
+     */
+    async listEnforcementFor(
+      subjectUserId: string,
+      subjectTeamId?: string | null
+    ): Promise<EnforcementAction[]> {
+      return createComplianceReadMethods(db).listEnforcementFor(
+        subjectUserId,
+        subjectTeamId
+      );
+    },
+
     reports: {
       /** File a report as a signed-in member of this team. */
       async create(input: {

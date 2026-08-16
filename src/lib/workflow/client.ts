@@ -8,6 +8,7 @@ import {
   assertCanGenerate,
   assertCanWrite,
   resolveEnforcementState,
+  type EnforcementRow,
 } from '@/lib/compliance/enforcement';
 import { loadComplianceRecords } from '@/lib/db/scoped';
 
@@ -34,21 +35,22 @@ const WRITE_ONLY_TRIGGERS = new Set(['sequence-export']);
  * policy, so this agrees with the banner the user sees and with the gate at the
  * entry points. Throws `AccountRestrictedError` (403).
  *
- * **This is a live D1 read, and three workflows call `triggerWorkflow` from
- * inside a run** (regenerate-shots, scene-split, shot-images), so those fan-outs
- * now read enforcement mid-run. That is deliberate and is the same category as
- * the sanctioned spawn-time billing guard: the ban must stop work that has not
- * started yet, which is only expressible as a live read. The consequence to know
- * about is that suspending an account mid-fan-out fails the parent run with
- * children partly spawned — correct for a ban, and the reason enforcement is
- * applied to accounts rather than to individual runs. Child spawns via
+ * **This is a live D1 read.** Request-path callers load via
+ * `loadComplianceRecords`. Mid-run callers (regenerate-shots, scene-split,
+ * shot-images) pass rows from `scopedDb.liveRead.compliance.listEnforcementFor`
+ * so the read is catalogued as a spawn-time billing guard. The ban must stop
+ * work that has not started yet. Suspending an account mid-fan-out fails the
+ * parent with children partly spawned — correct for a ban. Child spawns via
  * `spawnAndAwaitChild` use `binding.create()` directly and are not gated here.
  */
 async function assertTriggerAllowed(
   urlPath: string,
-  body: { userId: string; teamId: string }
+  body: { userId: string; teamId: string },
+  enforcementRows?: readonly EnforcementRow[]
 ): Promise<void> {
-  const { enforcement } = await loadComplianceRecords(body.userId, body.teamId);
+  const enforcement =
+    enforcementRows ??
+    (await loadComplianceRecords(body.userId, body.teamId)).enforcement;
   const state = resolveEnforcementState(enforcement);
   const key = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
   if (WRITE_ONLY_TRIGGERS.has(key)) {
@@ -81,6 +83,11 @@ export async function triggerWorkflow<
     label?: string;
     retries?: number;
     retryDelay?: string;
+    /**
+     * Mid-run: rows from `scopedDb.liveRead.compliance.listEnforcementFor`.
+     * Request-path callers omit this and the gate loads the rows itself.
+     */
+    enforcement?: readonly EnforcementRow[];
   }
 ): Promise<string> {
   logger.info('[TriggerWorkflow]', { url: urlPath, body, options });
@@ -88,7 +95,7 @@ export async function triggerWorkflow<
   // Enforcement backstop (#1180). Every generation in the app funnels through
   // here, and the payload carries `userId`/`teamId` by contract — so this is the
   // one place a restricted account cannot start durable work.
-  await assertTriggerAllowed(urlPath, body);
+  await assertTriggerAllowed(urlPath, body, options?.enforcement);
 
   const env = getEnv();
   if (env.E2E_TEST === 'true' && env.E2E_FULL_PIPELINE !== 'true') {

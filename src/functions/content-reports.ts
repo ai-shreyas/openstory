@@ -97,8 +97,9 @@ export const submitContentReportFn = createServerFn({ method: 'POST' })
         hasTrace: Boolean(traceId),
       });
       if (!sent.success) {
-        throw new Error(
-          `Report ${reference} was filed but the operator notification failed. Email ${notifyTo} and quote this reference.`
+        logger.error(
+          'report {reference} filed but operator notification to {notifyTo} failed',
+          { reference, notifyTo, reportId: report.id }
         );
       }
     }

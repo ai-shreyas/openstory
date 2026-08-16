@@ -86,7 +86,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
   protected override async runImpl(
     event: Readonly<WorkflowEvent<ShotImagesWorkflowInput>>,
     step: WorkflowStep,
-    _scopedDb: WorkflowScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<ShotImagesWorkflowResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -349,6 +349,11 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
         // its progress is tracked independently via
         // `shot.variantImageStatus`.
         await step.do(`trigger-variant-${scene.sceneId}-${model}`, async () => {
+          const enforcement =
+            await scopedDb.liveRead.compliance.listEnforcementFor(
+              input.userId,
+              input.teamId
+            );
           await triggerWorkflow<ShotVariantWorkflowInput>(
             '/variant-image',
             {
@@ -380,6 +385,7 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
                 matchedShot?.shotId ?? scene.sceneId,
                 model
               ),
+              enforcement,
             }
           );
         });

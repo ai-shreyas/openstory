@@ -42,6 +42,7 @@ import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
 import { recordProvenance } from '@/lib/compliance/provenance';
+import { buildR2Key, STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -750,7 +751,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             userId: input.userId,
             assetKind: 'video_variant',
             assetId: provenanceVersionId,
-            storageKey: storageResult.path,
+            storageKey: buildR2Key(STORAGE_BUCKETS.VIDEOS, storageResult.path),
             provider: 'fal',
             model,
             providerRequestId: job.jobId,
