@@ -4,6 +4,7 @@ import {
   isStyleConfigV2,
   migrateStyleConfigV1ToV2,
   parseStyleConfig,
+  resolveSequenceStyleConfig,
   StyleConfigSchema,
   styleConfigHashBody,
   toStyleProjection,
@@ -34,6 +35,33 @@ describe('migrateStyleConfigV1ToV2', () => {
 
   it('rejects a v1 blob that violates the shared constraints', () => {
     expect(() => migrateStyleConfigV1ToV2({ ...V1, mood: 'ab' })).toThrow();
+  });
+});
+
+describe('resolveSequenceStyleConfig', () => {
+  it('prefers the sequence snapshot over the live catalog row', () => {
+    const snapshot = migrateStyleConfigV1ToV2({
+      ...V1,
+      mood: 'snapshot mood here',
+    });
+    const live = migrateStyleConfigV1ToV2({
+      ...V1,
+      mood: 'live catalog mood',
+    });
+    expect(resolveSequenceStyleConfig({ snapshot, live }).look.mood).toBe(
+      'snapshot mood here'
+    );
+  });
+
+  it('falls back to the live row when the snapshot is missing', () => {
+    const live = migrateStyleConfigV1ToV2(V1);
+    expect(resolveSequenceStyleConfig({ snapshot: null, live })).toEqual(live);
+  });
+
+  it('throws when neither snapshot nor live recipe exists', () => {
+    expect(() =>
+      resolveSequenceStyleConfig({ snapshot: null, live: null })
+    ).toThrow(/no style config snapshot/);
   });
 });
 
@@ -78,22 +106,22 @@ describe('styleConfigHashBody (hash stability across the reshape)', () => {
       pace: 'measured',
       energy: 2,
     });
-    // version/summary/tone never shape prompt text — excluded from the body.
-    expect(
-      styleConfigHashBody({ ...v2, summary: 'a compact narrative handle' })
-    ).toEqual({ ...V1 });
+    // version never shapes prompt text — excluded from the body.
+    expect(styleConfigHashBody(v2)).toEqual({ ...V1 });
+    expect(styleConfigHashBody(v2)).not.toHaveProperty('version');
   });
 });
 
 describe('curated templates', () => {
-  it('every template config converts to valid v2', () => {
-    // The seed mapper converts at import time; this loop makes a bad template
-    // attributable instead of failing every team's seed at read time.
+  it('every template is valid v2 and hash-stable with its v1 projection', () => {
     for (const template of DEFAULT_STYLE_TEMPLATES) {
       expect(
-        () => migrateStyleConfigV1ToV2(template.config),
+        () => StyleConfigSchema.parse(template.config),
         `template "${template.name}"`
       ).not.toThrow();
+      const body = styleConfigHashBody(template.config);
+      expect(body).toHaveProperty('cameraWork');
+      expect(body).not.toHaveProperty('version');
     }
   });
 });

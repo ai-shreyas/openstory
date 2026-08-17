@@ -93,18 +93,14 @@ Target video duration: ${formatDuration(durationSeconds)} (about ${sceneRange} s
   if (style?.config) {
     // Config is a whole parsed StyleConfig (never partial): the required core
     // is emitted unconditionally, only the optional refinements are guarded.
-    const { look, motion, references, summary, tone } = style.config;
+    const { look, motion, references } = style.config;
     const lines = ['Style context (apply these aesthetics throughout):'];
-    if (summary) lines.push(`- Essence: ${summary}`);
-    if (tone) lines.push(`- Tone: ${tone}`);
     lines.push(`- Mood: ${look.mood}`);
     lines.push(`- Art style: ${look.artStyle}`);
     if (look.medium) lines.push(`- Medium: ${look.medium}`);
     lines.push(`- Lighting: ${look.lighting}`);
     lines.push(`- Color palette: ${look.colorPalette.join(', ')}`);
     lines.push(`- Color grading: ${look.colorGrading}`);
-    if (look.texture) lines.push(`- Texture: ${look.texture}`);
-    if (look.composition) lines.push(`- Composition: ${look.composition}`);
     lines.push(`- Camera work: ${motion.camera}`);
     if (motion.shots) lines.push(`- Shot selection: ${motion.shots}`);
     if (motion.pace) lines.push(`- Pace: ${motion.pace}`);

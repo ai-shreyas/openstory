@@ -113,7 +113,18 @@ async function discoverJobs(flags: Flags): Promise<VideoJob[]> {
         kind,
         videoPath,
         styleName: style.name,
-        config: styleBySlug.get(slug)?.config ?? null,
+        config: (() => {
+          const cfg = styleBySlug.get(slug)?.config;
+          return cfg
+            ? {
+                mood: cfg.look.mood,
+                artStyle: cfg.look.artStyle,
+                lighting: cfg.look.lighting,
+                cameraWork: cfg.motion.camera,
+                colorGrading: cfg.look.colorGrading,
+              }
+            : null;
+        })(),
         brief: brief?.slice(0, 1500) ?? null,
       });
     }

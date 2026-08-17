@@ -65,6 +65,7 @@ function makeScopedDb(opts: {
   claimSucceeds?: boolean;
   script?: string | null;
   styleId?: string | null;
+  styleConfig?: StyleConfig | null;
   style?: { config: StyleConfig } | null;
   elementIds?: string[];
   talent?: Array<{ id: string; name: string; description: string | null }>;
@@ -86,6 +87,7 @@ function makeScopedDb(opts: {
     script: opts.script === undefined ? 'INT. HALLWAY — NIGHT' : opts.script,
     aspectRatio: '16:9',
     styleId: opts.styleId === undefined ? 'style_1' : opts.styleId,
+    styleConfig: opts.styleConfig === undefined ? null : opts.styleConfig,
     analysisModel: 'invalid-model-id',
     imageModel: 'not-a-real-image-model',
     videoModel: 'not-a-real-video-model',
@@ -214,6 +216,33 @@ describe('triggerStoryboard', () => {
       // Casting identity is snapshotted here too; INPUT suggests neither.
       suggestedTalent: [],
       suggestedLocations: [],
+    });
+  });
+
+  test('uses the sequence-owned style snapshot, not the live catalog row', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const snapshot = migrateStyleConfigV1ToV2({
+      mood: 'snapshotted mood on the sequence',
+      artStyle: 'photoreal cinematic',
+      lighting: 'hard key, deep shadows',
+      colorPalette: ['#101020', '#e0d0b0'],
+      cameraWork: 'handheld, tight lenses',
+      referenceFilms: ['Children of Men'],
+      colorGrading: 'cool shadows, warm highlights',
+    });
+    const { scopedDb, getStyleById } = makeScopedDb({
+      workflowRunId: null,
+      styleConfig: snapshot,
+      style: { config: STYLE_CONFIG },
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    expect(getStyleById).not.toHaveBeenCalled();
+    expect(triggerWorkflowMock.mock.calls[0]?.[1]).toMatchObject({
+      styleConfig: snapshot,
     });
   });
 

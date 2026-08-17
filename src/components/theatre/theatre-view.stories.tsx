@@ -13,6 +13,7 @@ const baseSequence: Sequence = {
   createdBy: 'user_123',
   updatedBy: 'user_123',
   styleId: 'style_123',
+  styleConfig: null,
   aspectRatio: '16:9',
   analysisModel: 'anthropic/claude-haiku-4.5',
   analysisDurationMs: 5000,

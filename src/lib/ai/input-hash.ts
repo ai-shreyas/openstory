@@ -461,10 +461,10 @@ export function computeVisualPromptInputHash(
     artifact: 'shot:visual-prompt',
     hashVersion: PROMPT_INPUT_HASH_VERSION,
     scene: sceneInputContext(input.scene),
-    // Projected (not the raw blob) so the v2 config reshape and any
-    // non-prompt-shaping fields (`version`, `summary`, `tone`) cannot flip
-    // stored hashes. The projection keeps the legacy flat key names — a v2
-    // config with no authored refinements hashes identically to its v1 row.
+    // Projected (not the raw blob) so the v2 config reshape and `version`
+    // cannot flip stored hashes. The projection keeps the legacy flat key
+    // names — a v2 config with no authored refinements hashes identically to
+    // its v1 row.
     styleConfig: styleConfigHashBody(input.styleConfig),
     characterBible: bibles.characterBible.map(projectCharacterForPrompt),
     locationBible: bibles.locationBible.map(projectLocationForPrompt),

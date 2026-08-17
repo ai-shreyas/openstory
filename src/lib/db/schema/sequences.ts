@@ -15,6 +15,7 @@ import { user } from './auth';
 // shots.ts imports sequences for foreign key reference
 import { styles } from './libraries';
 import { teams } from './teams';
+import type { StoredStyleConfig } from '@/lib/style/style-config';
 
 // Enum values as constants (SQLite doesn't have native enums)
 const SEQUENCE_STATUSES = [
@@ -73,6 +74,10 @@ export const sequences = snakeCase.table(
     styleId: text()
       .notNull()
       .references(() => styles.id, { onDelete: 'set null' }),
+    // Recipe this sequence was generated with. Copied from styles.config on
+    // create / style change so catalog edits cannot stale existing work.
+    // Nullable only for the ADD COLUMN + backfill window; new writes always set it.
+    styleConfig: text({ mode: 'json' }).$type<StoredStyleConfig>(),
     aspectRatio: text({ length: 10 })
       .$type<AspectRatio>()
       .default(DEFAULT_ASPECT_RATIO)

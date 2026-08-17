@@ -26,7 +26,7 @@
  *   bun scripts/score-style-previews.ts --scene action        # only that scene
  *   bun scripts/score-style-previews.ts --model openai/gpt-5.5 --threshold 6.5
  */
-import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import type { TextModel } from '@/lib/ai/models';
 import { callLLM } from '@/lib/ai/llm-client';
 import {
@@ -283,7 +283,7 @@ async function main() {
       styleTasks.push({
         name: style.name,
         slug,
-        config: migrateStyleConfigV1ToV2(style.config),
+        config: parseStyleConfig(style.config),
         inputs,
       });
     }

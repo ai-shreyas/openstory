@@ -37,6 +37,7 @@ export const fixtureSequence: Sequence = {
   createdBy: '01KT2QSNQQNFCVAV1ASY9HRW90',
   updatedBy: '01KT2QSNQQNFCVAV1ASY9HRW90',
   styleId: '01KT2QRY2BWFJHT67CNQ3V9566',
+  styleConfig: null,
   aspectRatio: '9:16',
   analysisModel: 'x-ai/grok-4.6',
   analysisDurationMs: 81570,

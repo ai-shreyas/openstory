@@ -38,8 +38,6 @@ export function buildStyledImagePrompt(
     `Camera: ${motion.camera}`,
     motion.shots ? `Shot selection: ${motion.shots}` : '',
     `Color Grading: ${look.colorGrading}`,
-    look.texture ? `Texture: ${look.texture}` : '',
-    look.composition ? `Composition: ${look.composition}` : '',
     references.length ? `Inspired by: ${references.join(', ')}` : '',
     STILL_NEGATIVE,
   ]

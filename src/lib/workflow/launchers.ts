@@ -50,7 +50,7 @@ import { generateId } from '@/lib/db/id';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { type Sequence } from '@/lib/db/schema';
-import { parseStyleConfig } from '@/lib/style/style-config';
+import { resolveSequenceStyleConfig } from '@/lib/style/style-config';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { resolveRunState } from '@/lib/workflow/reconcile';
@@ -137,12 +137,17 @@ async function resolveStoryboardPayload(
   if (!sequence.script || sequence.script.trim().length === 0) {
     throw new ValidationError('Sequence has no script');
   }
-  if (!sequence.styleId) {
+  const hasSnapshot = sequence.styleConfig != null;
+  if (!hasSnapshot && !sequence.styleId) {
     throw new ValidationError('Sequence has no style selected');
   }
 
-  const style = await scopedDb.styles.getById(sequence.styleId);
-  if (!style) {
+  const style = hasSnapshot
+    ? null
+    : sequence.styleId
+      ? await scopedDb.styles.getById(sequence.styleId)
+      : null;
+  if (!hasSnapshot && !style) {
     throw new NotFoundError('No style found');
   }
 
@@ -176,7 +181,10 @@ async function resolveStoryboardPayload(
     title: sequence.title,
     script: sequence.script,
     aspectRatio: sequence.aspectRatio,
-    styleConfig: parseStyleConfig(style.config),
+    styleConfig: resolveSequenceStyleConfig({
+      snapshot: sequence.styleConfig,
+      live: style?.config,
+    }),
     analysisModelId:
       getAnalysisModelById(sequence.analysisModel)?.id ??
       DEFAULT_ANALYSIS_MODEL,

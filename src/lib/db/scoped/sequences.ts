@@ -20,10 +20,12 @@ import {
   renderSegments,
   sequences,
   shots,
+  styles,
   videoVariants,
 } from '@/lib/db/schema';
 import type { NewSequence, Sequence } from '@/lib/db/schema';
 import type { MusicStatus, SequenceStatus } from '@/lib/db/schema/sequences';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import type { ShotReadiness, ShotView } from '@/lib/shots/shot-view';
 import { getLatestPreviewByFrameIds } from './frame-variants';
 import { getPrimaryVideoByShotIds } from './video-variants';
@@ -248,6 +250,21 @@ function createSequencesReadMethods(db: Database, teamId: string) {
   };
 }
 
+async function snapshotConfigForStyleId(
+  db: Database,
+  styleId: string
+): Promise<ReturnType<typeof parseStyleConfig>> {
+  const [style] = await db
+    .select({ config: styles.config })
+    .from(styles)
+    .where(eq(styles.id, styleId))
+    .limit(1);
+  if (!style) {
+    throw new ValidationError(`Style ${styleId} not found`);
+  }
+  return parseStyleConfig(style.config);
+}
+
 export function createSequencesMethods(
   db: Database,
   teamId: string,
@@ -270,6 +287,7 @@ export function createSequencesMethods(
       suggestedTalentIds?: string[];
       suggestedLocationIds?: string[];
     }): Promise<Sequence> => {
+      const styleConfig = await snapshotConfigForStyleId(db, params.styleId);
       const sequenceData: NewSequence = {
         teamId,
         createdBy: userId,
@@ -277,6 +295,7 @@ export function createSequencesMethods(
         title: params.title,
         script: params.script,
         styleId: params.styleId,
+        styleConfig,
         aspectRatio: params.aspectRatio ?? DEFAULT_ASPECT_RATIO,
         analysisModel: params.analysisModel,
         // The sequences SQL column defaults are stale literals ('nano_banana_2'
@@ -357,9 +376,13 @@ export function createSequencesMethods(
       // particular is the generation-mutex column (#839), so a cross-team id
       // must never be able to stomp it.
       const { id, ...values } = params;
+      const styleConfig =
+        params.styleId !== undefined
+          ? await snapshotConfigForStyleId(db, params.styleId)
+          : undefined;
       const [data] = await db
         .update(sequences)
-        .set(values)
+        .set(styleConfig !== undefined ? { ...values, styleConfig } : values)
         .where(and(eq(sequences.id, id), eq(sequences.teamId, teamId)))
         .returning();
 

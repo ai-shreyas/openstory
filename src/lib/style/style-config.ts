@@ -3,17 +3,17 @@
  *
  * A style encodes two prescriptive signatures — LOOK (what a still looks like)
  * and MOTION (how the camera and cutting behave; it cannot be derived from a
- * still) — plus open narrative extras (`summary`/`tone`) consumed only by the
- * script enhancer. The schema is a small required core with optional
- * refinements so quick styles stay compact while curated templates stay rich.
+ * still). The schema is a small required core with optional refinements so
+ * quick styles stay compact while curated templates stay rich.
  *
  * Drizzle-free on purpose: importable from client bundles, scripts, and the
  * DB schema layer alike. `src/lib/db/schema/libraries.ts` re-exports the types
  * for the column `$type<>()`.
  *
  * Stored blobs may be v1 (flat) or v2 (grouped). Every read of a stored
- * `styles.config` must go through {@link parseStyleConfig}; the column is
- * typed `StoredStyleConfig` so direct field access does not compile.
+ * `styles.config` or `sequences.styleConfig` must go through
+ * {@link parseStyleConfig} / {@link resolveSequenceStyleConfig}; the columns
+ * are typed `StoredStyleConfig` so direct field access does not compile.
  */
 import { z } from 'zod';
 import { getLogger } from '@/lib/observability/logger';
@@ -29,8 +29,6 @@ const StyleLookSchema = z.object({
   colorPalette: z.array(z.string().min(1)).min(1).max(20),
   colorGrading: prose,
   medium: prose.optional(),
-  texture: prose.optional(),
-  composition: prose.optional(),
 });
 
 const STYLE_PACE_VALUES = ['slow', 'measured', 'brisk', 'frenetic'] as const;
@@ -45,9 +43,6 @@ const StyleMotionSchema = z.object({
 
 export const StyleConfigSchema = z.object({
   version: z.literal(2),
-  /** Compact narrative handle for pickers and the enhancer. */
-  summary: z.string().min(3).max(280).optional(),
-  tone: prose.optional(),
   look: StyleLookSchema,
   motion: StyleMotionSchema,
   /** Reference works/aesthetics (descriptive phrases, not necessarily titles). */
@@ -59,7 +54,7 @@ export type StyleConfig = z.infer<typeof StyleConfigSchema>;
 /**
  * Legacy flat shape. Constraints match the pre-v2 schema exactly, so every row
  * written through the old create/update path converts 1:1. Kept until prod
- * rows are backfilled (#858) — templates are also still authored in this shape.
+ * catalog rows are rewritten by the seeder (#858 / #1179).
  */
 const StyleConfigV1Schema = z.object({
   mood: prose,
@@ -85,10 +80,10 @@ export function isStyleConfigV2(raw: unknown): raw is StyleConfig {
 }
 
 /**
- * The one v1→v2 conversion, shared by {@link parseStyleConfig}, the template
- * seed mapper, and the backfill script. Output is validated against the v2
- * schema so an invariant-violating legacy blob fails loudly here rather than
- * flowing into prompts typed as a valid `StyleConfig`.
+ * The one v1→v2 conversion, shared by {@link parseStyleConfig} and the
+ * catalog backfill script. Output is validated against the v2 schema so an
+ * invariant-violating legacy blob fails loudly here rather than flowing into
+ * prompts typed as a valid `StyleConfig`.
  */
 export function migrateStyleConfigV1ToV2(raw: unknown): StyleConfig {
   const v1 = StyleConfigV1Schema.parse(raw);
@@ -120,15 +115,29 @@ export function parseStyleConfig(raw: unknown): StyleConfig {
 }
 
 /**
+ * Sequence-owned recipe first, live catalog row only as a fallback for
+ * pre-snapshot rows. Catalog edits must not win over the snapshot.
+ */
+export function resolveSequenceStyleConfig(args: {
+  snapshot: unknown;
+  live?: unknown;
+}): StyleConfig {
+  if (args.snapshot != null) return parseStyleConfig(args.snapshot);
+  if (args.live != null) return parseStyleConfig(args.live);
+  throw new Error(
+    'Sequence has no style config snapshot and no live style to fall back to'
+  );
+}
+
+/**
  * The style's contribution to input hashes, as one shared projection.
  *
  * Shape-stable by construction: the base keys are the v1 field names with the
  * same values a v1 blob carried, so the pure v1→v2 reshape changes no stored
  * hash (no `PROMPT_INPUT_HASH_VERSION` bump, no null-sweep migration). The
  * optional refinements join the body only when populated — authoring them is a
- * genuine input change and SHOULD flip staleness. `version`, `summary`, and
- * `tone` never shape visual/motion/sheet prompt text, so they are excluded;
- * hashing them would only manufacture false staleness.
+ * genuine input change and SHOULD flip staleness. `version` never shapes
+ * visual/motion/sheet prompt text, so it is excluded.
  */
 export function styleConfigHashBody(
   config: StyleConfig | null | undefined
@@ -137,8 +146,6 @@ export function styleConfigHashBody(
   const refinements = Object.fromEntries(
     Object.entries({
       medium: config.look.medium,
-      texture: config.look.texture,
-      composition: config.look.composition,
       shots: config.motion.shots,
       pace: config.motion.pace,
       energy: config.motion.energy,

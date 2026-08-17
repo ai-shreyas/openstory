@@ -82,8 +82,6 @@ const formatStyleDirectionForLocation = (styleConfig: StyleConfig): string => {
   const colorPaletteStr = look.colorPalette.join(', ');
   const referencesStr =
     references.length > 0 ? `\nReference look: ${references.join(', ')}.` : '';
-  const textureStr = look.texture ? `\nTexture: ${look.texture}` : '';
-
   return `
 [STYLE DIRECTION]:
 Render this location in the following visual style:
@@ -91,7 +89,7 @@ Art style: ${look.artStyle}
 Mood: ${look.mood}
 Lighting direction: ${look.lighting}
 Color palette: ${colorPaletteStr}
-Color grading: ${look.colorGrading}${textureStr}
+Color grading: ${look.colorGrading}
 Camera approach: ${motion.camera}${referencesStr}
 All 9 panels must consistently reflect this style direction.`;
 };

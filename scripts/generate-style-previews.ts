@@ -3,7 +3,7 @@ import {
   safeTextToImageModel,
   type TextToImageModel,
 } from '@/lib/ai/models';
-import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
 import { buildStyledImagePrompt } from '@/lib/style/style-image-prompt';
 import { styleSlug } from '@/lib/style/style-slug';
@@ -578,7 +578,7 @@ async function main() {
       // buildStyledImagePrompt.
       const fullPrompt = buildStyledImagePrompt(
         scene.prompt,
-        migrateStyleConfigV1ToV2(style.config)
+        parseStyleConfig(style.config)
       );
 
       allTasks.push({
