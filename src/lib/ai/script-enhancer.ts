@@ -77,7 +77,7 @@ Target video duration: ${formatDuration(durationSeconds)} (about ${sceneRange} s
   const style = options?.style;
   if (
     style &&
-    (style.name || style.category || style.description || style.tags?.length)
+    (style.name || style.category || style.description || style.tags.length)
   ) {
     const genre = [style.name, style.category].filter(Boolean).join(' / ');
     const lines = [
@@ -85,8 +85,7 @@ Target video duration: ${formatDuration(durationSeconds)} (about ${sceneRange} s
     ];
     if (genre) lines.push(`- Style: ${genre}`);
     if (style.description) lines.push(`- About: ${style.description}`);
-    if (style.tags?.length)
-      lines.push(`- Genre cues: ${style.tags.join(', ')}`);
+    if (style.tags.length) lines.push(`- Genre cues: ${style.tags.join(', ')}`);
     parts.push(`\n${lines.join('\n')}`);
   }
 

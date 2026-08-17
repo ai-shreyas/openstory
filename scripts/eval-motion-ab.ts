@@ -21,6 +21,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { z } from 'zod';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
 import { GENERATED_STYLE_BRIEFS } from '@/lib/style/style-briefs.generated';
 import { styleSlug } from '@/lib/style/style-slug';
@@ -64,7 +65,9 @@ async function renderOne(baseName: string, arm: (typeof ARMS)[number]) {
   // (or a killed poll) never re-bills a fresh render.
   let id: string;
   if (existsSync(idPath)) {
-    id = JSON.parse(await readFile(idPath, 'utf8')).id as string;
+    id = z
+      .object({ id: z.string().min(1) })
+      .parse(JSON.parse(await readFile(idPath, 'utf8'))).id;
     console.log(`[${arm.key}] ${label}: resuming sequence ${id}`);
   } else {
     console.log(`[${arm.key}] ${label}: creating sequence…`);

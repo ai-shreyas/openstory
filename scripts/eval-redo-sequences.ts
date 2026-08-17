@@ -144,11 +144,11 @@ function intendedLook(slug: string): string {
   return [
     `Style: ${s.name} (${s.category ?? 'n/a'})`,
     s.description ? `Description: ${s.description}` : '',
-    c?.look.mood ? `Mood: ${c.look.mood}` : '',
-    c?.look.artStyle ? `Art style: ${c.look.artStyle}` : '',
-    c?.look.lighting ? `Lighting: ${c.look.lighting}` : '',
-    c?.motion.camera ? `Camera: ${c.motion.camera}` : '',
-    c?.look.colorGrading ? `Color grading: ${c.look.colorGrading}` : '',
+    `Mood: ${c.look.mood}`,
+    `Art style: ${c.look.artStyle}`,
+    `Lighting: ${c.look.lighting}`,
+    `Camera: ${c.motion.camera}`,
+    `Color grading: ${c.look.colorGrading}`,
     `Brief: ${briefForStyle({ name: s.name, category: s.category ?? null })}`,
   ]
     .filter(Boolean)
