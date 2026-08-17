@@ -4,7 +4,6 @@
  */
 
 import { requireTeamAdminAccess } from '@/lib/auth/action-utils';
-import { listPublicStyles } from '@/lib/db/scoped';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createStyleSchema,
@@ -14,6 +13,7 @@ import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { authWithTeamMiddleware } from './middleware';
+export { getPublicStylesFn } from './public-styles';
 
 // ============================================================================
 // List Styles
@@ -35,22 +35,6 @@ export const getStylesFn = createServerFn({ method: 'GET' })
   .handler(async ({ data, context }) => {
     return context.scopedDb.styles.list({ orderBy: data?.orderBy });
   });
-
-// ============================================================================
-// List Public Styles (no auth)
-// ============================================================================
-
-/**
- * List publicly-shared styles. No authentication required so anonymous
- * visitors can browse and pick a style while composing a sequence before
- * being prompted to sign in.
- * @returns Array of public styles
- */
-export const getPublicStylesFn = createServerFn({ method: 'GET' }).handler(
-  async () => {
-    return listPublicStyles();
-  }
-);
 
 // ============================================================================
 // Get Single Style

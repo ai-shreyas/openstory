@@ -187,7 +187,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         transformCopiedText: true,
       }),
       Placeholder.configure({
-        placeholder: placeholder ?? '',
+        // Real HTML placeholder is rendered below so first paint (and LCP)
+        // does not wait for TipTap to hydrate a ::before (#1182).
+        placeholder: '',
         emptyEditorClass: 'is-editor-empty',
       }),
       // The Mention extension is generically typed for `MentionNodeAttrs`
@@ -336,6 +338,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       ref={scrollRef}
       className={cn(
         containerBaseClasses,
+        'relative',
         disabled && disabledClasses,
         'overflow-y-auto',
         className
@@ -344,7 +347,12 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       data-testid={dataTestId}
       data-slot="markdown-editor"
     >
-      <EditorContent editor={editor} className="w-full" />
+      {!value && placeholder ? (
+        <p className="pointer-events-none absolute inset-x-0 top-0 px-2.5 py-2 text-base text-muted-foreground md:text-sm">
+          {placeholder}
+        </p>
+      ) : null}
+      <EditorContent editor={editor} className="relative w-full" />
     </div>
   );
 };

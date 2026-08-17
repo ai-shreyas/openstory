@@ -5,6 +5,7 @@ import {
 import { getPublicStylesFn, getStyleFn, getStylesFn } from '@/functions/styles';
 import { usePublicOrTeamQuery } from '@/hooks/use-public-or-team-query';
 import { useAuthSession } from '@/lib/auth/session-query';
+import { publicStylesQueryKey } from '@/lib/style/public-styles-query';
 import { simpleHash } from '@/lib/utils/hash';
 import type { Style } from '@/types/database';
 import { useQuery } from '@tanstack/react-query';
@@ -14,7 +15,7 @@ export const styleKeys = {
   all: ['styles'] as const,
   lists: () => [...styleKeys.all, 'list'] as const,
   list: (teamId?: string) => [...styleKeys.lists(), teamId] as const,
-  public: () => [...styleKeys.lists(), 'public'] as const,
+  public: () => publicStylesQueryKey,
   details: () => [...styleKeys.all, 'detail'] as const,
   detail: (id: string) => [...styleKeys.details(), id] as const,
   // Recommendations are keyed by a hash of the (trimmed) script, so the same
