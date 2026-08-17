@@ -4,6 +4,11 @@ import { Info, MoreHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { StyleRecommendation } from '@/hooks/use-styles';
 import {
+  ALL_COMPOSER_STYLE_CATEGORIES,
+  composerCategoryHiddenCount,
+  stylesForComposerCategory,
+} from '@/lib/style/composer-style-row';
+import {
   buildRecommendationReasoningMap,
   catalogueWithoutRecommendations,
   RECOMMENDED_STYLE_SLOT_COUNT,
@@ -18,8 +23,7 @@ import type { Style } from '@/lib/db/schema/libraries';
  * Keep specific styles on screen without reordering the strip: any catalogue
  * style in `keep` that fell outside the visible head is swapped into the tail
  * slots (deduped, order preserved). Used so the current selection and the last
- * browse-dialog pick always stay reachable, even when they sit deep in the
- * catalogue.
+ * browse-dialog pick stay reachable *within the current category catalogue*.
  */
 function keepStylesVisible(
   head: Style[],
@@ -57,6 +61,8 @@ type StyleSelectorProps = {
   disabled?: boolean;
   recommendations?: StyleRecommendation[];
   recommendationsLoading?: boolean;
+  /** Filters the catalogue tiles. Recommendations and the browse dialog stay unfiltered. */
+  categoryFilter?: string;
 };
 
 export function StyleSelector({
@@ -67,12 +73,13 @@ export function StyleSelector({
   disabled = false,
   recommendations,
   recommendationsLoading = false,
+  categoryFilter = ALL_COMPOSER_STYLE_CATEGORIES,
 }: StyleSelectorProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailStyle, setDetailStyle] = useState<Style | null>(null);
   // The last style chosen from the "browse all" dialog. It stays pinned into
-  // the strip even after other tiles are selected, and only clears when the
-  // composer remounts (i.e. a fresh sequence).
+  // the strip when it belongs to the current category, and only clears when
+  // the composer remounts (i.e. a fresh sequence).
   const [pinnedStyleId, setPinnedStyleId] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [focusableIndex, setFocusableIndex] = useState(0);
@@ -130,13 +137,18 @@ export function StyleSelector({
       : recommendedStyles.length
     : 0;
 
+  const categoryStyles = useMemo(
+    () => stylesForComposerCategory(styles, categoryFilter),
+    [styles, categoryFilter]
+  );
+
   const catalogueStyles = useMemo(
     () =>
       catalogueWithoutRecommendations(
-        styles,
+        categoryStyles,
         showRecommendations ? recommendations : undefined
       ),
-    [styles, recommendations, showRecommendations]
+    [categoryStyles, recommendations, showRecommendations]
   );
 
   const selectedStyle = styles.find((s) => s.id === selectedStyleId) ?? null;
@@ -169,7 +181,10 @@ export function StyleSelector({
     return ids;
   }, [recommendedStyles, visibleCatalogueStyles]);
 
-  const hiddenCount = Math.max(0, styles.length - shownStyleIds.size);
+  const hiddenCount = composerCategoryHiddenCount(
+    categoryStyles,
+    shownStyleIds
+  );
 
   useEffect(() => {
     const recIndex = recommendedStyles.findIndex(

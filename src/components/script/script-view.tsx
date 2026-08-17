@@ -10,6 +10,7 @@ import { GenerateSequenceIcon } from '@/components/icons/generate-sequence-icon'
 import { LocationSuggestionSelector } from '@/components/location-library/location-suggestion-selector';
 import { buildMentionItems } from '@/components/scenes/prompt-mention/mention-items';
 import { GenerationSettings } from '@/components/settings/generation-settings';
+import { StyleCategorySelect } from '@/components/style/style-category-select';
 import { StyleSelector } from '@/components/style/style-selector';
 import { TalentSuggestionSelector } from '@/components/talent/talent-suggestion-selector';
 import {
@@ -80,6 +81,13 @@ import {
 } from '@/lib/constants/aspect-ratios';
 import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
+import {
+  ALL_COMPOSER_STYLE_CATEGORIES,
+  DEFAULT_COMPOSER_STYLE_CATEGORY,
+  defaultComposerStyle,
+  styleAfterComposerCategoryChange,
+  styleCategoryGroupKey,
+} from '@/lib/style/composer-style-row';
 import { cn } from '@/lib/utils';
 import {
   dataTransferHasImages,
@@ -179,11 +187,11 @@ export const ScriptView: FC<{
   const setStyleId = (v: string | null) =>
     setContentState((s) => ({ ...s, styleId: v }));
   // A user-initiated style pick: update local state and mirror it to the URL.
-  // The auto-selected default calls `setStyleId` directly, so a bare
+  // The auto-selected default calls `setStyleId` directly, so a
   // bare composer URL stays bare until the user actually chooses.
-  const selectStyle = (styleId: string) => {
-    setStyleId(styleId);
-    onStyleChange?.(styleId);
+  const selectStyle = (nextStyleId: string) => {
+    setStyleId(nextStyleId);
+    onStyleChange?.(nextStyleId);
   };
 
   // Load saved settings from localStorage
@@ -316,14 +324,6 @@ export const ScriptView: FC<{
   // and avoids a hydration mismatch (#style-selector "View all 0 styles").
   const { data: styles = [], isPending: isLoadingStyles } = useStyles();
 
-  // Auto-select first style if none selected
-  useEffect(() => {
-    const firstStyle = styles[0];
-    if (!isLoadingStyles && firstStyle && !styleId && !sequence?.styleId) {
-      setStyleId(firstStyle.id);
-    }
-  }, [styles, isLoadingStyles, styleId, sequence?.styleId]);
-
   // Derive style metadata for motion model filtering + recommendation badges
   const selectedStyle = useMemo(
     () => styles.find((s) => s.id === (styleId || sequence?.styleId)),
@@ -331,6 +331,45 @@ export const ScriptView: FC<{
   );
   const styleCategory = selectedStyle?.category ?? undefined;
   const styleName = selectedStyle?.name ?? undefined;
+
+  // The row follows the selected style, except while the user parks on All
+  // styles (`categoryOverride`). Draft / `?style=` / tile picks then show
+  // that family's strip without a snap effect.
+  const [categoryOverride, setCategoryOverride] = useState<string | null>(null);
+  const styleCategoryFilter =
+    categoryOverride ??
+    (selectedStyle
+      ? styleCategoryGroupKey(selectedStyle, styles)
+      : DEFAULT_COMPOSER_STYLE_CATEGORY);
+
+  const handleStyleSelect = (nextStyleId: string) => {
+    selectStyle(nextStyleId);
+    // Follow the pick's family unless the user is browsing All styles.
+    if (categoryOverride !== ALL_COMPOSER_STYLE_CATEGORIES) {
+      setCategoryOverride(null);
+    }
+  };
+
+  const handleStyleCategoryChange = (next: string) => {
+    setCategoryOverride(next);
+    // Named families replace the pick; All only changes the strip.
+    const first = styleAfterComposerCategoryChange(styles, next);
+    if (first) selectStyle(first.id);
+  };
+
+  // Auto-select the first style in the current row when the composer has
+  // no pick yet (the row starts as Film & Cinematic).
+  useEffect(() => {
+    if (isLoadingStyles || styleId || sequence?.styleId) return;
+    const firstStyle = defaultComposerStyle(styles, styleCategoryFilter);
+    if (firstStyle) setStyleId(firstStyle.id);
+  }, [
+    styles,
+    isLoadingStyles,
+    styleId,
+    sequence?.styleId,
+    styleCategoryFilter,
+  ]);
 
   // Sequence cast/elements/locations drive @-mention pills in the script
   // editor — same canonical tags the scene prompt editors use. An existing
@@ -1048,25 +1087,33 @@ export const ScriptView: FC<{
           )}
 
           <div className="shrink-0 flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={
-                  loading || currentScriptText.length < 3 || isRecommending
-                }
-                onClick={triggerRecommend}
-              >
-                {isRecommending ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
-                ) : (
-                  <Sparkles className="size-3.5 text-primary" />
-                )}
-                {recommendButtonLabel}
-              </Button>
-              <div className="flex items-center gap-1 shrink-0">
+            <div className="flex flex-col gap-2 @min-[480px]:flex-row @min-[480px]:items-center @min-[480px]:justify-between">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={
+                    loading || currentScriptText.length < 3 || isRecommending
+                  }
+                  onClick={triggerRecommend}
+                >
+                  {isRecommending ? (
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                  ) : (
+                    <Sparkles className="size-3.5 text-primary" />
+                  )}
+                  {recommendButtonLabel}
+                </Button>
+                <StyleCategorySelect
+                  styles={styles}
+                  value={styleCategoryFilter}
+                  onChange={handleStyleCategoryChange}
+                  disabled={loading || isLoadingStyles}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-1">
                 {canUndoEnhance && !isEnhancing && (
                   <Button
                     type="button"
@@ -1159,10 +1206,11 @@ export const ScriptView: FC<{
             <StyleSelector
               styles={styles}
               selectedStyleId={styleId || sequence?.styleId || null}
-              onStyleSelect={selectStyle}
+              onStyleSelect={handleStyleSelect}
               loading={isLoadingStyles}
               recommendations={activeRecommendations}
               recommendationsLoading={isRecommending && !recommendationsStale}
+              categoryFilter={styleCategoryFilter}
             />
             {(recommendEmpty || recommendFailed) && (
               <p className="text-xs text-muted-foreground">
