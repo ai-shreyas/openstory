@@ -28,14 +28,15 @@ asset URL or R2 key, a content hash (once populated), or the provider's request
 id back to the account that produced it.
 
 - Schema: `src/lib/db/schema/compliance.ts`
-- Recording: `src/lib/compliance/provenance.ts`, called from the image, motion,
-  asset-generation, and sequence-export workflows
+- Recording: `src/lib/compliance/provenance.ts`, called from every workflow
+  that writes a generated object to R2 (stills, grids, upscales, motion,
+  sheets, music, direct model access, sequence export)
 - Lookup: `src/functions/moderation.ts` → `traceContentFn`
 
-**Coverage is partial and documented as such** — see "Coverage limits" in the
-incident-response plan. Four asset kinds are instrumented; shot variants,
-upscales, sheets, and music are the reserved follow-up and remain traceable
-through the sequence graph in the meantime.
+User-uploaded reference photos are not provenance — they are warrants in
+`upload_attestations`. Assets generated before this shipped have no
+provenance row and must be traced through the sequence graph. See
+"Coverage limits" in the incident-response plan.
 
 **Deepfake prevention** is layered, because no single control is sufficient:
 
@@ -49,8 +50,9 @@ through the sequence graph in the meantime.
 4. Reported content is traced and the responsible account restricted.
 
 **Emergency response plan:** [`incident-response.md`](./incident-response.md),
-with a P0/P1/P2 severity ladder, response targets, and CSAM-specific escalation
-including evidence preservation and authority referral.
+with a P0/P1/P2 severity ladder and CSAM-specific escalation including evidence
+preservation and authority referral. Operational first-response targets are
+available to model providers and authorities on request.
 
 ---
 
@@ -135,14 +137,15 @@ Honest status of each claim, so nobody over-promises on the strength of this
 document:
 
 - ✅ Traceability infrastructure, lookup console, and response plan — built and
-  tested. **Partial asset coverage**, documented above.
+  tested. Uploads and assets generated before provenance shipped are the
+  remaining coverage limits, documented above.
 - ✅ Portrait attestation, terms, and liability pass-through — built.
 - ✅ Real-name authentication as accepted by BytePlus: email login + card on
   file. No government-ID flow.
 - ✅ Report intake, triage, enforcement, and the generation gate — built.
-- ⚠️ **Operational, not code:** someone must actually watch the queue and meet
-  the response targets; `ABUSE_REPORT_NOTIFY_EMAIL` should be set and routed to
-  a monitored inbox; an `abuse@` alias should exist.
+- ⚠️ **Operational, not code:** someone must actually watch the queue;
+  `ABUSE_REPORT_NOTIFY_EMAIL` should be set and routed to a monitored inbox; an
+  `abuse@` alias should exist. First-response targets are not published here.
 - ⚠️ **Not legal advice.** These representations are binding and carry
   liability. Have counsel review before signing, particularly the ownership and
   indemnity declarations for custom avatar assets.

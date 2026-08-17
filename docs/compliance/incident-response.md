@@ -15,17 +15,20 @@ Applies to every asset the platform generates — still frames, video clips,
 character/location/talent sheets, music, and stitched sequence exports — and to
 every image a user uploads as a reference, including portraits of real people.
 
-Three categories of incident:
+Three categories of incident, worst-first at triage:
 
-| Category          | Examples                                                                           | Target first response              |
-| ----------------- | ---------------------------------------------------------------------------------- | ---------------------------------- |
-| **P0 — Critical** | CSAM; non-consensual intimate imagery; credible threat to life                     | Immediately, and no later than 24h |
-| **P1 — Serious**  | Likeness/portrait misuse; impersonation of a real person; court or regulator order | 3 business days                    |
-| **P2 — Standard** | Copyright/trademark; misleading content; other terms breaches                      | 10 business days                   |
+| Category          | Examples                                                                           |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| **P0 — Critical** | CSAM; non-consensual intimate imagery; credible threat to life                     |
+| **P1 — Serious**  | Likeness/portrait misuse; impersonation of a real person; court or regulator order |
+| **P2 — Standard** | Copyright/trademark; misleading content; other terms breaches                      |
 
 `content_reports.priority` encodes this: `0` is forced for `csam` at intake
 regardless of what the reporter selected, everything else enters at `50` and is
 re-prioritised at triage.
+
+Operational first-response targets for each severity are kept privately and are
+available to model providers and authorities on request.
 
 ---
 
@@ -78,20 +81,22 @@ many, the workflow run id, and the timestamp.**
 
 ### Coverage limits — read before relying on a trace
 
-Provenance recording is instrumented at these points today:
+Provenance is recorded when a generated object lands in R2:
 
-- still images (`frame_variant`) — image workflow, persisted stills only
-  (`skipStorage` previews are not recorded; there is no R2 object)
+- still images (`frame_variant`) — image workflow (persisted stills only;
+  `skipStorage` previews have no R2 object), the 3×3 framing grid, and
+  upscales of a picked tile
 - video clips (`video_variant`) — motion workflow, and therefore motion batches
+- character / location / talent / element sheets — each sheet workflow,
+  including library talent headshots and library location grids + previews
+- music (`music_variant`) — sequence music workflow
 - direct model access (`generated_asset`) — one row per output file
 - sequence exports (`sequence_export`) — the stitched MP4 that gets shared
 
-**Not yet instrumented:** shot variants, upscales, character/location/talent
-sheets, and music. These have `PROVENANCE_ASSET_KINDS` entries reserved and are
-the follow-up; until then, trace them through the sequence graph directly
-(`sequences` → `scenes` → `shots` → variant tables), which carries the same
-team/user attribution. **Assets generated before this shipped have no provenance
-row at all** and must be traced the same way.
+**Not recorded:** user-uploaded reference photos (those are warrants in
+`upload_attestations`, not AIGC), system style previews seeded by script, and
+**any asset generated before provenance shipped** — walk the sequence graph
+for those (`sequences` → `scenes` → `shots` → variant tables).
 
 Provenance writes run in their own workflow step and retry on transient D1
 failure. A failed insert after retries fails the run rather than leaving a

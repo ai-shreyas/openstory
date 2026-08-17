@@ -27,6 +27,7 @@ import {
   buildLibraryLocationSheetPrompt,
   buildLocationPreviewPrompt,
 } from '@/lib/prompts/location-prompt';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { getLocationChannel } from '@/lib/realtime';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { uploadResponse } from '@/lib/storage/upload-response';
@@ -261,6 +262,46 @@ export class LibraryLocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<Li
         };
       }
     );
+
+    // Both the 3×3 grid and the preview land in R2. Record each: the grid is
+    // an intermediate but still shareable object; the preview is the live
+    // reference. Own steps so a retry of the publish step cannot double-insert.
+    await step.do('record-grid-provenance', async () => {
+      await recordProvenance(scopedDb.provenance, {
+        teamId: input.teamId,
+        userId: input.userId,
+        assetKind: 'location_sheet',
+        assetId: `${input.locationDbId}#grid`,
+        storageKey: storageResult.path,
+        provider: 'fal',
+        model: generationParams.model,
+        providerRequestId: sheetUsage.requestId ?? null,
+        workflowRunId: event.instanceId,
+        prompt: generationParams.prompt,
+        referenceImageCount: generationParams.referenceImageUrls?.length ?? 0,
+      });
+    });
+
+    await step.do('record-preview-provenance', async () => {
+      const hasReferenceImages = input.referenceImageUrls.length > 0;
+      await recordProvenance(scopedDb.provenance, {
+        teamId: input.teamId,
+        userId: input.userId,
+        assetKind: 'location_sheet',
+        assetId: input.locationDbId,
+        storageKey: previewStorageResult.path,
+        provider: 'fal',
+        model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+        providerRequestId: previewUsage.requestId ?? null,
+        workflowRunId: event.instanceId,
+        prompt: buildLocationPreviewPrompt(
+          input.locationName,
+          input.locationDescription,
+          hasReferenceImages
+        ),
+        referenceImageCount: input.referenceImageUrls.length,
+      });
+    });
 
     // Step 6: Publish the preview as the location's reference — the single
     // write that opens `waitForLocationReferences`' gate. Gated on divergence:

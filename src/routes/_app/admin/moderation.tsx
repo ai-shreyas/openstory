@@ -414,9 +414,9 @@ const TraceTab: React.FC = () => {
       {submitted && !isFetching && results.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            No provenance record matched. Assets generated before provenance
-            recording shipped, and asset kinds not yet instrumented, will not
-            resolve here — check the sequence directly.
+            No provenance record matched. Uploaded reference photos and assets
+            generated before provenance recording shipped will not resolve here
+            — check the sequence or the account’s attestations.
           </CardContent>
         </Card>
       ) : null}

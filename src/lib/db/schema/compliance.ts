@@ -50,6 +50,7 @@ const PROVENANCE_ASSET_KINDS = [
   'character_sheet',
   'location_sheet',
   'talent_sheet',
+  'element_sheet',
   'music_variant',
   'sequence_export',
   'generated_asset',
