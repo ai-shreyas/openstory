@@ -49,7 +49,7 @@ function sceneContextParts(
     // Cast membership is shared context; the per-shot subject state narrows it.
     continuity.characterTags.join(', '),
     // Style is the single look authored for the whole sequence.
-    styleConfig.artStyle,
+    styleConfig.look.artStyle,
     continuity.styleTag,
   ].filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
 }
@@ -89,7 +89,7 @@ function deriveVisualPrompt(
       lighting: scene.continuity.lightingSetup,
       camera: joinParts([framing.shotSize, framing.angle]),
       composition: framing.composition,
-      style: joinParts([styleConfig.artStyle, scene.continuity.styleTag]),
+      style: joinParts([styleConfig.look.artStyle, scene.continuity.styleTag]),
       technical: '',
       atmosphere: joinParts([
         scene.metadata.timeOfDay,

@@ -95,11 +95,11 @@ function styleBlock(style: StyleEntry): string {
     `Category: ${style.category ?? '—'}`,
     style.tags?.length ? `Tags: ${style.tags.join(', ')}` : '',
     style.useCases?.length ? `Use cases: ${style.useCases.join(', ')}` : '',
-    c ? `Mood: ${c.mood}` : '',
-    c ? `Art style / staging: ${c.artStyle}` : '',
-    c ? `Lighting: ${c.lighting}` : '',
-    c ? `Camera: ${c.cameraWork}` : '',
-    c ? `Color grading: ${c.colorGrading}` : '',
+    `Mood: ${c.look.mood}`,
+    `Art style / staging: ${c.look.artStyle}`,
+    `Lighting: ${c.look.lighting}`,
+    `Camera: ${c.motion.camera}`,
+    `Color grading: ${c.look.colorGrading}`,
   ]
     .filter(Boolean)
     .join('\n');

@@ -15,6 +15,7 @@
  *   3. Payload without a sequenceId → no DB access at all.
  */
 
+import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
 import { describe, expect, test, vi } from 'vitest';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
 import { DEFAULT_ANALYSIS_MODEL } from '@/lib/ai/models.config';
@@ -70,7 +71,7 @@ function makeEvent(
     script: 'INT. HALLWAY — NIGHT',
     aspectRatio: '16:9',
     musicPromptSource: 'ai-generated',
-    styleConfig: {
+    styleConfig: migrateStyleConfigV1ToV2({
       mood: 'tense and hopeful',
       artStyle: 'photoreal cinematic',
       lighting: 'hard key, deep shadows',
@@ -78,7 +79,7 @@ function makeEvent(
       cameraWork: 'handheld, tight lenses',
       referenceFilms: ['Children of Men'],
       colorGrading: 'cool shadows, warm highlights',
-    },
+    }),
     analysisModelId: DEFAULT_ANALYSIS_MODEL,
     imageModel: DEFAULT_IMAGE_MODEL,
     videoModel: DEFAULT_VIDEO_MODEL,

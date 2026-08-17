@@ -11,17 +11,14 @@ import { generateId } from '../id';
 import { user } from './auth';
 import { teams } from './teams';
 
-export const StyleConfigSchema = z.object({
-  mood: z.string().min(3).max(1000),
-  artStyle: z.string().min(3).max(1000),
-  lighting: z.string().min(3).max(1000),
-  colorPalette: z.array(z.string().min(1)).min(1).max(20),
-  cameraWork: z.string().min(3).max(1000),
-  referenceFilms: z.array(z.string().min(1)).max(50),
-  colorGrading: z.string().min(3).max(1000),
-});
-
-export type StyleConfig = z.infer<typeof StyleConfigSchema>;
+// Canonical config schema lives drizzle-free in src/lib/style/style-config.ts;
+// re-exported here to keep the historical `@/lib/db/schema` import paths.
+import type { StoredStyleConfig } from '@/lib/style/style-config';
+export {
+  StyleConfigSchema,
+  type StyleConfig,
+  type StoredStyleConfig,
+} from '@/lib/style/style-config';
 
 const StyleSampleVideoKindSchema = z.enum(['canonical', 'category', 'bespoke']);
 
@@ -50,7 +47,10 @@ export const styles = snakeCase.table(
       .references(() => teams.id, { onDelete: 'cascade' }),
     name: text({ length: 255 }).notNull(),
     description: text(),
-    config: text({ mode: 'json' }).$type<StyleConfig>().notNull(),
+    // StoredStyleConfig (v1 | v2) until the backfill lands (#858): typing the
+    // column as parsed v2 would compile direct `.look` access that crashes on
+    // legacy rows. Read through `parseStyleConfig` / `toStyleProjection`.
+    config: text({ mode: 'json' }).$type<StoredStyleConfig>().notNull(),
     category: text({ length: 100 }),
     // SQLite doesn't have array type - store as JSON array
     tags: text({ mode: 'json' })

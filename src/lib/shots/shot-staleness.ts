@@ -5,6 +5,7 @@
  * to the stored `*_input_hash`.
  */
 
+import { z } from 'zod';
 import { DEFAULT_IMAGE_MODEL, safeTextToImageModel } from '@/lib/ai/models';
 import {
   computeMotionPromptInputHash,
@@ -258,9 +259,17 @@ export async function computeShotStaleness(args: {
       // Context unavailable (e.g., style deleted mid-flight). Report
       // 'unknown' — fail-open as 'fresh' would silently lie to the user.
       visualPrompt = 'unknown';
-      logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
-        err: error,
-      });
+      if (error instanceof z.ZodError) {
+        // A ZodError here is a corrupt style/scene row — a permanent defect
+        // that would otherwise warn quietly on every poll forever.
+        logger.error(`corrupt prompt context for shot ${shot.id}:`, {
+          err: error,
+        });
+      } else {
+        logger.warn(`visual staleness uncomputable for shot ${shot.id}:`, {
+          err: error,
+        });
+      }
     }
   }
 
@@ -296,9 +305,15 @@ export async function computeShotStaleness(args: {
       }
     } catch (error) {
       motionPrompt = 'unknown';
-      logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
-        err: error,
-      });
+      if (error instanceof z.ZodError) {
+        logger.error(`corrupt prompt context for shot ${shot.id}:`, {
+          err: error,
+        });
+      } else {
+        logger.warn(`motion staleness uncomputable for shot ${shot.id}:`, {
+          err: error,
+        });
+      }
     }
   }
 

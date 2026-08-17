@@ -16,6 +16,7 @@
  * always parsed.
  */
 
+import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type {
   WorkflowEvent,
@@ -139,7 +140,7 @@ const PARSED_RESULT = {
   elementBible: [],
 };
 
-const STYLE_CONFIG: StyleConfig = {
+const STYLE_CONFIG: StyleConfig = migrateStyleConfigV1ToV2({
   mood: 'tense',
   artStyle: 'photoreal',
   lighting: 'hard key',
@@ -147,7 +148,7 @@ const STYLE_CONFIG: StyleConfig = {
   cameraWork: 'handheld',
   referenceFilms: [],
   colorGrading: 'cool shadows',
-};
+});
 
 const INPUT: SceneSplitWorkflowInput = {
   userId: 'u1',

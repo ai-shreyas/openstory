@@ -83,6 +83,7 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
     createdBy: 'u1',
     updatedBy: 'u1',
     styleId: 'style_1',
+    styleConfig: null,
     aspectRatio: '16:9',
     analysisModel: 'anthropic/claude-haiku-4.5',
     analysisDurationMs: 0,

@@ -47,6 +47,7 @@ const mockSequence: Sequence = {
   createdBy: 'user-1',
   updatedBy: 'user-1',
   styleId: 'style-1',
+  styleConfig: null,
   aspectRatio: '16:9',
   analysisModel: 'anthropic/claude-haiku-4.5',
   analysisDurationMs: 0,

@@ -1,6 +1,7 @@
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import { safeTextToImageModel } from '@/lib/ai/models';
-import { type SequenceLocation, StyleConfigSchema } from '@/lib/db/schema';
+import { type SequenceLocation } from '@/lib/db/schema';
+import { resolveSequenceStyleConfig } from '@/lib/style/style-config';
 import { getGenerationChannel } from '@/lib/realtime';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
@@ -101,12 +102,17 @@ export const recastLocationFn = createServerFn({ method: 'POST' })
     const sequence = await context.scopedDb.sequences.getForUser({
       sequenceId: location.sequenceId,
     });
-    const style = sequence.styleId
-      ? await context.scopedDb.styles.getById(sequence.styleId)
-      : null;
-    const styleConfig = style
-      ? StyleConfigSchema.parse(style.config)
-      : undefined;
+    const style =
+      sequence.styleConfig == null && sequence.styleId
+        ? await context.scopedDb.styles.getById(sequence.styleId)
+        : null;
+    const styleConfig =
+      sequence.styleConfig != null || style
+        ? resolveSequenceStyleConfig({
+            snapshot: sequence.styleConfig,
+            live: style?.config,
+          })
+        : undefined;
 
     // Bind the sequence location to the library location it was recast from.
     // Without this the downstream divergence check resolves the OLD (usually

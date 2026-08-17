@@ -53,6 +53,8 @@ export const createSequenceSchema = createInsertSchema(sequences, {
     imageModel: true, // Omit - will use imageModel field in extend
     videoModel: true, // Omit - will use videoModel field in extend
     workflow: true, // Omit - set by workflow, not user
+    // Copied from the style row on create — clients send styleId only.
+    styleConfig: true,
     // Music fields - managed by workflow, not user input
     musicUrl: true,
     musicPath: true,
@@ -188,6 +190,8 @@ export const updateSequenceSchema = createUpdateSchema(sequences, {
   updatedBy: true,
   workflow: true, // Set by workflow, not user
   workflowRunId: true, // Set at workflow trigger time, not user
+  // Copied from the style row on styleId change — clients send styleId only.
+  styleConfig: true,
   // Music fields - managed by workflow, not user input
   musicUrl: true,
   musicPath: true,
