@@ -6,16 +6,26 @@ import { useState } from 'react';
 import { getStyleGradient } from './style-gradient';
 import { getConfigColorPalette } from '@/lib/style/style-config';
 
-const StyleTileBackground: React.FC<{ style: Style }> = ({ style }) => {
+const StyleTileBackground: React.FC<{
+  style: Style;
+  priority?: boolean;
+}> = ({ style, priority = false }) => {
   const [imgError, setImgError] = useState(false);
 
   return style.previewUrl && !imgError ? (
     <AppImage
       key={style.id}
       src={style.previewUrl}
-      layout="fullWidth"
+      // ~65px tile; 130 is 2× so the srcset picks a retina-sized transform
+      // instead of the full thumbnail.webp.
+      width={130}
+      height={130}
+      sizes="65px"
       alt={style.name}
       className="h-full w-full object-cover"
+      fetchPriority={priority ? 'high' : 'low'}
+      loading={priority ? 'eager' : 'lazy'}
+      decoding="async"
       onError={() => setImgError(true)}
     />
   ) : (
@@ -34,6 +44,8 @@ type StyleInlineTileProps = {
   disabled?: boolean;
   reasoning?: string;
   recommended?: boolean;
+  /** First-paint tiles: eager + high fetch priority so they beat lazy ones. */
+  priority?: boolean;
   tabIndex: number;
   onSelect: (styleId: string) => void;
   onKeyDown: (event: React.KeyboardEvent) => void;
@@ -45,6 +57,7 @@ export function StyleInlineTile({
   disabled = false,
   reasoning,
   recommended = false,
+  priority = false,
   tabIndex,
   onSelect,
   onKeyDown,
@@ -71,7 +84,7 @@ export function StyleInlineTile({
       aria-label={`Select ${style.name} style`}
       title={reasoning}
     >
-      <StyleTileBackground style={style} />
+      <StyleTileBackground style={style} priority={priority} />
       {recommended && (
         <span
           aria-hidden

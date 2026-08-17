@@ -64,8 +64,8 @@ export const SampleVideoShowcase: React.FC = () => {
         <ArrowRight className="size-4" />
       </Link>
       <div className="grid grid-cols-2 items-start gap-4 md:grid-cols-3">
-        {entries.map((entry) => (
-          <SampleVideoCard key={entry.key} entry={entry} />
+        {entries.map((entry, index) => (
+          <SampleVideoCard key={entry.key} entry={entry} priority={index < 3} />
         ))}
       </div>
     </section>
@@ -83,11 +83,14 @@ const ShowcaseHeading: React.FC = () => (
   </div>
 );
 
-export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
-  entry,
-}) => {
+export const SampleVideoCard: React.FC<{
+  entry: SampleEntry;
+  /** First-viewport cards: eager poster + high fetch priority (#1182). */
+  priority?: boolean;
+}> = ({ entry, priority = false }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [open, setOpen] = useState(false);
+  const [playing, setPlaying] = useState(false);
 
   // Resting state is a cheap Cloudflare-extracted poster frame (~36KB jpg) and
   // `preload="none"`, so the page paints without fetching a single video byte.
@@ -104,6 +107,7 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
     const el = videoRef.current;
     if (!el) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    setPlaying(true);
     void el.play().catch(() => {});
   }, []);
 
@@ -112,6 +116,7 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
     if (!el) return;
     el.pause();
     el.currentTime = 0;
+    setPlaying(false);
   }, []);
 
   return (
@@ -124,11 +129,27 @@ export const SampleVideoCard: React.FC<{ entry: SampleEntry }> = ({
         onMouseEnter={play}
         onMouseLeave={stop}
       >
+        {poster ? (
+          <img
+            src={poster}
+            alt=""
+            width={640}
+            height={360}
+            className="absolute inset-0 h-full w-full object-cover"
+            fetchPriority={priority ? 'high' : 'low'}
+            loading={priority ? 'eager' : 'lazy'}
+            decoding="async"
+          />
+        ) : null}
         <video
           ref={videoRef}
           src={src}
-          poster={poster}
-          className="absolute inset-0 h-full w-full object-cover"
+          // Poster is a real <img> so LCP / preload hit one URL, not the
+          // video element. Hover still swaps in the downscaled clip.
+          className={cn(
+            'absolute inset-0 h-full w-full object-cover',
+            playing ? 'opacity-100' : 'opacity-0'
+          )}
           muted
           loop
           playsInline

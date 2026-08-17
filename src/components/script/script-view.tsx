@@ -317,11 +317,9 @@ export const ScriptView: FC<{
 
   const posthog = usePostHog();
 
-  // `isPending` (not `isLoading`) so the skeleton state is shown whenever there
-  // is no styles data yet — including during SSR, where the query is disabled
-  // behind the still-pending session and `isLoading` is misleadingly false.
-  // This keeps the server and first client render identical (both skeletons)
-  // and avoids a hydration mismatch (#style-selector "View all 0 styles").
+  // `isPending` (not `isLoading`) so the skeleton state is shown whenever
+  // there is no styles data yet. `/` prefetches the public catalogue in
+  // beforeLoad (#1182), so anonymous SSR renders tiles instead of skeletons.
   const { data: styles = [], isPending: isLoadingStyles } = useStyles();
 
   // Derive style metadata for motion model filtering + recommendation badges

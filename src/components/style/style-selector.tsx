@@ -288,6 +288,7 @@ export function StyleSelector({
                     selected={selectedStyleId === style.id}
                     disabled={disabled}
                     recommended
+                    priority={index < 4}
                     reasoning={reasoningByStyleId.get(style.id)}
                     tabIndex={index === focusableIndex ? 0 : -1}
                     onSelect={onStyleSelect}
@@ -303,6 +304,7 @@ export function StyleSelector({
                   style={style}
                   selected={selectedStyleId === style.id}
                   disabled={disabled}
+                  priority={unifiedIndex < 4}
                   tabIndex={unifiedIndex === focusableIndex ? 0 : -1}
                   onSelect={onStyleSelect}
                   onKeyDown={(e) => handleKeyDown(e, unifiedIndex)}
