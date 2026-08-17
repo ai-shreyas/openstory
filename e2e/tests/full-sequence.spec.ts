@@ -34,7 +34,10 @@ import {
   getSystemTalentByName,
   type TestTalent,
 } from '../fixtures/talent.fixture';
-import { waitForScriptEditor } from '../fixtures/test-utils';
+import {
+  selectComposerStyle,
+  waitForScriptEditor,
+} from '../fixtures/test-utils';
 import { t } from '../recording-mode';
 
 const fullPipeline = process.env.PLAYWRIGHT_FULL_PIPELINE === 'true';
@@ -194,19 +197,11 @@ testWithUser.describe('Full Sequence Pipeline', () => {
       // 1. Open the new-sequence page.
       await page.goto('/sequences/new');
 
-      // 2. Select the first style tile. Target the tile by its accessible
-      // name (`Select <name> style`) and wait for it to exist — the grid
-      // container renders immediately (before styles load) and its only
-      // button is then the "View all" browse trigger, which would open the
-      // style dialog instead of selecting.
-      // Waiting for a real tile also confirms the styles query resolved and
-      // React has hydrated.
-      const firstStyle = page
-        .getByRole('grid', { name: 'Style selection' })
-        .getByRole('button', { name: /^Select .* style$/ })
-        .first();
-      await expect(firstStyle).toBeVisible({ timeout: 15_000 });
-      await firstStyle.click();
+      // 2. Recorded image/motion fixtures were captured against Product Ad.
+      // The composer now defaults to Film & Cinematic (#1180), so switch
+      // the row and pick that style by name — clicking `.first()` would
+      // land on Action and miss every fal fixture.
+      await selectComposerStyle(page, 'Product Ad', 'E-commerce');
 
       // 3. Type a short script — a 30-second makeup ad.
       const script = `

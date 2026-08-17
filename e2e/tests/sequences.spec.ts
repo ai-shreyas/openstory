@@ -26,6 +26,24 @@ test.describe('Sequences', () => {
     await expect(editor).toBeVisible();
   });
 
+  test('composer style row defaults to cinematic and can switch family', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(
+      page.getByRole('button', { name: 'Style category: Film & Cinematic' })
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      page.getByRole('button', { name: 'Select Action style' })
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: /^Style category:/ }).click();
+    await page.getByRole('menuitemradio', { name: 'E-commerce' }).click();
+    await expect(
+      page.getByRole('button', { name: 'Select Product Ad style' })
+    ).toBeVisible();
+  });
+
   test('signed-in user can access /sequences/new', async ({ page }) => {
     // chromium project loads e2e/.auth/user.json — this is the logged-in alias
     // of the home composer (#1104). Anonymous redirect is in auth.spec.ts.

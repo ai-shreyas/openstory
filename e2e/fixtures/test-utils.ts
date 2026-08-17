@@ -29,6 +29,29 @@ export async function waitForScriptEditor(page: Page): Promise<Locator> {
 }
 
 /**
+ * Pick a named style on the composer strip.
+ *
+ * The row defaults to Film & Cinematic (#1180). Styles in another family
+ * need the category dropdown first — `family` is the radio label
+ * (e.g. "E-commerce").
+ */
+export async function selectComposerStyle(
+  page: Page,
+  styleName: string,
+  family?: string
+): Promise<void> {
+  if (family) {
+    await page.getByRole('button', { name: /^Style category:/ }).click();
+    await page.getByRole('menuitemradio', { name: family }).click();
+  }
+  const tile = page
+    .getByRole('grid', { name: 'Style selection' })
+    .getByRole('button', { name: `Select ${styleName} style` });
+  await expect(tile).toBeVisible({ timeout: HYDRATION_TIMEOUT });
+  await tile.click();
+}
+
+/**
  * Wait until every file picked in an add/edit dialog has finished uploading.
  *
  * Order matters. The submit button is only disabled while
