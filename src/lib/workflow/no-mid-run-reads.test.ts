@@ -336,11 +336,30 @@ const ALLOWED_LIVE_READS: Record<string, SanctionedRead[]> = {
       why: 'Ids only — every field the fan-out needs comes from the trigger-time snapshot.',
     },
   ],
+  'regenerate-shots-workflow.ts': [
+    {
+      read: 'compliance.listEnforcementFor',
+      bucket: 'BILLING-GUARD',
+      why: 'Spawn-time enforcement: a ban applied after the parent started must stop work that has not started yet.',
+    },
+  ],
   'scene-split-workflow.ts': [
     {
       read: 'resolveLlmKey',
       bucket: 'CREDENTIAL',
       why: 'Resolved inside the step that spends it.',
+    },
+    {
+      read: 'compliance.listEnforcementFor',
+      bucket: 'BILLING-GUARD',
+      why: 'Spawn-time enforcement: a ban applied after the parent started must stop work that has not started yet.',
+    },
+  ],
+  'shot-images-workflow.ts': [
+    {
+      read: 'compliance.listEnforcementFor',
+      bucket: 'BILLING-GUARD',
+      why: 'Spawn-time enforcement: a ban applied after the parent started must stop work that has not started yet.',
     },
   ],
   'sheet-snapshots.ts': [

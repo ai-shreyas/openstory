@@ -172,6 +172,11 @@ function makeScopedDb(): WorkflowScopedDb {
       resolveLlmKey: () =>
         Promise.resolve({ source: 'platform', via: 'env', key: 'k' }),
     },
+    liveRead: {
+      compliance: {
+        listEnforcementFor: () => Promise.resolve([]),
+      },
+    },
     scenes: {
       upsert: (row: { orderIndex: number }) =>
         Promise.resolve({

@@ -8,6 +8,12 @@
  */
 
 import { moveFile } from '#storage';
+import {
+  recordPortraitAttestation,
+  requireLikenessAttachment,
+  type LikenessRequestContext,
+  type PortraitAttestationInput,
+} from '@/lib/compliance/likeness-upload';
 import { generateId } from '@/lib/db/id';
 import type { Talent } from '@/lib/db/schema';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -33,18 +39,27 @@ export type CreateLibraryTalentInput = {
   isHuman?: boolean | null;
   /** Temp-upload URLs in the TALENT bucket; moved to permanent here. */
   referenceImageUrls?: string[];
+  portraitAttestation?: PortraitAttestationInput;
 };
 
 export type CreateLibraryTalentContext = {
   scopedDb: ScopedDb;
   user: { id: string };
   teamId: string;
+  request?: LikenessRequestContext;
 };
 
 export async function createLibraryTalent(
   input: CreateLibraryTalentInput,
   ctx: CreateLibraryTalentContext
 ): Promise<Talent> {
+  const tempUrls = input.referenceImageUrls ?? [];
+  const attestation = tempUrls.length
+    ? requireLikenessAttachment({
+        attestation: input.portraitAttestation,
+      })
+    : null;
+
   const newTalent = await ctx.scopedDb.talent.create({
     name: input.name,
     description: input.description,
@@ -53,8 +68,18 @@ export async function createLibraryTalent(
     isInTeamLibrary: true,
   });
 
+  if (attestation) {
+    // Recorded before media so a failed insert cannot leave likeness bytes
+    // without a warranty. The talent row exists either way.
+    await recordPortraitAttestation({
+      scopedDb: ctx.scopedDb,
+      subjectId: newTalent.id,
+      attestation,
+      request: ctx.request,
+    });
+  }
+
   // Move temp files to permanent location and create media records.
-  const tempUrls = input.referenceImageUrls ?? [];
   const permanentUrls: string[] = [];
 
   for (const tempUrl of tempUrls) {

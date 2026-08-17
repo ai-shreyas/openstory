@@ -41,6 +41,8 @@ import { gateEstimate } from '@/lib/billing/cost-estimation';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
+import { recordProvenance } from '@/lib/compliance/provenance';
+import { buildR2Key, STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { recordMediaGenerationSpan } from '@/lib/observability/ai-otel';
 import { getLogger } from '@/lib/observability/logger';
 import { getGenerationChannel } from '@/lib/realtime';
@@ -733,6 +735,36 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           );
         }
       });
+
+      // Provenance (#1180). Recorded even when the shot was deleted mid-render:
+      // the video is in R2 either way, and an untraceable object is exactly what
+      // this record exists to prevent. No content hash — a 1080p clip would have
+      // to be buffered whole to compute one; contentSha256 is unpopulated
+      // until we hash the small kinds. The storage key and fal request id
+      // carry the trace.
+      if (videoVersionId && input.teamId) {
+        const provenanceVersionId = videoVersionId;
+        const provenanceTeamId = input.teamId;
+        await step.do('record-provenance', async () => {
+          await recordProvenance(scopedDb.provenance, {
+            teamId: provenanceTeamId,
+            userId: input.userId,
+            assetKind: 'video_variant',
+            assetId: provenanceVersionId,
+            storageKey: buildR2Key(STORAGE_BUCKETS.VIDEOS, storageResult.path),
+            provider: 'fal',
+            model,
+            providerRequestId: job.jobId,
+            workflowRunId: event.instanceId,
+            prompt: input.prompt,
+            sequenceId: input.sequenceId,
+            shotId,
+            // Image-to-video: the start frame is a reference image, and whether
+            // one was supplied is the first question in a likeness complaint.
+            referenceImageCount: input.imageUrl ? 1 : 0,
+          });
+        });
+      }
     }
 
     // Return the video URL and duration

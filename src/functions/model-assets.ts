@@ -12,6 +12,7 @@
 import { usdToMicros, type Microdollars } from '@/lib/billing/money';
 import { assertModelsEnabled } from '@/lib/flags';
 import { requireCredits } from '@/lib/billing/preflight';
+import { requireGenerationAllowed } from '@/lib/compliance/generation-gate';
 import { getLogger } from '@/lib/observability/logger';
 import type { ScopedDb } from '@/lib/db/scoped';
 import {
@@ -143,6 +144,12 @@ export async function createGeneratedAsset(
   if (!validation.success) {
     return { ok: false, issues: validation.issues };
   }
+
+  // Enforcement gate beside the credit gate (#1180).
+  await requireGenerationAllowed({
+    userId: scopedDb.userId,
+    teamId: scopedDb.teamId,
+  });
 
   await requireCredits(scopedDb, ASSET_COST_ESTIMATES[data.activity], {
     errorMessage: `Insufficient credits for ${data.activity} generation`,

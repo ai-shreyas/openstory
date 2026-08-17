@@ -34,6 +34,7 @@ import {
   type ImageGenerationResult,
 } from '@/lib/image/image-generation';
 import { buildCharacterSheetPrompt } from '@/lib/prompts/character-prompt';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { getGenerationChannel } from '@/lib/realtime';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { uploadResponse } from '@/lib/storage/upload-response';
@@ -302,6 +303,26 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
           url: result.publicUrl,
           path: result.path,
         };
+      });
+
+      // Provenance (#1180) — recorded even when the run later diverges: the
+      // sheet is in R2 either way. Own step so a retry of reconcile cannot
+      // double-insert.
+      await step.do('record-provenance', async () => {
+        await recordProvenance(scopedDb.provenance, {
+          teamId: input.teamId,
+          userId: input.userId,
+          assetKind: 'character_sheet',
+          assetId: characterDbId,
+          storageKey: storageResult.path,
+          provider: 'fal',
+          model: generationParams.model,
+          providerRequestId: falUsage.requestId ?? null,
+          workflowRunId,
+          prompt: generationParams.prompt,
+          sequenceId,
+          referenceImageCount: generationParams.referenceImageUrls?.length ?? 0,
+        });
       });
 
       // Step 4: Divergence-aware database write. On convergent, update the

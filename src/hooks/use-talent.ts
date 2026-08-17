@@ -150,6 +150,10 @@ export function useUploadTalentMedia() {
       type: 'image' | 'video' | 'recording';
       file: File;
       onProgress?: (percent: number) => void;
+      portraitAttestation?: {
+        statementVersion: string;
+        authorizationBasis: string;
+      };
     }) => {
       const presign = await presignTalentUploadFn({
         data: {
@@ -173,6 +177,7 @@ export function useUploadTalentMedia() {
           mediaId: presign.mediaId,
           publicUrl: presign.publicUrl,
           path: presign.path,
+          portraitAttestation: data.portraitAttestation,
         },
       });
 

@@ -31,6 +31,7 @@ import {
   buildLibraryTalentSheetPrompt,
   buildTalentHeadshotPrompt,
 } from '@/lib/prompts/character-prompt';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { getTalentChannel } from '@/lib/realtime';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { uploadResponse } from '@/lib/storage/upload-response';
@@ -262,6 +263,31 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
 
     const sheet = sheetReconcile.sheet;
 
+    // Provenance (#1180) — recorded on divergent runs too: the sheet is in R2
+    // even when it does not become the talent's primary. Own step so a retry
+    // of the later headshot path cannot double-insert.
+    await step.do('record-sheet-provenance', async () => {
+      const hasReferenceImages =
+        input.referenceImageUrls && input.referenceImageUrls.length > 0;
+      await recordProvenance(scopedDb.provenance, {
+        teamId: input.teamId,
+        userId: input.userId,
+        assetKind: 'talent_sheet',
+        assetId: sheet.id,
+        storageKey: storageResult.path,
+        provider: 'fal',
+        model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+        providerRequestId: sheetUsage.requestId ?? null,
+        workflowRunId,
+        prompt: buildLibraryTalentSheetPrompt(
+          input.talentName,
+          input.talentDescription,
+          Boolean(hasReferenceImages)
+        ),
+        referenceImageCount: input.referenceImageUrls?.length ?? 0,
+      });
+    });
+
     if (sheetReconcile.kind === 'divergent') {
       // Helper already emitted `stale:detected` on the talent channel.
       // Stop here: do not generate the headshot or update talent.imageUrl,
@@ -403,6 +429,28 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         };
       }
     );
+
+    await step.do('record-headshot-provenance', async () => {
+      const hasReferenceImages =
+        input.referenceImageUrls && input.referenceImageUrls.length > 0;
+      await recordProvenance(scopedDb.provenance, {
+        teamId: input.teamId,
+        userId: input.userId,
+        assetKind: 'talent_sheet',
+        assetId: `${sheet.id}#headshot`,
+        storageKey: headshotStorageResult.path,
+        provider: 'fal',
+        model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+        providerRequestId: headshotUsage.requestId ?? null,
+        workflowRunId,
+        prompt: buildTalentHeadshotPrompt(
+          input.talentName,
+          input.talentDescription,
+          Boolean(hasReferenceImages)
+        ),
+        referenceImageCount: input.referenceImageUrls?.length ?? 0,
+      });
+    });
 
     // Step 7: Update talent with headshot
     await step.do('update-talent-headshot', async () => {

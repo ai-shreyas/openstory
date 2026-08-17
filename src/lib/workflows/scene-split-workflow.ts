@@ -159,12 +159,14 @@ async function triggerPreviewImage({
   parentInstanceId,
   shot,
   scene,
+  scopedDb,
 }: {
   input: SceneSplitWorkflowInput;
   sequenceId: string;
   parentInstanceId: string;
   shot: { id: string; frameId: string };
   scene: SceneSplittingScene;
+  scopedDb: WorkflowScopedDb;
 }): Promise<void> {
   const sceneText =
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
@@ -174,6 +176,10 @@ async function triggerPreviewImage({
     'A cinematic scene';
 
   try {
+    const enforcement = await scopedDb.liveRead.compliance.listEnforcementFor(
+      input.userId,
+      input.teamId
+    );
     await triggerWorkflow(
       '/image',
       {
@@ -194,6 +200,7 @@ async function triggerPreviewImage({
       {
         label: buildWorkflowLabel(sequenceId),
         deduplicationId: previewImageDedupId(parentInstanceId, shot.id),
+        enforcement,
       }
     );
   } catch (error) {
@@ -462,6 +469,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                     parentInstanceId: event.instanceId,
                     shot: prevShot,
                     scene: prevScene,
+                    scopedDb,
                   });
                 }
 
@@ -480,6 +488,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
             parentInstanceId: event.instanceId,
             shot: prevShot,
             scene: prevScene,
+            scopedDb,
           });
         }
 

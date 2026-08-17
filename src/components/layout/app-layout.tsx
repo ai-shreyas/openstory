@@ -12,6 +12,7 @@ import { GlobalBillingGateDialog } from '@/components/billing/billing-gate-dialo
 import { WelcomeCreditsDialog } from '@/components/billing/welcome-credits-dialog';
 import { AppSidebar } from './app-sidebar';
 import { Breadcrumbs } from './breadcrumbs';
+import { ComplianceRestrictionBanner } from './compliance-restriction-banner';
 import { InvalidApiKeyBanner } from './invalid-api-key-banner';
 
 interface AppLayoutProps extends React.HTMLAttributes<HTMLElement> {}
@@ -34,6 +35,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             <Separator orientation="vertical" className="mx-1 h-4" />
             <Breadcrumbs />
           </header>
+          <ComplianceRestrictionBanner />
           <InvalidApiKeyBanner />
           <div
             className={cn(

@@ -20,6 +20,7 @@ import { Route as AppAdminRouteRouteImport } from './routes/_app/admin/route'
 import { Route as AppCreditsRouteImport } from './routes/_app/credits'
 import { Route as AppPricingRouteImport } from './routes/_app/pricing'
 import { Route as AppPrivacyRouteImport } from './routes/_app/privacy'
+import { Route as AppReportRouteImport } from './routes/_app/report'
 import { Route as AppSettingsRouteRouteImport } from './routes/_app/settings/route'
 import { Route as AppTermsRouteImport } from './routes/_app/terms'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
@@ -35,6 +36,7 @@ import { Route as MetaOgRouteImport } from './routes/meta/og'
 import { Route as MetaOgGithubRouteImport } from './routes/meta/og-github'
 import { Route as MetaOgLinkedinRouteImport } from './routes/meta/og-linkedin'
 import { Route as R2SplatRouteImport } from './routes/r2.$'
+import { Route as AppAdminModerationRouteImport } from './routes/_app/admin/moderation'
 import { Route as AppAdminUsageRouteImport } from './routes/_app/admin/usage'
 import { Route as AppGalleryIndexRouteImport } from './routes/_app/gallery/index'
 import { Route as AppLocationsIndexRouteImport } from './routes/_app/locations/index'
@@ -137,6 +139,11 @@ const AppPrivacyRoute = AppPrivacyRouteImport.update({
   path: '/privacy',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppReportRoute = AppReportRouteImport.update({
+  id: '/report',
+  path: '/report',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppSettingsRouteRoute = AppSettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -211,6 +218,11 @@ const R2SplatRoute = R2SplatRouteImport.update({
   id: '/r2/$',
   path: '/r2/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppAdminModerationRoute = AppAdminModerationRouteImport.update({
+  id: '/moderation',
+  path: '/moderation',
+  getParentRoute: () => AppAdminRouteRoute,
 } as any)
 const AppAdminUsageRoute = AppAdminUsageRouteImport.update({
   id: '/usage',
@@ -468,6 +480,7 @@ export interface FileRoutesByFullPath {
   '/credits': typeof AppCreditsRoute
   '/pricing': typeof AppPricingRoute
   '/privacy': typeof AppPrivacyRoute
+  '/report': typeof AppReportRoute
   '/terms': typeof AppTermsRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
@@ -482,6 +495,7 @@ export interface FileRoutesByFullPath {
   '/r2/$': typeof R2SplatRoute
   '/docs/': typeof DocsIndexRoute
   '/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
+  '/admin/moderation': typeof AppAdminModerationRoute
   '/admin/usage': typeof AppAdminUsageRoute
   '/locations/$locationId': typeof AppLocationsLocationIdRoute
   '/models/$': typeof AppModelsSplatRoute
@@ -540,6 +554,7 @@ export interface FileRoutesByTo {
   '/credits': typeof AppCreditsRoute
   '/pricing': typeof AppPricingRoute
   '/privacy': typeof AppPrivacyRoute
+  '/report': typeof AppReportRoute
   '/terms': typeof AppTermsRoute
   '/login': typeof AuthLoginRoute
   '/verify': typeof AuthVerifyRoute
@@ -554,6 +569,7 @@ export interface FileRoutesByTo {
   '/r2/$': typeof R2SplatRoute
   '/docs': typeof DocsIndexRoute
   '/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
+  '/admin/moderation': typeof AppAdminModerationRoute
   '/admin/usage': typeof AppAdminUsageRoute
   '/locations/$locationId': typeof AppLocationsLocationIdRoute
   '/models/$': typeof AppModelsSplatRoute
@@ -616,6 +632,7 @@ export interface FileRoutesById {
   '/_app/credits': typeof AppCreditsRoute
   '/_app/pricing': typeof AppPricingRoute
   '/_app/privacy': typeof AppPrivacyRoute
+  '/_app/report': typeof AppReportRoute
   '/_app/terms': typeof AppTermsRoute
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/verify': typeof AuthVerifyRoute
@@ -631,6 +648,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/_app/sequences/$id': typeof AppSequencesIdRouteRouteWithChildren
+  '/_app/admin/moderation': typeof AppAdminModerationRoute
   '/_app/admin/usage': typeof AppAdminUsageRoute
   '/_app/locations/$locationId': typeof AppLocationsLocationIdRoute
   '/_app/models/$': typeof AppModelsSplatRoute
@@ -693,6 +711,7 @@ export interface FileRouteTypes {
     | '/credits'
     | '/pricing'
     | '/privacy'
+    | '/report'
     | '/terms'
     | '/login'
     | '/verify'
@@ -707,6 +726,7 @@ export interface FileRouteTypes {
     | '/r2/$'
     | '/docs/'
     | '/sequences/$id'
+    | '/admin/moderation'
     | '/admin/usage'
     | '/locations/$locationId'
     | '/models/$'
@@ -765,6 +785,7 @@ export interface FileRouteTypes {
     | '/credits'
     | '/pricing'
     | '/privacy'
+    | '/report'
     | '/terms'
     | '/login'
     | '/verify'
@@ -779,6 +800,7 @@ export interface FileRouteTypes {
     | '/r2/$'
     | '/docs'
     | '/sequences/$id'
+    | '/admin/moderation'
     | '/admin/usage'
     | '/locations/$locationId'
     | '/models/$'
@@ -840,6 +862,7 @@ export interface FileRouteTypes {
     | '/_app/credits'
     | '/_app/pricing'
     | '/_app/privacy'
+    | '/_app/report'
     | '/_app/terms'
     | '/_auth/login'
     | '/_auth/verify'
@@ -855,6 +878,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/docs/'
     | '/_app/sequences/$id'
+    | '/_app/admin/moderation'
     | '/_app/admin/usage'
     | '/_app/locations/$locationId'
     | '/_app/models/$'
@@ -1009,6 +1033,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPrivacyRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/_app/report': {
+      id: '/_app/report'
+      path: '/report'
+      fullPath: '/report'
+      preLoaderRoute: typeof AppReportRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/_app/settings': {
       id: '/_app/settings'
       path: '/settings'
@@ -1113,6 +1144,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/r2/$'
       preLoaderRoute: typeof R2SplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/admin/moderation': {
+      id: '/_app/admin/moderation'
+      path: '/moderation'
+      fullPath: '/admin/moderation'
+      preLoaderRoute: typeof AppAdminModerationRouteImport
+      parentRoute: typeof AppAdminRouteRoute
     }
     '/_app/admin/usage': {
       id: '/_app/admin/usage'
@@ -1454,10 +1492,12 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppAdminRouteRouteChildren {
+  AppAdminModerationRoute: typeof AppAdminModerationRoute
   AppAdminUsageRoute: typeof AppAdminUsageRoute
 }
 
 const AppAdminRouteRouteChildren: AppAdminRouteRouteChildren = {
+  AppAdminModerationRoute: AppAdminModerationRoute,
   AppAdminUsageRoute: AppAdminUsageRoute,
 }
 
@@ -1516,6 +1556,7 @@ interface AppRouteRouteChildren {
   AppCreditsRoute: typeof AppCreditsRoute
   AppPricingRoute: typeof AppPricingRoute
   AppPrivacyRoute: typeof AppPrivacyRoute
+  AppReportRoute: typeof AppReportRoute
   AppTermsRoute: typeof AppTermsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSequencesIdRouteRoute: typeof AppSequencesIdRouteRouteWithChildren
@@ -1538,6 +1579,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppCreditsRoute: AppCreditsRoute,
   AppPricingRoute: AppPricingRoute,
   AppPrivacyRoute: AppPrivacyRoute,
+  AppReportRoute: AppReportRoute,
   AppTermsRoute: AppTermsRoute,
   AppIndexRoute: AppIndexRoute,
   AppSequencesIdRouteRoute: AppSequencesIdRouteRouteWithChildren,

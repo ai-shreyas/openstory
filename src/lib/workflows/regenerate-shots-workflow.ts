@@ -77,9 +77,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
   protected override async runImpl(
     event: Readonly<WorkflowEvent<RegenerateShotsWorkflowInput>>,
     step: WorkflowStep,
-    // The reconcile pass that used scopedDb is retired (#989): image-workflow now
-    // appends + selects each version itself.
-    _scopedDb: WorkflowScopedDb
+    scopedDb: WorkflowScopedDb
   ): Promise<RegenerateShotsResult> {
     const input = event.payload;
     const parentInstanceId = event.instanceId;
@@ -243,6 +241,10 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
     // Fire-and-forget creates, wave-bounded. Promise.all within each wave (not
     // allSettled) so a failed create fails the durable step and CF retries.
     await step.do('trigger-variant-regen', async () => {
+      const enforcement = await scopedDb.liveRead.compliance.listEnforcementFor(
+        input.userId,
+        teamId
+      );
       const limit = VARIANT_TRIGGER_CONCURRENCY;
       for (let i = 0; i < succeeded.length; i += limit) {
         const wave = succeeded.slice(i, i + limit);
@@ -275,6 +277,7 @@ export class RegenerateShotsWorkflow extends OpenStoryWorkflowEntrypoint<Regener
                 label,
                 // Dedupe: a retry of this step.do mustn't re-fire variants.
                 deduplicationId: `variant-image-${result.shotId}-${imageModel}-${snapshot.snapshotInputHash.slice(0, 16)}`,
+                enforcement,
               }
             );
           })

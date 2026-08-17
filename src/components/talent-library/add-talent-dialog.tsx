@@ -15,8 +15,11 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { useCreateTalent } from '@/hooks/use-talent';
+import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
 import type { Talent } from '@/lib/db/schema';
 import { Plus } from 'lucide-react';
+import { toast } from 'sonner';
+import { PortraitAttestationFields } from './portrait-attestation-fields';
 import { TalentMediaUpload } from './talent-media-upload';
 
 type AddTalentDialogProps = {
@@ -32,6 +35,11 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
+  // Portrait-rights attestation (#1180). Required whenever reference media is
+  // attached, because that is when a real person's likeness can enter the
+  // library — the same condition that sets `isHuman` below.
+  const [attested, setAttested] = useState(false);
+  const [authorizationBasis, setAuthorizationBasis] = useState('');
 
   const isHydrated = useHydrated();
   const { requireAuth } = useAuthGate();
@@ -40,6 +48,10 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
   const closeAndReset = () => {
     setFiles([]);
     setUploadedUrls([]);
+    // Cleared with the rest of the form: an attestation must be made afresh for
+    // each upload, never inherited from the previous one.
+    setAttested(false);
+    setAuthorizationBasis('');
     setOpen(false);
   };
 
@@ -73,12 +85,25 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
 
     if (!name.trim()) return;
 
+    const depictsRealPerson = uploadedUrls.length > 0;
+
+    if (depictsRealPerson && (!attested || !authorizationBasis.trim())) {
+      toast.error('Confirm you have authorization for this person’s likeness');
+      return;
+    }
+
     createTalent.mutate(
       {
         name: name.trim(),
         description: description.trim() || undefined,
-        isHuman: uploadedUrls.length > 0,
+        isHuman: depictsRealPerson,
         referenceImageUrls: uploadedUrls,
+        portraitAttestation: depictsRealPerson
+          ? {
+              statementVersion: PORTRAIT_RIGHTS_V1.version,
+              authorizationBasis: authorizationBasis.trim(),
+            }
+          : undefined,
       },
       {
         onSuccess: (talent) => {
@@ -162,6 +187,15 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
                 disabled={isPending}
               />
             </div>
+
+            {uploadedUrls.length > 0 ? (
+              <PortraitAttestationFields
+                attested={attested}
+                onAttestedChange={setAttested}
+                authorizationBasis={authorizationBasis}
+                onAuthorizationBasisChange={setAuthorizationBasis}
+              />
+            ) : null}
           </div>
 
           <DialogFooter>

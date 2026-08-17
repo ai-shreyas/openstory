@@ -279,6 +279,13 @@ export function AuthForm({
           >
             Privacy&nbsp;Policy
           </Link>
+          . Report generated content at{' '}
+          <Link
+            to="/report"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            /report
+          </Link>
           .
         </p>
       </CardContent>

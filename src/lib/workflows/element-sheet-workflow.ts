@@ -35,6 +35,7 @@ import {
   generateImageWithProvider,
   type ImageGenerationParams,
 } from '@/lib/image/image-generation';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { buildElementSheetPrompt } from '@/lib/prompts/element-prompt';
 import { rejectionReasonMessage } from '@/lib/workflows/replace-element-workflow';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
@@ -240,6 +241,22 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
             return { url: result.publicUrl, path: result.path };
           }
         );
+
+        await step.do(`record-provenance-${index}`, async () => {
+          await recordProvenance(scopedDb.provenance, {
+            teamId: input.teamId,
+            userId: input.userId,
+            assetKind: 'element_sheet',
+            assetId: entry.elementId,
+            storageKey: storageResult.path,
+            provider: 'fal',
+            model: generationParams.model,
+            providerRequestId: falUsage.requestId ?? null,
+            workflowRunId: event.instanceId,
+            prompt: generationParams.prompt,
+            sequenceId,
+          });
+        });
 
         return await step.do(`ingest-element-${index}`, async () => {
           // Re-check inside the durable step: this step's own retry would hit

@@ -23,9 +23,11 @@ import {
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type { NewFrameVariant, NewShot } from '@/lib/db/schema';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { uploadImageToStorage } from '@/lib/image/image-storage';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
+import { buildR2Key, STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type {
@@ -296,6 +298,30 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         throw new Error('Failed to upload upscaled image to storage');
       }
       return { url: result.url, path: result.path };
+    });
+
+    // Provenance (#1180). The upscale is a new frame_variant in R2 — same
+    // kind as a still, different persist path. Recorded before select so a
+    // cancelled/failed pointer flip cannot leave an untraceable object.
+    await step.do('record-provenance', async () => {
+      await recordProvenance(scopedDb.provenance, {
+        teamId,
+        userId,
+        assetKind: 'frame_variant',
+        assetId: upscaleResult.versionId,
+        storageKey: buildR2Key(STORAGE_BUCKETS.THUMBNAILS, storageResult.path),
+        provider: 'fal',
+        model: upscaleModel,
+        providerRequestId: falUsage.requestId ?? null,
+        workflowRunId,
+        prompt: UPSCALE_PROMPT,
+        sequenceId,
+        shotId,
+        referenceImageCount:
+          1 +
+          (input.characterReferences?.length ?? 0) +
+          (input.locationReferences?.length ?? 0),
+      });
     });
 
     await step.do('select-upscaled-version', async () => {

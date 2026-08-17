@@ -27,6 +27,7 @@ import {
   type ImageGenerationParams,
 } from '@/lib/image/image-generation';
 import { buildLocationSheetPrompt } from '@/lib/prompts/location-prompt';
+import { recordProvenance } from '@/lib/compliance/provenance';
 import { getGenerationChannel } from '@/lib/realtime';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import { uploadResponse } from '@/lib/storage/upload-response';
@@ -214,6 +215,23 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
           url: result.publicUrl,
           path: result.path,
         };
+      });
+
+      await step.do('record-provenance', async () => {
+        await recordProvenance(scopedDb.provenance, {
+          teamId,
+          userId: input.userId,
+          assetKind: 'location_sheet',
+          assetId: locationDbId,
+          storageKey: storageResult.path,
+          provider: 'fal',
+          model: generationParams.model,
+          providerRequestId: falUsage.requestId ?? null,
+          workflowRunId,
+          prompt: generationParams.prompt,
+          sequenceId,
+          referenceImageCount: generationParams.referenceImageUrls?.length ?? 0,
+        });
       });
 
       // Step 4: Divergence-aware database write. On convergent, update the

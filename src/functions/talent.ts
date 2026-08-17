@@ -7,6 +7,12 @@ import {
   listPublicTalent,
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
+import {
+  portraitAttestationSchema,
+  recordPortraitAttestation,
+  requireLikenessAttachment,
+} from '@/lib/compliance/likeness-upload';
+import { getRequest } from '@tanstack/react-start/server';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createTalentSchema,
@@ -91,10 +97,15 @@ export const createTalentFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(createTalentSchema))
   .handler(async ({ context, data }) => {
+    const request = getRequest();
     return createLibraryTalent(data, {
       scopedDb: context.scopedDb,
       user: context.user,
       teamId: context.teamId,
+      request: {
+        ipAddress: request.headers.get('cf-connecting-ip'),
+        userAgent: request.headers.get('user-agent'),
+      },
     });
   });
 
@@ -299,6 +310,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         mediaId: ulidSchema,
         publicUrl: mediaUrlSchema,
         path: z.string().min(1),
+        portraitAttestation: portraitAttestationSchema.optional(),
       })
     )
   )
@@ -306,6 +318,20 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
     if (!data.path.startsWith(`talent/${context.teamId}/`)) {
       throw new Error('Invalid storage path');
     }
+
+    const attestation = requireLikenessAttachment({
+      attestation: data.portraitAttestation,
+    });
+    const request = getRequest();
+    await recordPortraitAttestation({
+      scopedDb: context.scopedDb,
+      subjectId: data.talentId,
+      attestation,
+      request: {
+        ipAddress: request.headers.get('cf-connecting-ip'),
+        userAgent: request.headers.get('user-agent'),
+      },
+    });
 
     await context.scopedDb.talent.media.create({
       id: data.mediaId,
