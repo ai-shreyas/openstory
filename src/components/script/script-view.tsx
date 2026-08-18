@@ -386,13 +386,30 @@ export const ScriptView: FC<{
     if (first) selectStyle(first.id);
   };
 
-  // Shuffle (#1187): jump to a random other style — the sample-swap effect
-  // above then puts that style's sample script in the editor.
+  // Shuffle (#1187): swap in a random other style's sample script. The row is
+  // always visible while composing, so guard the user's own text — replacing
+  // it goes through a confirm dialog (`requestShuffle`).
+  const [showShuffleConfirm, setShowShuffleConfirm] = useState(false);
   const handleShuffleSample = () => {
     const next = pickShuffleStyle(styles, styleId, Math.random);
     if (!next) return;
+    const sample = sampleScriptForStyle(next);
+    if (!sample) return;
     posthog.capture('sample_script_shuffled', { style_id: next.id });
+    setContentState((s) => ({ ...s, script: sample }));
+    setSampleStyleId(next.id);
+    // A stale Undo (from a pre-shuffle enhance) would restore text the sample
+    // state no longer describes.
+    setEnhance('canUndoEnhance', false);
     handleStyleSelect(next.id);
+  };
+  const requestShuffle = () => {
+    const hasOwnText = !sampleStyleId && (script ?? '').trim().length > 0;
+    if (hasOwnText) {
+      setShowShuffleConfirm(true);
+      return;
+    }
+    handleShuffleSample();
   };
 
   // Auto-select the first style in the current row when the composer has
@@ -1193,22 +1210,37 @@ export const ScriptView: FC<{
             className="shrink-0"
           />
           {/* Above the editor so the Shuffle button holds its position while
-              samples of different lengths grow/shrink the editor below it. */}
-          {sampleStyleId && (
+              samples of different lengths grow/shrink the editor below it.
+              Always visible while composing — over the user's own text,
+              Shuffle confirms before replacing. */}
+          {!isEditing && (
             <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground">
-                Sample script
-                <span className="hidden @min-[480px]:inline">
-                  {' '}
-                  — make it yours, or hit Generate to see it come to life.
-                </span>
+                {sampleStyleId ? (
+                  <>
+                    Sample script
+                    <span className="hidden @min-[480px]:inline">
+                      {' '}
+                      — make it yours, or hit Generate to see it come to life.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Need a starting point?
+                    <span className="hidden @min-[480px]:inline">
+                      {' '}
+                      Shuffle a sample script.
+                    </span>
+                  </>
+                )}
               </p>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
-                onClick={handleShuffleSample}
+                disabled={loading || isEnhancing || isSubmitting}
+                onClick={requestShuffle}
               >
                 <Shuffle className="size-3.5" />
                 Shuffle
@@ -1529,6 +1561,32 @@ export const ScriptView: FC<{
             >
               <Sparkles className="size-3.5" />
               Enhance Script
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={showShuffleConfirm}
+        onOpenChange={setShowShuffleConfirm}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace your script?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Shuffle swaps in a sample script for a random style. What you've
+              written here will be replaced.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep my script</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowShuffleConfirm(false);
+                handleShuffleSample();
+              }}
+            >
+              <Shuffle className="size-3.5" />
+              Replace
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
