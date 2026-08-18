@@ -4,11 +4,27 @@ type MermaidDiagramProps = {
   source: string;
 };
 
+function MermaidPlaceholder() {
+  return <div className="my-4 flex justify-center overflow-x-auto" />;
+}
+
+/**
+ * Vite replaces `import.meta.env.SSR` at compile time, so the mermaid
+ * dynamic import is dead on the worker/SSR graph and stays a client chunk.
+ * mermaid.render() needs a DOM; Workerd does not have one.
+ */
+async function loadMermaid() {
+  if (import.meta.env.SSR) {
+    throw new Error('mermaid is client-only');
+  }
+  return import('mermaid');
+}
+
 let initialized = false;
 let initializedTheme: 'default' | 'dark' | null = null;
 
 async function ensureInitialized(theme: 'default' | 'dark') {
-  const { default: mermaid } = await import('mermaid');
+  const { default: mermaid } = await loadMermaid();
   if (!initialized || initializedTheme !== theme) {
     mermaid.initialize({
       startOnLoad: false,
@@ -22,13 +38,12 @@ async function ensureInitialized(theme: 'default' | 'dark') {
 }
 
 function getPreferredTheme(): 'default' | 'dark' {
-  if (typeof window === 'undefined') return 'default';
   return window.matchMedia('(prefers-color-scheme: dark)').matches
     ? 'dark'
     : 'default';
 }
 
-export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ source }) => {
+const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
   const reactId = useId();
   const diagramId = `mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [svg, setSvg] = useState<string | null>(null);
@@ -36,7 +51,6 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ source }) => {
   const [theme, setTheme] = useState<'default' | 'dark'>(getPreferredTheme);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const handler = (event: MediaQueryListEvent) => {
       setTheme(event.matches ? 'dark' : 'default');
@@ -88,4 +102,11 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ source }) => {
       dangerouslySetInnerHTML={svg ? { __html: svg } : undefined}
     />
   );
+};
+
+export const MermaidDiagram: React.FC<MermaidDiagramProps> = (props) => {
+  if (import.meta.env.SSR) {
+    return <MermaidPlaceholder />;
+  }
+  return <MermaidDiagramClient {...props} />;
 };
