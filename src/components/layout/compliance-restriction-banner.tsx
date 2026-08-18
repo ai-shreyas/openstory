@@ -1,15 +1,20 @@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { getComplianceStatusFn } from '@/functions/compliance';
+import { useAuthSession } from '@/lib/auth/session-query';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ShieldAlert } from 'lucide-react';
 
 export const ComplianceRestrictionBanner: React.FC = () => {
+  // The app shell is anonymous-browsable; the status fn requires auth, so
+  // don't fire (and error-log) it without a session.
+  const { data: session } = useAuthSession();
   const { data } = useQuery({
     queryKey: ['compliance-status'],
     queryFn: () => getComplianceStatusFn(),
     staleTime: 30_000,
     retry: false,
+    enabled: !!session,
   });
 
   if (!data?.restrictionNotice) return null;
