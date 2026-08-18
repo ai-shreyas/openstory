@@ -189,6 +189,31 @@ export const ScriptView: FC<{
   const isDerivedScript = isEditing && !!composedScript && !allowScriptEdit;
   const baseScript = composedScript ?? sequence?.script;
 
+  // `isPending` (not `isLoading`) so the skeleton state is shown whenever
+  // there is no styles data yet. `/` prefetches the public catalogue in
+  // beforeLoad (#1182), so anonymous SSR renders tiles instead of skeletons.
+  const { data: styles = [], isPending: isLoadingStyles } = useStyles();
+
+  // Fallback sample seed (#1187), computed at FIRST render — during SSR on
+  // the anonymous front page (styles are loader-prefetched there) — so the
+  // sample is in the first paint instead of popping in after hydration and
+  // shifting the page. Only for a fully bare create composer; an explicit
+  // seed or an editing/copy sequence wins, and a saved draft replaces it via
+  // the draft-sync effect below. When styles aren't cached at mount (some
+  // signed-in paths), this stays null and the seed effect below fills in
+  // client-side.
+  const [fallbackSample] = useState<{ styleId: string; script: string } | null>(
+    () => {
+      if (isEditing || sequence || initialScript || initialStyleId) return null;
+      const style = defaultComposerStyle(
+        styles,
+        DEFAULT_COMPOSER_STYLE_CATEGORY
+      );
+      const sample = style ? sampleScriptForStyle(style) : null;
+      return style && sample ? { styleId: style.id, script: sample } : null;
+    }
+  );
+
   // Local script override — undefined means "show the canonical baseScript".
   // For existing sequences that is the composed scene-script document once the
   // query resolves (#1030); until then baseScript falls back to sequence.script.
@@ -198,8 +223,12 @@ export const ScriptView: FC<{
     script: string | null | undefined;
     styleId: string | null;
   }>({
-    script: initialScript ?? (isEditing ? undefined : sequence?.script),
-    styleId: initialStyleId ?? sequence?.styleId ?? null,
+    script:
+      initialScript ??
+      (isEditing ? undefined : sequence?.script) ??
+      fallbackSample?.script,
+    styleId:
+      initialStyleId ?? sequence?.styleId ?? fallbackSample?.styleId ?? null,
   });
   const { script, styleId } = contentState;
 
@@ -211,7 +240,7 @@ export const ScriptView: FC<{
   const [sampleStyleId, setSampleStyleId] = useState<string | null>(
     initialScriptIsSample && initialScript && initialStyleId
       ? initialStyleId
-      : null
+      : (fallbackSample?.styleId ?? null)
   );
 
   const setScript = (v: string | null | undefined) =>
@@ -348,11 +377,6 @@ export const ScriptView: FC<{
   };
 
   const posthog = usePostHog();
-
-  // `isPending` (not `isLoading`) so the skeleton state is shown whenever
-  // there is no styles data yet. `/` prefetches the public catalogue in
-  // beforeLoad (#1182), so anonymous SSR renders tiles instead of skeletons.
-  const { data: styles = [], isPending: isLoadingStyles } = useStyles();
 
   // Derive style metadata for motion model filtering + recommendation badges
   const selectedStyle = useMemo(
@@ -502,6 +526,9 @@ export const ScriptView: FC<{
         script: draft.script,
         styleId: draft.styleId || s.styleId,
       }));
+      // The restored draft is the user's own text — it replaces the
+      // render-time fallback sample, so drop the sample state with it.
+      setSampleStyleId(null);
       setSelections((s) => ({
         talentIds:
           draft.selectedTalentIds.length > 0

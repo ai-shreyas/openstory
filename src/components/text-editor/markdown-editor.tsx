@@ -352,7 +352,21 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           {placeholder}
         </p>
       ) : null}
-      <EditorContent editor={editor} className="relative w-full" />
+      {/* First-paint stand-in for seeded content (#1187): the editor only
+          renders after hydration (immediatelyRender: false), so a value
+          present at mount — the composer's sample script — would otherwise
+          pop in late and shift the page. Rendered in flow with the editor's
+          prose typography so the swap to the live editor holds height. */}
+      {!editor && value ? (
+        <div className={cn(proseClasses, 'whitespace-pre-wrap')}>{value}</div>
+      ) : null}
+      {/* Hidden while the stand-in shows — the container is a flex row, so an
+          empty pre-hydration EditorContent would otherwise share its width
+          and double the stand-in's wrapped lines. */}
+      <EditorContent
+        editor={editor}
+        className={cn('relative w-full', !editor && value && 'hidden')}
+      />
     </div>
   );
 };
