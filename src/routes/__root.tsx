@@ -11,7 +11,6 @@ import { Providers } from '@/components/providers';
 import { Button } from '@/components/ui/button';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
 import {
-  DARK_MODE_BOOT_SCRIPT,
   DARK_MODE_VARIANT_COOKIE,
   parseDarkModeVariant,
   shouldEvaluateDarkModeExperimentFromHost,
@@ -193,7 +192,7 @@ function RootLayout() {
       suppressHydrationWarning
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: DARK_MODE_BOOT_SCRIPT }} />
+        <script src="/dark-mode-boot.js" />
         <HeadContent />
       </head>
       <body>

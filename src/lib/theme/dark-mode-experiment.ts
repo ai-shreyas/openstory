@@ -3,7 +3,7 @@
  *
  * Control follows `prefers-color-scheme`. Test forces dark via `html.dark`
  * even when the OS is in light mode. Assignment is sticky in a cookie so
- * return visits apply before paint (see `DARK_MODE_BOOT_SCRIPT`).
+ * return visits apply before paint (`/dark-mode-boot.js`).
  */
 
 export const DARK_MODE_DEFAULT_FLAG = 'dark-mode-default';
@@ -226,10 +226,3 @@ export function readDarkModeOverride(args?: {
     return null;
   }
 }
-
-/**
- * Runs in `<head>` before CSS so a sticky `test` assignment does not flash
- * light on return visits. Query / localStorage overrides apply only off
- * production (same host gate as `shouldEvaluateDarkModeExperimentFromHost`).
- */
-export const DARK_MODE_BOOT_SCRIPT = `(function(){try{var host=location.hostname.toLowerCase();var evaluate=host!=="localhost"&&host!=="127.0.0.1"&&host!=="::1"&&!/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(host)&&host.indexOf("pr-")===-1;var q=null;var s=null;if(!evaluate){q=new URLSearchParams(location.search).get(${JSON.stringify(DARK_MODE_OVERRIDE_QUERY)});if(q==="test"||q==="control"){try{localStorage.setItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)},q)}catch(e){}}try{s=localStorage.getItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)})}catch(e){}}var c=document.cookie.match(/(?:^|; )${DARK_MODE_VARIANT_COOKIE}=([^;]*)/);var v=q||s||(c&&decodeURIComponent(c[1]));if(v==="test"){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}else if(v==="control"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme=""}}catch(e){}})();`;

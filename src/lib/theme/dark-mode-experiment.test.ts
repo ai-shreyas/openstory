@@ -1,6 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  DARK_MODE_BOOT_SCRIPT,
   DARK_MODE_DEFAULT_FLAG,
   DARK_MODE_DISTINCT_COOKIE,
   DARK_MODE_OVERRIDE_QUERY,
@@ -211,16 +211,21 @@ describe('signupDarkModeAnalytics', () => {
   });
 });
 
-describe('DARK_MODE_BOOT_SCRIPT', () => {
-  it('applies the sticky cookie name and override keys', () => {
-    expect(DARK_MODE_BOOT_SCRIPT).toContain(DARK_MODE_VARIANT_COOKIE);
-    expect(DARK_MODE_BOOT_SCRIPT).toContain(DARK_MODE_OVERRIDE_STORAGE_KEY);
-    expect(DARK_MODE_BOOT_SCRIPT).toContain(DARK_MODE_OVERRIDE_QUERY);
-    expect(DARK_MODE_BOOT_SCRIPT).toContain('classList.add("dark")');
+describe('public/dark-mode-boot.js', () => {
+  const boot = readFileSync(
+    new URL('../../../public/dark-mode-boot.js', import.meta.url),
+    'utf8'
+  );
+
+  it('uses the same cookie and override keys as the TS module', () => {
+    expect(boot).toContain(DARK_MODE_VARIANT_COOKIE);
+    expect(boot).toContain(DARK_MODE_OVERRIDE_STORAGE_KEY);
+    expect(boot).toContain(`'${DARK_MODE_OVERRIDE_QUERY}'`);
+    expect(boot).toContain("classList.add('dark')");
   });
 
   it('gates query/localStorage overrides behind the production host check', () => {
-    expect(DARK_MODE_BOOT_SCRIPT).toContain('if(!evaluate)');
-    expect(DARK_MODE_BOOT_SCRIPT).toContain('indexOf("pr-")');
+    expect(boot).toContain('if (!evaluate)');
+    expect(boot).toContain("host.includes('pr-')");
   });
 });
