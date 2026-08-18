@@ -21,16 +21,27 @@ export function markPendingGenerate(): void {
   }
 }
 
-/** Read-and-clear. True when a fresh pending Generate click was stored. */
-export function takePendingGenerate(): boolean {
+/** Non-consuming peek. True when a fresh pending Generate click is stored —
+ *  lets the welcome-credits dialog adapt its CTA without eating the intent. */
+export function hasPendingGenerate(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw === null) return false;
-    localStorage.removeItem(STORAGE_KEY);
     const at = Number(raw);
     return Number.isFinite(at) && Date.now() - at <= EXPIRY_MS;
   } catch {
     return false;
   }
+}
+
+/** Read-and-clear. True when a fresh pending Generate click was stored. */
+export function takePendingGenerate(): boolean {
+  const pending = hasPendingGenerate();
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // localStorage unavailable — nothing stored to clear.
+  }
+  return pending;
 }

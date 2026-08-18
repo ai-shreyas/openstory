@@ -1,6 +1,7 @@
 import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { ActionCost } from '@/components/billing/action-cost';
+import { useWelcomeCreditsGate } from '@/components/billing/welcome-credits-dialog';
 import { PremiumCard } from '@/components/cards/premium-card';
 import {
   ElementSelector,
@@ -1033,6 +1034,7 @@ export const ScriptView: FC<{
   // enhance nudge, billing gate, generation — continues without a second
   // click. Covers both the in-dialog OTP sign-in (no remount) and the OAuth
   // round-trip (fresh mount). Ref'd so the effect calls the fresh closure.
+  const { blocking: welcomeCreditsBlocking } = useWelcomeCreditsGate();
   const handleSubmitRef = useRef(handleSubmit);
   handleSubmitRef.current = handleSubmit;
   const resumeTriedRef = useRef(false);
@@ -1040,6 +1042,10 @@ export const ScriptView: FC<{
     if (isEditing || loading || !isAuthenticated) return;
     if (resumeTriedRef.current) return;
     if (!draftLoaded || !isFormValid || isSubmitting) return;
+    // Let the welcome-credits moment finish first — its "Keep creating"
+    // dismiss is what hands the flow back to us, instead of the nudge
+    // stacking on top of the gift dialog.
+    if (welcomeCreditsBlocking) return;
     resumeTriedRef.current = true;
     if (!takePendingGenerate()) return;
     void handleSubmitRef.current();
@@ -1050,6 +1056,7 @@ export const ScriptView: FC<{
     draftLoaded,
     isFormValid,
     isSubmitting,
+    welcomeCreditsBlocking,
   ]);
 
   const scriptValue = script ?? baseScript ?? '';
