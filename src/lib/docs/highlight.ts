@@ -26,9 +26,10 @@ const docsHighlighter = createHighlighter({
 export const highlightDocsCode: CodeHighlighter =
   createTanStackMarkdownHighlighter(docsHighlighter);
 
-// Site dark mode is `@media (prefers-color-scheme: dark)`, not a `.dark`
-// class. Pair-mode `darkSelector` is a selector, so wrap the dark rule in
-// the media query ourselves.
+// Site dark mode is `@media (prefers-color-scheme: dark)` or `html.dark`
+// (the `dark-mode-default` experiment, #1186). Pair-mode `darkSelector` is a
+// selector, so wrap the dark rule in the media query ourselves and duplicate
+// it under `html.dark`.
 export const docsHighlightCss = `${createThemeCss({
   light: githubLightTheme,
   lightSelector: '.markdown-renderer',
@@ -39,6 +40,8 @@ export const docsHighlightCss = `${createThemeCss({
 @media (prefers-color-scheme: dark) {
 ${createThemeRule('.markdown-renderer', githubDarkTheme)}
 }
+
+${createThemeRule('html.dark .markdown-renderer', githubDarkTheme)}
 
 .markdown-renderer .heading-anchor {
   margin-inline-start: 0.4em;
