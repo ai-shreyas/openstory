@@ -237,6 +237,7 @@ export function NewSequencePage({
             onCancel={handleCancelCopy}
             initialScript={from ? undefined : seedScript}
             initialStyleId={from ? undefined : seedStyleId}
+            initialScriptIsSample={!from && !!seedScript}
             onStyleChange={from ? undefined : handleStyleChange}
           />
         </PageContainer>
@@ -271,6 +272,7 @@ export function NewSequencePage({
             onSuccess={handleSuccess}
             initialScript={seedScript}
             initialStyleId={seedStyleId}
+            initialScriptIsSample={!!seedScript}
             onStyleChange={handleStyleChange}
           />
         </div>

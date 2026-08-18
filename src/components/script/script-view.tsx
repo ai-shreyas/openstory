@@ -82,6 +82,10 @@ import {
 import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
 import {
+  pickShuffleStyle,
+  sampleScriptForStyle,
+} from '@/lib/style/composer-sample';
+import {
   ALL_COMPOSER_STYLE_CATEGORIES,
   DEFAULT_COMPOSER_STYLE_CATEGORY,
   defaultComposerStyle,
@@ -97,7 +101,14 @@ import {
 } from '@/lib/utils/drag-images';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
-import { ImagePlus, Loader2, Sparkles, Square, Undo2 } from 'lucide-react';
+import {
+  ImagePlus,
+  Loader2,
+  Shuffle,
+  Sparkles,
+  Square,
+  Undo2,
+} from 'lucide-react';
 import React, {
   useCallback,
   useEffect,
@@ -132,6 +143,10 @@ export const ScriptView: FC<{
    *  saved draft for the initial value; remount (via `key`) to re-seed. */
   initialScript?: string;
   initialStyleId?: string;
+  /** Marks `initialScript` as a style sample (#1187): the composer treats it
+   *  as an untouched sample — the script follows style picks, Shuffle shows,
+   *  and Generate skips the enhance nudge — until the user edits it. */
+  initialScriptIsSample?: boolean;
   /** Notified when the user picks a style, so the new-sequence page can mirror
    *  it into `?style=`. Not called for the auto-selected default. */
   onStyleChange?: (styleId: string) => void;
@@ -155,6 +170,7 @@ export const ScriptView: FC<{
   onCancel,
   initialScript,
   initialStyleId,
+  initialScriptIsSample = false,
   onStyleChange,
   allowScriptEdit = false,
 }) => {
@@ -181,6 +197,17 @@ export const ScriptView: FC<{
     styleId: initialStyleId ?? sequence?.styleId ?? null,
   });
   const { script, styleId } = contentState;
+
+  // Sample state (#1187): non-null while the editor shows an untouched sample
+  // script for that style. While set, the script follows style picks (swapping
+  // to the new style's sample), Shuffle shows under the editor, Generate skips
+  // the enhance nudge, and the draft persists as empty (a pristine sample is
+  // not the user's work). Any user edit or enhance clears it.
+  const [sampleStyleId, setSampleStyleId] = useState<string | null>(
+    initialScriptIsSample && initialScript && initialStyleId
+      ? initialStyleId
+      : null
+  );
 
   const setScript = (v: string | null | undefined) =>
     setContentState((s) => ({ ...s, script: v }));
@@ -355,6 +382,15 @@ export const ScriptView: FC<{
     if (first) selectStyle(first.id);
   };
 
+  // Shuffle (#1187): jump to a random other style — the sample-swap effect
+  // above then puts that style's sample script in the editor.
+  const handleShuffleSample = () => {
+    const next = pickShuffleStyle(styles, styleId, Math.random);
+    if (!next) return;
+    posthog.capture('sample_script_shuffled', { style_id: next.id });
+    handleStyleSelect(next.id);
+  };
+
   // Auto-select the first style in the current row when the composer has
   // no pick yet (the row starts as Film & Cinematic).
   useEffect(() => {
@@ -461,6 +497,53 @@ export const ScriptView: FC<{
     }
   }, [isEditing, loading, draftLoaded, draft, initialScript, initialStyleId]);
 
+  // Seed a sample script into an otherwise-empty composer (#1187) — the
+  // first-time-user path: no draft to restore, no `?style=` seed, nothing
+  // typed. Runs at most once per mount so deleting the sample doesn't make it
+  // pop back.
+  const sampleSeedTriedRef = useRef(false);
+  useEffect(() => {
+    if (isEditing || loading || initialScript || sampleSeedTriedRef.current) {
+      return;
+    }
+    if (!draftLoaded || isLoadingStyles) return;
+    // A restorable draft wins — the draft-sync effect above fills it in.
+    // (With an `initialStyleId` seed that effect is skipped, so the draft
+    // doesn't block seeding there.)
+    if (!initialStyleId && draft.script) return;
+    if (script) return;
+    const style = styles.find((s) => s.id === styleId);
+    if (!style) return;
+    sampleSeedTriedRef.current = true;
+    const sample = sampleScriptForStyle(style);
+    if (!sample) return;
+    setContentState((s) => ({ ...s, script: sample }));
+    setSampleStyleId(style.id);
+  }, [
+    isEditing,
+    loading,
+    initialScript,
+    initialStyleId,
+    draftLoaded,
+    draft,
+    isLoadingStyles,
+    styles,
+    styleId,
+    script,
+  ]);
+
+  // While the sample is untouched, the script follows the style: picking a
+  // different style (tile, category row, or Shuffle) swaps in that style's
+  // sample instead of stranding the old style's text under the new look.
+  useEffect(() => {
+    if (!sampleStyleId || !styleId || styleId === sampleStyleId) return;
+    const style = styles.find((s) => s.id === styleId);
+    if (!style) return;
+    const sample = sampleScriptForStyle(style);
+    setContentState((s) => ({ ...s, script: sample ?? '' }));
+    setSampleStyleId(sample ? style.id : null);
+  }, [sampleStyleId, styleId, styles]);
+
   // Sync state with savedSettings when creating new sequences (not when editing)
   // Use a ref to track if we've already synced to avoid loops
   const hasSyncedRef = React.useRef(false);
@@ -497,11 +580,14 @@ export const ScriptView: FC<{
     }
   }, [isEditing, settingsLoaded, genSettings, saveSettings]);
 
-  // Persist draft to localStorage when creating new sequences
+  // Persist draft to localStorage when creating new sequences. An untouched
+  // sample script is not the user's work — persist it as empty so a reload
+  // (or the sign-in round-trip) re-seeds a fresh sample instead of restoring
+  // the sample as a "draft".
   useEffect(() => {
     if (!isEditing && draftLoaded) {
       saveDraft({
-        script: script ?? '',
+        script: sampleStyleId ? '' : (script ?? ''),
         styleId,
         selectedTalentIds,
         selectedLocationIds,
@@ -512,6 +598,7 @@ export const ScriptView: FC<{
     isEditing,
     draftLoaded,
     script,
+    sampleStyleId,
     styleId,
     selectedTalentIds,
     selectedLocationIds,
@@ -788,11 +875,20 @@ export const ScriptView: FC<{
     }
 
     const scriptText = script ?? baseScript ?? '';
-    if (!canUndoEnhance && scriptText.length < SCRIPT_SHORT_THRESHOLD) {
+    // An untouched sample is curated to generate well as-is — don't interrupt
+    // the first-run "click Generate" moment with the enhance nudge (#1187).
+    if (
+      !canUndoEnhance &&
+      !sampleStyleId &&
+      scriptText.length < SCRIPT_SHORT_THRESHOLD
+    ) {
       setEnhance('showEnhanceNudge', true);
       return;
     }
 
+    if (sampleStyleId) {
+      posthog.capture('sample_script_generated', { style_id: sampleStyleId });
+    }
     executeRegeneration();
   };
 
@@ -815,6 +911,8 @@ export const ScriptView: FC<{
       script_length: scriptValue.length,
       aspect_ratio: aspectRatio,
     });
+    // Enhancing rewrites the text — it stops being an untouched sample.
+    setSampleStyleId(null);
     setEnhanceUI((s) => ({ ...s, isEnhancing: true, error: null }));
     previousScriptRef.current = scriptValue;
     setScript('');
@@ -1071,6 +1169,9 @@ export const ScriptView: FC<{
               value={scriptValue}
               onValueChange={(val) => {
                 setScript(val);
+                // Only user edits emit here (prop-driven setContent doesn't),
+                // so typing claims the sample as the user's own script.
+                if (sampleStyleId) setSampleStyleId(null);
                 if (canUndoEnhance) setEnhance('canUndoEnhance', false);
               }}
               maxLength={50000}
@@ -1080,6 +1181,24 @@ export const ScriptView: FC<{
               mentionItems={mentionItems}
             />
           </div>
+          {sampleStyleId && !isEnhancing && (
+            <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Sample script — make it yours, or hit Generate to see it come to
+                life.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={handleShuffleSample}
+              >
+                <Shuffle className="size-3.5" />
+                Shuffle
+              </Button>
+            </div>
+          )}
           {enhanceError && (
             <p className="text-sm text-destructive">{enhanceError}</p>
           )}
