@@ -89,13 +89,18 @@ describe('shouldEvaluateDarkModeExperimentFromHost', () => {
 });
 
 describe('readDarkModeOverride', () => {
-  it('prefers the query param over localStorage', () => {
+  it('prefers the query param over localStorage and persists it', () => {
+    const stored: Record<string, string> = {};
     expect(
       readDarkModeOverride({
         search: `?${DARK_MODE_OVERRIDE_QUERY}=control`,
         storageGet: () => 'test',
+        storageSet: (key, value) => {
+          stored[key] = value;
+        },
       })
     ).toBe('control');
+    expect(stored[DARK_MODE_OVERRIDE_STORAGE_KEY]).toBe('control');
   });
 
   it('falls back to localStorage', () => {

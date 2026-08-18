@@ -124,6 +124,7 @@ export function writeBrowserDarkModeCookies(args: {
 export function readDarkModeOverride(args?: {
   search?: string;
   storageGet?: (key: string) => string | null;
+  storageSet?: (key: string, value: string) => void;
 }): DarkModeVariant | null {
   const search =
     args?.search ??
@@ -131,7 +132,20 @@ export function readDarkModeOverride(args?: {
   const fromQuery = parseDarkModeVariant(
     new URLSearchParams(search).get(DARK_MODE_OVERRIDE_QUERY)
   );
-  if (fromQuery) return fromQuery;
+  if (fromQuery) {
+    try {
+      const set =
+        args?.storageSet ??
+        (!args?.storageGet && typeof localStorage !== 'undefined'
+          ? (key: string, value: string) => localStorage.setItem(key, value)
+          : undefined);
+      // Persist so a later in-app redirect (e.g. /docs → /docs/...) keeps the override.
+      set?.(DARK_MODE_OVERRIDE_STORAGE_KEY, fromQuery);
+    } catch {
+      // private mode
+    }
+    return fromQuery;
+  }
 
   try {
     const get =
@@ -149,4 +163,4 @@ export function readDarkModeOverride(args?: {
  * Runs in `<head>` before CSS so a sticky `test` assignment does not flash
  * light on return visits. Also honors `?os_dark_mode=` and localStorage.
  */
-export const DARK_MODE_BOOT_SCRIPT = `(function(){try{var q=new URLSearchParams(location.search).get(${JSON.stringify(DARK_MODE_OVERRIDE_QUERY)});var s=null;try{s=localStorage.getItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)})}catch(e){}var c=document.cookie.match(/(?:^|; )${DARK_MODE_VARIANT_COOKIE}=([^;]*)/);var v=q||s||(c&&decodeURIComponent(c[1]));if(v==="test"){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}else if(v==="control"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme=""}}catch(e){}})();`;
+export const DARK_MODE_BOOT_SCRIPT = `(function(){try{var q=new URLSearchParams(location.search).get(${JSON.stringify(DARK_MODE_OVERRIDE_QUERY)});if(q==="test"||q==="control"){try{localStorage.setItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)},q)}catch(e){}}var s=null;try{s=localStorage.getItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)})}catch(e){}var c=document.cookie.match(/(?:^|; )${DARK_MODE_VARIANT_COOKIE}=([^;]*)/);var v=q||s||(c&&decodeURIComponent(c[1]));if(v==="test"){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}else if(v==="control"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme=""}}catch(e){}})();`;
