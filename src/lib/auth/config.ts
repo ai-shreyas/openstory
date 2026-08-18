@@ -33,13 +33,8 @@ import {
 import { apiKey } from '@better-auth/api-key';
 import { passkey as passkeyPlugin } from '@better-auth/passkey';
 
-import {
-  aliasDistinctId,
-  captureProductEvent,
-} from '@/lib/observability/product-events';
+import { captureProductEvent } from '@/lib/observability/product-events';
 import { getLogger } from '@/lib/observability/logger';
-import { signupDarkModeAnalytics } from '@/lib/theme/dark-mode-experiment';
-import { readDarkModeExperimentAssignment } from '@/lib/theme/dark-mode-experiment-request';
 
 const logger = getLogger(['openstory', 'auth', 'config']);
 const betterAuthLogger = getLogger(['openstory', 'auth', 'better-auth']);
@@ -280,11 +275,6 @@ function createAuth() {
             // personProperties set email/name on the PostHog person so Slack
             // templates (`person.properties.email ?? distinct_id`) show email,
             // not only the ULID (#1110).
-            const { alias, featureProperties } = signupDarkModeAnalytics({
-              userId: user.id,
-              assignment: readDarkModeExperimentAssignment(),
-            });
-            if (alias) aliasDistinctId(alias);
             captureProductEvent({
               distinctId: user.id,
               event: 'user_signed_up',
@@ -292,12 +282,10 @@ function createAuth() {
                 email: user.email,
                 name: user.name,
                 team_id: team.id,
-                ...featureProperties,
               },
               personProperties: {
                 email: user.email,
                 name: user.name,
-                ...featureProperties,
               },
             });
           },

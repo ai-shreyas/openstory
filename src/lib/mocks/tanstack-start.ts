@@ -60,16 +60,6 @@ export function getRequest() {
   return new Request('http://localhost');
 }
 
-export function getCookie(_name: string): string | undefined {
-  return undefined;
-}
-
-export function setCookie(
-  _name: string,
-  _value: string,
-  _options?: unknown
-): void {}
-
 // Other exports that might be imported from @tanstack/react-start
 export function json(data: any, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
