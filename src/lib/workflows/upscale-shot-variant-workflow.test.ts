@@ -1,20 +1,23 @@
 /**
- * Behavioural test for the upscale select step (#989).
+ * Behavioural test for the upscale promote step (#989 / #1129).
  *
  * `selectShotVariantFn` no longer writes the still synchronously — it triggers
- * this workflow, which upscales the chosen 3×3 tile and then REPOINTS the
- * frame's primary still at the upscaled version (pointer + mirror via
- * `frameVariants.select`). The e2e suite can't observe that async repoint
- * hermetically, so the outcome is pinned here: `persistUpscaleSelection`
- * completes the in-flight version and repoints the TRIGGER's frame (never
- * re-resolved from the shot) — skipping the repoint, but still completing the
- * version, if that frame vanished mid-flight.
+ * this workflow, which upscales the chosen 3×3 tile and then promotes the
+ * upscaled version to the frame's primary still. The promote rides the
+ * auto-promote claim minted at kickoff (#1070), NOT a bare `frameVariants.select`:
+ * an upscale runs for minutes, and a still the user picks from history in the
+ * meantime clears the claim and must win. The e2e suite can't observe that async
+ * promote hermetically, so the outcome is pinned here: `persistUpscaleSelection`
+ * completes the in-flight version and promotes the TRIGGER's frame (never
+ * re-resolved from the shot) only while the claim still points at this version —
+ * on a miss the upscale stays in history and the frame is left alone.
  *
  * The new still no longer drops the segment's chosen render (#1067 phase 2d):
  * the old video keeps playing and the manifest-staleness system flags it.
  */
 
-import type { NewFrameVariant, NewShot } from '@/lib/db/schema';
+import type { NewFrameVariant } from '@/lib/db/schema';
+import { frameVariantFixture } from '@/lib/mocks/frame-fixtures';
 import { describe, expect, it } from 'vitest';
 import {
   persistUpscaleSelection,
@@ -22,77 +25,59 @@ import {
 } from './upscale-shot-variant-workflow';
 
 type VariantUpdateCall = { versionId: string; data: Partial<NewFrameVariant> };
-type SelectCall = {
+type PromoteCall = {
   frameId: string;
   versionId: string;
   actorId: string | null;
 };
-type ShotUpdateCall = { shotId: string; data: Partial<NewShot> };
 type CallName =
   | 'frameVariants.update'
-  | 'frames.getById'
-  | 'frameVariants.select'
-  | 'shots.update';
+  | 'frameVariants.selectIfPendingPromoteIs';
 
-function buildScopedDbSpy(opts: { frameMissing?: boolean } = {}): {
+function buildScopedDbSpy(opts: { claimMoved?: boolean } = {}): {
   scopedDb: PersistUpscaleScopedDb;
   variantUpdates: VariantUpdateCall[];
-  selects: SelectCall[];
-  shotUpdates: ShotUpdateCall[];
+  promotes: PromoteCall[];
   callOrder: CallName[];
 } {
   const variantUpdates: VariantUpdateCall[] = [];
-  const selects: SelectCall[] = [];
-  const shotUpdates: ShotUpdateCall[] = [];
+  const promotes: PromoteCall[] = [];
   const callOrder: CallName[] = [];
+  // The methods return full rows; the helper only reads truthiness and `.id`,
+  // so the defaults carry the rest.
+  const row = (id: string) =>
+    frameVariantFixture({
+      id,
+      frameId: 'anchor-frame-id',
+      sequenceId: 'seq-1',
+    });
   const scopedDb: PersistUpscaleScopedDb = {
     frameVariants: {
       update: async (versionId, data) => {
         variantUpdates.push({ versionId, data });
         callOrder.push('frameVariants.update');
-        return { id: versionId };
+        return row(versionId);
       },
-      select: async (frameId, versionId, optsArg) => {
-        selects.push({ frameId, versionId, actorId: optsArg.actorId });
-        callOrder.push('frameVariants.select');
-        return { id: versionId };
-      },
-    },
-    liveRead: {
-      frames: {
-        getById: async (frameId) => {
-          callOrder.push('frames.getById');
-          return opts.frameMissing ? null : { id: frameId };
-        },
-      },
-    },
-    shots: {
-      update: async (shotId, data) => {
-        shotUpdates.push({ shotId, data });
-        callOrder.push('shots.update');
-        return { id: shotId };
+      selectIfPendingPromoteIs: async (frameId, versionId, optsArg) => {
+        promotes.push({ frameId, versionId, actorId: optsArg.actorId });
+        callOrder.push('frameVariants.selectIfPendingPromoteIs');
+        return opts.claimMoved ? null : row(versionId);
       },
     },
   };
-  return {
-    scopedDb,
-    variantUpdates,
-    selects,
-    shotUpdates,
-    callOrder,
-  };
+  return { scopedDb, variantUpdates, promotes, callOrder };
 }
 
 const NOW = new Date('2026-06-26T00:00:00Z');
 
 describe('persistUpscaleSelection', () => {
-  it('completes the version, repoints the frame at it, emits completed', async () => {
-    const { scopedDb, variantUpdates, selects, shotUpdates, callOrder } =
+  it('completes the version, promotes it through the claim, emits the new still', async () => {
+    const { scopedDb, variantUpdates, promotes, callOrder } =
       buildScopedDbSpy();
     const emits: Array<{
       shotId: string;
       status: string;
-      thumbnailUrl: string;
+      thumbnailUrl?: string;
     }> = [];
 
     const result = await persistUpscaleSelection({
@@ -109,13 +94,15 @@ describe('persistUpscaleSelection', () => {
       },
     });
 
-    expect(result).toEqual({ selected: true });
+    expect(result).toEqual({
+      promoted: true,
+      thumbnailUrl: 'https://r2/upscaled.png',
+    });
 
-    // Version is completed BEFORE the frame is checked + repointed.
+    // Version is completed BEFORE the claim-consuming promote.
     expect(callOrder).toEqual([
       'frameVariants.update',
-      'frames.getById',
-      'frameVariants.select',
+      'frameVariants.selectIfPendingPromoteIs',
     ]);
 
     const [versionUpdate] = variantUpdates;
@@ -129,16 +116,12 @@ describe('persistUpscaleSelection', () => {
       error: null,
     });
 
-    // Repoint targets the TRIGGER's frame id (≠ shotId), not the shot id.
-    const [select] = selects;
-    if (!select) throw new Error('expected frameVariants.select call');
-    expect(select.frameId).toBe('anchor-frame-id');
-    expect(select.versionId).toBe('ver-1');
-    expect(select.actorId).toBe('user-1');
-
-    // The existing render survives a new still (#1067 phase 2d) — no selection
-    // is dropped and nothing is written to the shot.
-    expect(shotUpdates).toEqual([]);
+    // Promote targets the TRIGGER's frame id (≠ shotId), not the shot id.
+    const [promote] = promotes;
+    if (!promote) throw new Error('expected a promote call');
+    expect(promote.frameId).toBe('anchor-frame-id');
+    expect(promote.versionId).toBe('ver-1');
+    expect(promote.actorId).toBe('user-1');
 
     expect(emits).toEqual([
       {
@@ -149,13 +132,14 @@ describe('persistUpscaleSelection', () => {
     ]);
   });
 
-  it('still completes the version but skips the repoint when the frame vanished', async () => {
-    const { scopedDb, variantUpdates, selects, shotUpdates, callOrder } =
-      buildScopedDbSpy({ frameMissing: true });
+  it('leaves the frame alone when the claim moved (manual selection wins)', async () => {
+    const { scopedDb, variantUpdates, promotes, callOrder } = buildScopedDbSpy({
+      claimMoved: true,
+    });
     const emits: Array<{
       shotId: string;
       status: string;
-      thumbnailUrl: string;
+      thumbnailUrl?: string;
     }> = [];
 
     const result = await persistUpscaleSelection({
@@ -172,13 +156,18 @@ describe('persistUpscaleSelection', () => {
       },
     });
 
-    expect(result).toEqual({ selected: false });
-    // The version is finished, but with no frame there is nothing to repoint:
-    // no select, no completed emit (a false "ready" signal).
-    expect(callOrder).toEqual(['frameVariants.update', 'frames.getById']);
+    expect(result).toEqual({ promoted: false });
+    // The version is still finished (it stays selectable from the picker), and
+    // the promote was attempted but conceded — one WHERE-guarded write, no
+    // read-then-select that could lose the race.
+    expect(callOrder).toEqual([
+      'frameVariants.update',
+      'frameVariants.selectIfPendingPromoteIs',
+    ]);
     expect(variantUpdates).toHaveLength(1);
-    expect(selects).toEqual([]);
-    expect(shotUpdates).toEqual([]);
-    expect(emits).toEqual([]);
+    expect(promotes).toHaveLength(1);
+    // Settle the spinner, but WITHOUT a thumbnail: pushing the unselected
+    // upscale's url would show the user something the frame doesn't point at.
+    expect(emits).toEqual([{ shotId: 'shot-1', status: 'completed' }]);
   });
 });
