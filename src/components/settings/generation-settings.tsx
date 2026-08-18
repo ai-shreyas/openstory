@@ -148,8 +148,12 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
         </PopoverTrigger>
         {appliedFromStyle && onResetStyleDefaults && (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs">
-            <span>From style</span>
-            <span aria-hidden="true" className="text-primary/40">
+            {/* Mobile: just "Reset" — the label + trigger don't fit one row. */}
+            <span className="hidden sm:inline">From style</span>
+            <span
+              aria-hidden="true"
+              className="hidden text-primary/40 sm:inline"
+            >
               ·
             </span>
             <Button

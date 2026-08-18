@@ -33,14 +33,16 @@ test.describe('Sequences', () => {
     await expect(
       page.getByRole('button', { name: 'Style category: Film & Cinematic' })
     ).toBeVisible({ timeout: 15_000 });
+    // The composer auto-selects the row's first style (#1187), and a selected
+    // tile relabels from "Select … style" to "View … details".
     await expect(
-      page.getByRole('button', { name: 'Select Action style' })
+      page.getByRole('button', { name: 'View Action details' })
     ).toBeVisible();
 
     await page.getByRole('button', { name: /^Style category:/ }).click();
     await page.getByRole('menuitemradio', { name: 'E-commerce' }).click();
     await expect(
-      page.getByRole('button', { name: 'Select Product Ad style' })
+      page.getByRole('button', { name: 'View Product Ad details' })
     ).toBeVisible();
   });
 

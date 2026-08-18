@@ -334,6 +334,10 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   }, [editor, disabled]);
 
   return (
+    // Click-forwarder only: the editable ProseMirror surface inside carries
+    // the interaction semantics, and this div must keep aria-invalid for its
+    // error styling (so role="presentation" is not an option).
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
       ref={scrollRef}
       className={cn(
@@ -346,13 +350,40 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       aria-invalid={ariaInvalid}
       data-testid={dataTestId}
       data-slot="markdown-editor"
+      // The ProseMirror node only spans its text, so the empty area below the
+      // last line (the box's min-height) is otherwise a dead zone — clicking
+      // it should place the caret at the end, like a textarea. Scrollbar
+      // clicks (offsetX past clientWidth) must keep their native behaviour.
+      onMouseDown={(e) => {
+        if (!editor || disabled) return;
+        if (e.target instanceof Element && e.target.closest('.ProseMirror')) {
+          return;
+        }
+        if (e.nativeEvent.offsetX > e.currentTarget.clientWidth) return;
+        e.preventDefault();
+        editor.commands.focus('end');
+      }}
     >
       {!value && placeholder ? (
         <p className="pointer-events-none absolute inset-x-0 top-0 px-2.5 py-2 text-base text-muted-foreground md:text-sm">
           {placeholder}
         </p>
       ) : null}
-      <EditorContent editor={editor} className="relative w-full" />
+      {/* First-paint stand-in for seeded content (#1187): the editor only
+          renders after hydration (immediatelyRender: false), so a value
+          present at mount — the composer's sample script — would otherwise
+          pop in late and shift the page. Rendered in flow with the editor's
+          prose typography so the swap to the live editor holds height. */}
+      {!editor && value ? (
+        <div className={cn(proseClasses, 'whitespace-pre-wrap')}>{value}</div>
+      ) : null}
+      {/* Hidden while the stand-in shows — the container is a flex row, so an
+          empty pre-hydration EditorContent would otherwise share its width
+          and double the stand-in's wrapped lines. */}
+      <EditorContent
+        editor={editor}
+        className={cn('relative w-full', !editor && value && 'hidden')}
+      />
     </div>
   );
 };

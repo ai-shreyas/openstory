@@ -44,11 +44,22 @@ export async function selectComposerStyle(
     await page.getByRole('button', { name: /^Style category:/ }).click();
     await page.getByRole('menuitemradio', { name: family }).click();
   }
-  const tile = page
-    .getByRole('grid', { name: 'Style selection' })
-    .getByRole('button', { name: `Select ${styleName} style` });
-  await expect(tile).toBeVisible({ timeout: HYDRATION_TIMEOUT });
-  await tile.click();
+  // A selected tile relabels to "View <name> details" and clicking it opens
+  // the style dialog (#1187) — and the composer auto-selects a default style
+  // (category switches pick the family's first). So the target may already be
+  // selected: only click while it still offers Select.
+  const grid = page.getByRole('grid', { name: 'Style selection' });
+  const tile = grid.getByRole('button', { name: `Select ${styleName} style` });
+  const selectedTile = grid.getByRole('button', {
+    name: `View ${styleName} details`,
+  });
+  await expect(tile.or(selectedTile)).toBeVisible({
+    timeout: HYDRATION_TIMEOUT,
+  });
+  if (await tile.isVisible()) {
+    await tile.click();
+  }
+  await expect(selectedTile).toBeVisible();
 }
 
 /**

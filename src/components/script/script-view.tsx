@@ -1,6 +1,7 @@
 import { ThinkingBar } from '@/components/ai/thinking-bar';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { ActionCost } from '@/components/billing/action-cost';
+import { useWelcomeCreditsGate } from '@/components/billing/welcome-credits-dialog';
 import { PremiumCard } from '@/components/cards/premium-card';
 import {
   ElementSelector,
@@ -79,8 +80,16 @@ import {
   aspectRatioSchema,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import {
+  markPendingGenerate,
+  takePendingGenerate,
+} from '@/lib/generation/pending-generate';
 import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
+import {
+  pickShuffleStyle,
+  sampleScriptForStyle,
+} from '@/lib/style/composer-sample';
 import {
   ALL_COMPOSER_STYLE_CATEGORIES,
   DEFAULT_COMPOSER_STYLE_CATEGORY,
@@ -97,7 +106,15 @@ import {
 } from '@/lib/utils/drag-images';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
-import { ImagePlus, Loader2, Sparkles, Square, Undo2 } from 'lucide-react';
+import {
+  ImagePlus,
+  Loader2,
+  Shuffle,
+  Sparkles,
+  Square,
+  Undo2,
+  Wand2,
+} from 'lucide-react';
 import React, {
   useCallback,
   useEffect,
@@ -132,6 +149,10 @@ export const ScriptView: FC<{
    *  saved draft for the initial value; remount (via `key`) to re-seed. */
   initialScript?: string;
   initialStyleId?: string;
+  /** Marks `initialScript` as a style sample (#1187): the composer treats it
+   *  as an untouched sample — the script follows style picks, Shuffle shows,
+   *  and Generate skips the enhance nudge — until the user edits it. */
+  initialScriptIsSample?: boolean;
   /** Notified when the user picks a style, so the new-sequence page can mirror
    *  it into `?style=`. Not called for the auto-selected default. */
   onStyleChange?: (styleId: string) => void;
@@ -155,6 +176,7 @@ export const ScriptView: FC<{
   onCancel,
   initialScript,
   initialStyleId,
+  initialScriptIsSample = false,
   onStyleChange,
   allowScriptEdit = false,
 }) => {
@@ -168,6 +190,31 @@ export const ScriptView: FC<{
   const isDerivedScript = isEditing && !!composedScript && !allowScriptEdit;
   const baseScript = composedScript ?? sequence?.script;
 
+  // `isPending` (not `isLoading`) so the skeleton state is shown whenever
+  // there is no styles data yet. `/` prefetches the public catalogue in
+  // beforeLoad (#1182), so anonymous SSR renders tiles instead of skeletons.
+  const { data: styles = [], isPending: isLoadingStyles } = useStyles();
+
+  // Fallback sample seed (#1187), computed at FIRST render — during SSR on
+  // the anonymous front page (styles are loader-prefetched there) — so the
+  // sample is in the first paint instead of popping in after hydration and
+  // shifting the page. Only for a fully bare create composer; an explicit
+  // seed or an editing/copy sequence wins, and a saved draft replaces it via
+  // the draft-sync effect below. When styles aren't cached at mount (some
+  // signed-in paths), this stays null and the seed effect below fills in
+  // client-side.
+  const [fallbackSample] = useState<{ styleId: string; script: string } | null>(
+    () => {
+      if (isEditing || sequence || initialScript || initialStyleId) return null;
+      const style = defaultComposerStyle(
+        styles,
+        DEFAULT_COMPOSER_STYLE_CATEGORY
+      );
+      const sample = style ? sampleScriptForStyle(style) : null;
+      return style && sample ? { styleId: style.id, script: sample } : null;
+    }
+  );
+
   // Local script override — undefined means "show the canonical baseScript".
   // For existing sequences that is the composed scene-script document once the
   // query resolves (#1030); until then baseScript falls back to sequence.script.
@@ -177,10 +224,25 @@ export const ScriptView: FC<{
     script: string | null | undefined;
     styleId: string | null;
   }>({
-    script: initialScript ?? (isEditing ? undefined : sequence?.script),
-    styleId: initialStyleId ?? sequence?.styleId ?? null,
+    script:
+      initialScript ??
+      (isEditing ? undefined : sequence?.script) ??
+      fallbackSample?.script,
+    styleId:
+      initialStyleId ?? sequence?.styleId ?? fallbackSample?.styleId ?? null,
   });
   const { script, styleId } = contentState;
+
+  // Sample state (#1187): non-null while the editor shows an untouched sample
+  // script for that style. While set, the script follows style picks (swapping
+  // to the new style's sample), Shuffle shows under the editor, Generate skips
+  // the enhance nudge, and the draft persists as empty (a pristine sample is
+  // not the user's work). Any user edit or enhance clears it.
+  const [sampleStyleId, setSampleStyleId] = useState<string | null>(
+    initialScriptIsSample && initialScript && initialStyleId
+      ? initialStyleId
+      : (fallbackSample?.styleId ?? null)
+  );
 
   const setScript = (v: string | null | undefined) =>
     setContentState((s) => ({ ...s, script: v }));
@@ -317,11 +379,6 @@ export const ScriptView: FC<{
 
   const posthog = usePostHog();
 
-  // `isPending` (not `isLoading`) so the skeleton state is shown whenever
-  // there is no styles data yet. `/` prefetches the public catalogue in
-  // beforeLoad (#1182), so anonymous SSR renders tiles instead of skeletons.
-  const { data: styles = [], isPending: isLoadingStyles } = useStyles();
-
   // Derive style metadata for motion model filtering + recommendation badges
   const selectedStyle = useMemo(
     () => styles.find((s) => s.id === (styleId || sequence?.styleId)),
@@ -353,6 +410,51 @@ export const ScriptView: FC<{
     // Named families replace the pick; All only changes the strip.
     const first = styleAfterComposerCategoryChange(styles, next);
     if (first) selectStyle(first.id);
+  };
+
+  // Sample swaps (#1187): Shuffle picks a random other style's sample; the
+  // style detail dialog's "Try" swaps in that specific style's sample. Both
+  // guard the user's own text — replacing it goes through a confirm dialog,
+  // and the pending action is remembered here until confirmed.
+  const [sampleReplaceConfirm, setSampleReplaceConfirm] = useState<
+    { kind: 'shuffle' } | { kind: 'try'; styleId: string } | null
+  >(null);
+  const applySampleForStyle = (
+    style: (typeof styles)[number],
+    event: 'sample_script_shuffled' | 'sample_script_tried'
+  ) => {
+    const sample = sampleScriptForStyle(style);
+    if (!sample) return;
+    posthog.capture(event, { style_id: style.id });
+    setContentState((s) => ({ ...s, script: sample }));
+    setSampleStyleId(style.id);
+    // A stale Undo (from a pre-swap enhance) would restore text the sample
+    // state no longer describes.
+    setEnhance('canUndoEnhance', false);
+    handleStyleSelect(style.id);
+  };
+  const handleShuffleSample = () => {
+    const next = pickShuffleStyle(styles, styleId, Math.random);
+    if (next) applySampleForStyle(next, 'sample_script_shuffled');
+  };
+  const handleTrySample = (tryStyleId: string) => {
+    const style = styles.find((s) => s.id === tryStyleId);
+    if (style) applySampleForStyle(style, 'sample_script_tried');
+  };
+  const hasOwnText = () => !sampleStyleId && (script ?? '').trim().length > 0;
+  const requestShuffle = () => {
+    if (hasOwnText()) {
+      setSampleReplaceConfirm({ kind: 'shuffle' });
+      return;
+    }
+    handleShuffleSample();
+  };
+  const requestTryStyle = (tryStyleId: string) => {
+    if (hasOwnText()) {
+      setSampleReplaceConfirm({ kind: 'try', styleId: tryStyleId });
+      return;
+    }
+    handleTrySample(tryStyleId);
   };
 
   // Auto-select the first style in the current row when the composer has
@@ -444,6 +546,9 @@ export const ScriptView: FC<{
         script: draft.script,
         styleId: draft.styleId || s.styleId,
       }));
+      // The restored draft is the user's own text — it replaces the
+      // render-time fallback sample, so drop the sample state with it.
+      setSampleStyleId(null);
       setSelections((s) => ({
         talentIds:
           draft.selectedTalentIds.length > 0
@@ -460,6 +565,53 @@ export const ScriptView: FC<{
       hasSyncedDraftRef.current = true;
     }
   }, [isEditing, loading, draftLoaded, draft, initialScript, initialStyleId]);
+
+  // Seed a sample script into an otherwise-empty composer (#1187) — the
+  // first-time-user path: no draft to restore, no `?style=` seed, nothing
+  // typed. Runs at most once per mount so deleting the sample doesn't make it
+  // pop back.
+  const sampleSeedTriedRef = useRef(false);
+  useEffect(() => {
+    if (isEditing || loading || initialScript || sampleSeedTriedRef.current) {
+      return;
+    }
+    if (!draftLoaded || isLoadingStyles) return;
+    // A restorable draft wins — the draft-sync effect above fills it in.
+    // (With an `initialStyleId` seed that effect is skipped, so the draft
+    // doesn't block seeding there.)
+    if (!initialStyleId && draft.script) return;
+    if (script) return;
+    const style = styles.find((s) => s.id === styleId);
+    if (!style) return;
+    sampleSeedTriedRef.current = true;
+    const sample = sampleScriptForStyle(style);
+    if (!sample) return;
+    setContentState((s) => ({ ...s, script: sample }));
+    setSampleStyleId(style.id);
+  }, [
+    isEditing,
+    loading,
+    initialScript,
+    initialStyleId,
+    draftLoaded,
+    draft,
+    isLoadingStyles,
+    styles,
+    styleId,
+    script,
+  ]);
+
+  // While the sample is untouched, the script follows the style: picking a
+  // different style (tile, category row, or Shuffle) swaps in that style's
+  // sample instead of stranding the old style's text under the new look.
+  useEffect(() => {
+    if (!sampleStyleId || !styleId || styleId === sampleStyleId) return;
+    const style = styles.find((s) => s.id === styleId);
+    if (!style) return;
+    const sample = sampleScriptForStyle(style);
+    setContentState((s) => ({ ...s, script: sample ?? '' }));
+    setSampleStyleId(sample ? style.id : null);
+  }, [sampleStyleId, styleId, styles]);
 
   // Sync state with savedSettings when creating new sequences (not when editing)
   // Use a ref to track if we've already synced to avoid loops
@@ -497,11 +649,14 @@ export const ScriptView: FC<{
     }
   }, [isEditing, settingsLoaded, genSettings, saveSettings]);
 
-  // Persist draft to localStorage when creating new sequences
+  // Persist draft to localStorage when creating new sequences. An untouched
+  // sample script is not the user's work — persist it as empty so a reload
+  // (or the sign-in round-trip) re-seeds a fresh sample instead of restoring
+  // the sample as a "draft".
   useEffect(() => {
     if (!isEditing && draftLoaded) {
       saveDraft({
-        script: script ?? '',
+        script: sampleStyleId ? '' : (script ?? ''),
         styleId,
         selectedTalentIds,
         selectedLocationIds,
@@ -512,6 +667,7 @@ export const ScriptView: FC<{
     isEditing,
     draftLoaded,
     script,
+    sampleStyleId,
     styleId,
     selectedTalentIds,
     selectedLocationIds,
@@ -660,7 +816,7 @@ export const ScriptView: FC<{
   ) => setEnhanceUI((s) => ({ ...s, [key]: value }));
 
   const createSequenceMutation = useCreateSequence();
-  const { requireAuth } = useAuthGate();
+  const { requireAuth, isAuthenticated } = useAuthGate();
   const { needsBillingSetup, showGate } = useBillingGate();
 
   // Style recommendations. We rank a *snapshot* of the script (not the live
@@ -773,7 +929,10 @@ export const ScriptView: FC<{
 
     // Anonymous visitors can compose a draft, but generating prompts a login.
     // The draft is persisted to localStorage, so it's restored after sign-in.
+    // Remember the click too, so the resume effect below continues this exact
+    // step (nudge, billing gate, generation) once sign-in completes (#1187).
     if (!requireAuth()) {
+      if (!isEditing) markPendingGenerate();
       return;
     }
 
@@ -785,6 +944,12 @@ export const ScriptView: FC<{
     if (isEditing) {
       setEnhance('showRegenerateConfirm', true);
       return;
+    }
+
+    // Generate was clicked on an untouched sample — capture the intent even
+    // when the enhance nudge takes over from here (#1187).
+    if (sampleStyleId) {
+      posthog.capture('sample_script_generated', { style_id: sampleStyleId });
     }
 
     const scriptText = script ?? baseScript ?? '';
@@ -815,6 +980,8 @@ export const ScriptView: FC<{
       script_length: scriptValue.length,
       aspect_ratio: aspectRatio,
     });
+    // Enhancing rewrites the text — it stops being an untouched sample.
+    setSampleStyleId(null);
     setEnhanceUI((s) => ({ ...s, isEnhancing: true, error: null }));
     previousScriptRef.current = scriptValue;
     setScript('');
@@ -907,6 +1074,37 @@ export const ScriptView: FC<{
   const isSubmitting = createSequenceMutation.isPending;
   const isDisabled =
     !isFormValid || isSubmitting || isEnhancing || isElementBusy;
+
+  // Resume a Generate click the sign-in gate interrupted (#1187): once the
+  // user is authenticated and the composer is ready again (draft restored, or
+  // the pristine sample re-seeded), re-run the submit flow so the next step —
+  // enhance nudge, billing gate, generation — continues without a second
+  // click. Covers both the in-dialog OTP sign-in (no remount) and the OAuth
+  // round-trip (fresh mount). Ref'd so the effect calls the fresh closure.
+  const { blocking: welcomeCreditsBlocking } = useWelcomeCreditsGate();
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+  const resumeTriedRef = useRef(false);
+  useEffect(() => {
+    if (isEditing || loading || !isAuthenticated) return;
+    if (resumeTriedRef.current) return;
+    if (!draftLoaded || !isFormValid || isSubmitting) return;
+    // Let the welcome-credits moment finish first — its "Keep creating"
+    // dismiss is what hands the flow back to us, instead of the nudge
+    // stacking on top of the gift dialog.
+    if (welcomeCreditsBlocking) return;
+    resumeTriedRef.current = true;
+    if (!takePendingGenerate()) return;
+    void handleSubmitRef.current();
+  }, [
+    isEditing,
+    loading,
+    isAuthenticated,
+    draftLoaded,
+    isFormValid,
+    isSubmitting,
+    welcomeCreditsBlocking,
+  ]);
 
   const scriptValue = script ?? baseScript ?? '';
   const { ref: textareaRef } = useAutoScroll<HTMLDivElement>({
@@ -1058,19 +1256,68 @@ export const ScriptView: FC<{
           </div>
         </CardHeader>
 
-        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 py-6 overflow-hidden">
+        {/* Holds the script alone; the enhance row, style grid and footer are
+            pinned below (outside), so long scripts scroll inside the editor
+            (min-h-28 floor, see the wrapper below) with the chrome fixed.
+            overflow-y-auto is a fallback for viewports too short for even the
+            editor floor + Sample-script row — it only engages then. */}
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
           {/* Thinking bar shows during the reasoning pass — i.e. while
               enhancing but before any enhanced text has streamed back. */}
           <ThinkingBar
             active={isEnhancing && !scriptValue}
             className="shrink-0"
           />
-          <div className="relative min-h-0 flex flex-col">
+          {/* Above the editor so the Shuffle button holds its position while
+              samples of different lengths grow/shrink the editor below it.
+              Always visible while composing — over the user's own text,
+              Shuffle confirms before replacing. */}
+          {!isEditing && (
+            <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                {sampleStyleId ? (
+                  <>
+                    Sample script
+                    <span className="hidden @min-[480px]:inline">
+                      {' '}
+                      — make it yours, or hit Generate to see it come to life.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Need a starting point?
+                    <span className="hidden @min-[480px]:inline">
+                      {' '}
+                      Shuffle a sample script.
+                    </span>
+                  </>
+                )}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={loading || isEnhancing || isSubmitting}
+                onClick={requestShuffle}
+              >
+                <Shuffle className="size-3.5" />
+                Shuffle
+              </Button>
+            </div>
+          )}
+          {/* Grows with content above the 4-row floor (min-h-28, see
+              ScriptEditor) — so the card resizes with the script, and samples
+              of different lengths change its height on Shuffle. */}
+          <div className="relative flex min-h-28 flex-col">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}
               onValueChange={(val) => {
                 setScript(val);
+                // Only user edits emit here (prop-driven setContent doesn't),
+                // so typing claims the sample as the user's own script.
+                if (sampleStyleId) setSampleStyleId(null);
                 if (canUndoEnhance) setEnhance('canUndoEnhance', false);
               }}
               maxLength={50000}
@@ -1083,142 +1330,147 @@ export const ScriptView: FC<{
           {enhanceError && (
             <p className="text-sm text-destructive">{enhanceError}</p>
           )}
+        </CardContent>
 
-          <div className="shrink-0 flex flex-col gap-3">
-            <div className="flex flex-col gap-2 @min-[480px]:flex-row @min-[480px]:items-center @min-[480px]:justify-between">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {/* Pinned between the scrolling script and the Generate footer (#1187):
+            the enhance row and style tiles must never scroll away — or
+            half-clip — behind a long script. @container replaces the one on
+            CardContent for the responsive row below. */}
+        <div className="shrink-0 @container flex flex-col gap-3 px-6 pb-6">
+          <div className="flex flex-col gap-2 @min-[480px]:flex-row @min-[480px]:items-center @min-[480px]:justify-between">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={
+                  loading || currentScriptText.length < 3 || isRecommending
+                }
+                onClick={triggerRecommend}
+              >
+                {isRecommending ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <Sparkles className="size-3.5 text-primary" />
+                )}
+                {recommendButtonLabel}
+              </Button>
+              <StyleCategorySelect
+                styles={styles}
+                value={styleCategoryFilter}
+                onChange={handleStyleCategoryChange}
+                disabled={loading || isLoadingStyles}
+              />
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-1">
+              {canUndoEnhance && !isEnhancing && (
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  className="gap-1.5"
-                  disabled={
-                    loading || currentScriptText.length < 3 || isRecommending
-                  }
-                  onClick={triggerRecommend}
+                  className="gap-1.5 text-muted-foreground"
+                  onClick={handleUndoEnhance}
                 >
-                  {isRecommending ? (
-                    <Loader2 className="size-3.5 animate-spin text-primary" />
-                  ) : (
-                    <Sparkles className="size-3.5 text-primary" />
-                  )}
-                  {recommendButtonLabel}
+                  <Undo2 className="size-3.5" />
+                  Undo
                 </Button>
-                <StyleCategorySelect
-                  styles={styles}
-                  value={styleCategoryFilter}
-                  onChange={handleStyleCategoryChange}
-                  disabled={loading || isLoadingStyles}
-                />
-              </div>
-              <div className="flex shrink-0 items-center justify-end gap-1">
-                {canUndoEnhance && !isEnhancing && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 text-muted-foreground"
-                    onClick={handleUndoEnhance}
-                  >
-                    <Undo2 className="size-3.5" />
-                    Undo
-                  </Button>
-                )}
-                {isEnhancing ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 text-muted-foreground"
-                    onClick={handleStopEnhance}
-                  >
-                    <span className="relative size-5">
-                      <Loader2 className="absolute inset-0 size-5 animate-spin" />
-                      <Square className="absolute inset-[5px] size-[10px] fill-current" />
-                    </span>
-                    Stop
-                  </Button>
-                ) : (
-                  <Popover
-                    open={enhancePopoverOpen}
-                    onOpenChange={setEnhancePopoverOpen}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
+              )}
+              {isEnhancing ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 text-muted-foreground"
+                  onClick={handleStopEnhance}
+                >
+                  <span className="relative size-5">
+                    <Loader2 className="absolute inset-0 size-5 animate-spin" />
+                    <Square className="absolute inset-[5px] size-[10px] fill-current" />
+                  </span>
+                  Stop
+                </Button>
+              ) : (
+                <Popover
+                  open={enhancePopoverOpen}
+                  onOpenChange={setEnhancePopoverOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={
+                        !scriptValue || scriptValue.length < 10 || isSubmitting
+                      }
+                    >
+                      <Sparkles className="size-3.5 text-primary" />
+                      Enhance Script
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" side="top" className="w-auto">
+                    <div className="flex flex-col gap-3">
+                      <p className="text-sm font-medium">
+                        Target video duration
+                      </p>
+                      <ToggleGroup
+                        type="single"
+                        value={String(targetDuration)}
+                        onValueChange={(v) => {
+                          if (v) setTargetDuration(Number(v));
+                        }}
                         variant="outline"
                         size="sm"
-                        className="gap-1.5"
-                        disabled={
-                          !scriptValue ||
-                          scriptValue.length < 10 ||
-                          isSubmitting
-                        }
+                        spacing={0}
                       >
-                        <Sparkles className="size-3.5 text-primary" />
-                        Enhance Script
+                        {DURATION_PRESETS.map((preset) => (
+                          <ToggleGroupItem
+                            key={preset.value}
+                            value={preset.value}
+                          >
+                            {preset.label}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => {
+                          setEnhancePopoverOpen(false);
+                          void handleEnhance();
+                        }}
+                      >
+                        <Sparkles className="size-3.5" />
+                        Enhance
                       </Button>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" side="top" className="w-auto">
-                      <div className="flex flex-col gap-3">
-                        <p className="text-sm font-medium">
-                          Target video duration
-                        </p>
-                        <ToggleGroup
-                          type="single"
-                          value={String(targetDuration)}
-                          onValueChange={(v) => {
-                            if (v) setTargetDuration(Number(v));
-                          }}
-                          variant="outline"
-                          size="sm"
-                          spacing={0}
-                        >
-                          {DURATION_PRESETS.map((preset) => (
-                            <ToggleGroupItem
-                              key={preset.value}
-                              value={preset.value}
-                            >
-                              {preset.label}
-                            </ToggleGroupItem>
-                          ))}
-                        </ToggleGroup>
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-1.5"
-                          onClick={() => {
-                            setEnhancePopoverOpen(false);
-                            void handleEnhance();
-                          }}
-                        >
-                          <Sparkles className="size-3.5" />
-                          Enhance
-                        </Button>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                )}
-              </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
             </div>
-            <StyleSelector
-              styles={styles}
-              selectedStyleId={styleId || sequence?.styleId || null}
-              onStyleSelect={handleStyleSelect}
-              loading={isLoadingStyles}
-              recommendations={activeRecommendations}
-              recommendationsLoading={isRecommending && !recommendationsStale}
-              categoryFilter={styleCategoryFilter}
-            />
-            {(recommendEmpty || recommendFailed) && (
-              <p className="text-xs text-muted-foreground">
-                {recommendFailed
-                  ? "Couldn't suggest styles — try again or pick one below."
-                  : 'No standout matches — try again or pick a style below.'}
-              </p>
-            )}
           </div>
-        </CardContent>
+          <StyleSelector
+            styles={styles}
+            selectedStyleId={styleId || sequence?.styleId || null}
+            onStyleSelect={handleStyleSelect}
+            loading={isLoadingStyles}
+            recommendations={activeRecommendations}
+            recommendationsLoading={isRecommending && !recommendationsStale}
+            categoryFilter={styleCategoryFilter}
+            // Create mode only — an analysed sequence's derived script must
+            // not be swapped for a sample (same gate as the Shuffle row).
+            onTryStyle={isEditing ? undefined : requestTryStyle}
+          />
+          {(recommendEmpty || recommendFailed) && (
+            <p className="text-xs text-muted-foreground">
+              {recommendFailed
+                ? "Couldn't suggest styles — try again or pick one below."
+                : 'No standout matches — try again or pick a style below.'}
+            </p>
+          )}
+        </div>
 
         <CardFooter className="shrink-0 flex-col gap-4 border-t border-border/30 bg-transparent px-6 py-4">
           {/* Footer row - stacks on mobile, inline on desktop */}
@@ -1271,7 +1523,12 @@ export const ScriptView: FC<{
                   <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
                 </Button>
               </div>
-              <ActionCost estimate={storyboardCostEstimate} align="end" />
+              {/* The estimate only exists client-side (pricing query), so it
+                  pops in after the SSR paint — reserve its line so the footer
+                  doesn't grow and shift the page (#1187). */}
+              <div className="min-h-4">
+                <ActionCost estimate={storyboardCostEstimate} align="end" />
+              </div>
               <span className="hidden text-xs text-muted-foreground sm:block sm:text-right">
                 {isEditing
                   ? analysisModels.length === 1
@@ -1376,6 +1633,41 @@ export const ScriptView: FC<{
             >
               <Sparkles className="size-3.5" />
               Enhance Script
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={sampleReplaceConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setSampleReplaceConfirm(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace your script?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {sampleReplaceConfirm?.kind === 'try'
+                ? "This swaps in the style's sample script. What you've written here will be replaced."
+                : "Shuffle swaps in a sample script for a random style. What you've written here will be replaced."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep my script</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = sampleReplaceConfirm;
+                setSampleReplaceConfirm(null);
+                if (pending?.kind === 'try') handleTrySample(pending.styleId);
+                else handleShuffleSample();
+              }}
+            >
+              {sampleReplaceConfirm?.kind === 'try' ? (
+                <Wand2 className="size-3.5" />
+              ) : (
+                <Shuffle className="size-3.5" />
+              )}
+              Replace
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

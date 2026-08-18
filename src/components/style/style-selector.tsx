@@ -1,6 +1,6 @@
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
-import { Info, MoreHorizontal } from 'lucide-react';
+import { MoreHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { StyleRecommendation } from '@/hooks/use-styles';
 import {
@@ -63,6 +63,9 @@ type StyleSelectorProps = {
   recommendationsLoading?: boolean;
   /** Filters the catalogue tiles. Recommendations and the browse dialog stay unfiltered. */
   categoryFilter?: string;
+  /** Handles the detail dialog's "Try" — swap the composer's script for this
+   *  style's sample (the composer confirms first over user-written text). */
+  onTryStyle?: (styleId: string) => void;
 };
 
 export function StyleSelector({
@@ -74,6 +77,7 @@ export function StyleSelector({
   recommendations,
   recommendationsLoading = false,
   categoryFilter = ALL_COMPOSER_STYLE_CATEGORIES,
+  onTryStyle,
 }: StyleSelectorProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailStyle, setDetailStyle] = useState<Style | null>(null);
@@ -84,6 +88,12 @@ export function StyleSelector({
   const gridRef = useRef<HTMLDivElement>(null);
   const [focusableIndex, setFocusableIndex] = useState(0);
   const [visibleCount, setVisibleCount] = useState(10);
+  // False until the ResizeObserver has measured real columns. The initial
+  // visibleCount is a guess, so on narrow screens the SSR/first render wraps
+  // to extra rows — inside the height-capped composer card that squeezes the
+  // editor, and everything reflows when the measure lands (#1187). While
+  // unmeasured, the grid is clamped to one row in CSS instead.
+  const [measured, setMeasured] = useState(false);
 
   const reservedSlots = 1;
 
@@ -96,6 +106,7 @@ export function StyleSelector({
       const gap = 12;
       const columns = Math.floor((width + gap) / (tileSize + gap));
       setVisibleCount(Math.max(3, columns));
+      setMeasured(true);
     };
 
     calculateColumns(container.clientWidth);
@@ -264,7 +275,17 @@ export function StyleSelector({
     <>
       <div
         ref={gridRef}
-        className="grid w-full grid-cols-[repeat(auto-fill,minmax(65px,1fr))] gap-3 py-2"
+        className={cn(
+          'grid w-full grid-cols-[repeat(auto-fill,minmax(65px,1fr))] gap-3 py-2',
+          // Unmeasured: clamp to one row so the guessed tile count can't wrap
+          // and change the grid's height. Row 1 is an explicit auto track;
+          // overflow rows get zero height + zero row-gap and are clipped; the
+          // bottom padding moves outside the clip (pb-0 + mb-2) so overflow
+          // tiles can't peek into it. Total height matches the measured state
+          // exactly: pt(8) + row + mb(8) == pt(8) + row + pb(8).
+          !measured &&
+            'grid-rows-[auto] [grid-auto-rows:0] gap-y-0 overflow-hidden pb-0 mb-2'
+        )}
         role="grid"
         aria-label="Style selection"
       >
@@ -292,6 +313,7 @@ export function StyleSelector({
                     reasoning={reasoningByStyleId.get(style.id)}
                     tabIndex={index === focusableIndex ? 0 : -1}
                     onSelect={onStyleSelect}
+                    onShowDetails={() => setDetailStyle(style)}
                     onKeyDown={(e) => handleKeyDown(e, index)}
                   />
                 ))}
@@ -307,6 +329,7 @@ export function StyleSelector({
                   priority={unifiedIndex < 4}
                   tabIndex={unifiedIndex === focusableIndex ? 0 : -1}
                   onSelect={onStyleSelect}
+                  onShowDetails={() => setDetailStyle(style)}
                   onKeyDown={(e) => handleKeyDown(e, unifiedIndex)}
                 />
               );
@@ -340,30 +363,12 @@ export function StyleSelector({
           </>
         )}
       </div>
-      {/* Reserve the info-line height so it never shifts the layout when the
-          selection resolves — skeleton while styles load, then the link. */}
-      <div className="flex min-h-5 items-center">
-        {loading ? (
-          <Skeleton className="h-4 w-40" />
-        ) : (
-          selectedStyle && (
-            <button
-              type="button"
-              onClick={() => setDetailStyle(selectedStyle)}
-              className="inline-flex w-fit items-center gap-1.5 self-start rounded-sm px-1 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Info className="size-3.5" />
-              View {selectedStyle.name} details
-            </button>
-          )
-        )}
-      </div>
-
       <StyleSelectionDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         styles={styles}
         onStyleSelect={handleStyleSelect}
+        selectedStyleId={selectedStyleId}
       />
 
       <StyleDetailDialog
@@ -373,6 +378,7 @@ export function StyleSelector({
           if (!open) setDetailStyle(null);
         }}
         onUseStyle={onStyleSelect}
+        onTryStyle={onTryStyle}
       />
     </>
   );

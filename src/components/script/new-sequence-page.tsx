@@ -2,7 +2,6 @@ import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { OpenStoryLogo } from '@/components/icons/openstory-logo';
 import { PageContainer } from '@/components/layout/page-container';
 import { ScriptView } from '@/components/script/script-view';
-import { SampleVideoShowcase } from '@/components/style/sample-video-showcase';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useBillingGate } from '@/hooks/use-billing-gate';
 import { useSequence } from '@/hooks/use-sequences';
@@ -10,7 +9,8 @@ import { useStyles } from '@/hooks/use-styles';
 import { useUser } from '@/hooks/use-user';
 import { briefForStyle } from '@/lib/style/brief-for-style';
 import { styleSlug } from '@/lib/style/style-slug';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { ArrowRight } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const BILLING_PROMPT_KEY = 'openstory:billing-prompt-dismissed';
@@ -46,8 +46,8 @@ type NewSequencePageProps = {
 
 /**
  * Shared composer used by the root home (`/`) and the logged-in alias
- * (`/sequences/new`). Anonymous visitors get the marketing lead-in +
- * showcase; signed-in users get a full-height composer.
+ * (`/sequences/new`). Anonymous visitors get the marketing lead-in;
+ * signed-in users get a full-height composer.
  */
 export function NewSequencePage({
   style: styleParam,
@@ -222,7 +222,7 @@ export function NewSequencePage({
   }
 
   // Signed-in: the script box fills the screen (no marketing chrome).
-  // Logged-out: logo + tagline + composer + style-sample gallery below (#956).
+  // Logged-out: logo + tagline + composer.
   if (user) {
     return (
       <div className="h-full">
@@ -237,6 +237,7 @@ export function NewSequencePage({
             onCancel={handleCancelCopy}
             initialScript={from ? undefined : seedScript}
             initialStyleId={from ? undefined : seedStyleId}
+            initialScriptIsSample={!from && !!seedScript}
             onStyleChange={from ? undefined : handleStyleChange}
           />
         </PageContainer>
@@ -244,37 +245,48 @@ export function NewSequencePage({
     );
   }
 
-  // Do NOT use `h-full` here — that traps height to the AppLayout viewport and
-  // hides the gallery below the fold (parent already scrolls). Let content
-  // grow so SampleVideoShowcase is reachable by scrolling the shell.
+  // Logged-out: marketing lead-in + composer. The viewport-bounded layout
+  // (`fullHeight` + `flex-1` wrapper) gives the card's `max-h-full` a real
+  // bound, so it sizes to content but never extends past the viewport bottom —
+  // a large paste scrolls inside the editor (#1000).
   return (
-    <div>
+    <div className="h-full">
       {billingGate}
-      <PageContainer maxWidth="narrow" padding="spacious">
-        <div className="flex flex-col items-center gap-4">
-          <OpenStoryLogo size="xl" />
-          <h1 className="text-center text-2xl font-semibold tracking-tight">
-            Tell your whole story
-          </h1>
+      <PageContainer maxWidth="narrow" padding="spacious" fullHeight>
+        <div className="flex shrink-0 flex-col items-center gap-4">
+          <OpenStoryLogo className="h-8 sm:h-12" />
+          <div className="flex flex-col items-center gap-1">
+            <h1 className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
+              Tell your whole story
+            </h1>
+            <p className="text-center text-sm text-muted-foreground">
+              Pay the models. See the code. Keep the film.
+            </p>
+          </div>
         </div>
-        {/* `#compose` target: the "Try" links navigate here so the router
-            scrolls the composer into view (scrollRestoration handles it). The
-            card grows with its content but is capped (`max-h-[70dvh]` overrides
-            the default `max-h-full`, which can't bound here — no definite-height
-            ancestor like the signed-in `fullHeight` layout) so a large paste
-            scrolls inside the editor instead of growing the page (#1000). */}
-        <div id="compose" className="scroll-mt-4">
+        {/* `#compose` target: the gallery "Try" links navigate here so the
+            router scrolls the composer into view (scrollRestoration handles
+            it). */}
+        <div id="compose" className="flex min-h-0 flex-1 flex-col scroll-mt-4">
           <ScriptView
             key={composerKey}
-            className="max-h-[70dvh]"
             loading={false}
             onSuccess={handleSuccess}
             initialScript={seedScript}
             initialStyleId={seedStyleId}
+            initialScriptIsSample={!!seedScript}
             onStyleChange={handleStyleChange}
           />
+          {/* Right under the card (not pinned to the viewport bottom): the
+              card is a sibling flex item that shrinks to fit above this. */}
+          <Link
+            to="/gallery"
+            className="mt-4 inline-flex shrink-0 items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground"
+          >
+            Browse the gallery to see what you can create
+            <ArrowRight className="size-4" />
+          </Link>
         </div>
-        <SampleVideoShowcase />
       </PageContainer>
     </div>
   );

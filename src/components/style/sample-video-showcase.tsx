@@ -6,82 +6,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Skeleton } from '@/components/ui/skeleton';
 import { VideoPlayer } from '@/components/motion/video-player';
-import { useStyles } from '@/hooks/use-styles';
 import { getAspectRatioClassName } from '@/lib/constants/aspect-ratios';
 import {
   optimizedVideoUrl,
   videoPosterUrl,
 } from '@/lib/media/cloudflare-video';
-import {
-  buildSampleEntries,
-  type SampleEntry,
-} from '@/lib/style/sample-entries';
+import { type SampleEntry } from '@/lib/style/sample-entries';
 import { cn } from '@/lib/utils';
 import { Link } from '@tanstack/react-router';
-import { ArrowRight, Wand2 } from 'lucide-react';
+import { Wand2 } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
-
-/** Max styles to feature in the curated showcase so it stays a teaser, not a dump. */
-const MAX_STYLES = 9;
-
-/**
- * Logged-out showcase on the home composer (#956): a curated grid of
- * canonical style sample videos so anonymous visitors can see the sort of thing
- * they can create, each labelled with the style that produced it. Each card's
- * "Try this style" button links to `/?style=<slug>#compose`; the composer
- * seeds itself from that param (see new-sequence-page.tsx), so the transport
- * is URL-driven and shareable.
- */
-export const SampleVideoShowcase: React.FC = () => {
-  const { data: styles, isPending } = useStyles();
-
-  if (isPending) {
-    return (
-      <section className="flex flex-col gap-4">
-        <ShowcaseHeading />
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="aspect-video w-full rounded-lg" />
-          ))}
-        </div>
-      </section>
-    );
-  }
-
-  const entries = buildSampleEntries(styles ?? []).slice(0, MAX_STYLES);
-  if (entries.length === 0) return null;
-
-  return (
-    <section className="flex flex-col gap-4">
-      <ShowcaseHeading />
-      <Link
-        to="/gallery"
-        className="inline-flex items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground"
-      >
-        Browse the full gallery
-        <ArrowRight className="size-4" />
-      </Link>
-      <div className="grid grid-cols-2 items-start gap-4 md:grid-cols-3">
-        {entries.map((entry, index) => (
-          <SampleVideoCard key={entry.key} entry={entry} priority={index < 3} />
-        ))}
-      </div>
-    </section>
-  );
-};
-
-const ShowcaseHeading: React.FC = () => (
-  <div className="flex flex-col gap-1 text-center">
-    <h2 className="text-lg font-semibold tracking-tight">
-      See what you can create
-    </h2>
-    <p className="text-sm text-muted-foreground">
-      Every clip below was generated from a one-line idea, in a different style.
-    </p>
-  </div>
-);
 
 export const SampleVideoCard: React.FC<{
   entry: SampleEntry;

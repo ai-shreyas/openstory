@@ -1,5 +1,4 @@
 import { NewSequencePage } from '@/components/script/new-sequence-page';
-import { frontPageImagePreloadLinks } from '@/lib/style/front-page-preloads';
 import { publicStylesQueryOptions } from '@/lib/style/public-styles-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
@@ -25,9 +24,6 @@ export const Route = createFileRoute('/_app/')({
   validateSearch: searchSchema,
   loader: ({ context: { queryClient } }) =>
     queryClient.ensureQueryData(publicStylesQueryOptions),
-  head: ({ loaderData }) => ({
-    links: frontPageImagePreloadLinks(loaderData),
-  }),
   component: HomePage,
 });
 

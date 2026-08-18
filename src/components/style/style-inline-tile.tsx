@@ -1,7 +1,7 @@
 import { AppImage } from '@/components/ui/app-image';
 import type { Style } from '@/lib/db/schema/libraries';
 import { cn } from '@/lib/utils';
-import { Sparkles } from 'lucide-react';
+import { Info, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { getStyleGradient } from './style-gradient';
 import { getConfigColorPalette } from '@/lib/style/style-config';
@@ -48,6 +48,9 @@ type StyleInlineTileProps = {
   priority?: boolean;
   tabIndex: number;
   onSelect: (styleId: string) => void;
+  /** Clicking the already-selected tile opens the style's detail dialog —
+   *  the (i) badge on the tile signals it. */
+  onShowDetails?: () => void;
   onKeyDown: (event: React.KeyboardEvent) => void;
 };
 
@@ -60,13 +63,15 @@ export function StyleInlineTile({
   priority = false,
   tabIndex,
   onSelect,
+  onShowDetails,
   onKeyDown,
 }: StyleInlineTileProps) {
+  const opensDetails = selected && !!onShowDetails;
   return (
     <button
       type="button"
       data-style-tile
-      onClick={() => onSelect(style.id)}
+      onClick={() => (opensDetails ? onShowDetails() : onSelect(style.id))}
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
       disabled={disabled}
@@ -81,7 +86,11 @@ export function StyleInlineTile({
           ? 'border-primary shadow-md scale-105'
           : 'border-transparent hover:border-primary/50'
       )}
-      aria-label={`Select ${style.name} style`}
+      aria-label={
+        opensDetails
+          ? `View ${style.name} details`
+          : `Select ${style.name} style`
+      }
       title={reasoning}
     >
       <StyleTileBackground style={style} priority={priority} />
@@ -100,6 +109,14 @@ export function StyleInlineTile({
       </div>
       {selected && (
         <div className="pointer-events-none absolute inset-0 bg-primary/10" />
+      )}
+      {opensDetails && (
+        <span
+          aria-hidden
+          className="absolute right-1.5 top-1.5 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
+        >
+          <Info className="size-4" />
+        </span>
       )}
     </button>
   );

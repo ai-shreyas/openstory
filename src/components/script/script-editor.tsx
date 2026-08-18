@@ -61,7 +61,9 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
 
   return (
     <>
-      <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+      {/* min-h-28 = 4 editor rows (24px line-height) + the editor's vertical
+          padding — the floor the flex layout can't crush the editor below. */}
+      <div className="min-h-28 flex-1 flex flex-col overflow-hidden">
         <MarkdownEditor
           scrollRef={ref}
           id="script"
