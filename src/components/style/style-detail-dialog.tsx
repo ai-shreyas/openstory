@@ -43,6 +43,12 @@ type StyleDetailDialogProps = {
    * would discard the current draft.
    */
   onUseStyle?: (styleId: string) => void;
+  /**
+   * When provided, the sample clips' "Try" buttons hand the style to the host
+   * composer (which swaps in its sample script, confirming first over user
+   * text) and close the dialog, instead of navigating to a fresh composer.
+   */
+  onTryStyle?: (styleId: string) => void;
 };
 
 /** A still that removes itself if the source 404s (some older styles render
@@ -73,7 +79,9 @@ const SampleClip: FC<{
   slug: string;
   label?: string;
   autoPlay?: boolean;
-}> = ({ src, poster, styleName, slug, label, autoPlay }) => (
+  /** In-composer Try: swap in this style's sample instead of navigating. */
+  onTry?: () => void;
+}> = ({ src, poster, styleName, slug, label, autoPlay, onTry }) => (
   <div className="flex flex-col gap-1">
     {label && (
       <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -93,22 +101,35 @@ const SampleClip: FC<{
           controls
           aria-label={`${styleName} ${label ?? 'sample'} video`}
         />
-        <Button
-          asChild
-          size="sm"
-          variant="secondary"
-          className="absolute right-2 top-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity hover:opacity-100"
-        >
-          <Link
-            to="/"
-            search={{ style: slug }}
-            hash="compose"
+        {onTry ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={onTry}
             aria-label={`Try the ${styleName} style`}
+            className="absolute right-2 top-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity hover:opacity-100"
           >
             <Wand2 className="size-3.5" />
             Try
-          </Link>
-        </Button>
+          </Button>
+        ) : (
+          <Button
+            asChild
+            size="sm"
+            variant="secondary"
+            className="absolute right-2 top-2 gap-1.5 opacity-90 backdrop-blur-sm transition-opacity hover:opacity-100"
+          >
+            <Link
+              to="/"
+              search={{ style: slug }}
+              hash="compose"
+              aria-label={`Try the ${styleName} style`}
+            >
+              <Wand2 className="size-3.5" />
+              Try
+            </Link>
+          </Button>
+        )}
       </div>
     </div>
   </div>
@@ -135,6 +156,7 @@ export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
   open,
   onOpenChange,
   onUseStyle,
+  onTryStyle,
 }) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -150,6 +172,14 @@ export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
                   }
                 : undefined
             }
+            onTryStyle={
+              onTryStyle
+                ? () => {
+                    onTryStyle(style.id);
+                    onOpenChange(false);
+                  }
+                : undefined
+            }
           />
         )}
       </DialogContent>
@@ -157,10 +187,11 @@ export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
   );
 };
 
-const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
-  style,
-  onUseStyle,
-}) => {
+const StyleDetailContent: FC<{
+  style: Style;
+  onUseStyle?: () => void;
+  onTryStyle?: () => void;
+}> = ({ style, onUseStyle, onTryStyle }) => {
   const canonicalUrl = styleCanonicalVideoUrl(style);
   const videoSrc = canonicalUrl ? optimizedVideoUrl(canonicalUrl) : null;
   const poster = canonicalUrl ? videoPosterUrl(canonicalUrl) : undefined;
@@ -214,6 +245,7 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
               slug={slug}
               label={bespokeSrc ? 'Sample' : undefined}
               autoPlay
+              onTry={onTryStyle}
             />
           ) : (
             <div
@@ -228,6 +260,7 @@ const StyleDetailContent: FC<{ style: Style; onUseStyle?: () => void }> = ({
               styleName={style.name}
               slug={slug}
               label="Showcase"
+              onTry={onTryStyle}
             />
           )}
 

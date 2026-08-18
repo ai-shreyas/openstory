@@ -20,7 +20,8 @@ import { useState } from 'react';
 const StyleBrowserContent: FC<{
   styles?: Style[];
   onUseStyle: (styleId: string) => void;
-}> = ({ styles, onUseStyle }) => (
+  selectedStyleId?: string | null;
+}> = ({ styles, onUseStyle, selectedStyleId }) => (
   <DialogContent className="flex h-[90vh] max-w-[95vw] flex-col sm:max-w-[95vw] lg:max-w-[90vw] xl:max-w-[85vw]">
     <DialogHeader>
       <DialogTitle>Visual Style</DialogTitle>
@@ -29,7 +30,11 @@ const StyleBrowserContent: FC<{
       </DialogDescription>
     </DialogHeader>
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <StyleLibraryView styles={styles} onUseStyle={onUseStyle} />
+      <StyleLibraryView
+        styles={styles}
+        onUseStyle={onUseStyle}
+        initialStyleId={selectedStyleId}
+      />
     </div>
   </DialogContent>
 );
@@ -39,6 +44,8 @@ type StyleSelectionDialogProps = {
   onOpenChange: (open: boolean) => void;
   styles?: Style[];
   onStyleSelect: (styleId: string) => void;
+  /** Current pick — the dialog opens scrolled to its category section. */
+  selectedStyleId?: string | null;
 };
 
 /** Controlled variant used by the composer's style selector. */
@@ -47,9 +54,14 @@ export const StyleSelectionDialog: FC<StyleSelectionDialogProps> = ({
   onOpenChange,
   styles,
   onStyleSelect,
+  selectedStyleId,
 }) => (
   <Dialog open={open} onOpenChange={onOpenChange}>
-    <StyleBrowserContent styles={styles} onUseStyle={onStyleSelect} />
+    <StyleBrowserContent
+      styles={styles}
+      onUseStyle={onStyleSelect}
+      selectedStyleId={selectedStyleId}
+    />
   </Dialog>
 );
 

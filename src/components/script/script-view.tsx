@@ -113,6 +113,7 @@ import {
   Sparkles,
   Square,
   Undo2,
+  Wand2,
 } from 'lucide-react';
 import React, {
   useCallback,
@@ -411,30 +412,49 @@ export const ScriptView: FC<{
     if (first) selectStyle(first.id);
   };
 
-  // Shuffle (#1187): swap in a random other style's sample script. The row is
-  // always visible while composing, so guard the user's own text — replacing
-  // it goes through a confirm dialog (`requestShuffle`).
-  const [showShuffleConfirm, setShowShuffleConfirm] = useState(false);
-  const handleShuffleSample = () => {
-    const next = pickShuffleStyle(styles, styleId, Math.random);
-    if (!next) return;
-    const sample = sampleScriptForStyle(next);
+  // Sample swaps (#1187): Shuffle picks a random other style's sample; the
+  // style detail dialog's "Try" swaps in that specific style's sample. Both
+  // guard the user's own text — replacing it goes through a confirm dialog,
+  // and the pending action is remembered here until confirmed.
+  const [sampleReplaceConfirm, setSampleReplaceConfirm] = useState<
+    { kind: 'shuffle' } | { kind: 'try'; styleId: string } | null
+  >(null);
+  const applySampleForStyle = (
+    style: (typeof styles)[number],
+    event: 'sample_script_shuffled' | 'sample_script_tried'
+  ) => {
+    const sample = sampleScriptForStyle(style);
     if (!sample) return;
-    posthog.capture('sample_script_shuffled', { style_id: next.id });
+    posthog.capture(event, { style_id: style.id });
     setContentState((s) => ({ ...s, script: sample }));
-    setSampleStyleId(next.id);
-    // A stale Undo (from a pre-shuffle enhance) would restore text the sample
+    setSampleStyleId(style.id);
+    // A stale Undo (from a pre-swap enhance) would restore text the sample
     // state no longer describes.
     setEnhance('canUndoEnhance', false);
-    handleStyleSelect(next.id);
+    handleStyleSelect(style.id);
   };
+  const handleShuffleSample = () => {
+    const next = pickShuffleStyle(styles, styleId, Math.random);
+    if (next) applySampleForStyle(next, 'sample_script_shuffled');
+  };
+  const handleTrySample = (tryStyleId: string) => {
+    const style = styles.find((s) => s.id === tryStyleId);
+    if (style) applySampleForStyle(style, 'sample_script_tried');
+  };
+  const hasOwnText = () => !sampleStyleId && (script ?? '').trim().length > 0;
   const requestShuffle = () => {
-    const hasOwnText = !sampleStyleId && (script ?? '').trim().length > 0;
-    if (hasOwnText) {
-      setShowShuffleConfirm(true);
+    if (hasOwnText()) {
+      setSampleReplaceConfirm({ kind: 'shuffle' });
       return;
     }
     handleShuffleSample();
+  };
+  const requestTryStyle = (tryStyleId: string) => {
+    if (hasOwnText()) {
+      setSampleReplaceConfirm({ kind: 'try', styleId: tryStyleId });
+      return;
+    }
+    handleTrySample(tryStyleId);
   };
 
   // Auto-select the first style in the current row when the composer has
@@ -1236,7 +1256,10 @@ export const ScriptView: FC<{
           </div>
         </CardHeader>
 
-        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 py-6 overflow-hidden">
+        {/* overflow-y-auto (not hidden): when the viewport-capped card can't
+            fit the content above its min-heights, the tail — style grid,
+            enhance row — must stay reachable by scrolling, not clip. */}
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 py-6 overflow-y-auto overflow-x-hidden">
           {/* Thinking bar shows during the reasoning pass — i.e. while
               enhancing but before any enhanced text has streamed back. */}
           <ThinkingBar
@@ -1281,7 +1304,10 @@ export const ScriptView: FC<{
               </Button>
             </div>
           )}
-          <div className="relative min-h-0 flex flex-col">
+          {/* Grows with content above the 4-row floor (min-h-28, see
+              ScriptEditor) — so the card resizes with the script, and samples
+              of different lengths change its height on Shuffle. */}
+          <div className="relative flex min-h-28 flex-col">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}
@@ -1428,6 +1454,9 @@ export const ScriptView: FC<{
               recommendations={activeRecommendations}
               recommendationsLoading={isRecommending && !recommendationsStale}
               categoryFilter={styleCategoryFilter}
+              // Create mode only — an analysed sequence's derived script must
+              // not be swapped for a sample (same gate as the Shuffle row).
+              onTryStyle={isEditing ? undefined : requestTryStyle}
             />
             {(recommendEmpty || recommendFailed) && (
               <p className="text-xs text-muted-foreground">
@@ -1490,7 +1519,12 @@ export const ScriptView: FC<{
                   <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
                 </Button>
               </div>
-              <ActionCost estimate={storyboardCostEstimate} align="end" />
+              {/* The estimate only exists client-side (pricing query), so it
+                  pops in after the SSR paint — reserve its line so the footer
+                  doesn't grow and shift the page (#1187). */}
+              <div className="min-h-4">
+                <ActionCost estimate={storyboardCostEstimate} align="end" />
+              </div>
               <span className="hidden text-xs text-muted-foreground sm:block sm:text-right">
                 {isEditing
                   ? analysisModels.length === 1
@@ -1600,26 +1634,35 @@ export const ScriptView: FC<{
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog
-        open={showShuffleConfirm}
-        onOpenChange={setShowShuffleConfirm}
+        open={sampleReplaceConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setSampleReplaceConfirm(null);
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Replace your script?</AlertDialogTitle>
             <AlertDialogDescription>
-              Shuffle swaps in a sample script for a random style. What you've
-              written here will be replaced.
+              {sampleReplaceConfirm?.kind === 'try'
+                ? "This swaps in the style's sample script. What you've written here will be replaced."
+                : "Shuffle swaps in a sample script for a random style. What you've written here will be replaced."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep my script</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                setShowShuffleConfirm(false);
-                handleShuffleSample();
+                const pending = sampleReplaceConfirm;
+                setSampleReplaceConfirm(null);
+                if (pending?.kind === 'try') handleTrySample(pending.styleId);
+                else handleShuffleSample();
               }}
             >
-              <Shuffle className="size-3.5" />
+              {sampleReplaceConfirm?.kind === 'try' ? (
+                <Wand2 className="size-3.5" />
+              ) : (
+                <Shuffle className="size-3.5" />
+              )}
               Replace
             </AlertDialogAction>
           </AlertDialogFooter>
