@@ -1256,10 +1256,12 @@ export const ScriptView: FC<{
           </div>
         </CardHeader>
 
-        {/* overflow-y-auto (not hidden): when the viewport-capped card can't
-            fit the content above its min-heights, the tail — style grid,
-            enhance row — must stay reachable by scrolling, not clip. */}
-        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 py-6 overflow-y-auto overflow-x-hidden">
+        {/* Holds the script alone; the enhance row, style grid and footer are
+            pinned below (outside), so long scripts scroll inside the editor
+            (min-h-28 floor, see the wrapper below) with the chrome fixed.
+            overflow-y-auto is a fallback for viewports too short for even the
+            editor floor + Sample-script row — it only engages then. */}
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
           {/* Thinking bar shows during the reasoning pass — i.e. while
               enhancing but before any enhanced text has streamed back. */}
           <ThinkingBar
@@ -1328,145 +1330,147 @@ export const ScriptView: FC<{
           {enhanceError && (
             <p className="text-sm text-destructive">{enhanceError}</p>
           )}
+        </CardContent>
 
-          <div className="shrink-0 flex flex-col gap-3">
-            <div className="flex flex-col gap-2 @min-[480px]:flex-row @min-[480px]:items-center @min-[480px]:justify-between">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {/* Pinned between the scrolling script and the Generate footer (#1187):
+            the enhance row and style tiles must never scroll away — or
+            half-clip — behind a long script. @container replaces the one on
+            CardContent for the responsive row below. */}
+        <div className="shrink-0 @container flex flex-col gap-3 px-6 pb-6">
+          <div className="flex flex-col gap-2 @min-[480px]:flex-row @min-[480px]:items-center @min-[480px]:justify-between">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={
+                  loading || currentScriptText.length < 3 || isRecommending
+                }
+                onClick={triggerRecommend}
+              >
+                {isRecommending ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <Sparkles className="size-3.5 text-primary" />
+                )}
+                {recommendButtonLabel}
+              </Button>
+              <StyleCategorySelect
+                styles={styles}
+                value={styleCategoryFilter}
+                onChange={handleStyleCategoryChange}
+                disabled={loading || isLoadingStyles}
+              />
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-1">
+              {canUndoEnhance && !isEnhancing && (
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  className="gap-1.5"
-                  disabled={
-                    loading || currentScriptText.length < 3 || isRecommending
-                  }
-                  onClick={triggerRecommend}
+                  className="gap-1.5 text-muted-foreground"
+                  onClick={handleUndoEnhance}
                 >
-                  {isRecommending ? (
-                    <Loader2 className="size-3.5 animate-spin text-primary" />
-                  ) : (
-                    <Sparkles className="size-3.5 text-primary" />
-                  )}
-                  {recommendButtonLabel}
+                  <Undo2 className="size-3.5" />
+                  Undo
                 </Button>
-                <StyleCategorySelect
-                  styles={styles}
-                  value={styleCategoryFilter}
-                  onChange={handleStyleCategoryChange}
-                  disabled={loading || isLoadingStyles}
-                />
-              </div>
-              <div className="flex shrink-0 items-center justify-end gap-1">
-                {canUndoEnhance && !isEnhancing && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 text-muted-foreground"
-                    onClick={handleUndoEnhance}
-                  >
-                    <Undo2 className="size-3.5" />
-                    Undo
-                  </Button>
-                )}
-                {isEnhancing ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 text-muted-foreground"
-                    onClick={handleStopEnhance}
-                  >
-                    <span className="relative size-5">
-                      <Loader2 className="absolute inset-0 size-5 animate-spin" />
-                      <Square className="absolute inset-[5px] size-[10px] fill-current" />
-                    </span>
-                    Stop
-                  </Button>
-                ) : (
-                  <Popover
-                    open={enhancePopoverOpen}
-                    onOpenChange={setEnhancePopoverOpen}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
+              )}
+              {isEnhancing ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 text-muted-foreground"
+                  onClick={handleStopEnhance}
+                >
+                  <span className="relative size-5">
+                    <Loader2 className="absolute inset-0 size-5 animate-spin" />
+                    <Square className="absolute inset-[5px] size-[10px] fill-current" />
+                  </span>
+                  Stop
+                </Button>
+              ) : (
+                <Popover
+                  open={enhancePopoverOpen}
+                  onOpenChange={setEnhancePopoverOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={
+                        !scriptValue || scriptValue.length < 10 || isSubmitting
+                      }
+                    >
+                      <Sparkles className="size-3.5 text-primary" />
+                      Enhance Script
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" side="top" className="w-auto">
+                    <div className="flex flex-col gap-3">
+                      <p className="text-sm font-medium">
+                        Target video duration
+                      </p>
+                      <ToggleGroup
+                        type="single"
+                        value={String(targetDuration)}
+                        onValueChange={(v) => {
+                          if (v) setTargetDuration(Number(v));
+                        }}
                         variant="outline"
                         size="sm"
-                        className="gap-1.5"
-                        disabled={
-                          !scriptValue ||
-                          scriptValue.length < 10 ||
-                          isSubmitting
-                        }
+                        spacing={0}
                       >
-                        <Sparkles className="size-3.5 text-primary" />
-                        Enhance Script
+                        {DURATION_PRESETS.map((preset) => (
+                          <ToggleGroupItem
+                            key={preset.value}
+                            value={preset.value}
+                          >
+                            {preset.label}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => {
+                          setEnhancePopoverOpen(false);
+                          void handleEnhance();
+                        }}
+                      >
+                        <Sparkles className="size-3.5" />
+                        Enhance
                       </Button>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" side="top" className="w-auto">
-                      <div className="flex flex-col gap-3">
-                        <p className="text-sm font-medium">
-                          Target video duration
-                        </p>
-                        <ToggleGroup
-                          type="single"
-                          value={String(targetDuration)}
-                          onValueChange={(v) => {
-                            if (v) setTargetDuration(Number(v));
-                          }}
-                          variant="outline"
-                          size="sm"
-                          spacing={0}
-                        >
-                          {DURATION_PRESETS.map((preset) => (
-                            <ToggleGroupItem
-                              key={preset.value}
-                              value={preset.value}
-                            >
-                              {preset.label}
-                            </ToggleGroupItem>
-                          ))}
-                        </ToggleGroup>
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-1.5"
-                          onClick={() => {
-                            setEnhancePopoverOpen(false);
-                            void handleEnhance();
-                          }}
-                        >
-                          <Sparkles className="size-3.5" />
-                          Enhance
-                        </Button>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                )}
-              </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
             </div>
-            <StyleSelector
-              styles={styles}
-              selectedStyleId={styleId || sequence?.styleId || null}
-              onStyleSelect={handleStyleSelect}
-              loading={isLoadingStyles}
-              recommendations={activeRecommendations}
-              recommendationsLoading={isRecommending && !recommendationsStale}
-              categoryFilter={styleCategoryFilter}
-              // Create mode only — an analysed sequence's derived script must
-              // not be swapped for a sample (same gate as the Shuffle row).
-              onTryStyle={isEditing ? undefined : requestTryStyle}
-            />
-            {(recommendEmpty || recommendFailed) && (
-              <p className="text-xs text-muted-foreground">
-                {recommendFailed
-                  ? "Couldn't suggest styles — try again or pick one below."
-                  : 'No standout matches — try again or pick a style below.'}
-              </p>
-            )}
           </div>
-        </CardContent>
+          <StyleSelector
+            styles={styles}
+            selectedStyleId={styleId || sequence?.styleId || null}
+            onStyleSelect={handleStyleSelect}
+            loading={isLoadingStyles}
+            recommendations={activeRecommendations}
+            recommendationsLoading={isRecommending && !recommendationsStale}
+            categoryFilter={styleCategoryFilter}
+            // Create mode only — an analysed sequence's derived script must
+            // not be swapped for a sample (same gate as the Shuffle row).
+            onTryStyle={isEditing ? undefined : requestTryStyle}
+          />
+          {(recommendEmpty || recommendFailed) && (
+            <p className="text-xs text-muted-foreground">
+              {recommendFailed
+                ? "Couldn't suggest styles — try again or pick one below."
+                : 'No standout matches — try again or pick a style below.'}
+            </p>
+          )}
+        </div>
 
         <CardFooter className="shrink-0 flex-col gap-4 border-t border-border/30 bg-transparent px-6 py-4">
           {/* Footer row - stacks on mobile, inline on desktop */}
