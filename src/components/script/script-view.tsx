@@ -79,6 +79,10 @@ import {
   aspectRatioSchema,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import {
+  markPendingGenerate,
+  takePendingGenerate,
+} from '@/lib/generation/pending-generate';
 import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
 import {
@@ -747,7 +751,7 @@ export const ScriptView: FC<{
   ) => setEnhanceUI((s) => ({ ...s, [key]: value }));
 
   const createSequenceMutation = useCreateSequence();
-  const { requireAuth } = useAuthGate();
+  const { requireAuth, isAuthenticated } = useAuthGate();
   const { needsBillingSetup, showGate } = useBillingGate();
 
   // Style recommendations. We rank a *snapshot* of the script (not the live
@@ -860,7 +864,10 @@ export const ScriptView: FC<{
 
     // Anonymous visitors can compose a draft, but generating prompts a login.
     // The draft is persisted to localStorage, so it's restored after sign-in.
+    // Remember the click too, so the resume effect below continues this exact
+    // step (nudge, billing gate, generation) once sign-in completes (#1187).
     if (!requireAuth()) {
+      if (!isEditing) markPendingGenerate();
       return;
     }
 
@@ -874,21 +881,18 @@ export const ScriptView: FC<{
       return;
     }
 
+    // Generate was clicked on an untouched sample — capture the intent even
+    // when the enhance nudge takes over from here (#1187).
+    if (sampleStyleId) {
+      posthog.capture('sample_script_generated', { style_id: sampleStyleId });
+    }
+
     const scriptText = script ?? baseScript ?? '';
-    // An untouched sample is curated to generate well as-is — don't interrupt
-    // the first-run "click Generate" moment with the enhance nudge (#1187).
-    if (
-      !canUndoEnhance &&
-      !sampleStyleId &&
-      scriptText.length < SCRIPT_SHORT_THRESHOLD
-    ) {
+    if (!canUndoEnhance && scriptText.length < SCRIPT_SHORT_THRESHOLD) {
       setEnhance('showEnhanceNudge', true);
       return;
     }
 
-    if (sampleStyleId) {
-      posthog.capture('sample_script_generated', { style_id: sampleStyleId });
-    }
     executeRegeneration();
   };
 
@@ -1005,6 +1009,31 @@ export const ScriptView: FC<{
   const isSubmitting = createSequenceMutation.isPending;
   const isDisabled =
     !isFormValid || isSubmitting || isEnhancing || isElementBusy;
+
+  // Resume a Generate click the sign-in gate interrupted (#1187): once the
+  // user is authenticated and the composer is ready again (draft restored, or
+  // the pristine sample re-seeded), re-run the submit flow so the next step —
+  // enhance nudge, billing gate, generation — continues without a second
+  // click. Covers both the in-dialog OTP sign-in (no remount) and the OAuth
+  // round-trip (fresh mount). Ref'd so the effect calls the fresh closure.
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+  const resumeTriedRef = useRef(false);
+  useEffect(() => {
+    if (isEditing || loading || !isAuthenticated) return;
+    if (resumeTriedRef.current) return;
+    if (!draftLoaded || !isFormValid || isSubmitting) return;
+    resumeTriedRef.current = true;
+    if (!takePendingGenerate()) return;
+    void handleSubmitRef.current();
+  }, [
+    isEditing,
+    loading,
+    isAuthenticated,
+    draftLoaded,
+    isFormValid,
+    isSubmitting,
+  ]);
 
   const scriptValue = script ?? baseScript ?? '';
   const { ref: textareaRef } = useAutoScroll<HTMLDivElement>({
@@ -1163,6 +1192,29 @@ export const ScriptView: FC<{
             active={isEnhancing && !scriptValue}
             className="shrink-0"
           />
+          {/* Above the editor so the Shuffle button holds its position while
+              samples of different lengths grow/shrink the editor below it. */}
+          {sampleStyleId && (
+            <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Sample script
+                <span className="hidden @min-[480px]:inline">
+                  {' '}
+                  — make it yours, or hit Generate to see it come to life.
+                </span>
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={handleShuffleSample}
+              >
+                <Shuffle className="size-3.5" />
+                Shuffle
+              </Button>
+            </div>
+          )}
           <div className="relative min-h-0 flex flex-col">
             <ScriptEditor
               ref={textareaRef}
@@ -1181,24 +1233,6 @@ export const ScriptView: FC<{
               mentionItems={mentionItems}
             />
           </div>
-          {sampleStyleId && !isEnhancing && (
-            <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                Sample script — make it yours, or hit Generate to see it come to
-                life.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={handleShuffleSample}
-              >
-                <Shuffle className="size-3.5" />
-                Shuffle
-              </Button>
-            </div>
-          )}
           {enhanceError && (
             <p className="text-sm text-destructive">{enhanceError}</p>
           )}
