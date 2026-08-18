@@ -81,12 +81,42 @@ const parseExtensions: MarkdownExtension[] = [
 ];
 
 /**
+ * Match `rehype-slug` / github-slugger so in-page `#` links from the old
+ * pipeline still land. TanStack's default slugger collapses every
+ * `[^a-z0-9]+` run to a single `-` (`Build & Deploy` → `build-deploy`);
+ * github-slugger strips punctuation first, then turns each remaining
+ * whitespace char into `-` (`build--deploy`).
+ */
+const GITHUB_SLUG_PUNCTUATION =
+  /[\u2000-\u206F\u2E00-\u2E7F\\'!"#$%&()*+,./:;<=>?@[\]^`{|}~]/g;
+
+function createGithubHeadingIds(): (text: string, index: number) => string {
+  const occurrences = new Map<string, number>();
+  return (text) => {
+    const original =
+      text
+        .toLowerCase()
+        .replace(GITHUB_SLUG_PUNCTUATION, '')
+        .replace(/\s/g, '-') || 'section';
+    let result = original;
+    while (occurrences.has(result)) {
+      const next = (occurrences.get(original) ?? 0) + 1;
+      occurrences.set(original, next);
+      result = `${original}-${next}`;
+    }
+    occurrences.set(result, 0);
+    return result;
+  };
+}
+
+/**
  * Parse docs markdown to a serializable TanStack AST + TOC headings.
  * Frontmatter is already stripped by content-collections.
  */
 export function parseDocsMarkdown(content: string): RenderedMarkdown {
   const document = parseMarkdown(content, {
     frontmatter: false,
+    headingIds: createGithubHeadingIds(),
     extensions: parseExtensions,
   });
   return {

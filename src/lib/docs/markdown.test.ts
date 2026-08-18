@@ -95,10 +95,18 @@ describe('parseDocsMarkdown', () => {
 
 ## Setup
 `);
-    const ids = headings.map((heading) => heading.id);
-    expect(ids[0]).toBe('setup');
-    expect(ids[1]).toMatch(/^setup-/);
-    expect(new Set(ids).size).toBe(2);
+    expect(headings.map((heading) => heading.id)).toEqual(['setup', 'setup-1']);
+  });
+
+  it('matches github-slugger / rehype-slug for punctuation headings', () => {
+    const { headings } = parseDocsMarkdown(`## Build & Deploy
+
+## wrangler.jsonc
+`);
+    expect(headings.map((heading) => heading.id)).toEqual([
+      'build--deploy',
+      'wranglerjsonc',
+    ]);
   });
 
   it('rewrites mermaid fences to mermaid-diagram components', () => {
@@ -173,6 +181,15 @@ Outro
       expect(collectMermaidComponents(document), file).toBe(
         mermaidFences.length
       );
+
+      const headingIds = new Set(headings.map((heading) => heading.id));
+      for (const match of content.matchAll(/\]\(#([^)]+)\)/g)) {
+        const target = match[1];
+        if (target === undefined) continue;
+        expect(headingIds.has(target), `${file} hash link #${target}`).toBe(
+          true
+        );
+      }
     }
   });
 });
