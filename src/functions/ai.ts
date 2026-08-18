@@ -8,7 +8,6 @@ import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import {
   callLLMStream,
   llmCostFromUsage,
-  PROMPT_REASONING,
   RECOMMENDED_MODELS,
 } from '@/lib/ai/llm-client';
 import { isValidAnalysisModelId } from '@/lib/ai/models.config';
@@ -409,9 +408,7 @@ export async function* streamScriptEnhancement(
   // Web search runs as OpenRouter's server tool — the model decides when to
   // search and OpenRouter executes it server-side within the agent loop.
   // Gate it out of E2E entirely (record + replay): live search results would
-  // make the recorded OpenRouter request/response non-deterministic. Reasoning
-  // is NOT gated — it's deterministic once recorded, so E2E records + replays
-  // it like any other request.
+  // make the recorded OpenRouter request/response non-deterministic.
   const useWebSearch = getEnv().E2E_TEST !== 'true';
   let usage;
   for await (const chunk of callLLMStream({
@@ -420,12 +417,14 @@ export async function* streamScriptEnhancement(
     // No max_tokens: every model routes through OpenRouter, which falls back
     // to the model's own max output when the field is omitted — so long
     // scripts use the full available output budget instead of an artificial
-    // cap. Reasoning (PROMPT_REASONING, medium) shares the completion budget,
-    // but the per-model default is far larger than any realistic script, so
-    // the #915 truncation (seen when this was a flat 4000) can't recur.
+    // cap, and the #915 truncation (seen when this was a flat 4000) can't
+    // recur.
     temperature: 0.7,
     ...(useWebSearch && { webSearch: true }),
-    reasoning: PROMPT_REASONING,
+    // No reasoning pass: enhancement streams to the user while they wait, and
+    // the thinking pass added far more latency than the quality lift was worth.
+    // The other creative paths (scene split, frame prompts) still use
+    // PROMPT_REASONING — they run inside workflows where latency is hidden.
     observationName: 'script-enhance',
     tags: ['script-enhance', model],
     userId: ctx.userId,
