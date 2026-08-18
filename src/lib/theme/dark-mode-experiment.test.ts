@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   DARK_MODE_BOOT_SCRIPT,
   DARK_MODE_DEFAULT_FLAG,
+  DARK_MODE_DISTINCT_COOKIE,
   DARK_MODE_OVERRIDE_QUERY,
   DARK_MODE_OVERRIDE_STORAGE_KEY,
   DARK_MODE_VARIANT_COOKIE,
+  applyDarkModeVariant,
   assignmentFromCookies,
   darkModeFeatureProperties,
   parseDarkModeVariant,
@@ -12,7 +14,32 @@ import {
   readDarkModeOverride,
   shouldEvaluateDarkModeExperimentFromHost,
   shouldForceDark,
+  signupDarkModeAnalytics,
+  writeBrowserDarkModeCookies,
+  type DarkModeRoot,
 } from './dark-mode-experiment';
+
+function fakeRoot(): DarkModeRoot & { tokens: Set<string> } {
+  const tokens = new Set<string>();
+  const style = {
+    colorScheme: '',
+    removeProperty(property: string) {
+      if (property === 'color-scheme') style.colorScheme = '';
+    },
+  };
+  return {
+    tokens,
+    classList: {
+      add: (token: string) => {
+        tokens.add(token);
+      },
+      remove: (token: string) => {
+        tokens.delete(token);
+      },
+    },
+    style,
+  };
+}
 
 describe('parseDarkModeVariant', () => {
   it('accepts control and test', () => {
@@ -114,11 +141,86 @@ describe('readDarkModeOverride', () => {
   });
 });
 
+describe('applyDarkModeVariant', () => {
+  it('adds html.dark and color-scheme only for test', () => {
+    const root = fakeRoot();
+    applyDarkModeVariant('test', root);
+    expect(root.tokens.has('dark')).toBe(true);
+    expect(root.style.colorScheme).toBe('dark');
+  });
+
+  it('removes html.dark for control (OS media query takes over)', () => {
+    const root = fakeRoot();
+    applyDarkModeVariant('test', root);
+    applyDarkModeVariant('control', root);
+    expect(root.tokens.has('dark')).toBe(false);
+    expect(root.style.colorScheme).toBe('');
+  });
+
+  it('no-ops without a root (SSR)', () => {
+    expect(() => applyDarkModeVariant('test', null)).not.toThrow();
+  });
+});
+
+describe('writeBrowserDarkModeCookies', () => {
+  it('writes the variant and optional distinct id', () => {
+    const written: string[] = [];
+    writeBrowserDarkModeCookies({
+      variant: 'test',
+      distinctId: 'anon_1',
+      writeCookie: (cookie) => written.push(cookie),
+      protocol: 'https:',
+    });
+    expect(written).toHaveLength(2);
+    expect(written[0]).toContain(`${DARK_MODE_VARIANT_COOKIE}=test`);
+    expect(written[0]).toContain('Secure');
+    expect(written[1]).toContain(`${DARK_MODE_DISTINCT_COOKIE}=anon_1`);
+  });
+});
+
+describe('signupDarkModeAnalytics', () => {
+  it('aliases the anon device id onto user.id and stamps both surfaces', () => {
+    const result = signupDarkModeAnalytics({
+      userId: 'user_1',
+      assignment: { variant: 'test', distinctId: 'anon_1' },
+    });
+    expect(result.alias).toEqual({ distinctId: 'user_1', alias: 'anon_1' });
+    expect(result.featureProperties).toEqual({
+      [`$feature/${DARK_MODE_DEFAULT_FLAG}`]: 'test',
+    });
+  });
+
+  it('does not alias when the assignment already uses user.id', () => {
+    const result = signupDarkModeAnalytics({
+      userId: 'user_1',
+      assignment: { variant: 'control', distinctId: 'user_1' },
+    });
+    expect(result.alias).toBeNull();
+    expect(result.featureProperties).toEqual({
+      [`$feature/${DARK_MODE_DEFAULT_FLAG}`]: 'control',
+    });
+  });
+
+  it('stamps nothing when there was no assignment', () => {
+    expect(
+      signupDarkModeAnalytics({
+        userId: 'user_1',
+        assignment: { variant: null, distinctId: null },
+      })
+    ).toEqual({ alias: null, featureProperties: {} });
+  });
+});
+
 describe('DARK_MODE_BOOT_SCRIPT', () => {
   it('applies the sticky cookie name and override keys', () => {
     expect(DARK_MODE_BOOT_SCRIPT).toContain(DARK_MODE_VARIANT_COOKIE);
     expect(DARK_MODE_BOOT_SCRIPT).toContain(DARK_MODE_OVERRIDE_STORAGE_KEY);
     expect(DARK_MODE_BOOT_SCRIPT).toContain(DARK_MODE_OVERRIDE_QUERY);
     expect(DARK_MODE_BOOT_SCRIPT).toContain('classList.add("dark")');
+  });
+
+  it('gates query/localStorage overrides behind the production host check', () => {
+    expect(DARK_MODE_BOOT_SCRIPT).toContain('if(!evaluate)');
+    expect(DARK_MODE_BOOT_SCRIPT).toContain('indexOf("pr-")');
   });
 });

@@ -11,10 +11,16 @@ export const DARK_MODE_DEFAULT_FLAG = 'dark-mode-default';
 export const DARK_MODE_VARIANT_COOKIE = 'os_dark_mode_default';
 export const DARK_MODE_DISTINCT_COOKIE = 'os_ph_distinct_id';
 
-/** localStorage key for local / preview overrides. */
+/**
+ * localStorage key for local / preview overrides. Ignored in production
+ * (`evaluate === true`) so a leftover key cannot skip flag exposure.
+ */
 export const DARK_MODE_OVERRIDE_STORAGE_KEY = 'os:dark-mode-default';
 
-/** Query param for one-off overrides (`?os_dark_mode=test`). */
+/**
+ * Query param for local / preview overrides (`?os_dark_mode=test`).
+ * Production ignores it (same reason as the localStorage key).
+ */
 export const DARK_MODE_OVERRIDE_QUERY = 'os_dark_mode';
 
 const DARK_MODE_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 180;
@@ -94,31 +100,93 @@ export function isDocumentDark(): boolean {
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
-export function applyDarkModeVariant(variant: DarkModeVariant | null): void {
-  if (typeof document === 'undefined') return;
+/** Injectable `document.documentElement` stand-in for unit tests. */
+export type DarkModeRoot = {
+  classList: {
+    add: (token: string) => void;
+    remove: (token: string) => void;
+  };
+  style: {
+    colorScheme: string;
+    removeProperty: (property: string) => void;
+  };
+};
+
+function defaultDarkModeRoot(): DarkModeRoot | null {
+  if (typeof document === 'undefined') return null;
+  return document.documentElement;
+}
+
+export function applyDarkModeVariant(
+  variant: DarkModeVariant | null,
+  root: DarkModeRoot | null = defaultDarkModeRoot()
+): void {
+  if (!root) return;
   if (variant === 'test') {
-    document.documentElement.classList.add('dark');
-    document.documentElement.style.colorScheme = 'dark';
+    root.classList.add('dark');
+    root.style.colorScheme = 'dark';
     return;
   }
-  document.documentElement.classList.remove('dark');
-  document.documentElement.style.removeProperty('color-scheme');
+  root.classList.remove('dark');
+  root.style.removeProperty('color-scheme');
 }
+
+/** Injectable cookie writer for unit tests. */
+export type DarkModeCookieWriter = (cookie: string) => void;
 
 export function writeBrowserDarkModeCookies(args: {
   variant: DarkModeVariant;
   distinctId?: string;
+  writeCookie?: DarkModeCookieWriter;
+  protocol?: string;
 }): void {
-  if (typeof document === 'undefined') return;
-  const secure =
-    typeof location !== 'undefined' && location.protocol === 'https:';
+  const write =
+    args.writeCookie ??
+    (typeof document === 'undefined'
+      ? undefined
+      : (cookie: string) => {
+          document.cookie = cookie;
+        });
+  if (!write) return;
+  const protocol =
+    args.protocol ??
+    (typeof location !== 'undefined' ? location.protocol : 'http:');
+  const secure = protocol === 'https:';
   const attrs = `; Path=/; Max-Age=${DARK_MODE_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax${
     secure ? '; Secure' : ''
   }`;
-  document.cookie = `${DARK_MODE_VARIANT_COOKIE}=${encodeURIComponent(args.variant)}${attrs}`;
+  write(
+    `${DARK_MODE_VARIANT_COOKIE}=${encodeURIComponent(args.variant)}${attrs}`
+  );
   if (args.distinctId) {
-    document.cookie = `${DARK_MODE_DISTINCT_COOKIE}=${encodeURIComponent(args.distinctId)}${attrs}`;
+    write(
+      `${DARK_MODE_DISTINCT_COOKIE}=${encodeURIComponent(args.distinctId)}${attrs}`
+    );
   }
+}
+
+/**
+ * Signup-side experiment wiring: alias the anonymous device id onto `user.id`
+ * (only when they differ) and stamp `$feature/dark-mode-default` for both the
+ * event and the person. Pure — the auth hook applies `alias` / spreads
+ * `featureProperties`. Does not import Better Auth.
+ */
+export function signupDarkModeAnalytics(args: {
+  userId: string;
+  assignment: { variant: DarkModeVariant | null; distinctId: string | null };
+}): {
+  alias: { distinctId: string; alias: string } | null;
+  featureProperties: Record<string, string>;
+} {
+  const { userId, assignment } = args;
+  const alias =
+    assignment.distinctId && assignment.distinctId !== userId
+      ? { distinctId: userId, alias: assignment.distinctId }
+      : null;
+  return {
+    alias,
+    featureProperties: darkModeFeatureProperties(assignment.variant),
+  };
 }
 
 export function readDarkModeOverride(args?: {
@@ -161,6 +229,7 @@ export function readDarkModeOverride(args?: {
 
 /**
  * Runs in `<head>` before CSS so a sticky `test` assignment does not flash
- * light on return visits. Also honors `?os_dark_mode=` and localStorage.
+ * light on return visits. Query / localStorage overrides apply only off
+ * production (same host gate as `shouldEvaluateDarkModeExperimentFromHost`).
  */
-export const DARK_MODE_BOOT_SCRIPT = `(function(){try{var q=new URLSearchParams(location.search).get(${JSON.stringify(DARK_MODE_OVERRIDE_QUERY)});if(q==="test"||q==="control"){try{localStorage.setItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)},q)}catch(e){}}var s=null;try{s=localStorage.getItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)})}catch(e){}var c=document.cookie.match(/(?:^|; )${DARK_MODE_VARIANT_COOKIE}=([^;]*)/);var v=q||s||(c&&decodeURIComponent(c[1]));if(v==="test"){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}else if(v==="control"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme=""}}catch(e){}})();`;
+export const DARK_MODE_BOOT_SCRIPT = `(function(){try{var host=location.hostname.toLowerCase();var evaluate=host!=="localhost"&&host!=="127.0.0.1"&&host!=="::1"&&!/^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(host)&&host.indexOf("pr-")===-1;var q=null;var s=null;if(!evaluate){q=new URLSearchParams(location.search).get(${JSON.stringify(DARK_MODE_OVERRIDE_QUERY)});if(q==="test"||q==="control"){try{localStorage.setItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)},q)}catch(e){}}try{s=localStorage.getItem(${JSON.stringify(DARK_MODE_OVERRIDE_STORAGE_KEY)})}catch(e){}}var c=document.cookie.match(/(?:^|; )${DARK_MODE_VARIANT_COOKIE}=([^;]*)/);var v=q||s||(c&&decodeURIComponent(c[1]));if(v==="test"){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}else if(v==="control"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme=""}}catch(e){}})();`;

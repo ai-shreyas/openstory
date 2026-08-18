@@ -50,10 +50,21 @@ const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
   const [theme, setTheme] = useState<'default' | 'dark'>(getPreferredTheme);
 
   useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
     const sync = () => setTheme(isDocumentDark() ? 'dark' : 'default');
+    // First-visit `test` (and `?os_dark_mode=test`) add `html.dark` after
+    // mount. Cookie return visits are already applied by the boot script.
+    sync();
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', sync);
-    return () => media.removeEventListener('change', sync);
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+    return () => {
+      media.removeEventListener('change', sync);
+      observer.disconnect();
+    };
   }, []);
 
   useEffect(() => {

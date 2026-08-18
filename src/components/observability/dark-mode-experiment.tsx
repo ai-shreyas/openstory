@@ -11,23 +11,23 @@ import { useEffect, type FC } from 'react';
 /**
  * Applies the `dark-mode-default` experiment (#1186).
  *
- * Production: `getFeatureFlag` records exposure, then we persist the variant
- * and toggle `html.dark`. Local / preview: override only (`?os_dark_mode=`
- * or `localStorage os:dark-mode-default`). Evaluation stays in an effect so
- * SSR never touches the PostHog JS client.
+ * Production (`evaluate`): `getFeatureFlag` records exposure, then we persist
+ * the variant and toggle `html.dark`. Overrides (`?os_dark_mode=` /
+ * `localStorage`) are local / preview only — a leftover key on production
+ * must not skip exposure.
  */
 export const DarkModeExperiment: FC<{ evaluate: boolean }> = ({ evaluate }) => {
   const posthog = usePostHog();
 
   useEffect(() => {
-    const override = readDarkModeOverride();
-    if (override) {
-      applyDarkModeVariant(override);
+    if (!evaluate) {
+      const override = readDarkModeOverride();
+      if (override) applyDarkModeVariant(override);
       return;
     }
 
     // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime: undefined when PostHogProvider is not mounted
-    if (!evaluate || typeof posthog?.getFeatureFlag !== 'function') return;
+    if (typeof posthog?.getFeatureFlag !== 'function') return;
 
     const applyFlag = () => {
       const variant = parseDarkModeVariant(

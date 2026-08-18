@@ -38,7 +38,7 @@ import {
   captureProductEvent,
 } from '@/lib/observability/product-events';
 import { getLogger } from '@/lib/observability/logger';
-import { darkModeFeatureProperties } from '@/lib/theme/dark-mode-experiment';
+import { signupDarkModeAnalytics } from '@/lib/theme/dark-mode-experiment';
 import { readDarkModeExperimentAssignment } from '@/lib/theme/dark-mode-experiment-request';
 
 const logger = getLogger(['openstory', 'auth', 'config']);
@@ -280,15 +280,11 @@ function createAuth() {
             // personProperties set email/name on the PostHog person so Slack
             // templates (`person.properties.email ?? distinct_id`) show email,
             // not only the ULID (#1110).
-            const darkMode = readDarkModeExperimentAssignment();
-            if (darkMode.distinctId && darkMode.distinctId !== user.id) {
-              // Exposure was recorded on the anonymous device id (#1186).
-              aliasDistinctId({
-                distinctId: user.id,
-                alias: darkMode.distinctId,
-              });
-            }
-            const darkModeProps = darkModeFeatureProperties(darkMode.variant);
+            const { alias, featureProperties } = signupDarkModeAnalytics({
+              userId: user.id,
+              assignment: readDarkModeExperimentAssignment(),
+            });
+            if (alias) aliasDistinctId(alias);
             captureProductEvent({
               distinctId: user.id,
               event: 'user_signed_up',
@@ -296,12 +292,12 @@ function createAuth() {
                 email: user.email,
                 name: user.name,
                 team_id: team.id,
-                ...darkModeProps,
+                ...featureProperties,
               },
               personProperties: {
                 email: user.email,
                 name: user.name,
-                ...darkModeProps,
+                ...featureProperties,
               },
             });
           },
