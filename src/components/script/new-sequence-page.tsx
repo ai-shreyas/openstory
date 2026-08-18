@@ -260,7 +260,7 @@ export function NewSequencePage({
               Tell your whole story
             </h1>
             <p className="text-center text-sm text-muted-foreground">
-              Pay the models. Read the code. Keep the film.
+              Pay the models. See the code. Keep the film.
             </p>
           </div>
         </div>
