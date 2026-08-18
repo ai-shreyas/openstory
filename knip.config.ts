@@ -44,8 +44,6 @@ export default {
     'content-collections',
     // Available transitively and imported directly (acceptable here):
     '@tiptap/extension-hard-break', // via @tiptap/starter-kit
-    'html-dom-parser', // via html-react-parser
-    'hast', // via the unified/rehype toolchain (types only)
     // Used in src/styles/global.css (@import / @plugin), not via a TS import.
     '@fontsource-variable/geist',
     '@tailwindcss/typography',

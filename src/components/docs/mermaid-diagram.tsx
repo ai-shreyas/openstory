@@ -1,5 +1,4 @@
 import { useEffect, useId, useState } from 'react';
-import parse from 'html-react-parser';
 
 type MermaidDiagramProps = {
   source: string;
@@ -83,8 +82,10 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ source }) => {
   }
 
   return (
-    <div className="my-4 flex justify-center overflow-x-auto">
-      {svg ? parse(svg) : null}
-    </div>
+    <div
+      className="my-4 flex justify-center overflow-x-auto"
+      // mermaid.render + securityLevel: 'strict' is the trusted SVG source.
+      dangerouslySetInnerHTML={svg ? { __html: svg } : undefined}
+    />
   );
 };
