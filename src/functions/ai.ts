@@ -8,6 +8,7 @@ import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import {
   callLLMStream,
   llmCostFromUsage,
+  PROMPT_REASONING,
   RECOMMENDED_MODELS,
 } from '@/lib/ai/llm-client';
 import { isValidAnalysisModelId } from '@/lib/ai/models.config';
@@ -309,6 +310,12 @@ const enhanceScriptInputSchema = z.object({
     .optional(),
   analysisModel: z.string().optional(),
   aspectRatio: aspectRatioSchema.optional(),
+  // Opt into the model's reasoning pass. OFF by default: enhancement streams
+  // to a user who is watching the text appear, and the thinking pass delays the
+  // first token by a lot. Worth it when the script needs real structural
+  // invention rather than a competent expansion — surfaced as a checkbox in the
+  // enhance options so the user makes that call per run.
+  thinking: z.boolean().optional(),
   elements: z
     .array(
       z.object({
@@ -421,10 +428,10 @@ export async function* streamScriptEnhancement(
     // recur.
     temperature: 0.7,
     ...(useWebSearch && { webSearch: true }),
-    // No reasoning pass: enhancement streams to the user while they wait, and
-    // the thinking pass added far more latency than the quality lift was worth.
-    // The other creative paths (scene split, frame prompts) still use
-    // PROMPT_REASONING — they run inside workflows where latency is hidden.
+    // Reasoning is opt-in per request (default off) — see `thinking` on the
+    // input schema. The workflow-side creative paths (scene split, frame
+    // prompts) still take it unconditionally: latency is hidden there.
+    ...(data.thinking && { reasoning: PROMPT_REASONING }),
     observationName: 'script-enhance',
     tags: ['script-enhance', model],
     userId: ctx.userId,

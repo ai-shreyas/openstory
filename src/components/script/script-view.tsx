@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { CardContent, CardFooter, CardHeader } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import {
   Popover,
@@ -38,6 +39,7 @@ import { useAutoScroll } from '@/hooks/use-auto-scroll';
 import { BILLING_BALANCE_KEY } from '@/hooks/use-billing-balance';
 import { BILLING_TRANSACTIONS_KEY } from '@/hooks/use-billing-balance-realtime';
 import { useBillingGate } from '@/hooks/use-billing-gate';
+import { useEnhanceThinking } from '@/hooks/use-enhance-thinking';
 import { useFalPricing } from '@/hooks/use-fal-pricing';
 import { useGenerationSettings } from '@/hooks/use-generation-settings';
 import { useComposedScript } from '@/hooks/use-scenes';
@@ -795,6 +797,8 @@ export const ScriptView: FC<{
 
   const [targetDuration, setTargetDuration] = useState(30);
   const [enhancePopoverOpen, setEnhancePopoverOpen] = useState(false);
+  const { thinking: enhanceThinking, setThinking: setEnhanceThinking } =
+    useEnhanceThinking();
 
   const [enhanceUI, setEnhanceUI] = useState({
     isEnhancing: false,
@@ -979,6 +983,7 @@ export const ScriptView: FC<{
       target_duration: targetDuration,
       script_length: scriptValue.length,
       aspect_ratio: aspectRatio,
+      thinking: enhanceThinking,
     });
     // Enhancing rewrites the text — it stops being an untouched sample.
     setSampleStyleId(null);
@@ -1005,6 +1010,7 @@ export const ScriptView: FC<{
           targetDuration,
           analysisModel: analysisModels[0],
           aspectRatio,
+          thinking: enhanceThinking,
           ...toEnhanceInputs({
             style: selectedStyle,
             elements: enhanceElements,
@@ -1433,6 +1439,23 @@ export const ScriptView: FC<{
                           </ToggleGroupItem>
                         ))}
                       </ToggleGroup>
+                      <label
+                        htmlFor="enhance-thinking"
+                        className="flex items-start gap-2 text-sm text-muted-foreground"
+                      >
+                        <Checkbox
+                          id="enhance-thinking"
+                          className="mt-0.5"
+                          checked={enhanceThinking}
+                          onCheckedChange={(checked) =>
+                            setEnhanceThinking(checked === true)
+                          }
+                        />
+                        <span className="max-w-56">
+                          Think first — slower, but plans the story before
+                          writing
+                        </span>
+                      </label>
                       <Button
                         type="button"
                         size="sm"
