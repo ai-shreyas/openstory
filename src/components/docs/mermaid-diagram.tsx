@@ -1,3 +1,4 @@
+import { isDocumentDark } from '@/lib/theme/dark-mode-experiment';
 import { useEffect, useId, useState } from 'react';
 
 type MermaidDiagramProps = {
@@ -38,9 +39,7 @@ async function ensureInitialized(theme: 'default' | 'dark') {
 }
 
 function getPreferredTheme(): 'default' | 'dark' {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'default';
+  return isDocumentDark() ? 'dark' : 'default';
 }
 
 const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
@@ -52,11 +51,9 @@ const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = (event: MediaQueryListEvent) => {
-      setTheme(event.matches ? 'dark' : 'default');
-    };
-    media.addEventListener('change', handler);
-    return () => media.removeEventListener('change', handler);
+    const sync = () => setTheme(isDocumentDark() ? 'dark' : 'default');
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
   }, []);
 
   useEffect(() => {

@@ -1,10 +1,22 @@
 import { getEnv } from '#env';
-import { getProductionDeploymentAppUrl } from '@/lib/utils/environment';
+import { DarkModeExperiment } from '@/components/observability/dark-mode-experiment';
+import {
+  getProductionDeploymentAppUrl,
+  isLocalRequestHost,
+  isPreviewDeployment,
+} from '@/lib/utils/environment';
 import { DocsReferrerTracker } from '@/components/docs/docs-referrer-tracker';
 import { DefaultNotFound } from '@/components/error/default-not-found';
 import { Providers } from '@/components/providers';
 import { Button } from '@/components/ui/button';
 import { SITE_CONFIG } from '@/lib/marketing/constants';
+import {
+  DARK_MODE_BOOT_SCRIPT,
+  DARK_MODE_VARIANT_COOKIE,
+  parseDarkModeVariant,
+  shouldEvaluateDarkModeExperimentFromHost,
+  shouldForceDark,
+} from '@/lib/theme/dark-mode-experiment';
 import appCss from '@/styles/global.css?url';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ErrorComponentProps } from '@tanstack/react-router';
@@ -18,7 +30,7 @@ import {
   useRouter,
 } from '@tanstack/react-router';
 import { createIsomorphicFn } from '@tanstack/react-start';
-import { getRequest } from '@tanstack/react-start/server';
+import { getCookie, getRequest } from '@tanstack/react-start/server';
 
 type RouterContext = {
   queryClient: QueryClient;
@@ -30,6 +42,25 @@ const getIsPreviewFn = createIsomorphicFn()
     return appUrl.includes('pr-');
   })
   .client(() => false);
+
+const getForceDarkFromCookieFn = createIsomorphicFn()
+  .server(() =>
+    shouldForceDark(parseDarkModeVariant(getCookie(DARK_MODE_VARIANT_COOKIE)))
+  )
+  .client(
+    () =>
+      typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('dark')
+  );
+
+const getEvaluateDarkModeExperimentFn = createIsomorphicFn()
+  .server(() => {
+    const request = getRequest();
+    return !isLocalRequestHost(request) && !isPreviewDeployment(request);
+  })
+  .client(() =>
+    shouldEvaluateDarkModeExperimentFromHost(window.location.hostname)
+  );
 
 const getCanonicalOriginFn = createIsomorphicFn().server(() => {
   const request = getRequest();
@@ -153,13 +184,21 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 function RootLayout() {
   const { queryClient } = Route.useRouteContext();
+  const forceDark = getForceDarkFromCookieFn();
+  const evaluateDarkModeExperiment = getEvaluateDarkModeExperimentFn();
   return (
-    <html lang="en">
+    <html
+      lang="en"
+      className={forceDark ? 'dark' : undefined}
+      suppressHydrationWarning
+    >
       <head>
+        <script dangerouslySetInnerHTML={{ __html: DARK_MODE_BOOT_SCRIPT }} />
         <HeadContent />
       </head>
       <body>
         <Providers queryClient={queryClient}>
+          <DarkModeExperiment evaluate={evaluateDarkModeExperiment} />
           <DocsReferrerTracker />
           <Outlet />
         </Providers>

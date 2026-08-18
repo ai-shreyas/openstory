@@ -75,3 +75,32 @@ export function captureProductEvent(args: CaptureProductEventArgs): void {
     });
   }
 }
+
+export type AliasDistinctIdArgs = {
+  /** Canonical id after signup (`user.id`). */
+  distinctId: string;
+  /** Anonymous device id the experiment was assigned on. */
+  alias: string;
+};
+
+/**
+ * Link an anonymous PostHog distinct id to the signed-up user so experiment
+ * exposure (`$feature_flag_called` on the device id) and `user_signed_up`
+ * (on `user.id`) land on the same person. Never throws.
+ */
+export function aliasDistinctId(args: AliasDistinctIdArgs): void {
+  try {
+    const posthog = getPostHogClient();
+    if (!posthog) return;
+    posthog.alias({
+      distinctId: args.distinctId,
+      alias: args.alias,
+    });
+  } catch (err) {
+    logger.error('aliasDistinctId failed', {
+      distinctId: args.distinctId,
+      alias: args.alias,
+      err,
+    });
+  }
+}

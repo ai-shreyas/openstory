@@ -41,9 +41,9 @@ export default defineConfig({
       ? 'on-first-retry'
       : { mode: 'on', size: { width: 1920, height: 1080 } },
     // Local recordings render the app in dark mode (matches the design's
-    // primary palette). CI keeps the default light scheme. The app uses
-    // `@media (prefers-color-scheme: dark)` so this toggles natively
-    // without injecting a class.
+    // primary palette). CI keeps the default light scheme. Control still
+    // follows `@media (prefers-color-scheme: dark)`; e2e is localhost so
+    // the dark-mode-default experiment is not assigned.
     colorScheme: process.env.CI ? 'light' : 'dark',
   },
 
