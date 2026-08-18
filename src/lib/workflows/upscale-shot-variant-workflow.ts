@@ -4,9 +4,10 @@
  * The picked tile is cropped (a Cloudflare Image Resizing URL) by
  * `selectShotVariantFn`, then this workflow upscales it and records the result
  * as a `kind:'framing'` `frame_variants` version (`sourceVariantId` = the grid
- * sheet it came from) and SELECTS it — a pointer repoint that mirrors the new
- * still onto the frame, never an overwrite. Downstream video (still on `shots`
- * until Phase 3) is reset because the anchor still changed.
+ * sheet it came from) and promotes it to the frame's still — a pointer repoint
+ * that mirrors the new still onto the frame, never an overwrite. The promote
+ * rides the auto-promote claim (#1070/#1129), so a still the user picked from
+ * history mid-upscale wins and the upscale lands in history instead.
  */
 
 import { IMAGE_MODELS } from '@/lib/ai/models';
@@ -20,8 +21,8 @@ import {
   aspectRatioToImageSize,
   DEFAULT_IMAGE_SIZE,
 } from '@/lib/constants/aspect-ratios';
+import type { ScopedDb } from '@/lib/db/scoped';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
-import type { NewFrameVariant, NewShot } from '@/lib/db/schema';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
 import { recordProvenance } from '@/lib/compliance/provenance';
 import { uploadImageToStorage } from '@/lib/image/image-storage';
@@ -65,50 +66,65 @@ OUTPUT
 - Resolution: upscale to animation-ready quality.
 - No text overlays, borders, watermarks, or new graphics added by the model.`;
 
-/** The frame/variant/shot writes `persistUpscaleSelection` needs — a narrow
- * slice of {@link ScopedDb} so unit tests can inject a small spy. */
+/**
+ * The frame/variant writes `persistUpscaleSelection` needs — a narrow slice of
+ * {@link ScopedDb} so unit tests can inject a small spy. `Pick`ed off the real
+ * thing rather than hand-written, per scoped-workflow.ts: the signatures stay
+ * in lockstep with the query module instead of restating it.
+ *
+ * What this still does NOT catch is a change in RETURN semantics — e.g.
+ * `selectIfPendingPromoteIs` returning the current selection instead of `null`
+ * on a miss would keep compiling and silently turn every claim miss into a
+ * wrong-thumbnail promote. The `…If` naming convention is the only guard there.
+ */
 export type PersistUpscaleScopedDb = {
-  frameVariants: {
-    update: (
-      versionId: string,
-      data: Partial<NewFrameVariant>
-    ) => Promise<{ id: string }>;
-    select: (
-      frameId: string,
-      versionId: string,
-      opts: { actorId: string | null }
-    ) => Promise<{ id: string }>;
-  };
-  liveRead: {
-    frames: {
-      // Existence only — the frame is the trigger's, never re-resolved here.
-      getById: (frameId: string) => Promise<{ id: string } | null>;
-    };
-  };
-  shots: {
-    update: (
-      shotId: string,
-      data: Partial<NewShot>,
-      options?: { throwOnMissing?: boolean }
-    ) => Promise<{ id: string } | undefined>;
-  };
+  frameVariants: Pick<
+    ScopedDb['frameVariants'],
+    'update' | 'selectIfPendingPromoteIs'
+  >;
 };
 
 type UpscaleImageProgress = {
   shotId: string;
   status: 'completed';
-  thumbnailUrl: string;
+  thumbnailUrl?: string;
 };
 
 /**
- * Complete the in-flight upscaled framing version and REPOINT the frame's
- * primary still at it (pointer + mirror, via `frameVariants.select`). Extracted
- * from the workflow's `select-upscaled-version` step so the repoint outcome is
- * unit-testable without the fal/storage/credit steps. The frame is the trigger's
- * (frame id ≠ shot id, #989) — resolving the anchor here would let a mid-run
- * anchor change move the still onto a different frame than the run claimed. It
- * is checked for existence only; `{ selected: false }` (a no-op past the version
- * completion) means it was deleted mid-flight.
+ * Two-outcome result of the promote, mirroring `PersistMotionOutcome`
+ * (motion-workflow-persist.ts). The "a promoted upscale always has a still"
+ * invariant lives HERE rather than on the emit payload: the wire schema
+ * (`image:progress`) has to keep `thumbnailUrl` optional because the claim-miss
+ * emit deliberately omits it, so the outcome type is the only place the pairing
+ * is actually true.
+ */
+export type UpscalePromoteOutcome =
+  | { promoted: true; thumbnailUrl: string }
+  | { promoted: false };
+
+/**
+ * Complete the in-flight upscaled framing version and promote it to the frame's
+ * primary still THROUGH the auto-promote claim minted at kickoff (#1129) — the
+ * same door every other primary-still writer uses (#1070). A bare
+ * `frameVariants.select` here would clobber a still the user picked from
+ * history while the upscale ran (minutes); the claim encodes *later intent
+ * wins*, and that manual pick clears it.
+ *
+ * A claim miss — the user selected something else, or a newer kickoff took the
+ * claim — finalizes the upscale into history instead. Nothing is lost: the row
+ * stays selectable from the picker.
+ *
+ * A frame deleted mid-flight is NOT this path: `frames.id` cascades to
+ * `frame_variants`, so the version row is gone too and the `update` above
+ * throws before the claim is ever consulted. That surfaces as a run failure,
+ * which is what the old explicit existence check here could never actually
+ * catch — the same `update` threw first.
+ *
+ * Extracted from the workflow's `select-upscaled-version` step so the promote
+ * outcome is unit-testable without the fal/storage/credit steps. The frame is
+ * the trigger's (frame id ≠ shot id, #989) — resolving the anchor here would
+ * let a mid-run anchor change move the still onto a different frame than the
+ * run claimed.
  */
 export async function persistUpscaleSelection(params: {
   scopedDb: PersistUpscaleScopedDb;
@@ -120,7 +136,7 @@ export async function persistUpscaleSelection(params: {
   actorId: string;
   generatedAt: Date;
   emit: (payload: UpscaleImageProgress) => Promise<void>;
-}): Promise<{ selected: boolean }> {
+}): Promise<UpscalePromoteOutcome> {
   const {
     scopedDb,
     shotId,
@@ -141,18 +157,24 @@ export async function persistUpscaleSelection(params: {
     error: null,
   });
 
-  const frame = await scopedDb.liveRead.frames.getById(frameId);
-  if (!frame) {
+  const promoted = await scopedDb.frameVariants.selectIfPendingPromoteIs(
+    frameId,
+    versionId,
+    { actorId }
+  );
+
+  if (!promoted) {
     logger.info(
-      `[UpscaleShotVariantWorkflow] Frame ${frameId} vanished, skipping select`
+      `[UpscaleShotVariantWorkflow] Promote claim on frame ${frameId} moved; upscale ${versionId} stays in history`
     );
-    return { selected: false };
+    // Settle the spinner without a thumbnail: the client refetches and shows
+    // whatever the frame actually points at now, not this unselected still.
+    await emit({ shotId, status: 'completed' });
+    return { promoted: false };
   }
 
-  await scopedDb.frameVariants.select(frameId, versionId, { actorId });
-
   await emit({ shotId, status: 'completed', thumbnailUrl: url });
-  return { selected: true };
+  return { promoted: true, thumbnailUrl: url };
 }
 
 export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<UpscaleShotVariantWorkflowInput> {
@@ -209,6 +231,11 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         status: 'generating',
         workflowRunId,
       });
+
+      // Claim auto-promote for this upscale (#1129); last kickoff wins (#1070).
+      // Without the claim the completion below is an unconditional repoint that
+      // overwrites a still the user picked from history while the upscale ran.
+      await scopedDb.frames.setPendingPromoteVersionId(frame.id, version.id);
 
       // The cropped tile rides through the builder as the primary reference so
       // the prompt's Image numbering matches the image_urls array — prepending
@@ -325,8 +352,8 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
     });
 
     await step.do('select-upscaled-version', async () => {
-      // Completes the version + repoints the frame's still + resets video.
-      const { selected } = await persistUpscaleSelection({
+      // Completes the version, then promotes it through this run's claim.
+      const outcome = await persistUpscaleSelection({
         scopedDb,
         shotId,
         frameId: input.frameId,
@@ -342,9 +369,9 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
           ),
       });
 
-      if (selected) {
+      if (outcome.promoted) {
         logger.info(
-          `[UpscaleShotVariantWorkflow] Upscale completed + selected for shot ${shotId}`
+          `[UpscaleShotVariantWorkflow] Upscale completed + selected for shot ${shotId}: ${outcome.thumbnailUrl}`
         );
       }
     });
@@ -377,9 +404,26 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
       event.instanceId,
       error
     );
+
+    // Drop the auto-promote claim, but only if THIS run still owns it (#1129) —
+    // a newer kickoff's claim must survive an older upscale's failure.
+    const frame = await scopedDb.liveRead.frames.getById(input.frameId);
+    if (frame?.pendingPromoteVersionId) {
+      const pending = await scopedDb.claims.frameVariants.getById(
+        frame.pendingPromoteVersionId
+      );
+      if (pending?.workflowRunId === event.instanceId) {
+        await scopedDb.frames.clearPendingPromoteVersionIdIf(
+          frame.id,
+          pending.id
+        );
+      }
+    }
+
     if (input.sequenceId) {
-      // The upscale just became the frame's selection; read the still back
-      // off that version rather than a frame column (#1067).
+      // A failed upscale never promoted, so the frame still points at whatever
+      // it did before; read that still off the selected version rather than a
+      // frame column (#1067).
       const thumbnailUrl = await getAnchorImageUrl(
         scopedDb.liveRead,
         input.shotId

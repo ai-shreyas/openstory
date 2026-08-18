@@ -462,9 +462,14 @@ const ALLOWED_LIVE_READS: Record<string, SanctionedRead[]> = {
   ],
   'upscale-shot-variant-workflow.ts': [
     {
+      read: 'frameVariants.getById',
+      bucket: 'CLAIM-BY-ID',
+      why: "On the failure path only: the frame's pending-promote claim row, read by the id the frame holds, to check this run owns it before clearing (#1129).",
+    },
+    {
       read: 'frames.getById',
       bucket: 'EXISTENCE-GUARD',
-      why: "The trigger's frame, checked but never re-resolved, so the render step and the select step write to the same one.",
+      why: "The trigger's frame, checked but never re-resolved, so the render step and the promote step write to the same one. On the failure path it also yields the pending-promote claim id.",
     },
   ],
   'wait-for-sheets.ts': [
