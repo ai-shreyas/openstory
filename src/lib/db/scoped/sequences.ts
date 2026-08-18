@@ -3,6 +3,7 @@
  * Team-scoped sequence CRUD and per-sequence update methods.
  */
 
+import { DEFAULT_ANALYSIS_MODEL } from '@/lib/ai/models.config';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
 import {
   type AspectRatio,
@@ -261,7 +262,7 @@ export function createSequencesMethods(
       script?: string | null;
       styleId: string;
       aspectRatio?: AspectRatio;
-      analysisModel: string;
+      analysisModel?: string;
       imageModel?: string;
       videoModel?: string;
       musicModel?: string;
@@ -278,11 +279,12 @@ export function createSequencesMethods(
         script: params.script,
         styleId: params.styleId,
         aspectRatio: params.aspectRatio ?? DEFAULT_ASPECT_RATIO,
-        analysisModel: params.analysisModel,
-        // The sequences SQL column defaults are stale literals ('nano_banana_2'
-        // for image, 'kling_v3_pro' for video — see schema/sequences.ts) that
-        // can't be changed without a D1 table rebuild, so resolve the app's real
-        // default here instead of relying on the column default.
+        // The sequences SQL column defaults are stale literals
+        // ('anthropic/claude-haiku-4.5' for analysis, 'nano_banana_2' for
+        // image, 'kling_v3_pro' for video — see schema/sequences.ts) that
+        // can't be changed without a D1 table rebuild, so resolve the app's
+        // real defaults here instead of relying on the column default.
+        analysisModel: params.analysisModel ?? DEFAULT_ANALYSIS_MODEL,
         imageModel: params.imageModel ?? DEFAULT_IMAGE_MODEL,
         videoModel: params.videoModel ?? DEFAULT_VIDEO_MODEL,
         musicModel: params.musicModel,

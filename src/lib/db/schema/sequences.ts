@@ -78,7 +78,13 @@ export const sequences = snakeCase.table(
       .default(DEFAULT_ASPECT_RATIO)
       .notNull(),
 
-    // TB-20260804: DB-Audit: I don't love that there's a default here and that it's a specific model identifier
+    // SQL default pinned to the literal 'anthropic/claude-haiku-4.5' to match
+    // every deployed DB's column default. DEFAULT_ANALYSIS_MODEL (see
+    // models.config.ts) must NOT be written here: SQLite can't ALTER a
+    // column default without a full table rebuild, which CASCADE-deletes
+    // child rows on D1 (#612). The scoped create (db/scoped/sequences.ts)
+    // substitutes DEFAULT_ANALYSIS_MODEL for an omitted analysisModel,
+    // mirroring imageModel / videoModel below.
     analysisModel: text({ length: 100 })
       .default('anthropic/claude-haiku-4.5')
       .notNull(),
