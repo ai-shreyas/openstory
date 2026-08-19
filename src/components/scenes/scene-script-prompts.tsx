@@ -38,6 +38,7 @@ import {
 } from '@/components/scenes/segment-video-panel';
 import type { SequenceSegment } from '@/lib/scenes/scene-segments';
 import type { UpdateStaleDepth } from '@/lib/shots/update-stale-depth';
+import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import {
   type ShotStaleness,
   markArtifactFresh,
@@ -732,15 +733,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     async (text: string | undefined, tabName: string) => {
       if (!text) return;
 
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopiedTab(tabName);
-        setTimeout(() => setCopiedTab(null), 2000);
-      } catch (error) {
+      if (!(await copyTextToClipboard(text))) {
         toast.error('Failed to copy', {
-          description: errorMessage(error),
+          id: 'copy-prompt-failed',
+          description:
+            'Your browser blocked clipboard access. Select the prompt text to copy it manually.',
         });
+        return;
       }
+      setCopiedTab(tabName);
+      setTimeout(() => setCopiedTab(null), 2000);
     },
     []
   );

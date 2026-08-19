@@ -17,6 +17,7 @@ import {
   getAspectRatioClassName,
 } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
+import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import type { ShotView } from '@/lib/shots/shot-view';
 import { AppImage } from '@/components/ui/app-image';
 import {
@@ -131,7 +132,10 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
       // worker's public /r2 route serves it (redirecting to the CDN in prod).
       const absoluteUrl = new URL(currentShot.image.url, window.location.origin)
         .href;
-      await navigator.clipboard.writeText(absoluteUrl);
+      if (!(await copyTextToClipboard(absoluteUrl))) {
+        toast.error('Failed to copy URL');
+        return;
+      }
       toast.success('Start frame URL copied');
     } catch {
       toast.error('Failed to copy URL');
@@ -143,7 +147,10 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
     try {
       const absoluteUrl = new URL(currentShot.video.url, window.location.origin)
         .href;
-      await navigator.clipboard.writeText(absoluteUrl);
+      if (!(await copyTextToClipboard(absoluteUrl))) {
+        toast.error('Failed to copy URL');
+        return;
+      }
       toast.success('Segment URL copied');
     } catch {
       toast.error('Failed to copy URL');

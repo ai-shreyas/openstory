@@ -23,6 +23,7 @@ import {
 } from '@/lib/scenes/scene-selection';
 import type { ShotView } from '@/lib/shots/shot-view';
 import type { Sequence } from '@/types/database';
+import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import { Download, Film, Link, Loader2, Share2 } from 'lucide-react';
 import { usePostHog } from '@posthog/react';
 import { useCallback, useMemo } from 'react';
@@ -94,7 +95,11 @@ const TheatreShareOverlay: React.FC<{ sequence: Sequence }> = ({
     }
     try {
       const absoluteUrl = new URL(shareUrl, window.location.origin).href;
-      await navigator.clipboard.writeText(absoluteUrl);
+      if (!(await copyTextToClipboard(absoluteUrl))) {
+        toast.error('Failed to copy URL');
+        posthog.captureException(new Error('Clipboard write blocked'));
+        return;
+      }
       toast.success('Video URL copied');
       posthog.capture('video_url_copied', { sequence_id: sequence.id });
     } catch (err) {

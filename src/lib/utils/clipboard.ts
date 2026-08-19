@@ -11,7 +11,8 @@
  * retry or a follow-up prompt.
  *
  * Returns whether the text made it to the clipboard, so callers can show a
- * failure state instead of a silent no-op.
+ * failure state instead of a silent no-op. Never throws — a copy button
+ * should not be able to take a handler down with it.
  */
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   // lib.dom types `navigator.clipboard` as always present; it is undefined
@@ -57,13 +58,13 @@ function copyViaExecCommand(text: string): boolean {
   textarea.style.border = 'none';
   textarea.style.opacity = '0';
   textarea.style.pointerEvents = 'none';
-  document.body.appendChild(textarea);
 
   const selection = document.getSelection();
   const previousRange =
     selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
 
   try {
+    document.body.appendChild(textarea);
     textarea.focus({ preventScroll: true });
     textarea.select();
     textarea.setSelectionRange(0, text.length);
