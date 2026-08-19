@@ -13,92 +13,34 @@ updates:
       prefix: ci
 
   # Root app (bun.lock). Weekly version updates keep the stack current between
-  # intentional upgrade PRs. Groups reduce PR noise: one PR per ecosystem area.
+  # intentional upgrade PRs.
+  #
+  # Grouping is deliberately coarse — three PRs a week, not a dozen. Per-library
+  # groups (tanstack, radix, storybook, …) produced ~10 PRs every Monday, each
+  # one a full CI run and a separate review. Instead: routine minor/patch bumps
+  # ride together, split only by production vs development so a runtime-affecting
+  # PR is obvious at a glance, and majors are quarantined in their own PR so one
+  # breaking bump can never block the routine ones.
   - package-ecosystem: bun
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     commit-message:
       prefix: chore
       include: scope
     groups:
-      tanstack:
-        patterns:
-          - '@tanstack/*'
-      better-auth:
-        patterns:
-          - 'better-auth'
-          - '@better-auth/*'
-      storybook:
-        patterns:
-          - 'storybook'
-          - '@storybook/*'
-          - 'msw-storybook-addon'
-      tiptap:
-        patterns:
-          - '@tiptap/*'
-          - 'tiptap-markdown'
-      radix:
-        patterns:
-          - '@radix-ui/*'
-          - 'radix-ui'
-      opentelemetry:
-        patterns:
-          - '@opentelemetry/*'
-      posthog:
-        patterns:
-          - 'posthog-*'
-          - '@posthog/*'
-      lint-format:
-        patterns:
-          - 'oxlint'
-          - 'oxfmt'
-          - 'oxlint-tsgolint'
-          - 'knip'
-          - 'lefthook'
-      cloudflare:
-        patterns:
-          - 'wrangler'
-          - '@cloudflare/*'
-      testing:
-        patterns:
-          - 'vitest'
-          - 'playwright'
-          - '@testing-library/*'
-          - 'msw'
-      production-deps:
+      production:
         dependency-type: production
-        exclude-patterns:
-          - '@tanstack/*'
-          - 'better-auth'
-          - '@better-auth/*'
-          - '@tiptap/*'
-          - 'tiptap-markdown'
-          - '@radix-ui/*'
-          - 'radix-ui'
-          - '@opentelemetry/*'
-          - 'posthog-*'
-          - '@posthog/*'
-      dev-deps:
+        update-types: ['minor', 'patch']
+      development:
         dependency-type: development
-        exclude-patterns:
-          - 'storybook'
-          - '@storybook/*'
-          - '@chromatic-com/*'
-          - 'msw-storybook-addon'
-          - 'oxlint'
-          - 'oxfmt'
-          - 'oxlint-tsgolint'
-          - 'knip'
-          - 'lefthook'
-          - 'wrangler'
-          - '@cloudflare/*'
-          - 'vitest'
-          - 'playwright'
-          - '@testing-library/*'
-          - 'msw'
-          - '@tanstack/*'
+        update-types: ['minor', 'patch']
+      # Majors land together. Review or close as a batch — do the risky ones by
+      # hand rather than letting each open its own PR.
+      major-updates:
+        patterns: ['*']
+        update-types: ['major']
     ignore:
       # Engines pin Node 24; types for Node 26 would lie about the runtime.
       - dependency-name: '@types/node'
@@ -117,7 +59,7 @@ updates:
     directory: /containers/video-export
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     commit-message:
       prefix: chore
       include: scope
