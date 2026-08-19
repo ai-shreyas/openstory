@@ -256,18 +256,15 @@ export const RECOMMENDED_MODELS = {
 } as const;
 
 /**
- * Shared reasoning config for the creative generation paths that run inside
- * workflows (scene split, frame prompts). `medium` effort balances the
- * creativity lift against the added latency — a forward pass converges on the
- * modal/obvious answer, and the planning step is what escapes it (see #875 and
- * the eval notes in #870).
+ * Shared reasoning config for the creative generation paths (script enhance +
+ * prompt generation). `medium` effort balances the creativity lift against the
+ * added latency — a forward pass converges on the modal/obvious answer, and the
+ * planning step is what escapes it (see #875 and the eval notes in #870).
  *
  * NOT applied to utility calls (prompt shortening, duration estimation) where a
- * forward pass is already correct and reasoning would only add latency, and NOT
- * applied to script enhancement — that one streams to a waiting user, where the
- * thinking pass cost more in latency than it returned in quality. Enabled in
- * E2E — unlike live web search it's deterministic once recorded, so aimock
- * records + replays the reasoning request/response like any other call.
+ * forward pass is already correct and reasoning would only add latency. Enabled
+ * in E2E too — unlike live web search it's deterministic once recorded, so
+ * aimock records + replays the reasoning request/response like any other call.
  */
 export const PROMPT_REASONING = {
   enabled: true,

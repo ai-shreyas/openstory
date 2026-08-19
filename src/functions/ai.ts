@@ -310,13 +310,6 @@ const enhanceScriptInputSchema = z.object({
     .optional(),
   analysisModel: z.string().optional(),
   aspectRatio: aspectRatioSchema.optional(),
-  // Run the model's reasoning pass before it writes. The dashboard sends this
-  // on by default (see use-enhance-thinking) — the planning step is what
-  // escapes a merely competent expansion — and offers a checkbox to drop it
-  // when the user would rather have text on screen sooner. Unset (the public
-  // API) means off: an API caller has no stream to watch, but also no way to
-  // opt in yet.
-  thinking: z.boolean().optional(),
   elements: z
     .array(
       z.object({
@@ -331,9 +324,9 @@ const enhanceScriptInputSchema = z.object({
 export type EnhanceScriptInput = z.infer<typeof enhanceScriptInputSchema>;
 
 /**
- * One shot of an enhancement stream. Script text arrives as `delta`; when the
- * model is running its thinking pass (`thinking: true`), its reasoning arrives
- * as `reasoning` on chunks whose `delta` is `''`.
+ * One shot of an enhancement stream. Script text arrives as `delta`; the
+ * model's reasoning, while its thinking pass runs, arrives as `reasoning` on
+ * chunks whose `delta` is `''`.
  *
  * The two channels are kept in one stream so the UI can interleave them in
  * order, and split by field rather than by a tag so a consumer that only reads
@@ -441,10 +434,11 @@ export async function* streamScriptEnhancement(
     // recur.
     temperature: 0.7,
     ...(useWebSearch && { webSearch: true }),
-    // Reasoning is opt-in per request (default off) — see `thinking` on the
-    // input schema. The workflow-side creative paths (scene split, frame
-    // prompts) still take it unconditionally: latency is hidden there.
-    ...(data.thinking && { reasoning: PROMPT_REASONING }),
+    // Always on. It is what escapes a merely competent expansion (#870/#875),
+    // and its cost in silence is paid off by streaming the reasoning to the UI
+    // rather than by skipping it. Note most models we enhance with reason
+    // whether or not this is set — see the table in #1206.
+    reasoning: PROMPT_REASONING,
     observationName: 'script-enhance',
     tags: ['script-enhance', model],
     userId: ctx.userId,
