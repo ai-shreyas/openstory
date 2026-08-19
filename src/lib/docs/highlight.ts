@@ -4,9 +4,8 @@ import { plaintext } from '@tanstack/highlight/languages/plaintext';
 import { shell } from '@tanstack/highlight/languages/shell';
 import { ts } from '@tanstack/highlight/languages/ts';
 import { createTanStackMarkdownHighlighter } from '@tanstack/highlight/markdown';
-import { createThemeCss, createThemeRule } from '@tanstack/highlight/theme';
+import { createThemeCss } from '@tanstack/highlight/theme';
 import { githubDarkTheme } from '@tanstack/highlight/themes/github-dark';
-import { githubLightTheme } from '@tanstack/highlight/themes/github-light';
 import type { CodeHighlighter } from '@tanstack/markdown';
 
 /**
@@ -26,19 +25,12 @@ const docsHighlighter = createHighlighter({
 export const highlightDocsCode: CodeHighlighter =
   createTanStackMarkdownHighlighter(docsHighlighter);
 
-// Site dark mode is `@media (prefers-color-scheme: dark)`, not a `.dark`
-// class. Pair-mode `darkSelector` is a selector, so wrap the dark rule in
-// the media query ourselves.
 export const docsHighlightCss = `${createThemeCss({
-  light: githubLightTheme,
+  light: githubDarkTheme,
   lightSelector: '.markdown-renderer',
   codeBlockSelector: '.markdown-renderer pre.tm-code',
   lineNumbersSelector: '.markdown-renderer .tm-code--line-numbers',
 })}
-
-@media (prefers-color-scheme: dark) {
-${createThemeRule('.markdown-renderer', githubDarkTheme)}
-}
 
 .markdown-renderer .heading-anchor {
   margin-inline-start: 0.4em;

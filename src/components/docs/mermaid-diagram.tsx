@@ -37,27 +37,11 @@ async function ensureInitialized(theme: 'default' | 'dark') {
   return mermaid;
 }
 
-function getPreferredTheme(): 'default' | 'dark' {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'default';
-}
-
 const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
   const reactId = useId();
   const diagramId = `mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [theme, setTheme] = useState<'default' | 'dark'>(getPreferredTheme);
-
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = (event: MediaQueryListEvent) => {
-      setTheme(event.matches ? 'dark' : 'default');
-    };
-    media.addEventListener('change', handler);
-    return () => media.removeEventListener('change', handler);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +49,7 @@ const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
 
     void (async () => {
       try {
-        const mermaid = await ensureInitialized(theme);
+        const mermaid = await ensureInitialized('dark');
         const { svg: rendered } = await mermaid.render(diagramId, source);
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- mutated by cleanup
         if (!cancelled) setSvg(rendered);
@@ -80,7 +64,7 @@ const MermaidDiagramClient: React.FC<MermaidDiagramProps> = ({ source }) => {
     return () => {
       cancelled = true;
     };
-  }, [source, theme, diagramId]);
+  }, [source, diagramId]);
 
   if (error) {
     return (
