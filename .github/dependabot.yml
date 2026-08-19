@@ -45,9 +45,16 @@ updates:
       # Engines pin Node 24; types for Node 26 would lie about the runtime.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
-      # Pinned by @tanstack/ai-openrouter until that package adopts 1.x.
+      # Hard-pinned to the exact version @tanstack/ai-openrouter depends on
+      # (0.13.20). Any other version installs a second nested copy of the SDK,
+      # and `createAdapter` then fails to typecheck: the two copies declare
+      # separate private fields on HTTPClient. Move this only in lockstep with
+      # an @tanstack/ai-openrouter bump.
       - dependency-name: '@openrouter/sdk'
-        versions: ['>=1.0.0']
+      # 0.17.x peers on @tanstack/ai ^0.45.0 (we hold 0.44.1) and ships
+      # x-ai/grok-4.6 in its generated catalog, which the CATALOG_LAG_MODELS
+      # guard requires pruning in the same PR. Not a routine bump — see #1178.
+      - dependency-name: '@tanstack/ai-openrouter'
       # Stay on drizzle 1.0 RC line; do not silently roll back to 0.x.
       - dependency-name: 'drizzle-orm'
         versions: ['<1.0.0-0']
