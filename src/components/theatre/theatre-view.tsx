@@ -21,6 +21,7 @@ import { useShotsBySequence } from '@/hooks/use-shots';
 import { useSetSequenceMusic } from '@/hooks/use-sequences';
 import type { ExportProgress } from '@/lib/sequence-player/export';
 import type { Sequence } from '@/types/database';
+import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import { Download, Film, Link, Loader2, Share2 } from 'lucide-react';
 import { usePostHog } from '@posthog/react';
 import { useCallback, useMemo } from 'react';
@@ -56,7 +57,11 @@ export const TheatreView: React.FC<TheatreViewProps> = ({ sequence }) => {
       // current origin so the copied link is usable when pasted elsewhere. The
       // worker's public /r2 route serves it (redirecting to the CDN in prod).
       const absoluteUrl = new URL(shareUrl, window.location.origin).href;
-      await navigator.clipboard.writeText(absoluteUrl);
+      if (!(await copyTextToClipboard(absoluteUrl))) {
+        toast.error('Failed to copy URL');
+        posthog.captureException(new Error('Clipboard write blocked'));
+        return;
+      }
       toast.success('Video URL copied');
       posthog.capture('video_url_copied', { sequence_id: sequence.id });
     } catch (err) {
