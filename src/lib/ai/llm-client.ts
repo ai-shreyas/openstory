@@ -135,7 +135,19 @@ export function llmCostFromUsage(
 }
 
 export type StreamChunk<T = never> =
-  | { done: false; delta: string; accumulated: string }
+  | {
+      done: false;
+      delta: string;
+      accumulated: string;
+      /**
+       * Reasoning ("thinking") text, when the model is running a reasoning pass
+       * and the caller wants to show it. Scratch work, NOT part of the answer:
+       * a reasoning chunk always carries `delta: ''` and leaves `accumulated`
+       * untouched, so callers that only ever append `delta` (every caller but
+       * the enhance UI) are unaffected.
+       */
+      reasoning?: string;
+    }
   | {
       done: true;
       delta: '';
@@ -762,6 +774,18 @@ export async function* callLLMStream<T>(
       if (event.type === 'TEXT_MESSAGE_CONTENT') {
         accumulated += event.delta;
         yield { delta: event.delta, accumulated, done: false };
+        continue;
+      }
+      if (
+        event.type === 'REASONING_MESSAGE_CONTENT' &&
+        typeof event.delta === 'string'
+      ) {
+        // Forwarded so a streaming UI can show the model thinking instead of a
+        // dead editor (the reasoning pass can run for many seconds before the
+        // first answer token). Empty `delta` keeps it out of the answer.
+        // Deliberately plain-text-path only: the structured-output paths above
+        // feed workflows with nothing watching, so they keep dropping it.
+        yield { delta: '', accumulated, reasoning: event.delta, done: false };
         continue;
       }
       throwIfRunError(event);

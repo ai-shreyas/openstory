@@ -710,9 +710,9 @@ describe('llm-client', () => {
     });
 
     describe('reasoning', () => {
-      it('ignores REASONING_MESSAGE_CONTENT events (reasoning is not surfaced)', async () => {
-        // Reasoning is enabled for quality, but its tokens are scratch work —
-        // never accumulated into the answer or yielded to the caller.
+      it('surfaces REASONING_MESSAGE_CONTENT without letting it reach the answer', async () => {
+        // Reasoning tokens are scratch work — forwarded on their own channel so
+        // a streaming UI can show them, never accumulated into the answer.
         mockChat.mockReturnValue(
           (async function* () {
             yield { type: 'REASONING_MESSAGE_CONTENT', delta: 'let me think' };
@@ -723,6 +723,7 @@ describe('llm-client', () => {
         );
 
         const answer: string[] = [];
+        const thinking: string[] = [];
         let finalAccumulated = '';
         for await (const chunk of callLLMStream({
           model: 'anthropic/claude-sonnet-5',
@@ -730,11 +731,42 @@ describe('llm-client', () => {
           reasoning: { enabled: true, effort: 'medium' },
         })) {
           if (chunk.delta) answer.push(chunk.delta);
+          if (!chunk.done && chunk.reasoning) thinking.push(chunk.reasoning);
           finalAccumulated = chunk.accumulated;
         }
 
         expect(answer).toEqual(['Hello', ' World']);
+        expect(thinking).toEqual(['let me think', ' more']);
         expect(finalAccumulated).toBe('Hello World');
+      });
+
+      it('keeps reasoning out of `accumulated` as it streams', async () => {
+        // The guarantee the enhance UI leans on: a reasoning chunk must not move
+        // `accumulated`, or thinking would leak into the script mid-stream.
+        mockChat.mockReturnValue(
+          (async function* () {
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'INT. ' };
+            yield { type: 'REASONING_MESSAGE_CONTENT', delta: 'hmm' };
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'DOCK' };
+          })()
+        );
+
+        const seen: { delta: string; accumulated: string }[] = [];
+        for await (const chunk of callLLMStream({
+          model: 'anthropic/claude-sonnet-5',
+          messages: [{ role: 'user', content: 'test' }],
+          reasoning: { enabled: true, effort: 'medium' },
+        })) {
+          if (!chunk.done) {
+            seen.push({ delta: chunk.delta, accumulated: chunk.accumulated });
+          }
+        }
+
+        expect(seen).toEqual([
+          { delta: 'INT. ', accumulated: 'INT. ' },
+          { delta: '', accumulated: 'INT. ' },
+          { delta: 'DOCK', accumulated: 'INT. DOCK' },
+        ]);
       });
 
       it('forwards the reasoning config to chat modelOptions', async () => {

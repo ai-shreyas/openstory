@@ -331,6 +331,18 @@ const enhanceScriptInputSchema = z.object({
 export type EnhanceScriptInput = z.infer<typeof enhanceScriptInputSchema>;
 
 /**
+ * One shot of an enhancement stream. Script text arrives as `delta`; when the
+ * model is running its thinking pass (`thinking: true`), its reasoning arrives
+ * as `reasoning` on chunks whose `delta` is `''`.
+ *
+ * The two channels are kept in one stream so the UI can interleave them in
+ * order, and split by field rather than by a tag so a consumer that only reads
+ * `delta` — `enhanceScriptToString`, the API's SSE writer — needs no changes
+ * and can never splice thinking into the script.
+ */
+export type EnhanceChunk = { delta: string; reasoning?: string };
+
+/**
  * Core script-enhancement generator, shared by the streaming server function
  * (which yields deltas to the browser) and the public API's one-shot create
  * flow (which drains it to a full string). Single source of truth for billing,
@@ -346,7 +358,7 @@ export type EnhanceScriptInput = z.infer<typeof enhanceScriptInputSchema>;
 export async function* streamScriptEnhancement(
   data: EnhanceScriptInput,
   ctx: { scopedDb: ScopedDb; userId: string; teamId: string }
-): AsyncGenerator<{ delta: string }> {
+): AsyncGenerator<EnhanceChunk> {
   const { llmKey, deduct } = await prepareBilling(
     ctx.scopedDb,
     'Script enhancement'
@@ -446,6 +458,9 @@ export async function* streamScriptEnhancement(
   })) {
     if (chunk.delta) {
       yield { delta: chunk.delta };
+    }
+    if (!chunk.done && chunk.reasoning) {
+      yield { delta: '', reasoning: chunk.reasoning };
     }
     if (chunk.done) usage = chunk.usage;
   }

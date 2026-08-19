@@ -125,6 +125,7 @@ import React, {
   useState,
   type FC,
 } from 'react';
+import { EnhanceThinking } from './enhance-thinking';
 import { ScriptEditor } from './script-editor';
 
 const DURATION_PRESETS = [
@@ -797,6 +798,12 @@ export const ScriptView: FC<{
 
   const [targetDuration, setTargetDuration] = useState(30);
   const [enhancePopoverOpen, setEnhancePopoverOpen] = useState(false);
+  // Thinking is streamed on its own channel and kept out of `enhanceUI` — it
+  // updates per token, and re-rendering the whole enhance state object on every
+  // reasoning delta would churn the editor with it.
+  const [thinkingText, setThinkingText] = useState('');
+  const [thinkingActive, setThinkingActive] = useState(false);
+  const [thinkingSeconds, setThinkingSeconds] = useState<number | null>(null);
   const { thinking: enhanceThinking, setThinking: setEnhanceThinking } =
     useEnhanceThinking();
 
@@ -987,6 +994,9 @@ export const ScriptView: FC<{
     });
     // Enhancing rewrites the text — it stops being an untouched sample.
     setSampleStyleId(null);
+    setThinkingText('');
+    setThinkingSeconds(null);
+    setThinkingActive(enhanceThinking);
     setEnhanceUI((s) => ({ ...s, isEnhancing: true, error: null }));
     previousScriptRef.current = scriptValue;
     setScript('');
@@ -1004,6 +1014,7 @@ export const ScriptView: FC<{
         ? (mentionElements ?? [])
         : draftElements;
       let accumulated = '';
+      const startedAt = Date.now();
       for await (const chunk of await enhanceScriptStreamFn({
         data: {
           script: scriptValue,
@@ -1018,6 +1029,17 @@ export const ScriptView: FC<{
         },
       })) {
         if (abortController.signal.aborted) break;
+        if (chunk.reasoning) {
+          setThinkingText((t) => t + chunk.reasoning);
+          continue;
+        }
+        if (!chunk.delta) continue;
+        // First script token — the thinking pass is over. Stamp how long it ran
+        // so the collapsed panel can report it.
+        if (!accumulated) {
+          setThinkingActive(false);
+          setThinkingSeconds(Math.round((Date.now() - startedAt) / 1000));
+        }
         accumulated += chunk.delta;
         setScript(accumulated);
       }
@@ -1047,6 +1069,7 @@ export const ScriptView: FC<{
       }
     } finally {
       enhanceAbortRef.current = null;
+      setThinkingActive(false);
       setEnhance('isEnhancing', false);
     }
   };
@@ -1312,6 +1335,11 @@ export const ScriptView: FC<{
               </Button>
             </div>
           )}
+          <EnhanceThinking
+            text={thinkingText}
+            active={thinkingActive}
+            elapsedSeconds={thinkingSeconds}
+          />
           {/* Grows with content above the 4-row floor (min-h-28, see
               ScriptEditor) — so the card resizes with the script, and samples
               of different lengths change its height on Shuffle. */}
