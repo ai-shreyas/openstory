@@ -125,7 +125,6 @@ import React, {
   useState,
   type FC,
 } from 'react';
-import { EnhanceThinking } from './enhance-thinking';
 import { ScriptEditor } from './script-editor';
 
 const DURATION_PRESETS = [
@@ -1291,10 +1290,14 @@ export const ScriptView: FC<{
             overflow-y-auto is a fallback for viewports too short for even the
             editor floor + Sample-script row — it only engages then. */}
         <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
-          {/* Thinking bar shows during the reasoning pass — i.e. while
-              enhancing but before any enhanced text has streamed back. */}
+          {/* Shows during the reasoning pass — i.e. while enhancing but before
+              any enhanced text has streamed back. Carries the model's own
+              reasoning when it sent any (collapsed; see ThinkingBar), and
+              falls back to a status-only bar when thinking is switched off. */}
           <ThinkingBar
-            active={isEnhancing && !scriptValue}
+            active={thinkingActive || (isEnhancing && !scriptValue)}
+            text={thinkingText || undefined}
+            elapsedSeconds={thinkingSeconds}
             className="shrink-0"
           />
           {/* Above the editor so the Shuffle button holds its position while
@@ -1335,11 +1338,6 @@ export const ScriptView: FC<{
               </Button>
             </div>
           )}
-          <EnhanceThinking
-            text={thinkingText}
-            active={thinkingActive}
-            elapsedSeconds={thinkingSeconds}
-          />
           {/* Grows with content above the 4-row floor (min-h-28, see
               ScriptEditor) — so the card resizes with the script, and samples
               of different lengths change its height on Shuffle. */}
