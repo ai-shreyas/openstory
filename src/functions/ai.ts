@@ -310,11 +310,12 @@ const enhanceScriptInputSchema = z.object({
     .optional(),
   analysisModel: z.string().optional(),
   aspectRatio: aspectRatioSchema.optional(),
-  // Opt into the model's reasoning pass. OFF by default: enhancement streams
-  // to a user who is watching the text appear, and the thinking pass delays the
-  // first token by a lot. Worth it when the script needs real structural
-  // invention rather than a competent expansion — surfaced as a checkbox in the
-  // enhance options so the user makes that call per run.
+  // Run the model's reasoning pass before it writes. The dashboard sends this
+  // on by default (see use-enhance-thinking) — the planning step is what
+  // escapes a merely competent expansion — and offers a checkbox to drop it
+  // when the user would rather have text on screen sooner. Unset (the public
+  // API) means off: an API caller has no stream to watch, but also no way to
+  // opt in yet.
   thinking: z.boolean().optional(),
   elements: z
     .array(

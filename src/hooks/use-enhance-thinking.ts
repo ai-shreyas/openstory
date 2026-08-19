@@ -1,29 +1,32 @@
 /**
  * "Extended thinking" preference for script enhancement.
  *
- * The enhance call streams straight to a waiting user, so the model's reasoning
- * pass is off by default — it delays the first token noticeably. This toggle
- * lets the user buy that latency back when a script needs real structural
- * invention rather than a competent expansion.
+ * ON by default: the reasoning pass is what escapes the modal/obvious expansion
+ * (#870/#875), and that matters most where enhancement is weakest — budgeting a
+ * story across enough scenes to fill the target duration. The toggle exists for
+ * the times the user wants text on screen now and will take a competent
+ * expansion over a considered one.
  *
  * localStorage-backed so the choice survives a reload, hydrated after mount:
- * SSR renders the default (off), so the first client render matches the server
- * and there is no hydration mismatch.
+ * SSR renders the default, so the first client render matches the server and
+ * there is no hydration mismatch.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'openstory:enhance-thinking';
 
-/** Product default — fast path; the user opts into the slower, deeper run. */
-const DEFAULT_THINKING = false;
+/** Product default — the considered run; the user opts out for speed. */
+const DEFAULT_THINKING = true;
 
 export function useEnhanceThinking() {
   const [thinking, setThinkingState] = useState(DEFAULT_THINKING);
 
   useEffect(() => {
     try {
-      setThinkingState(localStorage.getItem(STORAGE_KEY) === 'true');
+      const raw = localStorage.getItem(STORAGE_KEY);
+      // Only an explicit "false" turns it off — an absent key keeps the default.
+      if (raw !== null) setThinkingState(raw === 'true');
     } catch {
       // private mode / storage disabled — keep the default
     }
