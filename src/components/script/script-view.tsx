@@ -1279,8 +1279,8 @@ export const ScriptView: FC<{
         <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
           {/* Shows during the reasoning pass — i.e. while enhancing but before
               any enhanced text has streamed back. Carries the model's own
-              reasoning when it sent any (collapsed; see ThinkingBar), and
-              falls back to a status-only bar when thinking is switched off. */}
+              reasoning when it sent any (collapsed; see ThinkingBar), and is a
+              status-only bar for the models that return none. */}
           <ThinkingBar
             active={thinkingActive || (isEnhancing && !scriptValue)}
             text={thinkingText || undefined}
