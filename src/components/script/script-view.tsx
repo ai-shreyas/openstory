@@ -802,7 +802,6 @@ export const ScriptView: FC<{
   // reasoning delta would churn the editor with it.
   const [thinkingText, setThinkingText] = useState('');
   const [thinkingActive, setThinkingActive] = useState(false);
-  const [thinkingSeconds, setThinkingSeconds] = useState<number | null>(null);
   const { thinking: enhanceThinking, setThinking: setEnhanceThinking } =
     useEnhanceThinking();
 
@@ -994,7 +993,6 @@ export const ScriptView: FC<{
     // Enhancing rewrites the text — it stops being an untouched sample.
     setSampleStyleId(null);
     setThinkingText('');
-    setThinkingSeconds(null);
     setThinkingActive(enhanceThinking);
     setEnhanceUI((s) => ({ ...s, isEnhancing: true, error: null }));
     previousScriptRef.current = scriptValue;
@@ -1013,7 +1011,6 @@ export const ScriptView: FC<{
         ? (mentionElements ?? [])
         : draftElements;
       let accumulated = '';
-      const startedAt = Date.now();
       for await (const chunk of await enhanceScriptStreamFn({
         data: {
           script: scriptValue,
@@ -1033,12 +1030,8 @@ export const ScriptView: FC<{
           continue;
         }
         if (!chunk.delta) continue;
-        // First script token — the thinking pass is over. Stamp how long it ran
-        // so the collapsed panel can report it.
-        if (!accumulated) {
-          setThinkingActive(false);
-          setThinkingSeconds(Math.round((Date.now() - startedAt) / 1000));
-        }
+        // First script token — the thinking pass is over, and the bar goes.
+        if (!accumulated) setThinkingActive(false);
         accumulated += chunk.delta;
         setScript(accumulated);
       }
@@ -1297,7 +1290,6 @@ export const ScriptView: FC<{
           <ThinkingBar
             active={thinkingActive || (isEnhancing && !scriptValue)}
             text={thinkingText || undefined}
-            elapsedSeconds={thinkingSeconds}
             className="shrink-0"
           />
           {/* Above the editor so the Shuffle button holds its position while

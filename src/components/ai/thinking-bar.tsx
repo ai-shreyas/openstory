@@ -12,6 +12,10 @@ import { useEffect, useState, type FC } from 'react';
  * that don't stream reasoning (the shot-prompt regens) get. With `text` it
  * becomes a collapsible transcript of the model's actual reasoning.
  *
+ * Either mode renders only while `active`: once the answer starts streaming the
+ * reasoning is spent, and a lingering summary is just chrome above the thing
+ * the user actually asked for.
+ *
  * The transcript is **collapsed by default**, deliberately. Measured against
  * OpenRouter, both models we enhance with return a one-or-two-sentence summary
  * of their reasoning, not a live raw stream: ~100 chars for claude-sonnet-5
@@ -23,15 +27,10 @@ import { useEffect, useState, type FC } from 'react';
  */
 export const ThinkingBar: FC<{
   active: boolean;
-  /**
-   * Reasoning text streamed so far. Omit for a status-only bar. When present
-   * the bar outlives `active`, so the finished reasoning stays readable.
-   */
+  /** Reasoning text streamed so far. Omit for a status-only bar. */
   text?: string;
-  /** Seconds the pass took, once finished — shown on the collapsed summary. */
-  elapsedSeconds?: number | null;
   className?: string;
-}> = ({ active, text, elapsedSeconds = null, className }) => {
+}> = ({ active, text, className }) => {
   const [open, setOpen] = useState(false);
   const { ref } = useAutoScroll<HTMLDivElement>({
     enabled: active && open,
@@ -48,8 +47,9 @@ export const ThinkingBar: FC<{
     className
   );
 
+  if (!active) return null;
+
   if (!text) {
-    if (!active) return null;
     return (
       <div aria-live="polite" className={barClasses}>
         <Brain
@@ -76,22 +76,13 @@ export const ThinkingBar: FC<{
         className="flex min-h-6 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <Brain
-          className={cn(
-            'size-3.5 shrink-0',
-            active && 'animate-pulse motion-reduce:animate-none'
-          )}
+          className="size-3.5 shrink-0 animate-pulse motion-reduce:animate-none"
           aria-hidden
         />
         {/* The status line is the live region, not the transcript below: a
             token-by-token stream through aria-live would flood a screen reader
             with scratch work. */}
-        <span aria-live="polite">
-          {active
-            ? 'Thinking…'
-            : elapsedSeconds !== null
-              ? `Thought for ${elapsedSeconds}s`
-              : 'Thinking'}
-        </span>
+        <span aria-live="polite">Thinking…</span>
         <ChevronRight
           className={cn(
             'size-3.5 shrink-0 transition-transform motion-reduce:transition-none',
@@ -103,7 +94,7 @@ export const ThinkingBar: FC<{
       <CollapsibleContent>
         <div
           ref={ref}
-          aria-busy={active}
+          aria-busy
           className="max-h-32 overflow-y-auto font-normal whitespace-pre-wrap"
         >
           {text}
