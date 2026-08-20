@@ -243,7 +243,10 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             if (i < parts.length - 1) out.push(hardBreak.create());
             return out;
           });
-          view.dispatch(tr.replaceWith(selection.from, selection.to, nodes));
+          // Same delete-then-insert as handlePaste so a selected range doesn't
+          // stay selected around the inserted text.
+          if (!selection.empty) tr.deleteSelection();
+          view.dispatch(tr.insert(tr.selection.from, nodes));
           return true;
         },
       },
@@ -272,9 +275,11 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         });
         if (nodes.length === 0) return true;
 
-        view.dispatch(
-          tr.replaceWith(selection.from, selection.to, nodes).scrollIntoView()
-        );
+        // Delete first, then insert at the collapsed caret: a replaceWith over
+        // a range maps the old selection to span the inserted text (select-all
+        // + paste left the paste selected). A collapsed caret maps past it.
+        if (!selection.empty) tr.deleteSelection();
+        view.dispatch(tr.insert(tr.selection.from, nodes).scrollIntoView());
         return true;
       },
       // Backup path for non-handlePaste clipboard inserts: normalize + hard breaks.

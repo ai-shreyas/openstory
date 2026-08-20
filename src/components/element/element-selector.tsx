@@ -554,7 +554,7 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
             )}
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[420px]">
+        <PopoverContent align="end" className="w-[min(420px,calc(100vw-2rem))]">
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-1">
               <p className="text-sm font-medium">Upload reference elements</p>

@@ -252,14 +252,21 @@ export function NewSequencePage({
   return (
     <div className="h-full">
       {billingGate}
-      <PageContainer maxWidth="narrow" padding="spacious" fullHeight>
-        <div className="flex shrink-0 flex-col items-center gap-4">
+      <PageContainer
+        maxWidth="narrow"
+        padding="spacious"
+        fullHeight
+        // Phones: every row saved here goes to the script editor inside the
+        // height-bounded composer below.
+        className="space-y-4 sm:space-y-8"
+      >
+        <div className="flex shrink-0 flex-col items-center gap-2 sm:gap-4">
           <OpenStoryLogo className="h-8 sm:h-12" />
           <div className="flex flex-col items-center gap-1">
             <h1 className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
               Tell your whole story
             </h1>
-            <p className="text-center text-sm text-muted-foreground">
+            <p className="hidden text-center text-sm text-muted-foreground sm:block">
               Pay the models. See the code. Keep the film.
             </p>
           </div>

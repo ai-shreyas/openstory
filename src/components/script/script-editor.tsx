@@ -61,9 +61,11 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
 
   return (
     <>
-      {/* min-h-28 = 4 editor rows (24px line-height) + the editor's vertical
-          padding — the floor the flex layout can't crush the editor below. */}
-      <div className="min-h-28 flex-1 flex flex-col overflow-hidden">
+      {/* 4 editor rows (24px line-height) + the editor's vertical padding —
+          the floor the flex layout can't crush the editor below. Phones get 2
+          rows: ScriptView adds a Shuffle/Enhance row beneath, so together they
+          cost about the same 4 rows. */}
+      <div className="min-h-16 md:min-h-28 flex-1 flex flex-col overflow-hidden">
         <MarkdownEditor
           scrollRef={ref}
           id="script"
@@ -76,7 +78,7 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
           disabled={disabled}
           aria-invalid={hasError}
           className={cn(
-            'min-h-[4lh] flex-1 bg-transparent dark:bg-transparent border-none shadow-none focus-within:ring-0 focus-within:border-input overscroll-contain pb-10',
+            'min-h-[2lh] md:min-h-[4lh] flex-1 bg-transparent dark:bg-transparent border-none shadow-none focus-within:ring-0 focus-within:border-input overscroll-contain pb-10',
             hasError && 'border-destructive focus-within:ring-destructive/20'
           )}
           data-testid="script-editor-textarea"

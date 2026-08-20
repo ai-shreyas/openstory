@@ -101,21 +101,19 @@ export function StyleSelector({
     const container = gridRef.current;
     if (!container) return;
 
-    const calculateColumns = (width: number) => {
-      const tileSize = 65;
-      const gap = 12;
-      const columns = Math.floor((width + gap) / (tileSize + gap));
+    // Read the resolved track list rather than re-deriving it from the
+    // minmax/gap constants, which differ per breakpoint in the className.
+    const calculateColumns = () => {
+      const columns = getComputedStyle(container)
+        .gridTemplateColumns.split(' ')
+        .filter(Boolean).length;
       setVisibleCount(Math.max(3, columns));
       setMeasured(true);
     };
 
-    calculateColumns(container.clientWidth);
+    calculateColumns();
 
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      calculateColumns(entry.contentRect.width);
-    });
+    const observer = new ResizeObserver(() => calculateColumns());
 
     observer.observe(container);
     return () => observer.disconnect();
@@ -276,15 +274,15 @@ export function StyleSelector({
       <div
         ref={gridRef}
         className={cn(
-          'grid w-full grid-cols-[repeat(auto-fill,minmax(65px,1fr))] gap-3 py-2',
+          'grid w-full grid-cols-[repeat(auto-fill,minmax(56px,1fr))] gap-2 py-1 sm:grid-cols-[repeat(auto-fill,minmax(65px,1fr))] sm:gap-3 sm:py-2',
           // Unmeasured: clamp to one row so the guessed tile count can't wrap
           // and change the grid's height. Row 1 is an explicit auto track;
           // overflow rows get zero height + zero row-gap and are clipped; the
           // bottom padding moves outside the clip (pb-0 + mb-2) so overflow
           // tiles can't peek into it. Total height matches the measured state
-          // exactly: pt(8) + row + mb(8) == pt(8) + row + pb(8).
+          // exactly: pt + row + mb == pt + row + pb at each breakpoint.
           !measured &&
-            'grid-rows-[auto] [grid-auto-rows:0] gap-y-0 overflow-hidden pb-0 mb-2'
+            'grid-rows-[auto] [grid-auto-rows:0] gap-y-0 overflow-hidden pb-0 mb-1 sm:mb-2'
         )}
         role="grid"
         aria-label="Style selection"
