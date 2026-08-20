@@ -7,8 +7,8 @@ import { getEnv } from '#env';
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import {
   callLLMStream,
+  ENHANCE_REASONING,
   llmCostFromUsage,
-  PROMPT_REASONING,
   RECOMMENDED_MODELS,
 } from '@/lib/ai/llm-client';
 import { isValidAnalysisModelId } from '@/lib/ai/models.config';
@@ -434,11 +434,10 @@ export async function* streamScriptEnhancement(
     // recur.
     temperature: 0.7,
     ...(useWebSearch && { webSearch: true }),
-    // Always on. It is what escapes a merely competent expansion (#870/#875),
-    // and its cost in silence is paid off by streaming the reasoning to the UI
-    // rather than by skipping it. Note most models we enhance with reason
-    // whether or not this is set — see the table in #1206.
-    reasoning: PROMPT_REASONING,
+    // Always on at `low`. Omitting this on Grok 4.6 (the default) falls through
+    // to xAI's `high` — sending `low` is the fastest we can ask for. Workflows
+    // keep PROMPT_REASONING (`medium`); latency is hidden there.
+    reasoning: ENHANCE_REASONING,
     observationName: 'script-enhance',
     tags: ['script-enhance', model],
     userId: ctx.userId,
