@@ -135,7 +135,19 @@ export function llmCostFromUsage(
 }
 
 export type StreamChunk<T = never> =
-  | { done: false; delta: string; accumulated: string }
+  | {
+      done: false;
+      delta: string;
+      accumulated: string;
+      /**
+       * Reasoning ("thinking") text, when the model is running a reasoning pass
+       * and the caller wants to show it. Scratch work, NOT part of the answer:
+       * a reasoning chunk always carries `delta: ''` and leaves `accumulated`
+       * untouched, so callers that only ever append `delta` (every caller but
+       * the enhance UI) are unaffected.
+       */
+      reasoning?: string;
+    }
   | {
       done: true;
       delta: '';
@@ -244,19 +256,33 @@ export const RECOMMENDED_MODELS = {
 } as const;
 
 /**
- * Shared reasoning config for the creative generation paths (script enhance +
- * prompt generation). `medium` effort balances the creativity lift against the
- * added latency — a forward pass converges on the modal/obvious answer, and the
- * planning step is what escapes it (see #875 and the eval notes in #870).
+ * Shared reasoning config for the creative generation paths that run inside
+ * workflows (scene split, frame prompts). `medium` effort balances the
+ * creativity lift against the added latency — a forward pass converges on the
+ * modal/obvious answer, and the planning step is what escapes it (see #875 and
+ * the eval notes in #870).
  *
  * NOT applied to utility calls (prompt shortening, duration estimation) where a
- * forward pass is already correct and reasoning would only add latency. Enabled
- * in E2E too — unlike live web search it's deterministic once recorded, so
- * aimock records + replays the reasoning request/response like any other call.
+ * forward pass is already correct and reasoning would only add latency. Script
+ * enhancement uses {@link ENHANCE_REASONING} (`low`) instead — that call streams
+ * to a waiting user. Enabled in E2E too — unlike live web search it's
+ * deterministic once recorded, so aimock records + replays the reasoning
+ * request/response like any other call.
  */
 export const PROMPT_REASONING = {
   enabled: true,
   effort: 'medium',
+} as const satisfies NonNullable<LLMRequestParams['reasoning']>;
+
+/**
+ * Reasoning for script enhancement. Always on at `low`: Grok 4.6 (the default
+ * enhance model) cannot disable thinking, and omitting the param falls through
+ * to xAI's `high` default — so sending `low` is the fastest we can ask for.
+ * Workflows keep {@link PROMPT_REASONING} (`medium`); latency is hidden there.
+ */
+export const ENHANCE_REASONING = {
+  enabled: true,
+  effort: 'low',
 } as const satisfies NonNullable<LLMRequestParams['reasoning']>;
 
 /**
@@ -759,6 +785,18 @@ export async function* callLLMStream<T>(
       if (event.type === 'TEXT_MESSAGE_CONTENT') {
         accumulated += event.delta;
         yield { delta: event.delta, accumulated, done: false };
+        continue;
+      }
+      if (
+        event.type === 'REASONING_MESSAGE_CONTENT' &&
+        typeof event.delta === 'string'
+      ) {
+        // Forwarded so a streaming UI can show the model thinking instead of a
+        // dead editor (the reasoning pass can run for many seconds before the
+        // first answer token). Empty `delta` keeps it out of the answer.
+        // Deliberately plain-text-path only: the structured-output paths above
+        // feed workflows with nothing watching, so they keep dropping it.
+        yield { delta: '', accumulated, reasoning: event.delta, done: false };
         continue;
       }
       throwIfRunError(event);

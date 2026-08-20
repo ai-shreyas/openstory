@@ -12,6 +12,7 @@
  */
 
 import {
+  type EnhanceChunk,
   type EnhanceScriptInput,
   streamScriptEnhancement,
 } from '@/functions/ai';
@@ -45,7 +46,7 @@ export type EnhanceContext = {
 export async function buildEnhanceGenerator(
   input: ApiEnhanceScriptInput,
   ctx: EnhanceContext
-): Promise<AsyncGenerator<{ delta: string }>> {
+): Promise<AsyncGenerator<EnhanceChunk>> {
   const style = input.style
     ? await resolveStyle(ctx.scopedDb, input.style)
     : undefined;
@@ -120,8 +121,8 @@ const SSE_HEADERS = {
  * sent) becomes an `event: error` shot `{ code, message }`.
  */
 export function enhanceSseResponse(
-  first: IteratorResult<{ delta: string }>,
-  rest: AsyncGenerator<{ delta: string }>
+  first: IteratorResult<EnhanceChunk>,
+  rest: AsyncGenerator<EnhanceChunk>
 ): Response {
   const encoder = new TextEncoder();
 
@@ -137,6 +138,8 @@ export function enhanceSseResponse(
         );
 
       let full = '';
+      // Reasoning chunks carry `delta: ''` and are dropped here: thinking is a
+      // dashboard-stream affordance, not part of the documented v1 wire format.
       const push = (delta: string) => {
         if (!delta) return;
         full += delta;

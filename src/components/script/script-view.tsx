@@ -795,6 +795,11 @@ export const ScriptView: FC<{
 
   const [targetDuration, setTargetDuration] = useState(30);
   const [enhancePopoverOpen, setEnhancePopoverOpen] = useState(false);
+  // Thinking is streamed on its own channel and kept out of `enhanceUI` — it
+  // updates per token, and re-rendering the whole enhance state object on every
+  // reasoning delta would churn the editor with it.
+  const [thinkingText, setThinkingText] = useState('');
+  const [thinkingActive, setThinkingActive] = useState(false);
 
   const [enhanceUI, setEnhanceUI] = useState({
     isEnhancing: false,
@@ -982,6 +987,8 @@ export const ScriptView: FC<{
     });
     // Enhancing rewrites the text — it stops being an untouched sample.
     setSampleStyleId(null);
+    setThinkingText('');
+    setThinkingActive(true);
     setEnhanceUI((s) => ({ ...s, isEnhancing: true, error: null }));
     previousScriptRef.current = scriptValue;
     setScript('');
@@ -1012,6 +1019,13 @@ export const ScriptView: FC<{
         },
       })) {
         if (abortController.signal.aborted) break;
+        if (chunk.reasoning) {
+          setThinkingText((t) => t + chunk.reasoning);
+          continue;
+        }
+        if (!chunk.delta) continue;
+        // First script token — the thinking pass is over, and the bar goes.
+        if (!accumulated) setThinkingActive(false);
         accumulated += chunk.delta;
         setScript(accumulated);
       }
@@ -1041,6 +1055,7 @@ export const ScriptView: FC<{
       }
     } finally {
       enhanceAbortRef.current = null;
+      setThinkingActive(false);
       setEnhance('isEnhancing', false);
     }
   };
@@ -1262,10 +1277,13 @@ export const ScriptView: FC<{
             overflow-y-auto is a fallback for viewports too short for even the
             editor floor + Sample-script row — it only engages then. */}
         <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
-          {/* Thinking bar shows during the reasoning pass — i.e. while
-              enhancing but before any enhanced text has streamed back. */}
+          {/* Shows during the reasoning pass — i.e. while enhancing but before
+              any enhanced text has streamed back. Carries the model's own
+              reasoning when it sent any (collapsed; see ThinkingBar), and is a
+              status-only bar for the models that return none. */}
           <ThinkingBar
-            active={isEnhancing && !scriptValue}
+            active={thinkingActive || (isEnhancing && !scriptValue)}
+            text={thinkingText || undefined}
             className="shrink-0"
           />
           {/* Above the editor so the Shuffle button holds its position while

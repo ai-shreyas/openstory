@@ -7,8 +7,8 @@ import { getEnv } from '#env';
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import {
   callLLMStream,
+  ENHANCE_REASONING,
   llmCostFromUsage,
-  PROMPT_REASONING,
   RECOMMENDED_MODELS,
 } from '@/lib/ai/llm-client';
 import { isValidAnalysisModelId } from '@/lib/ai/models.config';
@@ -324,6 +324,18 @@ const enhanceScriptInputSchema = z.object({
 export type EnhanceScriptInput = z.infer<typeof enhanceScriptInputSchema>;
 
 /**
+ * One shot of an enhancement stream. Script text arrives as `delta`; the
+ * model's reasoning, while its thinking pass runs, arrives as `reasoning` on
+ * chunks whose `delta` is `''`.
+ *
+ * The two channels are kept in one stream so the UI can interleave them in
+ * order, and split by field rather than by a tag so a consumer that only reads
+ * `delta` — `enhanceScriptToString`, the API's SSE writer — needs no changes
+ * and can never splice thinking into the script.
+ */
+export type EnhanceChunk = { delta: string; reasoning?: string };
+
+/**
  * Core script-enhancement generator, shared by the streaming server function
  * (which yields deltas to the browser) and the public API's one-shot create
  * flow (which drains it to a full string). Single source of truth for billing,
@@ -339,7 +351,7 @@ export type EnhanceScriptInput = z.infer<typeof enhanceScriptInputSchema>;
 export async function* streamScriptEnhancement(
   data: EnhanceScriptInput,
   ctx: { scopedDb: ScopedDb; userId: string; teamId: string }
-): AsyncGenerator<{ delta: string }> {
+): AsyncGenerator<EnhanceChunk> {
   const { llmKey, deduct } = await prepareBilling(
     ctx.scopedDb,
     'Script enhancement'
@@ -409,9 +421,7 @@ export async function* streamScriptEnhancement(
   // Web search runs as OpenRouter's server tool — the model decides when to
   // search and OpenRouter executes it server-side within the agent loop.
   // Gate it out of E2E entirely (record + replay): live search results would
-  // make the recorded OpenRouter request/response non-deterministic. Reasoning
-  // is NOT gated — it's deterministic once recorded, so E2E records + replays
-  // it like any other request.
+  // make the recorded OpenRouter request/response non-deterministic.
   const useWebSearch = getEnv().E2E_TEST !== 'true';
   let usage;
   for await (const chunk of callLLMStream({
@@ -420,12 +430,14 @@ export async function* streamScriptEnhancement(
     // No max_tokens: every model routes through OpenRouter, which falls back
     // to the model's own max output when the field is omitted — so long
     // scripts use the full available output budget instead of an artificial
-    // cap. Reasoning (PROMPT_REASONING, medium) shares the completion budget,
-    // but the per-model default is far larger than any realistic script, so
-    // the #915 truncation (seen when this was a flat 4000) can't recur.
+    // cap, and the #915 truncation (seen when this was a flat 4000) can't
+    // recur.
     temperature: 0.7,
     ...(useWebSearch && { webSearch: true }),
-    reasoning: PROMPT_REASONING,
+    // Always on at `low`. Omitting this on Grok 4.6 (the default) falls through
+    // to xAI's `high` — sending `low` is the fastest we can ask for. Workflows
+    // keep PROMPT_REASONING (`medium`); latency is hidden there.
+    reasoning: ENHANCE_REASONING,
     observationName: 'script-enhance',
     tags: ['script-enhance', model],
     userId: ctx.userId,
@@ -439,6 +451,9 @@ export async function* streamScriptEnhancement(
   })) {
     if (chunk.delta) {
       yield { delta: chunk.delta };
+    }
+    if (!chunk.done && chunk.reasoning) {
+      yield { delta: '', reasoning: chunk.reasoning };
     }
     if (chunk.done) usage = chunk.usage;
   }
