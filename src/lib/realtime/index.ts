@@ -306,6 +306,12 @@ export const realtimeSchema = {
       posterUrl: z.string(),
     }),
 
+    // Automatic style derived from the script and written to its row (#1213)
+    'style:ready': z.object({
+      styleId: z.string(),
+      name: z.string(),
+    }),
+
     // Divergence detected: a workflow finished but its inputs no longer match
     // the snapshot it was triggered from. The divergent result has been parked
     // (see workflow-snapshots-and-content-hash-staleness.md § "Divergence-on-completion")

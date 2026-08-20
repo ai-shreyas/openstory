@@ -69,7 +69,6 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
       title,
       script,
       aspectRatio,
-      styleConfig,
       analysisModelId,
       imageModel,
       videoModel,
@@ -92,6 +91,11 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
 
       await seq.updateStatus('processing');
     });
+
+    // Pending automatic style (#1213): the poster renders from the script alone.
+    const styleConfig = input.pendingAutoStyleId
+      ? undefined
+      : input.styleConfig;
 
     // Generate a poster image from the script for the video player empty
     // state. Non-critical — failures are logged and swallowed so a poster
@@ -187,7 +191,8 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
         sequenceId,
         script,
         aspectRatio,
-        styleConfig,
+        styleConfig: input.styleConfig,
+        pendingAutoStyleId: input.pendingAutoStyleId,
         analysisModelId,
         elementIds,
         musicPromptSource: input.musicPromptSource,

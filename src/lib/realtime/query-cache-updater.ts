@@ -8,6 +8,7 @@ import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
 import { musicPromptStalenessKey, sequenceKeys } from '@/hooks/use-sequences';
+import { styleKeys } from '@/hooks/use-styles';
 import type { Sequence } from '@/types/database';
 import type { ShotView } from '@/lib/shots/shot-view';
 import type { QueryClient } from '@tanstack/react-query';
@@ -421,6 +422,24 @@ export function updateQueryCacheFromEvent(
           (old) => (old ? { ...old, posterUrl } : old)
         );
       }
+      break;
+    }
+
+    case 'generation.style:ready': {
+      const styleId = getString(data, 'styleId');
+      if (styleId) {
+        debouncedInvalidate(
+          queryClient,
+          styleKeys.detail(styleId),
+          `style:${styleId}`
+        );
+      }
+      // `sequence.styleConfig` flipping non-null is what ends the pending state.
+      debouncedInvalidate(
+        queryClient,
+        sequenceKeys.detail(sequenceId),
+        `sequence:${sequenceId}`
+      );
       break;
     }
 

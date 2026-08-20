@@ -27,7 +27,15 @@ import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { requireCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
+import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
+import { ValidationError } from '@/lib/errors';
+import {
+  AUTO_STYLE_ID,
+  type AutoStyleDraft,
+  placeholderAutoStyleDraft,
+} from '@/lib/style/auto-style';
+import { parseStyleConfig } from '@/lib/style/style-config';
 import type { Sequence } from '@/types/database';
 import type { CreateSequenceInput } from '@/lib/schemas/sequence.schemas';
 import { copySequenceElements } from '@/lib/sequence-elements/copy-sequence-elements';
@@ -37,6 +45,45 @@ import { bumpStylePopularity } from '@/lib/style/bump-style-popularity';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type { StoryboardTriggerInput } from '@/lib/workflow/types';
 import { createServerOnlyFn } from '@tanstack/react-start';
+
+export type StyleSource =
+  | { kind: 'library' }
+  /** Fresh automatic style: placeholder row now, recipe derived by the run. */
+  | { kind: 'pending'; draft: AutoStyleDraft }
+  /** Copy of another sequence's (already derived) automatic style. */
+  | { kind: 'clone'; draft: AutoStyleDraft };
+
+export async function resolveStyleSource(
+  scopedDb: Pick<ScopedDb, 'styles' | 'sequences'>,
+  styleId: string
+): Promise<StyleSource> {
+  if (styleId === AUTO_STYLE_ID) {
+    return { kind: 'pending', draft: placeholderAutoStyleDraft() };
+  }
+  // `getById` hides other teams' bound rows, so reaching the clone branch
+  // means the source is ours.
+  const style = await scopedDb.styles.getById(styleId);
+  if (!style) {
+    throw new ValidationError(`Style ${styleId} not found`);
+  }
+  if (style.sequenceId === null) return { kind: 'library' };
+  // Copying a sequence whose style is still being derived: the source row
+  // holds only the placeholder, so the copy derives its own.
+  const source = await scopedDb.sequences.getById(style.sequenceId);
+  if (source?.styleConfig == null) {
+    return { kind: 'pending', draft: placeholderAutoStyleDraft() };
+  }
+  return {
+    kind: 'clone',
+    draft: {
+      name: style.name,
+      description: style.description,
+      config: parseStyleConfig(style.config),
+      category: style.category,
+      tags: style.tags ?? [],
+    },
+  };
+}
 
 export type CreateSequencesContext = {
   scopedDb: ScopedDb;
@@ -165,6 +212,11 @@ export const createSequences = createServerOnlyFn(
       }
     );
 
+    // Automatic style (#1213). `'auto'` asks for a fresh script-derived style;
+    // a style already bound to another sequence (regenerate / copy of an auto
+    // sequence) is cloned rather than shared, so each sequence owns its row.
+    const styleSource = await resolveStyleSource(context.scopedDb, styleId);
+
     const created = await Promise.all(
       analysisModels.map(async (modelId) => {
         // Only persist video/music model choices when the user actually opts
@@ -175,10 +227,21 @@ export const createSequences = createServerOnlyFn(
           ? primaryAudioModel
           : undefined;
 
+        const sequenceId = generateId();
+        const boundStyle =
+          styleSource.kind === 'library'
+            ? null
+            : await context.scopedDb.styles.createForSequence({
+                sequenceId,
+                draft: styleSource.draft,
+              });
+
         const sequence = await context.scopedDb.sequences.create({
+          id: sequenceId,
           title: data.title || 'Untitled Sequence',
           script: data.script,
-          styleId,
+          styleId: boundStyle?.id ?? styleId,
+          deferStyleSnapshot: styleSource.kind === 'pending',
           aspectRatio,
           analysisModel:
             getAnalysisModelById(modelId)?.id || DEFAULT_ANALYSIS_MODEL,
@@ -252,13 +315,15 @@ export const createSequences = createServerOnlyFn(
     // One click = one popularity bump + one analytics event, regardless of how
     // many analysis models the caller picked. Fire-and-forget — never block.
     const sequenceIds = created.map((c) => c.sequence.id);
-    bumpStylePopularity({
-      scopedDb: context.scopedDb,
-      styleId,
-      sequenceIds,
-      teamId,
-      userId: context.user.id,
-    });
+    if (styleSource.kind === 'library') {
+      bumpStylePopularity({
+        scopedDb: context.scopedDb,
+        styleId,
+        sequenceIds,
+        teamId,
+        userId: context.user.id,
+      });
+    }
 
     // Server-side so dashboard + public API both feed #product-alerts (#1088).
     captureProductEvent({
@@ -267,6 +332,7 @@ export const createSequences = createServerOnlyFn(
       properties: {
         team_id: teamId,
         style_id: styleId,
+        automatic_style: styleSource.kind !== 'library',
         aspect_ratio: aspectRatio,
         sequence_ids: sequenceIds,
         sequence_count: sequenceIds.length,

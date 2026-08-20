@@ -211,6 +211,14 @@ export interface StoryboardWorkflowInput extends SequenceWorkflowContext {
   script: string;
   aspectRatio: AspectRatio;
   styleConfig: StyleConfig;
+  /**
+   * Automatic style (#1213): set when the sequence's style is a placeholder
+   * bound to it whose recipe has not been derived yet. The poster renders
+   * style-free and analyze-script derives the recipe in parallel with
+   * scene-split, then uses it for every later phase. Absent once a snapshot
+   * exists (retries).
+   */
+  pendingAutoStyleId?: string;
   analysisModelId: AnalysisModelId;
   imageModel: TextToImageModel;
   videoModel: ImageToVideoModel;
@@ -280,6 +288,8 @@ export interface AnalyzeScriptWorkflowInput extends SequenceWorkflowContext {
   script: string;
   aspectRatio: AspectRatio;
   styleConfig: StyleConfig;
+  /** @see StoryboardWorkflowInput.pendingAutoStyleId — derived here, in parallel with scene-split. */
+  pendingAutoStyleId?: string;
   analysisModelId: AnalysisModelId;
   imageModel: TextToImageModel;
   /** @see StoryboardWorkflowInput.elementIds — passed straight through. */
@@ -312,7 +322,9 @@ export interface AnalyzeScriptWorkflowInput extends SequenceWorkflowContext {
 export type SceneSplitWorkflowInput = SequenceWorkflowContext & {
   promptName: string;
   modelId: AnalysisModelId;
-  styleConfig: StyleConfig;
+  /** Only styles the per-scene preview stills; absent while an automatic style
+   *  is still being derived alongside this run (#1213). */
+  styleConfig?: StyleConfig;
   aspectRatio: AspectRatio;
   script: string;
   /** User-uploaded elements to make the model aware of uppercase tokens */

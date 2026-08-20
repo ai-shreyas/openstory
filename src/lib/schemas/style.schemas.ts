@@ -36,6 +36,8 @@ export const SERVER_MANAGED_STYLE_COLUMNS = {
   isPublic: true,
   isTemplate: true,
   sortOrder: true,
+  // Sequence binding is set by sequence creation and cleared by promotion.
+  sequenceId: true,
 } as const;
 
 export type ServerManagedStyleColumn =

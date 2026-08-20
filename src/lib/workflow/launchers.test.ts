@@ -66,7 +66,11 @@ function makeScopedDb(opts: {
   script?: string | null;
   styleId?: string | null;
   styleConfig?: StyleConfig | null;
-  style?: { config: StyleConfig } | null;
+  style?: {
+    id?: string;
+    sequenceId?: string | null;
+    config: StyleConfig;
+  } | null;
   elementIds?: string[];
   talent?: Array<{ id: string; name: string; description: string | null }>;
   locations?: Array<{ id: string; name: string; description: string | null }>;
@@ -244,6 +248,61 @@ describe('triggerStoryboard', () => {
     expect(triggerWorkflowMock.mock.calls[0]?.[1]).toMatchObject({
       styleConfig: snapshot,
     });
+  });
+
+  test('automatic style still a placeholder (no snapshot + row bound here) → pendingAutoStyleId on the payload', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb } = makeScopedDb({
+      workflowRunId: null,
+      styleId: 'style_auto',
+      styleConfig: null,
+      style: { id: 'style_auto', sequenceId: 'seq_1', config: STYLE_CONFIG },
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    expect(triggerWorkflowMock.mock.calls[0]?.[1]).toMatchObject({
+      pendingAutoStyleId: 'style_auto',
+      styleConfig: STYLE_CONFIG,
+    });
+  });
+
+  test('automatic style already derived (snapshot present) → no pendingAutoStyleId, so a retry never re-derives', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb } = makeScopedDb({
+      workflowRunId: null,
+      styleId: 'style_auto',
+      styleConfig: STYLE_CONFIG,
+      style: { id: 'style_auto', sequenceId: 'seq_1', config: STYLE_CONFIG },
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    const payload = triggerWorkflowMock.mock.calls[0]?.[1];
+    expect(payload).toMatchObject({ styleConfig: STYLE_CONFIG });
+    expect(payload).toHaveProperty('pendingAutoStyleId', undefined);
+  });
+
+  test('library style with no snapshot (pre-snapshot row) → no pendingAutoStyleId', async () => {
+    runStateResult = 'failed';
+    triggerWorkflowMock.mockReset();
+    triggerWorkflowMock.mockResolvedValue('run-1');
+    const { scopedDb } = makeScopedDb({
+      workflowRunId: null,
+      styleConfig: null,
+      style: { id: 'style_1', sequenceId: null, config: STYLE_CONFIG },
+    });
+
+    await triggerStoryboard(scopedDb, INPUT);
+
+    expect(triggerWorkflowMock.mock.calls[0]?.[1]).toHaveProperty(
+      'pendingAutoStyleId',
+      undefined
+    );
   });
 
   test('a sequence that already has a music prompt snapshots promptSource=regenerated', async () => {

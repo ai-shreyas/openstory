@@ -58,7 +58,8 @@ import {
 } from '@/hooks/use-sequence-elements';
 import { useSequenceLocations } from '@/hooks/use-sequence-locations';
 import { useCreateSequence } from '@/hooks/use-sequences';
-import { useRecommendedStyles, useStyles } from '@/hooks/use-styles';
+import { useRecommendedStyles, useStyle, useStyles } from '@/hooks/use-styles';
+import { AUTO_STYLE_ID } from '@/lib/style/auto-style';
 import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -396,6 +397,23 @@ export const ScriptView: FC<{
   );
   const styleCategory = selectedStyle?.category ?? undefined;
   const styleName = selectedStyle?.name ?? undefined;
+
+  // Automatic style (#1213): a fresh `auto` pick, or — when editing — the
+  // sequence's own script-derived style (not in the library list, so it is
+  // resolved by id). Regenerating from it sends the bound style id, which
+  // `createSequences` clones for the new sequence.
+  const effectiveStyleId = styleId || sequence?.styleId || null;
+  const needsBoundStyleLookup =
+    !isLoadingStyles &&
+    effectiveStyleId != null &&
+    effectiveStyleId !== AUTO_STYLE_ID &&
+    !styles.some((s) => s.id === effectiveStyleId);
+  const { data: boundStyle } = useStyle(
+    needsBoundStyleLookup ? effectiveStyleId : ''
+  );
+  const autoStyleSelected =
+    effectiveStyleId === AUTO_STYLE_ID ||
+    (boundStyle?.sequenceId != null && boundStyle.id === effectiveStyleId);
 
   // The row follows the selected style, except while the user parks on All
   // styles (`categoryOverride`). Draft / `?style=` / tile picks then show
@@ -1549,6 +1567,8 @@ export const ScriptView: FC<{
             recommendations={activeRecommendations}
             recommendationsLoading={isRecommending && !recommendationsStale}
             categoryFilter={styleCategoryFilter}
+            autoSelected={autoStyleSelected}
+            onSelectAuto={() => handleStyleSelect(AUTO_STYLE_ID)}
             // Create mode only — an analysed sequence's derived script must
             // not be swapped for a sample (same gate as the Shuffle row).
             onTryStyle={isEditing ? undefined : requestTryStyle}

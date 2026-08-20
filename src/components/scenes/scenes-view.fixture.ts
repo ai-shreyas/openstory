@@ -70,6 +70,7 @@ export const fixtureSequence: Sequence = {
 export const fixtureStyle: Style = {
   id: '01KT2QRY2BWFJHT67CNQ3V9566',
   teamId: '01KT2QRY14ZWQ9YS21GGMF6DV1',
+  sequenceId: null,
   name: 'Beauty Macro',
   description:
     'Beauty-counter close-ups with dewy texture, micro-detail, and slow-motion product engagement. Built for skincare, cosmetics, and fragrance launch content.',

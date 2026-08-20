@@ -39,6 +39,7 @@ type SceneModelBarProps = {
   resolvedSequenceImageModel: TextToImageModel;
   resolvedSequenceVideoModel: ImageToVideoModel;
   styleId?: string;
+  stylePending?: boolean;
   aspectRatio?: AspectRatio;
   /** The LLM that analysed the script into scenes. Fixed post-analysis. */
   analysisModel?: string;
@@ -66,6 +67,7 @@ export const SceneModelBar: React.FC<SceneModelBarProps> = ({
   resolvedSequenceImageModel,
   resolvedSequenceVideoModel,
   styleId,
+  stylePending,
   aspectRatio,
   analysisModel,
 }) => {
@@ -88,7 +90,11 @@ export const SceneModelBar: React.FC<SceneModelBarProps> = ({
       {showSequenceSettings && (
         <div className="space-y-2">
           <SettingRow label="Style">
-            <StyleBadge styleId={styleId} />
+            <StyleBadge
+              styleId={styleId}
+              sequenceId={sequenceId}
+              stylePending={stylePending}
+            />
           </SettingRow>
           <SettingRow label="Aspect ratio">
             <span className="flex items-center gap-1.5">
