@@ -688,9 +688,9 @@ export interface CharacterBibleWorkflowInput extends SequenceWorkflowContext {
 }
 
 /**
- * Maps each analysis scene (the LLM-assigned `Scene.sceneId` string carried in
- * the analysis output) to the DB shot row created for it. `analysisSceneId` is
- * deliberately NOT the new `scenes.id` ULID (see DbSceneId in schema/scenes.ts)
+ * Maps each analysis scene (the server-minted `Scene.sceneId` ULID from
+ * scene-split) to the DB shot row created for it. `analysisSceneId` is
+ * deliberately NOT the `scenes.id` ULID (see DbSceneId in schema/scenes.ts)
  * — both are strings, so the distinct name guards against confusing them.
  *
  * `frameId` is the shot's anchor frame id, captured at shot-creation time in

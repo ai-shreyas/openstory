@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "Photorealistic 16:9 cinematic still with modern social-first lifestyle beauty energy and a naturalistic walking-take feel, SCARLETT (Image 1) in a black long-sleeve rash vest worn as a swim top and simple flip-flops, a faded sun-bleached canvas tote hanging at her hip, holding the product from (CORAL_LIPSTICK (Image 3)) as she thumbs the cap shut in one unfussy motion, body already turning away from the cars, one shoulder lifting as if to sling the bag, weight on the ball of a flip-flop, looking off-camera toward the promenade, mid-breath with coiled walk-away energy. Open utilitarian Bondi Beach car park in early morning, pale sun-warmed poured concrete bays stretching toward a simple metal safety rail, empty-ish spaces, a parked sedan of warm white paint and flashing chrome receding behind her, the ocean a bright hard horizontal strip beyond the rail, heat already sitting in the concrete, everyday beach clutter low in the frame. Bright raking unfiltered morning sun, clean directional shadows across doors and pale concrete, punchy chrome speculars, crisp whites, slight warmth in the highlights and airy lifted shadows, high-key coastal air. Handheld eye-level medium-wide 16:9, shallow depth of field with chrome and white paint falling into tactile bokeh, true-to-life color with one warm accent against the neutral concrete, no posing, the still implying flip-flops about to slap toward the promenade.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 2 (location): EXT. BONDI BEACH CAR PARK - EARLY MORNING - Open coastal car park above Bondi Beach: pale sun-warmed concrete bays",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa70bf6/oeJ_ekISG-dVI6SvvDwkf_YZ8TJrzK.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "oeJ_ekISG-dVI6SvvDwkf_YZ8TJrzK.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

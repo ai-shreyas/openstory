@@ -378,7 +378,6 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
                 versionId: input.targetVersionId,
                 frameId,
                 text: result.visual.fullPrompt,
-                components: result.visual.components,
                 inputHash,
                 analysisModel: analysisModelId,
               });
@@ -396,7 +395,6 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
             const written = await scopedDb.framePromptVersions.writeAiVersion({
               frameId,
               text: result.visual.fullPrompt,
-              components: result.visual.components,
               inputHash,
               analysisModel: analysisModelId,
             });

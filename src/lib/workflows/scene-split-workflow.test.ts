@@ -50,28 +50,41 @@ vi.doMock('@/lib/billing/workflow-deduction', () => ({
 type StreamChunk = {
   done: boolean;
   accumulated: string;
-  parsed?: typeof PARSED_RESULT;
+  parsed?: typeof SCENES_RESULT | typeof BIBLES_RESULT;
   usage?: undefined;
 };
 
 /**
- * Chunks the mocked stream yields. Defaults to a single `done` chunk carrying
- * the whole (already-validated) result; the parser mock below is what turns it
- * into per-scene events. The coalescing test swaps in a long delta stream.
+ * Chunks the mocked SCENES stream yields. Defaults to a single `done` chunk
+ * carrying the whole (already-validated) result; the parser mock below is what
+ * turns it into per-scene events. The coalescing test swaps in a long delta
+ * stream. The parallel bibles call is served separately (see the llm-client
+ * mock, keyed on observationName).
  */
 let streamChunks: StreamChunk[] = [];
 function singleDoneChunk(): StreamChunk[] {
   return [
-    { done: true, accumulated: '{}', parsed: PARSED_RESULT, usage: undefined },
+    { done: true, accumulated: '{}', parsed: SCENES_RESULT, usage: undefined },
   ];
 }
 
 vi.doMock('@/lib/ai/llm-client', () => ({
   PROMPT_REASONING: undefined,
   llmCostFromUsage: vi.fn(() => 0),
-  callLLMStream: vi.fn(() => ({
+  callLLMStream: vi.fn((params: { observationName?: string }) => ({
     async *[Symbol.asyncIterator]() {
-      for (const chunk of streamChunks) yield chunk;
+      const chunks =
+        params.observationName === 'phase-1-scene-bibles'
+          ? [
+              {
+                done: true,
+                accumulated: '{}',
+                parsed: BIBLES_RESULT,
+                usage: undefined,
+              },
+            ]
+          : streamChunks;
+      for (const chunk of chunks) yield chunk;
     },
   })),
 }));
@@ -99,6 +112,8 @@ vi.doMock('@/lib/ai/streaming-scene-parser', async () => {
             index,
           }));
         },
+        mintedSceneIds: () =>
+          new Map(SCENES.map((scene, index) => [index, scene.sceneId])),
       };
     },
   };
@@ -132,9 +147,23 @@ function makeScene(n: number): SceneSplittingScene {
 
 const SCENES = [makeScene(1), makeScene(2), makeScene(3)];
 
-const PARSED_RESULT = {
-  scenes: SCENES,
+const SCRIPT = 'Scene 1 action\nScene 2 action\nScene 3 action';
+
+const SCENES_RESULT = {
   projectMetadata: { title: 'Test Film' },
+  boundaries: [
+    { hintLine: 1, quote: 'Scene 1 action' },
+    { hintLine: 2, quote: 'Scene 2 action' },
+    { hintLine: 3, quote: 'Scene 3 action' },
+  ],
+  sceneMeta: SCENES.map((scene) => ({
+    ...scene.metadata,
+    continuity: scene.continuity,
+    dialogue: [],
+  })),
+};
+
+const BIBLES_RESULT = {
   characterBible: [],
   locationBible: [],
   elementBible: [],
@@ -154,7 +183,7 @@ const INPUT: SceneSplitWorkflowInput = {
   userId: 'u1',
   teamId: 't1',
   sequenceId: 'seq_1',
-  script: 'INT. ROOM - DAY',
+  script: SCRIPT,
   modelId: 'anthropic/claude-sonnet-5',
   promptName: 'scene-splitting',
   styleConfig: STYLE_CONFIG,
@@ -352,7 +381,7 @@ describe('SceneSplitWorkflow stream parsing', () => {
     chunks.push({
       done: true,
       accumulated,
-      parsed: PARSED_RESULT,
+      parsed: SCENES_RESULT,
       usage: undefined,
     });
     return chunks;
@@ -387,5 +416,55 @@ describe('SceneSplitWorkflow stream parsing', () => {
     expect(lastFeed).toHaveLength(DELTA.length * DELTA_COUNT);
     expect(result.shotMapping).toHaveLength(SCENES.length);
     expect(previewCalls()).toHaveLength(SCENES.length);
+  });
+});
+
+const DEGRADED_RESULT = {
+  ...SCENES_RESULT,
+  boundaries: [
+    { hintLine: 1, quote: 'Scene 1 action' },
+    { hintLine: 2, quote: 'NO SUCH TEXT ANYWHERE, TRULY NOT PRESENT' },
+    { hintLine: 3, quote: 'ALSO ABSENT FROM THE SCRIPT ENTIRELY' },
+  ],
+};
+
+describe('SceneSplitWorkflow degraded boundary retry', () => {
+  beforeEach(() => {
+    triggerWorkflow.mockReset();
+    triggerWorkflow.mockResolvedValue('run_1');
+    emit.mockReset();
+    streamChunks = [
+      {
+        done: true,
+        accumulated: '{}',
+        parsed: DEGRADED_RESULT,
+        usage: undefined,
+      },
+    ];
+    feed.mockReset();
+  });
+
+  test('keeps first-pass LLM scenes when retry is still degraded (no heuristic split)', async () => {
+    const result = await makeWorkflow().split(
+      makeEvent(),
+      makeStep(),
+      makeScopedDb()
+    );
+
+    // Two unresolvable quotes merge into scene 1; the LLM title/meta stay.
+    // fastSceneSplit would title from the first line ("Scene 1 action").
+    expect(result.scenes).toHaveLength(1);
+    expect(result.title).toBe('Test Film');
+    const scene = result.scenes[0];
+    // LLM sceneMeta (location 'A room'), not fastSceneSplit / placeholder.
+    expect(scene?.metadata?.location).toBe('A room');
+    expect(scene?.originalScript.extract).toBe(SCRIPT);
+    expect(emit).toHaveBeenCalledWith(
+      'generation.error',
+      expect.objectContaining({
+        message: expect.stringMatching(/merged/i),
+        phase: 1,
+      })
+    );
   });
 });

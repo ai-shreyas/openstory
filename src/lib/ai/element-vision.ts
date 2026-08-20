@@ -26,13 +26,13 @@ import { DEFAULT_VISION_MODEL } from './models.config';
 
 export const ELEMENT_VISION_MODEL = DEFAULT_VISION_MODEL;
 
-const responseSchema = z.object({
+export const elementVisionResponseSchema = z.object({
   description: z.string().min(1),
   consistencyTag: z.string().min(1),
   suggestedToken: z.string().min(1),
 });
 
-type ElementDescription = z.infer<typeof responseSchema>;
+type ElementDescription = z.infer<typeof elementVisionResponseSchema>;
 
 export type DescribeElementInput = {
   imageUrl: string;
@@ -131,7 +131,7 @@ export async function describeElementImage(
       temperature: 0.3,
       streamOptions: { includeUsage: true },
     },
-    outputSchema: responseSchema,
+    outputSchema: elementVisionResponseSchema,
     middleware: [
       ...aiObservabilityMiddleware({
         observationName: 'element-vision',
@@ -163,7 +163,7 @@ export async function describeElementImage(
     }
   }
 
-  const parsed = responseSchema.parse(
+  const parsed = elementVisionResponseSchema.parse(
     structuredObject !== undefined ? structuredObject : JSON.parse(accumulated)
   );
   return {

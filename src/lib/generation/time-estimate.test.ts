@@ -105,9 +105,10 @@ describe('estimateSceneCountFromDuration', () => {
 describe('estimateTotalSeconds', () => {
   test('returns reasonable total for any scene count', () => {
     const total = estimateTotalSeconds(6);
-    // All 5 phases (including optional motion/music), ~7-8min
-    expect(total).toBeGreaterThan(300);
-    expect(total).toBeLessThan(600);
+    // All 5 phases (including optional motion/music), ~13min against real
+    // providers (calibrated on the 2026-08-20 11-scene record run)
+    expect(total).toBeGreaterThan(600);
+    expect(total).toBeLessThan(1000);
   });
 
   test('uses default scene count for 0', () => {

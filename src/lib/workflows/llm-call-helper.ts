@@ -14,8 +14,6 @@ import {
   extractRunError,
   formatRunErrorMessage,
   llmCostFromUsage,
-  parseJsonObjectResponse,
-  planStructuredOutput,
   PROMPT_REASONING,
 } from '@/lib/ai/llm-client';
 import type { TextModel } from '@/lib/ai/models';
@@ -284,10 +282,6 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
       // Always stream structured output so OpenRouter attaches usage.cost
       // (TanStack/ai#1076). No live channel here — drain for result + usage.
       const usageCapture = createUsageCapture();
-      // Native strict output when the provider's grammar fits the schema;
-      // json_object + schema-in-prompt when it can't (Anthropic large
-      // schemas). The trailing responseSchema.parse validates either way.
-      const plan = planStructuredOutput(modelId, config.responseSchema);
       try {
         const commonOptions = {
           adapter,
@@ -316,33 +310,15 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
           ],
           debug: false,
         };
-        const eventStream =
-          plan.mode === 'json-object'
-            ? chat({
-                ...commonOptions,
-                systemPrompts: [...systemPrompts, plan.instruction],
-                modelOptions: {
-                  ...commonOptions.modelOptions,
-                  responseFormat: { type: 'json_object' as const },
-                },
-              })
-            : chat({
-                ...commonOptions,
-                systemPrompts,
-                outputSchema: config.responseSchema,
-              });
+        const eventStream = chat({
+          ...commonOptions,
+          systemPrompts,
+          outputSchema: config.responseSchema,
+        });
 
-        let accumulated = '';
         let structuredObject: unknown;
         for await (const event of eventStream) {
           usageCapture.noteFromStreamEvent(event);
-          if (
-            event.type === 'TEXT_MESSAGE_CONTENT' &&
-            typeof event.delta === 'string'
-          ) {
-            accumulated += event.delta;
-            continue;
-          }
           if (
             event.type === 'CUSTOM' &&
             event.name === 'structured-output.complete'
@@ -359,15 +335,16 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
           }
         }
 
-        const result =
-          plan.mode === 'native' && structuredObject !== undefined
-            ? structuredObject
-            : parseJsonObjectResponse(accumulated);
+        if (structuredObject === undefined) {
+          throw new NonRetryableError(
+            `[LLM:${logName}:cf] Call ended without a structured-output.complete event`
+          );
+        }
         logger.info(`[LLM:${logName}:cf] Call succeeded`);
         // Return as JSON string — round-trips through step.do without hitting
         // CF's Rpc.Serializable constraint on the Zod-inferred shape.
         return {
-          jsonText: JSON.stringify(result),
+          jsonText: JSON.stringify(structuredObject),
           costMicros: llmCostFromUsage(usageCapture.get(), modelId),
           keySource: llmKeyInfo.source,
         };
@@ -496,9 +473,6 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         await channel.emit('shotPrompt.streaming', { promptType, delta });
       };
 
-      // Same native-vs-json_object routing as the non-streaming path; both
-      // stream raw JSON text deltas, so the loop below is mode-agnostic.
-      const plan = planStructuredOutput(modelId, config.responseSchema);
       const commonOptions = {
         adapter,
         messages: chatMessages,
@@ -522,26 +496,15 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         ],
         debug: false,
       };
-      const eventStream =
-        plan.mode === 'json-object'
-          ? chat({
-              ...commonOptions,
-              systemPrompts: [...systemPrompts, plan.instruction],
-              modelOptions: {
-                ...commonOptions.modelOptions,
-                responseFormat: { type: 'json_object' as const },
-              },
-            })
-          : chat({
-              ...commonOptions,
-              systemPrompts,
-              outputSchema: config.responseSchema,
-            });
+      const eventStream = chat({
+        ...commonOptions,
+        systemPrompts,
+        outputSchema: config.responseSchema,
+      });
       // The orchestrator-validated result from the terminal
-      // `structured-output.complete` event (native mode only — the
-      // json_object fallback has no outputSchema, so no event). Preferred
-      // over the hand-accumulated text: it's what the library validated,
-      // and it survives any delta-assembly drift.
+      // `structured-output.complete` event. Preferred over the
+      // hand-accumulated text: it's what the library validated, and it
+      // survives any delta-assembly drift.
       let structuredJson: string | null = null;
       try {
         for await (const event of eventStream) {
@@ -577,17 +540,14 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
           }
         }
         await flushDelta();
-        if (plan.mode === 'native' && structuredJson === null) {
-          // Native structured streams should always end with the complete
-          // event; falling back to accumulated text means the adapter didn't
-          // emit it (version drift) — the trailing Zod parse still guards.
-          logger.warn(
-            `[LLM:${logName}:cf] No structured-output.complete event received; falling back to accumulated text`
+        if (structuredJson === null) {
+          throw new NonRetryableError(
+            `[LLM:${logName}:cf] Stream ended without a structured-output.complete event`
           );
         }
         logger.info(`[LLM:${logName}:cf] Streaming call succeeded`);
         return {
-          jsonText: structuredJson ?? accumulated,
+          jsonText: structuredJson,
           costMicros: llmCostFromUsage(usageCapture.get(), modelId),
           keySource: llmKeyInfo.source,
         };
@@ -618,9 +578,5 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
     });
   }
 
-  // Native streams return the orchestrator-validated object (serialized off
-  // the structured-output.complete event); the fence-tolerant parse covers
-  // the json_object fallback's raw accumulated text. The Zod parse runs
-  // either way — it's what narrows to the schema's inferred type.
-  return config.responseSchema.parse(parseJsonObjectResponse(jsonText));
+  return config.responseSchema.parse(JSON.parse(jsonText));
 }

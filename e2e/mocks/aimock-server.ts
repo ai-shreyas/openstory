@@ -61,7 +61,8 @@ const RECORD_STAGING_DIR = resolve(
 const STAGE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['Enhance the script inside <USER_SCRIPT>', 'script-enhance'],
   ['STYLE CATALOG (choose by index):', 'style-recommend'],
-  ['Analyze the script within the USER_SCRIPT', 'script-analyze'],
+  ['Split the script within the USER_SCRIPT', 'script-analyze'],
+  ['Extract a complete character bible', 'script-bibles'],
   ['Match the following library locations', 'location-match'],
   ['Cast the following talent', 'talent-cast'],
   ['Generate the visual prompt for the starting frame', 'visual-prompts'],
