@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "9-panel cinematic storyboard sheet derived from Image 1. Mix Wide, Medium, and Tight shots of the same scene. No borders between panels.\n\nLayout: 3x3 grid (9 panels) in a 16:9 landscape image.\n\nScene: Cinematic 16:9 naturalistic coastal commercial still with modern social-first lifestyle energy, clean bright true-to-life color and slight warmth in the highlights. SCARLETT (Image 2) wears a black long-sleeve rash vest as a swim top and simple flip-flops, coral mouth unblotted and breaking into a real easy grin as she glances sideways without breaking stride, tote bag already lifting off her hip, weight shifting forward as she coils to break into a jog toward the sand. MAISIE (Image 3) keeps pace just off her shoulder in a spring suit peeled to the waist so the torso hangs around her hips, swimsuit still on above, barefoot, a foam rental-style surfboard tucked under one arm, already grinning at the glance. They occupy the wide pale-concrete Bondi promenade above the beach: sun-bleached walkway running toward a sand access, a simple metal safety rail along the ocean edge, a rack of rental surfboards further down, distant joggers dissolving into haze, open morning view of incoming sets and blue-green water beyond the rail, pale civic concrete and low beach infrastructure stretching either side. Direct high-key morning coastal sun, slightly harsh and immediate, raking across SCARLETT (Image 2) as she looks over, crisp whites, airy lifted shadows, sparkling glare on the water and a soft bounce of light off the pale concrete. Handheld eye-level medium-wide, natural micro-movement, shallow depth of field so the rail and promenade stay tactile while the ocean falls into bright bokeh, 16:9 anamorphic coastal frame.\n\nEvery panel is a shot of the same scene as Image 1 — keep the characters, wardrobe, lighting, color grade, and texture consistent across all panels.\n\nNo text, dialogue bubbles, scene numbers, or watermarks.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 1 (primary): Primary source scene — generate 9 variant shots from this image\nImage 4 (location): EXT. BONDI PROMENADE - Wide pale-concrete Bondi promenade running above the sand: joggers\nImage 5 (element): CORAL_LIPSTICK - A slim pocket-length lipstick tube",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa70bea/8iH-QBF3aM6wRfMbOGbsq_GxtSx1xN.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "8iH-QBF3aM6wRfMbOGbsq_GxtSx1xN.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

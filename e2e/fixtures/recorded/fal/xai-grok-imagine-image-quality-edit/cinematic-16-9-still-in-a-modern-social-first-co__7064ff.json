@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "Cinematic 16:9 still in a modern social-first coastal commercial look, tactile editorial energy and clean true-to-life color, SCARLETT (Image 1) wearing a black long-sleeve rash vest as a swim top half-peeled and slightly damp against her, simple flip-flops planted on the car-park concrete, leaning hard into the driver's-side wing mirror of a parked sedan with one palm braced on the pale door and the other hand lifting the product from (CORAL_LIPSTICK (Image 3)) toward her mouth, mid-twist, mid-breath, weight forward, no vanity and no posing, just a local getting ready before the water. Open Bondi Beach car park at early morning: pale sun-warmed poured concrete bays stretching empty and utilitarian, heat already shimmering off the deck, a metal safety rail running behind the car, the ocean a bright hard horizontal strip beyond that rail, chrome trim and warm white bodywork of the sedan catching the sun, a sun-faded canvas tote slumped on the warm white bonnet with everyday beach clutter scattered nearby, empty spaces and no ornamental architecture. Hard unfiltered morning sun slashes a clean geometric shadow across the door panel and the mirror glass, bright coastal bounce keeping the frame airy, glare skating the glossy surface of the product from (CORAL_LIPSTICK (Image 3)) and rim light tracing the mirror bezel and chrome. Crisp whites, sunlit metal, black rashie, pale door paint, slight warmth in the highlights and lifted shadows, shallow depth of field locking focus on the mirror edge and her raised hand while the rail and ocean strip fall into soft bokeh, eye-level three-quarter close-up along the car flank, handheld micro-freeze of potential energy, naturalistic 16:9 coastal commercial grade.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 2 (location): EXT. BONDI BEACH CAR PARK - EARLY MORNING - Open coastal car park above Bondi Beach: pale sun-warmed concrete bays",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa70bf6/X-lLxogQBSsPmzUuQBziG_SKHQDeKx.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "X-lLxogQBSsPmzUuQBziG_SKHQDeKx.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}
