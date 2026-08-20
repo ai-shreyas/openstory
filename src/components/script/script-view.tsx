@@ -32,6 +32,15 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { enhanceScriptStreamFn } from '@/functions/ai';
 import { useAutoScroll } from '@/hooks/use-auto-scroll';
@@ -113,6 +122,7 @@ import {
   Sparkles,
   Square,
   Undo2,
+  Library,
   Wand2,
 } from 'lucide-react';
 import React, {
@@ -1090,6 +1100,49 @@ export const ScriptView: FC<{
   const isDisabled =
     !isFormValid || isSubmitting || isEnhancing || isElementBusy;
 
+  const isMobile = useIsMobile();
+  const [referencesSheetOpen, setReferencesSheetOpen] = useState(false);
+  const referenceCount =
+    selectedTalentIds.length +
+    selectedLocationIds.length +
+    (isEditing ? 0 : draftElements.length);
+  const referenceSelectors = (
+    <>
+      <TalentSuggestionSelector
+        selectedTalentIds={selectedTalentIds}
+        onSelectionChange={(v) =>
+          setSelections((s) => ({ ...s, talentIds: v }))
+        }
+        disabled={loading}
+      />
+      <LocationSuggestionSelector
+        selectedLocationIds={selectedLocationIds}
+        onSelectionChange={(v) =>
+          setSelections((s) => ({ ...s, locationIds: v }))
+        }
+        disabled={loading}
+      />
+      {/* `isEditing = !!sequence?.id`; the `?.` mirrors that derivation for narrowing on `sequence.id` below. */}
+      {/* oxlint-disable-next-line typescript/no-unnecessary-condition */}
+      {isEditing && sequence?.id ? (
+        <ElementSelector
+          ref={elementSelectorRef}
+          sequenceId={sequence.id}
+          disabled={loading}
+          onElementBusyChange={setIsElementBusy}
+        />
+      ) : (
+        <ElementSelector
+          ref={elementSelectorRef}
+          draftElements={draftElements}
+          onDraftElementsChange={setDraftElements}
+          onDraftTokenRename={handleDraftTokenRename}
+          disabled={loading}
+          onElementBusyChange={setIsElementBusy}
+        />
+      )}
+    </>
+  );
   // Resume a Generate click the sign-in gate interrupted (#1187): once the
   // user is authenticated and the composer is ready again (draft restored, or
   // the pristine sample re-seeded), re-run the submit flow so the next step —
@@ -1179,6 +1232,86 @@ export const ScriptView: FC<{
     audioModels,
   ]);
 
+  const enhanceControls = (
+    <>
+      {canUndoEnhance && !isEnhancing && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="gap-1.5 text-muted-foreground"
+          onClick={handleUndoEnhance}
+        >
+          <Undo2 className="size-3.5" />
+          Undo
+        </Button>
+      )}
+      {isEnhancing ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="gap-1.5 text-muted-foreground"
+          onClick={handleStopEnhance}
+        >
+          <span className="relative size-5">
+            <Loader2 className="absolute inset-0 size-5 animate-spin" />
+            <Square className="absolute inset-[5px] size-[10px] fill-current" />
+          </span>
+          Stop
+        </Button>
+      ) : (
+        <Popover open={enhancePopoverOpen} onOpenChange={setEnhancePopoverOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={!scriptValue || scriptValue.length < 10 || isSubmitting}
+            >
+              <Sparkles className="size-3.5 text-primary" />
+              Enhance Script
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" side="top" className="w-auto">
+            <div className="flex flex-col gap-3">
+              <p className="text-sm font-medium">Target video duration</p>
+              <ToggleGroup
+                type="single"
+                value={String(targetDuration)}
+                onValueChange={(v) => {
+                  if (v) setTargetDuration(Number(v));
+                }}
+                variant="outline"
+                size="sm"
+                spacing={0}
+              >
+                {DURATION_PRESETS.map((preset) => (
+                  <ToggleGroupItem key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <Button
+                type="button"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => {
+                  setEnhancePopoverOpen(false);
+                  void handleEnhance();
+                }}
+              >
+                <Sparkles className="size-3.5" />
+                Enhance
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+      )}
+    </>
+  );
+
   return (
     <PremiumCard
       className={cn(
@@ -1206,8 +1339,10 @@ export const ScriptView: FC<{
         onSubmit={(e) => void handleSubmit(e)}
         className="flex flex-col min-h-0 max-h-full"
       >
-        {/* Control bar */}
-        <CardHeader className="shrink-0 flex flex-col lg:flex-row items-start justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40">
+        {/* Control bar. Below md the three reference selectors fold into one "References"
+            button that opens a sheet, so the bar is a single row next to the
+            settings trigger. */}
+        <CardHeader className="shrink-0 flex flex-row items-center md:flex-col md:items-start lg:flex-row justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40">
           <GenerationSettings
             aspectRatio={aspectRatio}
             analysisModels={analysisModels}
@@ -1234,46 +1369,51 @@ export const ScriptView: FC<{
             appliedFromStyle={appliedFromStyle}
             onResetStyleDefaults={resetStyleDefaults}
           />
-          <div className="flex items-center gap-2 min-h-10">
-            <TalentSuggestionSelector
-              selectedTalentIds={selectedTalentIds}
-              onSelectionChange={(v) =>
-                setSelections((s) => ({ ...s, talentIds: v }))
-              }
-              disabled={loading}
-            />
-            <LocationSuggestionSelector
-              selectedLocationIds={selectedLocationIds}
-              onSelectionChange={(v) =>
-                setSelections((s) => ({ ...s, locationIds: v }))
-              }
-              disabled={loading}
-            />
-            {/* `isEditing = !!sequence?.id`; the `?.` mirrors that derivation for narrowing on `sequence.id` below. */}
-            {/* oxlint-disable-next-line typescript/no-unnecessary-condition */}
-            {isEditing && sequence?.id ? (
-              <ElementSelector
-                ref={elementSelectorRef}
-                sequenceId={sequence.id}
-                disabled={loading}
-                onElementBusyChange={setIsElementBusy}
-              />
-            ) : (
-              <ElementSelector
-                ref={elementSelectorRef}
-                draftElements={draftElements}
-                onDraftElementsChange={setDraftElements}
-                onDraftTokenRename={handleDraftTokenRename}
-                disabled={loading}
-                onElementBusyChange={setIsElementBusy}
-              />
-            )}
+          {/* The selectors own their dialogs and the element ref, so they
+              mount exactly once: inline on md+, inside the sheet below it.
+              Visibility is CSS; only the mount point follows the hook. */}
+          <div className="hidden md:flex items-center gap-2 min-h-10">
+            {!isMobile && referenceSelectors}
           </div>
+          <Sheet
+            open={referencesSheetOpen}
+            onOpenChange={setReferencesSheetOpen}
+          >
+            <SheetTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loading}
+                className="md:hidden gap-1.5 shrink-0"
+              >
+                <Library className="size-3.5" />
+                References
+                {referenceCount > 0 && (
+                  <span className="ml-1 rounded-full bg-primary/10 px-1.5 text-xs">
+                    {referenceCount}
+                  </span>
+                )}
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="bottom" className="px-4 pb-6">
+              <SheetHeader className="px-0">
+                <SheetTitle>Talent, locations & elements</SheetTitle>
+                <SheetDescription>
+                  Pre-cast talent, pin locations, or add reference images.
+                  Anything you skip is extracted from the script.
+                </SheetDescription>
+              </SheetHeader>
+              <div className="flex flex-col items-start gap-3">
+                {isMobile && referenceSelectors}
+              </div>
+            </SheetContent>
+          </Sheet>
         </CardHeader>
 
         {/* Holds the script alone; the enhance row, style grid and footer are
             pinned below (outside), so long scripts scroll inside the editor
-            (min-h-28 floor, see the wrapper below) with the chrome fixed.
+            (editor floor, see the wrapper below) with the chrome fixed.
             overflow-y-auto is a fallback for viewports too short for even the
             editor floor + Sample-script row — it only engages then. */}
         <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
@@ -1289,9 +1429,10 @@ export const ScriptView: FC<{
           {/* Above the editor so the Shuffle button holds its position while
               samples of different lengths grow/shrink the editor below it.
               Always visible while composing — over the user's own text,
-              Shuffle confirms before replacing. */}
+              Shuffle confirms before replacing. Phones drop the caption and
+              put Shuffle in the Enhance strip below. */}
           {!isEditing && (
-            <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
+            <div className="hidden shrink-0 flex-wrap items-center justify-between gap-2 md:flex">
               <p className="text-xs text-muted-foreground">
                 {sampleStyleId ? (
                   <>
@@ -1324,10 +1465,10 @@ export const ScriptView: FC<{
               </Button>
             </div>
           )}
-          {/* Grows with content above the 4-row floor (min-h-28, see
-              ScriptEditor) — so the card resizes with the script, and samples
-              of different lengths change its height on Shuffle. */}
-          <div className="relative flex min-h-28 flex-col">
+          {/* Grows with content above the editor floor (2 rows on phones, 4 on
+              md+ — see ScriptEditor) — so the card resizes with the script,
+              and samples of different lengths change its height on Shuffle. */}
+          <div className="flex flex-col">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}
@@ -1351,122 +1492,53 @@ export const ScriptView: FC<{
         </CardContent>
 
         {/* Pinned between the scrolling script and the Generate footer (#1187):
-            the enhance row and style tiles must never scroll away — or
-            half-clip — behind a long script. @container replaces the one on
-            CardContent for the responsive row below. */}
-        <div className="shrink-0 @container flex flex-col gap-3 px-6 pb-6">
-          <div className="flex flex-col gap-2 @min-[480px]:flex-row @min-[480px]:items-center @min-[480px]:justify-between">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+            the style row and tiles must never scroll away — or half-clip —
+            behind a long script. */}
+        <div className="shrink-0 flex flex-col gap-2 px-6 pb-3 sm:gap-3 sm:pb-6">
+          {/* Phones: Shuffle and Enhance share one pinned row right under the
+              script (the caption row and the style row's Enhance slot are md+). */}
+          <div className="flex items-center justify-end gap-2 md:hidden">
+            {!isEditing && (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
-                disabled={
-                  loading || currentScriptText.length < 3 || isRecommending
-                }
-                onClick={triggerRecommend}
+                disabled={loading || isEnhancing || isSubmitting}
+                onClick={requestShuffle}
               >
-                {isRecommending ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
-                ) : (
-                  <Sparkles className="size-3.5 text-primary" />
-                )}
-                {recommendButtonLabel}
+                <Shuffle className="size-3.5" />
+                Shuffle
               </Button>
-              <StyleCategorySelect
-                styles={styles}
-                value={styleCategoryFilter}
-                onChange={handleStyleCategoryChange}
-                disabled={loading || isLoadingStyles}
-              />
-            </div>
-            <div className="flex shrink-0 items-center justify-end gap-1">
-              {canUndoEnhance && !isEnhancing && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1.5 text-muted-foreground"
-                  onClick={handleUndoEnhance}
-                >
-                  <Undo2 className="size-3.5" />
-                  Undo
-                </Button>
-              )}
-              {isEnhancing ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1.5 text-muted-foreground"
-                  onClick={handleStopEnhance}
-                >
-                  <span className="relative size-5">
-                    <Loader2 className="absolute inset-0 size-5 animate-spin" />
-                    <Square className="absolute inset-[5px] size-[10px] fill-current" />
-                  </span>
-                  Stop
-                </Button>
+            )}
+            {isMobile && enhanceControls}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={
+                loading || currentScriptText.length < 3 || isRecommending
+              }
+              onClick={triggerRecommend}
+            >
+              {isRecommending ? (
+                <Loader2 className="size-3.5 animate-spin text-primary" />
               ) : (
-                <Popover
-                  open={enhancePopoverOpen}
-                  onOpenChange={setEnhancePopoverOpen}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      disabled={
-                        !scriptValue || scriptValue.length < 10 || isSubmitting
-                      }
-                    >
-                      <Sparkles className="size-3.5 text-primary" />
-                      Enhance Script
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent align="end" side="top" className="w-auto">
-                    <div className="flex flex-col gap-3">
-                      <p className="text-sm font-medium">
-                        Target video duration
-                      </p>
-                      <ToggleGroup
-                        type="single"
-                        value={String(targetDuration)}
-                        onValueChange={(v) => {
-                          if (v) setTargetDuration(Number(v));
-                        }}
-                        variant="outline"
-                        size="sm"
-                        spacing={0}
-                      >
-                        {DURATION_PRESETS.map((preset) => (
-                          <ToggleGroupItem
-                            key={preset.value}
-                            value={preset.value}
-                          >
-                            {preset.label}
-                          </ToggleGroupItem>
-                        ))}
-                      </ToggleGroup>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={() => {
-                          setEnhancePopoverOpen(false);
-                          void handleEnhance();
-                        }}
-                      >
-                        <Sparkles className="size-3.5" />
-                        Enhance
-                      </Button>
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                <Sparkles className="size-3.5 text-primary" />
               )}
+              {recommendButtonLabel}
+            </Button>
+            <StyleCategorySelect
+              styles={styles}
+              value={styleCategoryFilter}
+              onChange={handleStyleCategoryChange}
+              disabled={loading || isLoadingStyles}
+            />
+            <div className="ml-auto hidden md:flex items-center gap-1">
+              {!isMobile && enhanceControls}
             </div>
           </div>
           <StyleSelector
@@ -1490,7 +1562,7 @@ export const ScriptView: FC<{
           )}
         </div>
 
-        <CardFooter className="shrink-0 flex-col gap-4 border-t border-border/30 bg-transparent px-6 py-4">
+        <CardFooter className="shrink-0 flex-col gap-4 border-t border-border/30 bg-transparent px-6 py-3 sm:py-4">
           {/* Footer row - stacks on mobile, inline on desktop */}
           <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             {/* Meta info - hidden on mobile */}

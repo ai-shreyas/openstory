@@ -39,7 +39,7 @@ export const GenerationSettingsTrigger: FC<GenerationSettingsTriggerProps> = ({
       )}
       <span className="font-mono text-sm">{aspectRatio}</span>
       {autoLabels.length > 0 && (
-        <span className="text-xs text-muted-foreground">
+        <span className="hidden sm:inline text-xs text-muted-foreground">
           {autoLabels.join(' + ')}
         </span>
       )}
