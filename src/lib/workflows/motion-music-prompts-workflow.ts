@@ -155,14 +155,22 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
       'merge-music-and-motion',
       () =>
         Promise.resolve(
-          scenesWithSnappedDurations.map((scene) => {
+          scenesWithSnappedDurations.map((scene, index) => {
             // A scene with no motion prompt is now an expected outcome, not a
             // mismatch: the batch returns partial results rather than failing
             // a whole sequence for one unanchorable scene (#1143). The shot
             // keeps its still and simply can't be animated until regenerated.
-            const musicSceneDesign = musicDesign.scenes.find(
-              (s) => s.sceneId === scene.sceneId
-            );
+            //
+            // Join on the echoed sceneId first, then fall back to position:
+            // scene ids are server-minted ULIDs since #1035, and a model can
+            // mangle an echoed ULID (the reason style recommendation moved to
+            // catalog indices) — the response array is index-aligned with the
+            // summaries we sent, so position recovers the pairing. This also
+            // keeps aimock replay working, where a static recorded response
+            // cannot echo run-specific ids.
+            const musicSceneDesign =
+              musicDesign.scenes.find((s) => s.sceneId === scene.sceneId) ??
+              musicDesign.scenes[index];
 
             // The motion prompt is persisted to `shot_prompt_versions` by the
             // per-scene motion child (mirrored on `shot.motionPrompt`) — it is

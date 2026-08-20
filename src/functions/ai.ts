@@ -17,6 +17,10 @@ import {
   sanitizeScriptContent,
 } from '@/lib/ai/prompt-validation';
 import {
+  sceneDurationResponseSchema,
+  styleRecommendationResponseSchema,
+} from '@/lib/ai/response-schemas';
+import {
   createUserPrompt,
   RateLimiter,
   scriptEnhancementRateLimiter,
@@ -201,16 +205,6 @@ Otherwise:
 Avoid generous padding. Reach 10+ seconds only when the script clearly demands it. Never invent visual moments that aren't in the script.
 
 Return ONLY valid JSON: {"durationSeconds": <integer between 1 and 60>}.`;
-
-// Schema sent to the LLM as the structured-output JSON Schema. Use plain
-// `z.number()` rather than `.int()` / `.min()` / `.max()` — Zod injects
-// JS-safe-integer bounds for `.int()`, and Amazon Bedrock (one of the
-// OpenRouter providers for Sonnet) rejects ANY `minimum`/`maximum` on
-// integer types: "For 'integer' type, properties maximum, minimum are not
-// supported". Range + integer enforcement happen post-parse via clamp.
-const sceneDurationResponseSchema = z.object({
-  durationSeconds: z.number(),
-});
 
 const SCENE_DURATION_MIN = 1;
 const SCENE_DURATION_MAX = 60;
@@ -495,23 +489,6 @@ const recommendStylesInputSchema = z.object({
   // Top-N shortlist size. This is request input (not an LLM JSON Schema), so the
   // 1..MAX integer bound is expressed here rather than clamped in the handler.
   limit: z.number().int().min(1).max(MAX_RECOMMENDATION_LIMIT).optional(),
-});
-
-// Structured-output schema sent to the LLM. The model returns catalog INDICES,
-// not style ids — ULIDs get mangled by the model, and an index maps back
-// unambiguously. Kept catch-free with plain `z.number()` (no `.int()`/min/max):
-// `.int()` injects JS-safe-integer bounds and some OpenRouter providers reject
-// `minimum`/`maximum` on integers (see sceneDurationResponseSchema). Integer +
-// in-range enforcement for `index` happens post-parse in
-// `rankStyleRecommendations`; `score` is used only for ordering, not bounded.
-const styleRecommendationResponseSchema = z.object({
-  recommendations: z.array(
-    z.object({
-      index: z.number(),
-      score: z.number(),
-      reasoning: z.string(),
-    })
-  ),
 });
 
 type RawStyleRecommendations = z.infer<

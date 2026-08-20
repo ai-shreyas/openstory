@@ -165,19 +165,21 @@ Uses streaming LLM output to create frames progressively as scenes arrive, plus 
 
 **Steps:**
 
-1. **`scene-splitting-stream`** — Resolves the prompt template from the local registry, then streams the LLM response through `createStreamingSceneParser()`:
-   - Parses incremental JSON chunks via `partial-json`
-   - On each complete scene: calls `upsertFrame()` to create/update the frame in DB, emits `generation.scene:new` and `generation.frame:created`
-   - On title detection: updates the sequence title, emits `generation.updated`
-   - **Preview images:** After each scene completes, triggers an image workflow (fire-and-forget via `triggerWorkflow`) using `PREVIEW_IMAGE_MODEL` for instant visual feedback
-   - On `scene:updated` events: upserts frame with partial metadata as scenes stream in
-2. **`reconcile-frames`** — Bulk upserts all frames via `bulkInsertFrames()` for workflow replay safety — a Cloudflare Workflows body re-executes from the top on every step callback, so this is idempotent on `sequenceId + orderIndex` conflict. Also emits `frame:created` for any frames missed during streaming.
-3. **`deduct-llm-credits-scene-splitting`** — Credit deduction
+Since #1035 the split runs as **two parallel LLM calls** (sibling `step.do`s via `Promise.all`), both over the same line-gutter copy of the script, and the LLM never re-emits script text:
 
-- **Prompt:** `phase/scene-splitting-chat`
-- **Variables:** `{ aspectRatio, script }` (script is sanitized)
-- **Response schema:** `sceneSplittingResultSchema`
-- **Output:** `{ scenes[], title, frameMapping[] }` — `frameMapping` is an array of `{ sceneId, frameId }` used throughout remaining phases
+1. **`scene-splitting-stream`** — the scenes call, a **boundary-annotation** contract: the model returns `boundaries[] = { hintLine, quote }` plus index-aligned `sceneMeta[]`, and `boundary-split.ts` resolves each verbatim quote to a raw offset (exact → normalized → fuzzy, monotonic cursor) and slices the ORIGINAL script — extracts are byte-verbatim adjacent substrings (`concat(slices) === script`, asserted). The stream is fed through `createStreamingSceneParser()`:
+   - On each finalized boundary: persists the scene + 1:1 shot, emits `generation.scene:new` / `generation.shot:created`
+   - On title detection: updates the sequence title, emits `generation.updated`
+   - On `scene:updated` (a scene's `sceneMeta` entry settling): upserts the scene and triggers its preview image (fire-and-forget via `triggerWorkflow`, staggered off the meta stream so the boundary burst can't fan out all previews at once)
+   - Excessive anchor repairs → one retry with feedback → heuristic `fastSceneSplit` fallback
+2. **`scene-bibles`** — the bibles call: `{ characterBible[], locationBible[], elementBible[] }`. Bible `firstMention`s carry `{ text, lineNumber }` only; the owning scene id is derived server-side from the gutter line. After the join, scene continuity tags are canonicalized onto bible tags (`tag-reconcile.ts`) since two independent calls can disagree.
+3. **`reconcile-shots`** / **`persist-scenes`** — replay-safe bulk upserts of scenes + shot links (idempotent on `sequenceId + orderIndex`).
+4. **`deduct-llm-credits-scene-splitting`** / **`deduct-llm-credits-scene-bibles`** — one credit deduction per LLM call
+
+- **Prompts:** `phase/scene-splitting-boundaries-chat` + `phase/scene-bibles-chat`
+- **Variables:** `{ aspectRatio, script, elements }` (script is sanitized and line-guttered)
+- **Response schemas:** `sceneSplitScenesResultSchema` + `sceneSplitBiblesResultSchema` — both under the ~3KB Anthropic strict-output grammar budget enforced by `response-schema-budget.test.ts`
+- **Output:** `{ scenes[], title, shotMapping[], characterBible[], locationBible[], elementBible[] }` — `shotMapping` maps `analysisSceneId → shotId/frameId` used throughout remaining phases
 
 ### Phase 2: Casting Characters & Locations (Parallel Sub-Workflows)
 

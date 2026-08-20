@@ -79,23 +79,6 @@ function deriveVisualPrompt(
   return {
     fullPrompt,
     negativePrompt: '',
-    components: {
-      sceneDescription: scene.metadata.storyBeat,
-      subject: framing.subjectStartState,
-      environment: joinParts([
-        scene.metadata.location,
-        scene.continuity.environmentTag,
-      ]),
-      lighting: scene.continuity.lightingSetup,
-      camera: joinParts([framing.shotSize, framing.angle]),
-      composition: framing.composition,
-      style: joinParts([styleConfig.look.artStyle, scene.continuity.styleTag]),
-      technical: '',
-      atmosphere: joinParts([
-        scene.metadata.timeOfDay,
-        scene.continuity.colorPalette,
-      ]),
-    },
   };
 }
 
@@ -124,27 +107,6 @@ export function deriveMotionPrompt(
   // signal presence and the on-screen sound cue.
   return {
     fullPrompt,
-    components: {
-      cameraMovement: cameraMovement.move,
-      startPosition: shot.framing.subjectStartState,
-      endPosition: '',
-      durationSeconds: shot.durationSeconds,
-      speed: cameraMovement.pacing,
-      smoothness: 'smooth',
-      subjectTracking: '',
-      equipment: '',
-    },
-    parameters: {
-      durationSeconds: shot.durationSeconds,
-      fps: 24,
-      motionAmount: cameraMovement.move === 'static' ? 'low' : 'medium',
-      cameraControl: {
-        pan: 0,
-        tilt: 0,
-        zoom: 1,
-        movement: cameraMovement.move,
-      },
-    },
     dialogue: scene.dialoguePresent
       ? {
           presence: true,

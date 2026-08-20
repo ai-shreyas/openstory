@@ -6,24 +6,6 @@ import { assembleMotionPrompt } from './assemble-motion-prompt';
 // Test fixtures
 // ---------------------------------------------------------------------------
 
-const baseComponents: MotionPrompt['components'] = {
-  cameraMovement: 'slow dolly forward',
-  startPosition: 'medium shot of character at desk',
-  endPosition: 'close-up on character face',
-  durationSeconds: 8,
-  speed: 'slow',
-  smoothness: 'smooth',
-  subjectTracking: 'Maintains focus on character face',
-  equipment: 'Steadicam',
-};
-
-const baseParameters: MotionPrompt['parameters'] = {
-  durationSeconds: 8,
-  fps: 30,
-  motionAmount: 'medium',
-  cameraControl: { pan: 0, tilt: 0, zoom: 1.2, movement: 'forward' },
-};
-
 const dialogueWithTone: NonNullable<MotionPrompt['dialogue']> = {
   presence: true,
   lines: [
@@ -51,8 +33,6 @@ const fullPromptText =
 function makeMotionPrompt(overrides: Partial<MotionPrompt> = {}): MotionPrompt {
   return {
     fullPrompt: fullPromptText,
-    components: baseComponents,
-    parameters: baseParameters,
     dialogue: dialogueWithTone,
     audio: audioData,
     ...overrides,

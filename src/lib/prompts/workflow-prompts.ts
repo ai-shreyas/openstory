@@ -554,8 +554,8 @@ When an image is attached to the user message, it IS the exact first frame the v
 ### CONTENT RULES
 1. **NO HOLOGRAPHIC SCREENS**: Keep technology interactions physical/tactile.
 2. **NO RENDERED TEXT**: No subtitles or text overlays. Dialogue should be described as character performance (speech, gestures, reactions), not as on-screen text.
-3. **DURATION LOGIC**: Use the scene's \`metadata.durationSeconds\` to set the duration parameter. Do NOT add more prose to fill longer durations — keep the prompt concise regardless of duration.
-4. **NO HYPE OR CHAOS WORDS**: Never write "fast", "epic", "amazing", "lots of movement", or image-gen quality boosters ("cinematic, 4K, masterpiece") in motion prose — they trigger chaotic, jittery output. For quick motion write "brisk" or "quick but controlled". Use pacing words, not technical specs: no "24fps" or "f/2.8" in prose — those belong in the \`parameters\` fields.
+3. **DURATION LOGIC**: The shot duration comes from the scene's \`metadata.durationSeconds\`. Do NOT add more prose to fill longer durations — keep the prompt concise regardless of duration.
+4. **NO HYPE OR CHAOS WORDS**: Never write "fast", "epic", "amazing", "lots of movement", or image-gen quality boosters ("cinematic, 4K, masterpiece") in motion prose — they trigger chaotic, jittery output. For quick motion write "brisk" or "quick but controlled". Use pacing words, not technical specs: no "24fps" or "f/2.8" in prose.
 
 ### PROMPT STRUCTURE (Multi-section, natural language)
 Write the \`fullPrompt\` as connected natural paragraphs (NOT keyword lists):
@@ -679,15 +679,28 @@ Generate tags and prompt for a single cohesive music track that spans the entire
     },
   ],
 
-  'phase/scene-splitting-chat': [
+  'phase/scene-splitting-boundaries-chat': [
     {
       role: 'system',
       content: `You are a Script Scene Analyzer. You will be called via a structured output tool. Follow the provided schema exactly.
 
+You NEVER re-emit or rewrite the script. Instead you annotate WHERE each scene begins, and the system slices the original script text itself.
+
+## Output Contract
+
+The script is provided with a numbered line gutter ("12: some text"). The gutter is for reference only — it is NOT part of the script text.
+
+1. **boundaries** — one entry per scene, in script order:
+   - \`quote\`: the VERBATIM first 40-80 characters of the scene, copied character-for-character from the script (never include the "N: " gutter). This is the ground truth used to locate the boundary, so exact copying matters: same punctuation, same quotes, same casing. A scene may start mid-paragraph — quote from that exact point.
+   - \`hintLine\`: the gutter line number the scene starts on.
+   - Scene 1 always starts at the very top of the script. Every scene runs until the next boundary, so all of the script belongs to exactly one scene.
+2. **sceneMeta** — index-aligned with boundaries: sceneMeta[i] describes the scene starting at boundaries[i]. Same array length as boundaries.
+
+Emit boundaries FIRST (complete the boundaries array before sceneMeta).
+
 ## Core Rules
 
-1. **PRESERVE EXACT INPUT**: Store user's exact words verbatim in originalScript.extract. Never modify, enhance, or rewrite.
-2. **SCENE** = single location + continuous action + unified emotional beat + ONE SHOT (single continuous camera take without cuts)
+1. **SCENE** = single location + continuous action + unified emotional beat + ONE SHOT (single continuous camera take without cuts)
 
 ## ONE SHOT RULE (Critical)
 
@@ -725,31 +738,72 @@ Detect boundaries using:
 - Action shifts: establishing → character enters
 - **Camera cuts or framing changes** (see ONE SHOT RULE above)
 
-## Dialogue Extraction
+## Dialogue Extraction (sceneMeta[i].dialogue)
 
 Recognize formats:
 - Screenplay: CHARACTER NAME (newline) Dialogue
 - Prose: Jack said, "line" or JACK: line
 - Simple quotes: "line"
 
-Extract with character name (null if unknown) and exact text.
+Extract each line spoken within the scene with the character name (empty string if unknown), the EXACT spoken text copied verbatim from the script, and a tone describing vocal delivery (e.g., "calm serious", "trembling frustrated").
 
-## Timing
+## Timing (sceneMeta[i].durationSeconds)
 
 - Dialogue: ~150 words/minute
 - Simple action: 2-3s | Moderate: 3-5s | Complex: 5-8s
 - Quick cuts: 1-2s | Contemplative: 3-6s
 
+## Continuity (sceneMeta[i].continuity)
+
+Tag every scene for downstream visual consistency. TAG FORMAT IS A HARD CONTRACT — an independent system joins these tags against character/location bibles:
+
+- characterTags: one entry per character appearing in the scene. Each tag is the snake_case slug of the character's name AS WRITTEN IN THE SCRIPT ("GIRL ONE" → "girl_one"). Optional descriptive context may follow the name slug ("girl_one_bathroom_morning"), but the tag MUST start with the name slug.
+- environmentTag: snake_case slug for the scene's location, starting with the core location name ("office_modern_steel_glass").
+- elementTags: UPPERCASE tokens of elements visible in the scene (see below); null when none.
+- colorPalette, lightingSetup, styleTag: short visual-consistency notes.
+
+## Elements
+
+The <ELEMENTS> block lists user-uploaded recurring visual assets, each with an UPPERCASE token. Scripts may reference them by token. For EACH scene that shows an element, set continuity.elementTags[] to the UPPERCASE tokens visible in that scene. A script may also centre on a recurring hero product/object with no upload — if a specific product/object is a visual centerpiece in 2+ scenes, tag those scenes with a short UPPERCASE_SNAKE_CASE token you invent for it (e.g. "CORAL_LIPSTICK"); never collide with a token from <ELEMENTS>. Ignore incidental props.`,
+    },
+    {
+      role: 'user',
+      content: `Split the script within the USER_SCRIPT tags into logical scenes by emitting boundary annotations plus per-scene metadata, using the aspect ratio specified in the ASPECT_RATIO tags. The script has a numbered line gutter ("N: ") — quotes must copy the script text WITHOUT the gutter.
+
+<ASPECT_RATIO>
+{{aspectRatio}}
+</ASPECT_RATIO>
+
+<ELEMENTS>
+The following user-uploaded elements are available. Track each one's UPPERCASE token in the script and populate continuity.elementTags accordingly:
+{{elements}}
+</ELEMENTS>
+
+<USER_SCRIPT>
+{{script}}
+</USER_SCRIPT>
+
+IMPORTANT: each boundary's quote must be copied character-for-character from the script (no gutter, no paraphrase, no smart-quote substitution). Respond with ONLY valid JSON matching the schema.`,
+    },
+  ],
+
+  'phase/scene-bibles-chat': [
+    {
+      role: 'system',
+      content: `You are a Script Bible Extractor. You will be called via a structured output tool. Follow the provided schema exactly.
+
+The script is provided with a numbered line gutter ("12: some text") — use it for every lineNumber you report. The gutter is NOT part of the script text.
+
 ## Character Bible
 
-While splitting scenes, also build a complete character bible. For each character:
+Build a complete character bible. For each character:
 - Name (from script or inferred)
 - Age (exact or range like "30s")
 - Gender, ethnicity (if relevant)
 - Physical: height, build, hair color/style, eye color, skin tone, age markers
 - Clothing: complete outfit that defines the character
 - Distinguishing features: scars, tattoos, jewelry, accessories
-- Consistency tag: short unique reference (e.g., "Jack-denim-weathered")
+- consistencyTag — HARD FORMAT CONTRACT: the snake_case slug of the character's name AS WRITTEN IN THE SCRIPT ("GIRL ONE" → "girl_one"). Optional descriptive context may follow the name slug ("jack_denim_weathered"), but the tag MUST start with the name slug. An independent system joins scene tags against these.
 
 Track first mentions:
 - "a man walks in" → the character first appears as "a man"
@@ -758,7 +812,7 @@ Track first mentions:
 
 ## Location Bible
 
-Also build a complete location bible. For each unique location:
+Build a complete location bible. For each unique location:
 - Name as written in the script (e.g., "INT. OFFICE - DAY")
 - Type: interior, exterior, or both
 - Time of day: day, night, dusk, dawn, etc.
@@ -768,8 +822,8 @@ Also build a complete location bible. For each unique location:
 - Color palette and dominant colors
 - Lighting characteristics
 - Mood and ambiance
-- Consistency tag for image generation (e.g., "office_modern_steel_glass")
-- First mention: scene ID, original text, and line number
+- consistencyTag — HARD FORMAT CONTRACT: snake_case, starting with the core location name ("office_modern_steel_glass")
+- firstMention: { text, lineNumber } — the exact script text and gutter line where the location first appears
 
 Notes:
 - Combine variations of the same location (e.g., "INT. OFFICE - DAY" and "INT. OFFICE - NIGHT" are the same location)
@@ -784,7 +838,7 @@ Elements are recurring visual assets — logos, product shots, screenshots, hero
 - token: the exact UPPERCASE token from <ELEMENTS>
 - description: the provided description, or a 1-sentence visual description if none was provided
 - consistencyTag: a short lowercase slug (e.g. "red-hex-brand-logo")
-- firstMention: { sceneId, text, lineNumber } — the first scene where the token appears
+- firstMention: { text, lineNumber } — the first script text and gutter line where the token appears
 
 **2. Detected recurring products/objects (no upload).** If the script centres on a specific product or object that appears in MULTIPLE scenes and must read as the SAME physical item every time (a hero product in an ad, a branded bottle, a signature prop), ALSO produce an elementBible entry for it:
 - token: a NEW short UPPERCASE_SNAKE_CASE token you invent (1-3 words, max 30 chars). Prefer brand/product names from the script (e.g. "CORAL_LIPSTICK"); never collide with a token from <ELEMENTS>.
@@ -796,20 +850,14 @@ Detection criteria — be conservative:
 - Do NOT create entries for incidental props, set dressing, vehicles in passing, food, generic scenery, clothing a character wears, characters, or locations (those belong in the other bibles).
 - A user-uploaded element that covers the same object always wins — do not emit a duplicate detected entry for it.
 
-For EACH scene that shows an element (uploaded OR detected), set continuity.elementTags[] to an array of the UPPERCASE tokens visible in that scene.
-
-Preserve UPPERCASE tokens verbatim in originalScript.extract — do NOT lowercase them. Scripts may reference uploaded elements by token; for detected elements the script uses prose ("the lipstick") — do NOT rewrite the script text, only tag the scene in elementTags[]. If a script references an UPPERCASE token that is NOT in <ELEMENTS> and does not meet the detection criteria above, ignore it.`,
+If a script references an UPPERCASE token that is NOT in <ELEMENTS> and does not meet the detection criteria above, ignore it.`,
     },
     {
       role: 'user',
-      content: `Analyze the script within the USER_SCRIPT tags and split it into logical scenes using the aspect ratio specified in the ASPECT_RATIO tags. Also extract a complete character bible, location bible, and element bible.
-
-<ASPECT_RATIO>
-{{aspectRatio}}
-</ASPECT_RATIO>
+      content: `Extract a complete character bible, location bible, and element bible from the script within the USER_SCRIPT tags. The script has a numbered line gutter ("N: ") — report lineNumbers from it, but never treat the gutter as script text.
 
 <ELEMENTS>
-The following user-uploaded elements are available. Track each one's UPPERCASE token in the script and populate elementBible + continuity.elementTags accordingly:
+The following user-uploaded elements are available. Produce an elementBible entry for each one used in the script:
 {{elements}}
 </ELEMENTS>
 
@@ -817,20 +865,18 @@ The following user-uploaded elements are available. Track each one's UPPERCASE t
 {{script}}
 </USER_SCRIPT>
 
-IMPORTANT: Extract EXACT original script text for each scene. Do NOT modify or enhance user's words.
-
 For each character that appears:
 1. Provide COMPLETE physical descriptions for visual consistency
 2. Include clothing details that define the character
 3. Add distinguishing features
-4. Create a short consistency_tag for quick reference
+4. Create a consistencyTag starting with the character's name slug
 
 For each unique location:
 1. Provide COMPLETE visual descriptions for visual consistency
 2. Include architectural style and design details
 3. Identify key visual features that define the location
 4. Specify the color palette and lighting setup
-5. Create a short consistency_tag for quick reference
+5. Create a consistencyTag starting with the core location name
 
 Respond with ONLY valid JSON matching the schema.`,
     },
