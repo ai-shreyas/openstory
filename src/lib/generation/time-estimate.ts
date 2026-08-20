@@ -8,12 +8,18 @@
  * badly undercounts (e.g. 29 labeled scenes → ~8 by words → ~⅓ the real cost).
  */
 
+// Calibrated against a real-provider 11-scene run (2026-08-20, grok-4.6
+// analysis + seedance_v2 motion): phases measured 151s / 25s / 95s / 130s /
+// 328–487s. Phase 1's scene-split output scales with scene count (~13s/scene
+// observed); phases 3–4 are parallel per scene so only their slowest call
+// paces them; phase 5's per-scene term tracks the completion tail widening as
+// the parallel clip batch grows.
 const PHASE_BUDGETS = [
-  { base: 30, perScene: 1.5 }, // 1. Script analysis (streaming LLM output scales with scenes)
-  { base: 60, perScene: 1.5 }, // 2. Casting (LLM input scales with scenes)
-  { base: 150, perScene: 0 }, // 3. Sheets + visual prompts (all parallel per scene)
-  { base: 90, perScene: 0 }, // 4. Images + motion/music prompts (all parallel per scene)
-  { base: 210, perScene: 0 }, // 5. Motion/music generation (optional; all parallel per scene)
+  { base: 30, perScene: 12 }, // 1. Script analysis (scene-split output scales with scenes)
+  { base: 20, perScene: 1 }, // 2. Casting (LLM input scales with scenes)
+  { base: 100, perScene: 0 }, // 3. Sheets + visual prompts (all parallel per scene)
+  { base: 135, perScene: 0 }, // 4. Images + motion/music prompts (images, then vision-conditioned motion prompts)
+  { base: 330, perScene: 15 }, // 5. Motion/music generation (optional; parallel, tail grows with batch size)
 ] as const;
 
 const WORDS_PER_SCENE = 120;
