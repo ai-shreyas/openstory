@@ -6,7 +6,11 @@
  * Drizzle-free so the composer can import the sentinel and labels.
  */
 import { z } from 'zod';
-import { StyleConfigSchema, type StyleConfig } from './style-config';
+import {
+  STYLE_PACE_VALUES,
+  StyleConfigSchema,
+  type StyleConfig,
+} from './style-config';
 
 /** Composer-side sentinel sent as `styleId` to request an automatic style. */
 export const AUTO_STYLE_ID = 'auto';
@@ -57,7 +61,7 @@ export const autoStyleResponseSchema = z.object({
   colorGrading: z.string(),
   camera: z.string(),
   shots: z.string(),
-  pace: z.enum(['slow', 'measured', 'brisk', 'frenetic']),
+  pace: z.enum(STYLE_PACE_VALUES),
   /** 1 = stillness, 5 = kinetic chaos. */
   energy: z.number(),
   references: z.array(z.string()),
@@ -100,14 +104,15 @@ function nonEmpty(values: string[], max: number): string[] {
 /**
  * Coerce the free-form LLM answer into a valid `StyleConfig` + row fields.
  * Throws (ZodError) only if the model returned something unsalvageable, e.g.
- * an empty palette — the workflow step then retries the call.
+ * an empty palette or name. The caller decides what that failure means.
  */
 export function autoStyleDraftFromResponse(
   response: AutoStyleResponse
 ): AutoStyleDraft {
-  const name =
-    response.name.trim().slice(0, MAX_NAME_LENGTH) ||
-    AUTO_STYLE_PLACEHOLDER_NAME;
+  const name = z
+    .string()
+    .min(1)
+    .parse(response.name.trim().slice(0, MAX_NAME_LENGTH));
   const config = StyleConfigSchema.parse({
     version: 2,
     look: {

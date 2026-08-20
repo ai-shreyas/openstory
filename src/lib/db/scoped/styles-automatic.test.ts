@@ -105,7 +105,7 @@ describe('automatic styles', () => {
     expect(sequence.styleConfig).toBeNull();
   });
 
-  it('setGeneratedForSequence writes the recipe and re-snapshotting copies it', async () => {
+  it('setGeneratedForSequence writes the recipe and snapshotAutoStyle copies it', async () => {
     const { stylesDb, sequencesDb, sequence, style } =
       await createAutoSequence();
 
@@ -116,15 +116,58 @@ describe('automatic styles', () => {
     });
     expect(bound).toBe(true);
 
-    const updated = await sequencesDb.update({
-      id: sequence.id,
-      styleId: style.id,
-    });
-    expect(parseStyleConfig(updated.styleConfig).look.mood).toBe(
+    expect(
+      await sequencesDb.snapshotAutoStyle({
+        id: sequence.id,
+        styleId: style.id,
+      })
+    ).toBe(true);
+    const updated = await sequencesDb.getById(sequence.id);
+    expect(parseStyleConfig(updated?.styleConfig).look.mood).toBe(
       derived().config.look.mood
     );
     const row = await stylesDb.getBoundToSequence(sequence.id);
     expect(row?.name).toBe('Rain-slick Neon Noir');
+  });
+
+  it('snapshotAutoStyle leaves a library style picked mid-run untouched', async () => {
+    const library = await seedLibraryStyle('Noir');
+    const { stylesDb, sequencesDb, sequence, style } =
+      await createAutoSequence();
+    await sequencesDb.update({ id: sequence.id, styleId: library.id });
+    await stylesDb.setGeneratedForSequence({
+      styleId: style.id,
+      sequenceId: sequence.id,
+      draft: derived(),
+    });
+
+    expect(
+      await sequencesDb.snapshotAutoStyle({
+        id: sequence.id,
+        styleId: style.id,
+      })
+    ).toBe(false);
+    const after = await sequencesDb.getById(sequence.id);
+    expect(after?.styleId).toBe(library.id);
+    expect(parseStyleConfig(after?.styleConfig).look.mood).toBe(
+      placeholderAutoStyleDraft().config.look.mood
+    );
+  });
+
+  it('getById/listByIds hide another team’s bound row but resolve library rows', async () => {
+    const { style } = await createAutoSequence();
+    const library = await seedLibraryStyle('Noir');
+    const otherTeam = createStylesMethods(db, generateId(), userId);
+
+    expect(await otherTeam.getById(style.id)).toBeNull();
+    expect(await otherTeam.getById(library.id)).toMatchObject({
+      id: library.id,
+    });
+    expect(
+      (await otherTeam.listByIds([style.id, library.id])).map((s) => s.id)
+    ).toEqual([library.id]);
+    const own = createStylesMethods(db, teamId, userId);
+    expect(await own.getById(style.id)).toMatchObject({ id: style.id });
   });
 
   it('setGeneratedForSequence refuses once the row is no longer bound', async () => {

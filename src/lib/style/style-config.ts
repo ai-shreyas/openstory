@@ -31,7 +31,12 @@ const StyleLookSchema = z.object({
   medium: prose.optional(),
 });
 
-const STYLE_PACE_VALUES = ['slow', 'measured', 'brisk', 'frenetic'] as const;
+export const STYLE_PACE_VALUES = [
+  'slow',
+  'measured',
+  'brisk',
+  'frenetic',
+] as const;
 
 const StyleMotionSchema = z.object({
   camera: prose,

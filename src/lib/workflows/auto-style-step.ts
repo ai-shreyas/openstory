@@ -12,6 +12,7 @@ import { getGenerationChannel } from '@/lib/realtime';
 import {
   autoStyleDraftFromResponse,
   autoStyleResponseSchema,
+  type AutoStyleDraft,
 } from '@/lib/style/auto-style';
 import type { StyleConfig } from '@/lib/style/style-config';
 import { durableLLMCallCf } from '@/lib/workflows/llm-call-helper';
@@ -52,7 +53,17 @@ export async function deriveAutoStyle(
     { sequenceId, workflowRunId: params.workflowRunId, scopedDb }
   );
 
-  const draft = autoStyleDraftFromResponse(response);
+  // The LLM result is a cached durable step, so a coercion failure here replays
+  // identically on every engine retry — surface it as non-retryable instead of
+  // letting the instance spin.
+  let draft: AutoStyleDraft;
+  try {
+    draft = autoStyleDraftFromResponse(response);
+  } catch (error) {
+    throw new NonRetryableError(
+      `Automatic style for sequence ${sequenceId} was unsalvageable: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 
   await step.do('save-automatic-style', async () => {
     const bound = await scopedDb.styles.setGeneratedForSequence({
@@ -61,15 +72,24 @@ export async function deriveAutoStyle(
       draft,
     });
     if (!bound) {
-      // The row was promoted (or the sequence re-styled) between the trigger
-      // and this step — a library row must never be rewritten by a run.
+      // Promoted between the trigger and this step — a library row must never
+      // be rewritten by a run.
       throw new NonRetryableError(
         `Automatic style ${styleId} is no longer bound to sequence ${sequenceId}`
       );
     }
-    // Re-snapshots from the row just written, so the sequence carries the
-    // derived recipe like any library pick would.
-    await scopedDb.sequences.update({ id: sequenceId, styleId });
+    // Reads the row just written in this step; scoped to the sequence still
+    // pointing at this style, so a library pick made mid-run wins.
+    const snapshotted = await scopedDb.sequences.snapshotAutoStyle({
+      id: sequenceId,
+      styleId,
+    });
+    if (!snapshotted) {
+      logger.warn('[AutoStyle:cf] sequence re-styled mid-run; snapshot kept', {
+        sequenceId,
+        styleId,
+      });
+    }
     await getGenerationChannel(sequenceId).emit('generation.style:ready', {
       styleId,
       name: draft.name,

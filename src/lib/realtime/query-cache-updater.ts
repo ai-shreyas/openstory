@@ -426,8 +426,6 @@ export function updateQueryCacheFromEvent(
     }
 
     case 'generation.style:ready': {
-      // The automatic style row now carries its derived name + recipe (#1213);
-      // the badge and detail dialog read it through the style detail query.
       const styleId = getString(data, 'styleId');
       if (styleId) {
         debouncedInvalidate(
@@ -436,6 +434,12 @@ export function updateQueryCacheFromEvent(
           `style:${styleId}`
         );
       }
+      // `sequence.styleConfig` flipping non-null is what ends the pending state.
+      debouncedInvalidate(
+        queryClient,
+        sequenceKeys.detail(sequenceId),
+        `sequence:${sequenceId}`
+      );
       break;
     }
 

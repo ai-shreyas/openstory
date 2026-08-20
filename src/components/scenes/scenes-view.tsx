@@ -1404,6 +1404,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 resolvedSequenceImageModel={resolvedSequenceImageModel}
                 resolvedSequenceVideoModel={resolvedSequenceVideoModel}
                 styleId={sequence?.styleId ?? undefined}
+                stylePending={sequence?.styleConfig == null}
                 aspectRatio={aspectRatio}
                 analysisModel={sequence?.analysisModel ?? undefined}
               />
@@ -1459,6 +1460,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 resolvedSequenceImageModel={resolvedSequenceImageModel}
                 resolvedSequenceVideoModel={resolvedSequenceVideoModel}
                 styleId={sequence?.styleId ?? undefined}
+                stylePending={sequence?.styleConfig == null}
                 aspectRatio={aspectRatio}
                 analysisModel={sequence?.analysisModel ?? undefined}
               />

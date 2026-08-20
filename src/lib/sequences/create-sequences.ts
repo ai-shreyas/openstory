@@ -46,27 +46,32 @@ import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type { StoryboardTriggerInput } from '@/lib/workflow/types';
 import { createServerOnlyFn } from '@tanstack/react-start';
 
-type StyleSource =
+export type StyleSource =
   | { kind: 'library' }
   /** Fresh automatic style: placeholder row now, recipe derived by the run. */
   | { kind: 'pending'; draft: AutoStyleDraft }
   /** Copy of another sequence's (already derived) automatic style. */
   | { kind: 'clone'; draft: AutoStyleDraft };
 
-async function resolveStyleSource(
-  scopedDb: ScopedDb,
+export async function resolveStyleSource(
+  scopedDb: Pick<ScopedDb, 'styles' | 'sequences'>,
   styleId: string
 ): Promise<StyleSource> {
   if (styleId === AUTO_STYLE_ID) {
     return { kind: 'pending', draft: placeholderAutoStyleDraft() };
   }
+  // `getById` hides other teams' bound rows, so reaching the clone branch
+  // means the source is ours.
   const style = await scopedDb.styles.getById(styleId);
   if (!style) {
     throw new ValidationError(`Style ${styleId} not found`);
   }
   if (style.sequenceId === null) return { kind: 'library' };
-  if (style.teamId !== scopedDb.teamId) {
-    throw new ValidationError(`Style ${styleId} not found`);
+  // Copying a sequence whose style is still being derived: the source row
+  // holds only the placeholder, so the copy derives its own.
+  const source = await scopedDb.sequences.getById(style.sequenceId);
+  if (source?.styleConfig == null) {
+    return { kind: 'pending', draft: placeholderAutoStyleDraft() };
   }
   return {
     kind: 'clone',
@@ -236,7 +241,6 @@ export const createSequences = createServerOnlyFn(
           title: data.title || 'Untitled Sequence',
           script: data.script,
           styleId: boundStyle?.id ?? styleId,
-          // A placeholder recipe must not be frozen — the run derives the real one.
           deferStyleSnapshot: styleSource.kind === 'pending',
           aspectRatio,
           analysisModel:

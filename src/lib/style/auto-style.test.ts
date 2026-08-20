@@ -68,15 +68,15 @@ describe('autoStyleDraftFromResponse', () => {
     expect(draft.description).toBeNull();
   });
 
-  it('falls back to the placeholder name when the model returns none', () => {
-    expect(autoStyleDraftFromResponse({ ...RESPONSE, name: '  ' }).name).toBe(
-      AUTO_STYLE_PLACEHOLDER_NAME
-    );
-  });
-
-  it('throws on an unsalvageable answer (empty palette)', () => {
+  it('throws on an unsalvageable answer (empty palette, blank name, terse prose)', () => {
     expect(() =>
       autoStyleDraftFromResponse({ ...RESPONSE, colorPalette: [' '] })
+    ).toThrow();
+    expect(() =>
+      autoStyleDraftFromResponse({ ...RESPONSE, name: '  ' })
+    ).toThrow();
+    expect(() =>
+      autoStyleDraftFromResponse({ ...RESPONSE, mood: 'ok' })
     ).toThrow();
   });
 });

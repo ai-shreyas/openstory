@@ -194,9 +194,14 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       consistencyTag: el.consistencyTag,
     }));
 
-    // Automatic style (#1213): derived from the script in parallel with
-    // scene-split, which only needs a style for its preview stills — those
-    // render style-free on an automatic run. Every later phase uses the result.
+    if (pendingAutoStyleId && !sequenceId) {
+      throw new NonRetryableError(
+        'Automatic style requested without a sequence to bind it to'
+      );
+    }
+
+    // Automatic style (#1213): derived in parallel with scene-split, whose
+    // preview stills render style-free on an automatic run.
     const [sceneSplitResult, styleConfig] = await Promise.all([
       spawnAndAwaitChild<SceneSplitWorkflowInput, SceneSplitWorkflowResult>(
         step,

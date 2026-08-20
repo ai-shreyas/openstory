@@ -41,16 +41,16 @@ const RESPONSE: AutoStyleResponse = {
   references: ['neon-noir cityscapes'],
 };
 
-function makeScopedDb(bound: boolean) {
+function makeScopedDb(bound: boolean, stillSelected = true) {
   const setGeneratedForSequence = vi.fn(async () => bound);
-  const update = vi.fn(async () => ({}));
+  const snapshotAutoStyle = vi.fn(async () => stillSelected);
   const stub = {
     styles: { setGeneratedForSequence },
-    sequences: { update },
+    sequences: { snapshotAutoStyle },
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- only the two writes the step performs
   const scopedDb = stub as unknown as WorkflowScopedDb;
-  return { scopedDb, setGeneratedForSequence, update };
+  return { scopedDb, setGeneratedForSequence, snapshotAutoStyle };
 }
 
 const PARAMS = {
@@ -66,7 +66,8 @@ describe('deriveAutoStyle', () => {
   it('writes the derived recipe to the bound row, re-snapshots the sequence, and emits', async () => {
     durableLLMCallCf.mockResolvedValueOnce(RESPONSE);
     emit.mockReset();
-    const { scopedDb, setGeneratedForSequence, update } = makeScopedDb(true);
+    const { scopedDb, setGeneratedForSequence, snapshotAutoStyle } =
+      makeScopedDb(true);
 
     const config = await deriveAutoStyle(step, { scopedDb, ...PARAMS });
 
@@ -80,7 +81,10 @@ describe('deriveAutoStyle', () => {
         config,
       }),
     });
-    expect(update).toHaveBeenCalledWith({ id: 'seq_1', styleId: 'style_auto' });
+    expect(snapshotAutoStyle).toHaveBeenCalledWith({
+      id: 'seq_1',
+      styleId: 'style_auto',
+    });
     expect(emit).toHaveBeenCalledWith('generation.style:ready', {
       styleId: 'style_auto',
       name: 'Rain-slick Neon Noir',
@@ -97,12 +101,39 @@ describe('deriveAutoStyle', () => {
   it('refuses to touch a row that is no longer bound to the sequence', async () => {
     durableLLMCallCf.mockResolvedValueOnce(RESPONSE);
     emit.mockReset();
-    const { scopedDb, update } = makeScopedDb(false);
+    const { scopedDb, snapshotAutoStyle } = makeScopedDb(false);
 
     await expect(
       deriveAutoStyle(step, { scopedDb, ...PARAMS })
     ).rejects.toThrow(/no longer bound/);
-    expect(update).not.toHaveBeenCalled();
+    expect(snapshotAutoStyle).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('keeps a library style picked mid-run, still returning the derived config', async () => {
+    durableLLMCallCf.mockResolvedValueOnce(RESPONSE);
+    emit.mockReset();
+    const { scopedDb, setGeneratedForSequence } = makeScopedDb(true, false);
+
+    const config = await deriveAutoStyle(step, { scopedDb, ...PARAMS });
+
+    expect(config.look.mood).toBe('tense and paranoid');
+    expect(setGeneratedForSequence).toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith(
+      'generation.style:ready',
+      expect.objectContaining({ styleId: 'style_auto' })
+    );
+  });
+
+  it('fails non-retryably on an unsalvageable answer without writing anything', async () => {
+    durableLLMCallCf.mockResolvedValueOnce({ ...RESPONSE, colorPalette: [] });
+    emit.mockReset();
+    const { scopedDb, setGeneratedForSequence } = makeScopedDb(true);
+
+    await expect(
+      deriveAutoStyle(step, { scopedDb, ...PARAMS })
+    ).rejects.toThrow(/unsalvageable/);
+    expect(setGeneratedForSequence).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
   });
 });

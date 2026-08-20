@@ -48,8 +48,9 @@ export const styles = snakeCase.table(
     // Set on an automatic style (#1213): derived from one sequence's script,
     // visible only through that sequence, excluded from every library list and
     // the slug-uniqueness check. Cleared by promotion. No FK: `sequences`
-    // already references `styles`, and the owning sequence's delete path
-    // removes its bound style explicitly.
+    // already references `styles`, and the row is inserted before its
+    // sequence exists. `sequences.delete` removes it; re-styling a sequence
+    // leaves it orphaned (unreachable, harmless).
     sequenceId: text(),
     name: text({ length: 255 }).notNull(),
     description: text(),

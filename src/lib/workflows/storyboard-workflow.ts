@@ -92,9 +92,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
       await seq.updateStatus('processing');
     });
 
-    // Automatic style (#1213): the payload's styleConfig is only the placeholder,
-    // so the poster renders from the script alone; analyze-script derives the
-    // real recipe in parallel with scene-split.
+    // Pending automatic style (#1213): the poster renders from the script alone.
     const styleConfig = input.pendingAutoStyleId
       ? undefined
       : input.styleConfig;

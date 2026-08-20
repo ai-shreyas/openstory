@@ -33,7 +33,7 @@ export function AutoStyleTile({
         'relative aspect-square overflow-hidden rounded-lg border-2 whitespace-normal',
         'flex flex-col items-center justify-center gap-1 bg-muted/40',
         'transition-all duration-200 hover:scale-105 hover:shadow-lg',
-        'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
         selected
           ? 'border-primary shadow-md scale-105 bg-primary/10'

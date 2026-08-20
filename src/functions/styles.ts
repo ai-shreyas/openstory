@@ -4,6 +4,7 @@
  */
 
 import { requireTeamAdminAccess } from '@/lib/auth/action-utils';
+import type { Sequence, Style } from '@/lib/db/schema';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
@@ -146,6 +147,24 @@ const promoteSequenceStyleInputSchema = z.object({
 });
 
 /**
+ * The bound row must still be the sequence's selected style — a re-styled
+ * sequence keeps its (orphaned) automatic row — and its recipe must be derived.
+ */
+export function assertPromotableAutoStyle(
+  sequence: Pick<Sequence, 'styleId' | 'styleConfig'>,
+  style: Pick<Style, 'id'> | null
+): asserts style is Pick<Style, 'id'> {
+  if (!style || style.id !== sequence.styleId) {
+    throw new NotFoundError('This sequence has no automatic style');
+  }
+  if (sequence.styleConfig == null) {
+    throw new ValidationError(
+      'The automatic style is still being derived from the script'
+    );
+  }
+}
+
+/**
  * Add a sequence's automatic style to the team library under `name`. The
  * sequence's poster becomes the style's preview; the sequence keeps pointing
  * at the same (now library) row.
@@ -160,14 +179,7 @@ export const promoteSequenceStyleFn = createServerFn({ method: 'POST' })
     const style = await context.scopedDb.styles.getBoundToSequence(
       data.sequenceId
     );
-    if (!style || style.id !== sequence.styleId) {
-      throw new NotFoundError('This sequence has no automatic style');
-    }
-    if (sequence.styleConfig == null) {
-      throw new ValidationError(
-        'The automatic style is still being derived from the script'
-      );
-    }
+    assertPromotableAutoStyle(sequence, style);
     return context.scopedDb.styles.promoteToLibrary({
       styleId: style.id,
       name: data.name,

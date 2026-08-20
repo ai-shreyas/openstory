@@ -40,6 +40,10 @@ type StylesListOptions = {
   orderBy?: 'popular' | 'sortOrder';
 };
 
+function boundRowsOwnedBy(teamId: string) {
+  return or(isNull(styles.sequenceId), eq(styles.teamId, teamId));
+}
+
 /** The team's library: own + public rows, never a sequence-bound one. */
 function libraryVisibleTo(teamId: string) {
   return and(
@@ -114,11 +118,15 @@ function createStylesReadMethods(db: Database, teamId: string) {
       return result[0] ?? null;
     },
 
+    /**
+     * Library rows resolve by id alone (a sequence may reference a public
+     * style); a sequence-bound one is private to its team.
+     */
     getById: async (styleId: string): Promise<Style | null> => {
       const result = await db
         .select()
         .from(styles)
-        .where(eq(styles.id, styleId))
+        .where(and(eq(styles.id, styleId), boundRowsOwnedBy(teamId)))
         .limit(1);
       return result[0] ?? null;
     },
@@ -126,11 +134,10 @@ function createStylesReadMethods(db: Database, teamId: string) {
     /**
      * Batched style fetch by id — resolves the style rows referenced by a page
      * of sequences in one batched fetch (one query per ≤90-id chunk), backing
-     * the `style` block in the public `GET /api/v1/sequences` list. Like
-     * `getById`, it resolves by id alone (no team scope): the ids come from the
-     * team's own sequences, which reference their team's styles plus public
-     * ones. Duplicate ids collapse and order is not guaranteed — callers index
-     * the result by id, and an id that resolves to no row simply has no entry.
+     * the `style` block in the public `GET /api/v1/sequences` list. Same
+     * scoping as `getById`. Duplicate ids collapse and order is not
+     * guaranteed — callers index the result by id, and an id that resolves to
+     * no row simply has no entry.
      */
     listByIds: async (styleIds: string[]): Promise<Style[]> => {
       if (styleIds.length === 0) return [];
@@ -141,7 +148,10 @@ function createStylesReadMethods(db: Database, teamId: string) {
       }
       const results = await Promise.all(
         batches.map((batch) =>
-          db.select().from(styles).where(inArray(styles.id, batch))
+          db
+            .select()
+            .from(styles)
+            .where(and(inArray(styles.id, batch), boundRowsOwnedBy(teamId)))
         )
       );
       return results.flat();
@@ -223,6 +233,8 @@ export function createStylesMethods(
      * Automatic style (#1213): a row bound to one sequence. Created at
      * sequence creation with a placeholder recipe and filled in by the
      * storyboard run's first step. Outside the library, so no slug check.
+     * Inserted before the sequence row exists (the id is pre-allocated) —
+     * safe only because `sequenceId` has no FK.
      */
     createForSequence: async (params: {
       sequenceId: string;
@@ -304,14 +316,6 @@ export function createStylesMethods(
         );
       }
       return style;
-    },
-
-    deleteBoundToSequence: async (sequenceId: string): Promise<void> => {
-      await db
-        .delete(styles)
-        .where(
-          and(eq(styles.sequenceId, sequenceId), eq(styles.teamId, teamId))
-        );
     },
 
     incrementUsage: async (styleId: string): Promise<void> => {

@@ -408,6 +408,30 @@ export function createSequencesMethods(
       return data;
     },
 
+    /**
+     * Snapshot an automatic style's derived recipe onto its sequence (#1213),
+     * but only while the sequence still points at that style — a library pick
+     * made mid-run must not be overwritten. Returns false when it no longer does.
+     */
+    snapshotAutoStyle: async (params: {
+      id: string;
+      styleId: string;
+    }): Promise<boolean> => {
+      const styleConfig = await snapshotConfigForStyleId(db, params.styleId);
+      const rows = await db
+        .update(sequences)
+        .set({ styleConfig, updatedAt: new Date() })
+        .where(
+          and(
+            eq(sequences.id, params.id),
+            eq(sequences.teamId, teamId),
+            eq(sequences.styleId, params.styleId)
+          )
+        )
+        .returning({ id: sequences.id });
+      return rows.length > 0;
+    },
+
     delete: async (sequenceId: string): Promise<void> => {
       await db.delete(sequences).where(eq(sequences.id, sequenceId));
       // An automatic style has no FK to its sequence (#1213); drop it here.

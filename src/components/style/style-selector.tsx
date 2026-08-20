@@ -102,7 +102,6 @@ export function StyleSelector({
   // unmeasured, the grid is clamped to one row in CSS instead.
   const [measured, setMeasured] = useState(false);
 
-  // The trailing "More" tile plus the leading Automatic tile.
   const autoSlots = onSelectAuto ? 1 : 0;
   const reservedSlots = 1 + autoSlots;
 

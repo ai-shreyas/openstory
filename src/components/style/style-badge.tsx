@@ -11,7 +11,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { StyleDetailDialog } from '@/components/style/style-detail-dialog';
 import { PromoteStyleDialog } from '@/components/style/promote-style-dialog';
 import { useStyle, useStyles } from '@/hooks/use-styles';
-import { AUTO_STYLE_PLACEHOLDER_NAME } from '@/lib/style/auto-style';
 import { cn } from '@/lib/utils';
 import { ChevronDown, Info, Library, Wand2 } from 'lucide-react';
 
@@ -50,6 +49,8 @@ type StyleBadgeProps = {
    * recipe, or add it to the team library.
    */
   sequenceId?: string;
+  /** `sequence.styleConfig == null`: the automatic recipe isn't derived yet. */
+  stylePending?: boolean;
 };
 
 /**
@@ -61,6 +62,7 @@ type StyleBadgeProps = {
 export const StyleBadge: React.FC<StyleBadgeProps> = ({
   styleId,
   sequenceId,
+  stylePending = false,
 }) => {
   const { data: styles } = useStyles();
   const listed = styleId ? styles?.find((s) => s.id === styleId) : undefined;
@@ -90,9 +92,6 @@ export const StyleBadge: React.FC<StyleBadgeProps> = ({
     );
   }
 
-  // Placeholder until the storyboard run's first step derives the recipe.
-  const pending = style.name === AUTO_STYLE_PLACEHOLDER_NAME;
-
   return (
     <>
       <DropdownMenu>
@@ -110,7 +109,7 @@ export const StyleBadge: React.FC<StyleBadgeProps> = ({
               title={`Automatic style: ${style.name}`}
             >
               <Wand2 className="size-3" aria-hidden />
-              {pending ? 'Deriving style…' : style.name}
+              {stylePending ? 'Deriving style…' : style.name}
               <ChevronDown className="size-3" aria-hidden />
             </Badge>
           </button>
@@ -121,7 +120,7 @@ export const StyleBadge: React.FC<StyleBadgeProps> = ({
             View style
           </DropdownMenuItem>
           <DropdownMenuItem
-            disabled={pending}
+            disabled={stylePending}
             onSelect={() => setPromoteOpen(true)}
           >
             <Library />
