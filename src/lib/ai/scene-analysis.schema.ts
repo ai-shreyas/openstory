@@ -17,9 +17,10 @@ import { z } from 'zod';
 // `.optional()`.
 //
 // Resilience for streaming partial-scene parsing lives in
-// `streaming-scene-parser.ts` (its own lenient schema), and frame.metadata is
-// stored as a `$type<Scene>()` cast (never re-parsed on read), so dropping
-// `.catch()` here does not weaken any DB-read path.
+// `streaming-scene-parser.ts` (settled-prefix `safeParse`, ignore the trailing
+// partial entry — not a second schema), and frame.metadata is stored as a
+// `$type<Scene>()` cast (never re-parsed on read), so dropping `.catch()` here
+// does not weaken any DB-read path.
 
 // ============================================================================
 // Character Bible Schemas

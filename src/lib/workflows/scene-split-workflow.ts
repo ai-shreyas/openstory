@@ -21,10 +21,12 @@
  * (`tag-reconcile.ts` — two independent calls can disagree) and bible
  * `firstMention`s get their owning scene id derived from the gutter line.
  *
- * Excessive boundary-resolution repairs trigger one retry with feedback, then
- * fall back to the heuristic `fastSceneSplit`. Preview-image triggers are
- * staggered off the `sceneMeta` stream (one per scene as its meta lands) so
- * the boundary burst can't fan out ~18 image workflows at once (#839/#891).
+ * Excessive boundary-resolution repairs trigger one retry with feedback; a
+ * second degraded result keeps the first-pass LLM scenes (verbatim slices +
+ * metadata). Dropped boundaries are always logged and emitted as a non-fatal
+ * `generation.error`. Preview-image triggers are staggered off the
+ * `sceneMeta` stream (one per scene as its meta lands) so the boundary burst
+ * can't fan out ~18 image workflows at once (#839/#891).
  *
  * Infrastructure notes (unchanged from the previous version): per-chunk DB
  * writes + realtime emissions run inline inside the streaming step (a step
@@ -49,13 +51,11 @@ import {
   addLineGutter,
   isExcessivelyRepaired,
   sceneIndexForLine,
+  type ResolvedBoundaries,
 } from '@/lib/ai/boundary-split';
-import { fastSceneSplit } from '@/lib/ai/fast-scene-split';
 import {
   assembleScenes,
   createStreamingSceneParser,
-  EMPTY_CONTINUITY,
-  placeholderMetadata,
   type SceneSplittingScene,
 } from '@/lib/ai/streaming-scene-parser';
 import { reconcileSceneTags } from '@/lib/ai/tag-reconcile';
@@ -247,9 +247,8 @@ type StreamResult = {
     shotId: string;
     frameId: string | null;
   }>;
-  /** Raw-script start offset per final scene (empty on the fastSceneSplit fallback). */
+  /** Raw-script start offset per final scene (a true partition of the script). */
   offsets: number[];
-  usedFallback: boolean;
   /** Provider-reported cost for the LLM call(s), billed after reconciliation. */
   llmCostMicros: Microdollars;
   /**
@@ -266,36 +265,28 @@ type BiblesStepResult = SceneSplitBiblesResult & {
   llmKeySource: 'team' | 'platform';
 };
 
-/** Convert the heuristic fallback's scenes into the streamed-scene shape. */
-function fallbackScenes(script: string): SceneSplittingScene[] {
-  return fastSceneSplit(script).map((scene, index) => ({
-    sceneId: scene.sceneId,
-    sceneNumber: index + 1,
-    originalScript: scene.originalScript,
-    metadata: scene.metadata ?? placeholderMetadata(index + 1),
-    continuity: EMPTY_CONTINUITY,
-  }));
-}
-
-/**
- * Best-effort start offsets for fallback scenes (their extracts are trimmed
- * chunks, not exact slices): monotonic `indexOf` on each extract's first line.
- * Only used to attribute bible `firstMention` lines to a scene.
- */
-function fallbackOffsets(
-  script: string,
-  scenes: SceneSplittingScene[]
-): number[] {
-  const offsets: number[] = [];
-  let cursor = 0;
-  for (const scene of scenes) {
-    const probe = scene.originalScript.extract.split('\n', 1)[0] ?? '';
-    const hit = probe ? script.indexOf(probe, cursor) : -1;
-    const offset = hit >= 0 ? hit : cursor;
-    offsets.push(offsets.length === 0 ? 0 : offset);
-    cursor = Math.max(cursor, offset + 1);
-  }
-  return offsets;
+async function reportDroppedBoundaries(
+  sequenceId: string | undefined,
+  resolution: ResolvedBoundaries,
+  boundaries: ReadonlyArray<{ quote: string }>
+): Promise<void> {
+  if (resolution.dropped.length === 0) return;
+  const quotes = resolution.dropped
+    .map((i) => boundaries[i]?.quote)
+    .filter((q): q is string => typeof q === 'string' && q.length > 0);
+  logger.warn(
+    `[SceneSplitWorkflow:cf] Dropped unresolvable scene boundaries; those scenes merged into their predecessor`,
+    { sequenceId, dropped: resolution.dropped, quotes, kept: resolution.kept }
+  );
+  if (!sequenceId) return;
+  const n = resolution.dropped.length;
+  await getGenerationChannel(sequenceId).emit('generation.error', {
+    message:
+      n === 1
+        ? 'One scene boundary could not be found in the script and was merged into the previous scene.'
+        : `${n} scene boundaries could not be found in the script and were merged into neighbouring scenes.`,
+    phase: PHASE.number,
+  });
 }
 
 export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWorkflowInput> {
@@ -542,7 +533,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           mintedIds.get(index) ?? generateId();
         let assembled = assembleScenes(script, parsedResult, sceneIdFor);
         let resolvedTitle = parsedResult.projectMetadata.title;
-        let usedFallback = false;
+        let finalBoundaries = parsedResult.boundaries;
         let llmCostMicros = llmCostFromUsage(firstPass.usage, modelId);
 
         if (
@@ -552,8 +543,8 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           )
         ) {
           // One retry with explicit feedback about the quotes that failed to
-          // anchor; a second degraded result falls back to the heuristic
-          // splitter rather than failing the workflow.
+          // anchor. A second degraded result (or a retry with no payload)
+          // keeps these first-pass LLM scenes — never a heuristic split.
           const failedQuotes = assembled.resolution.dropped
             .map((i) => parsedResult.boundaries[i]?.quote)
             .filter((q): q is string => typeof q === 'string');
@@ -593,38 +584,39 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
             ) {
               assembled = retryAssembled;
               resolvedTitle = retryPass.parsed.projectMetadata.title;
+              finalBoundaries = retryPass.parsed.boundaries;
             } else {
-              usedFallback = true;
+              logger.warn(
+                `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Retry still degraded; keeping first-pass LLM scenes`
+              );
             }
           } else {
-            usedFallback = true;
-          }
-        }
-
-        let scenes: SceneSplittingScene[];
-        let offsets: number[];
-        if (usedFallback) {
-          logger.warn(
-            `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Falling back to heuristic fastSceneSplit`
-          );
-          scenes = fallbackScenes(script);
-          offsets = fallbackOffsets(script, scenes);
-        } else {
-          // Slices are adjacent substrings by construction — this assert is a
-          // pure-logic invariant, not an LLM behaviour: a failure means a bug
-          // in boundary-split, so fail loud rather than persist drifted text.
-          if (assembled.slices.join('') !== script) {
-            throw new NonRetryableError(
-              `[SceneSplitWorkflow:cf] boundary slices do not reassemble the script (${assembled.slices.join('').length} vs ${script.length} chars)`,
-              'WorkflowValidationError'
+            logger.warn(
+              `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Retry ended without a validated payload; keeping first-pass LLM scenes`
             );
           }
-          scenes = assembled.scenes;
-          offsets = assembled.resolution.offsets;
         }
 
-        // Scenes are final — the (parallel) bibles call is what phase 2 waits
-        // on now.
+        await reportDroppedBoundaries(
+          sequenceId,
+          assembled.resolution,
+          finalBoundaries
+        );
+
+        // Slices are adjacent substrings by construction — this assert is a
+        // pure-logic invariant, not an LLM behaviour: a failure means a bug
+        // in boundary-split, so fail loud rather than persist drifted text.
+        if (assembled.slices.join('') !== script) {
+          throw new NonRetryableError(
+            `[SceneSplitWorkflow:cf] boundary slices do not reassemble the script (${assembled.slices.join('').length} vs ${script.length} chars)`,
+            'WorkflowValidationError'
+          );
+        }
+        const scenes = assembled.scenes;
+        const offsets = assembled.resolution.offsets;
+
+        // Advance the UI to the casting label once scene cards exist; the
+        // parent still awaits both sibling steps before matching.
         if (sequenceId) {
           await getGenerationChannel(sequenceId).emit(
             'generation.phase:start',
@@ -652,7 +644,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         }
 
         logger.info(
-          `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Complete | ${chunkCount} chunks | ${scenes.length} scenes | fallback=${usedFallback}`
+          `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Complete | ${chunkCount} chunks | ${scenes.length} scenes`
         );
 
         const streamResult: StreamResult = {
@@ -660,7 +652,6 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           title: resolvedTitle || 'Untitled',
           shotMapping,
           offsets,
-          usedFallback,
           llmCostMicros,
           llmKeySource: llmKeyInfo.source,
         };

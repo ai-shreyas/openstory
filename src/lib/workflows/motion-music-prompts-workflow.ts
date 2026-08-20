@@ -31,7 +31,10 @@ import type {
   MusicPromptWorkflowInput,
   MusicPromptWorkflowResult,
 } from '@/lib/workflow/types';
-import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
+import {
+  buildMusicSceneSummaries,
+  joinMusicDesignByIndex,
+} from '@/lib/workflows/music-scene-summaries';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { getLogger } from '@/lib/observability/logger';
 
@@ -150,38 +153,29 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
       ),
     ]);
 
-    // Merge music design into scenes.
+    // Merge music design into scenes by index. The summaries we sent are
+    // index-aligned; echoed ULIDs are not a reliable join key (same class
+    // as style recommendation moving to catalog indices). A length mismatch
+    // throws rather than attaching another scene's cue.
     const completeScenes: Scene[] = await step.do(
       'merge-music-and-motion',
-      () =>
-        Promise.resolve(
-          scenesWithSnappedDurations.map((scene, index) => {
-            // A scene with no motion prompt is now an expected outcome, not a
-            // mismatch: the batch returns partial results rather than failing
-            // a whole sequence for one unanchorable scene (#1143). The shot
-            // keeps its still and simply can't be animated until regenerated.
-            //
-            // Join on the echoed sceneId first, then fall back to position:
-            // scene ids are server-minted ULIDs since #1035, and a model can
-            // mangle an echoed ULID (the reason style recommendation moved to
-            // catalog indices) — the response array is index-aligned with the
-            // summaries we sent, so position recovers the pairing. This also
-            // keeps aimock replay working, where a static recorded response
-            // cannot echo run-specific ids.
-            const musicSceneDesign =
-              musicDesign.scenes.find((s) => s.sceneId === scene.sceneId) ??
-              musicDesign.scenes[index];
-
-            // The motion prompt is persisted to `shot_prompt_versions` by the
-            // per-scene motion child (mirrored on `shot.motionPrompt`) — it is
-            // NOT merged back into `scene.prompts` (#713). Only music design
-            // rides on the scene metadata here.
-            return {
-              ...scene,
-              musicDesign: musicSceneDesign?.musicDesign,
-            };
-          })
-        )
+      () => {
+        const echoedIds = musicDesign.scenes.map((s) => s.sceneId);
+        const expectedIds = scenesWithSnappedDurations.map((s) => s.sceneId);
+        if (echoedIds.some((id, i) => id !== expectedIds[i])) {
+          logger.warn(
+            '[MotionMusicPrompts] Music design sceneIds did not match; pairing by index',
+            { sequenceId, expected: expectedIds, echoed: echoedIds }
+          );
+        }
+        // Motion prompts are persisted to `shot_prompt_versions` by the
+        // per-scene child (mirrored on `shot.motionPrompt`) — they are NOT
+        // merged back into `scene.prompts` (#1143 / #713). Only music design
+        // rides on the scene metadata here.
+        return Promise.resolve(
+          joinMusicDesignByIndex(scenesWithSnappedDurations, musicDesign.scenes)
+        );
+      }
     );
 
     // Return the generated motion prompts in memory, keyed by sceneId, so the
@@ -192,10 +186,6 @@ export class MotionMusicPromptsWorkflow extends OpenStoryWorkflowEntrypoint<Moti
     const motionPromptsBySceneId: Record<string, MotionPrompt> =
       Object.fromEntries(motionPrompts.map((m) => [m.sceneId, m.motionPrompt]));
 
-    // `aspectRatio`, `characterBible`, `locationBible`, `elementBible`,
-    // `styleConfig`, and `shotMapping` are passed through to the stubbed
-    // motion-prompts child once the Pattern 3 batch ports it. They're left
-    // off this orchestrator's destructure for now to keep tsgo happy.
     return {
       completeScenes,
       motionPromptsBySceneId,

@@ -7,8 +7,9 @@
  * text is a local verbatim slice of the ORIGINAL script (see
  * `boundary-split.ts`), so scene cards appear with real script text while the
  * (much longer) `sceneMeta` tail is still streaming. Metadata arriving later
- * upgrades already-emitted scenes via `scene:updated` events — exactly one per
- * scene, when its meta entry has fully streamed.
+ * upgrades already-emitted scenes via `scene:updated` — at most one per scene,
+ * and only if meta arrived after the initial `'scene'` emit. If meta rode in
+ * the `'scene'` event, no upgrade is sent.
  *
  * Scene ids/numbers are minted here (server-side), never by the LLM.
  */
@@ -21,7 +22,7 @@ import {
   resolveBoundaries,
   sliceScenes,
 } from './boundary-split';
-import { sceneMetaEntrySchema } from './response-schemas';
+import { sceneBoundarySchema, sceneMetaEntrySchema } from './response-schemas';
 import type {
   Continuity,
   DialogueLine,
@@ -58,14 +59,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-const boundarySchema = z.object({
-  hintLine: z.number(),
-  quote: z.string(),
-});
-
 type SceneMetaEntry = z.infer<typeof sceneMetaEntrySchema>;
 
-export function placeholderMetadata(sceneNumber: number): SceneMetadata {
+function placeholderMetadata(sceneNumber: number): SceneMetadata {
   return {
     title: `Scene ${sceneNumber}`,
     durationSeconds: 3,
@@ -75,7 +71,7 @@ export function placeholderMetadata(sceneNumber: number): SceneMetadata {
   };
 }
 
-export const EMPTY_CONTINUITY: Continuity = {
+const EMPTY_CONTINUITY: Continuity = {
   characterTags: [],
   environmentTag: '',
   elementTags: null,
@@ -216,7 +212,7 @@ export function createStreamingSceneParser(
       const boundariesClosed = done || raw.sceneMeta !== undefined;
       const boundaries: BoundaryAnnotation[] = settledPrefix(
         raw.boundaries,
-        boundarySchema,
+        sceneBoundarySchema,
         boundariesClosed
       );
       const sceneMeta: SceneMetaEntry[] = settledPrefix(

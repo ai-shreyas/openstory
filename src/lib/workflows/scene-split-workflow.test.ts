@@ -418,3 +418,53 @@ describe('SceneSplitWorkflow stream parsing', () => {
     expect(previewCalls()).toHaveLength(SCENES.length);
   });
 });
+
+const DEGRADED_RESULT = {
+  ...SCENES_RESULT,
+  boundaries: [
+    { hintLine: 1, quote: 'Scene 1 action' },
+    { hintLine: 2, quote: 'NO SUCH TEXT ANYWHERE, TRULY NOT PRESENT' },
+    { hintLine: 3, quote: 'ALSO ABSENT FROM THE SCRIPT ENTIRELY' },
+  ],
+};
+
+describe('SceneSplitWorkflow degraded boundary retry', () => {
+  beforeEach(() => {
+    triggerWorkflow.mockReset();
+    triggerWorkflow.mockResolvedValue('run_1');
+    emit.mockReset();
+    streamChunks = [
+      {
+        done: true,
+        accumulated: '{}',
+        parsed: DEGRADED_RESULT,
+        usage: undefined,
+      },
+    ];
+    feed.mockReset();
+  });
+
+  test('keeps first-pass LLM scenes when retry is still degraded (no heuristic split)', async () => {
+    const result = await makeWorkflow().split(
+      makeEvent(),
+      makeStep(),
+      makeScopedDb()
+    );
+
+    // Two unresolvable quotes merge into scene 1; the LLM title/meta stay.
+    // fastSceneSplit would title from the first line ("Scene 1 action").
+    expect(result.scenes).toHaveLength(1);
+    expect(result.title).toBe('Test Film');
+    const scene = result.scenes[0];
+    // LLM sceneMeta (location 'A room'), not fastSceneSplit / placeholder.
+    expect(scene?.metadata?.location).toBe('A room');
+    expect(scene?.originalScript.extract).toBe(SCRIPT);
+    expect(emit).toHaveBeenCalledWith(
+      'generation.error',
+      expect.objectContaining({
+        message: expect.stringMatching(/merged/i),
+        phase: 1,
+      })
+    );
+  });
+});

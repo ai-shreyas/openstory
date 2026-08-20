@@ -14,7 +14,6 @@ import {
   extractRunError,
   formatRunErrorMessage,
   llmCostFromUsage,
-  parseJsonObjectResponse,
   PROMPT_REASONING,
 } from '@/lib/ai/llm-client';
 import type { TextModel } from '@/lib/ai/models';
@@ -317,17 +316,9 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
           outputSchema: config.responseSchema,
         });
 
-        let accumulated = '';
         let structuredObject: unknown;
         for await (const event of eventStream) {
           usageCapture.noteFromStreamEvent(event);
-          if (
-            event.type === 'TEXT_MESSAGE_CONTENT' &&
-            typeof event.delta === 'string'
-          ) {
-            accumulated += event.delta;
-            continue;
-          }
           if (
             event.type === 'CUSTOM' &&
             event.name === 'structured-output.complete'
@@ -344,15 +335,16 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
           }
         }
 
-        const result =
-          structuredObject !== undefined
-            ? structuredObject
-            : parseJsonObjectResponse(accumulated);
+        if (structuredObject === undefined) {
+          throw new NonRetryableError(
+            `[LLM:${logName}:cf] Call ended without a structured-output.complete event`
+          );
+        }
         logger.info(`[LLM:${logName}:cf] Call succeeded`);
         // Return as JSON string — round-trips through step.do without hitting
         // CF's Rpc.Serializable constraint on the Zod-inferred shape.
         return {
-          jsonText: JSON.stringify(result),
+          jsonText: JSON.stringify(structuredObject),
           costMicros: llmCostFromUsage(usageCapture.get(), modelId),
           keySource: llmKeyInfo.source,
         };
@@ -549,16 +541,13 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         }
         await flushDelta();
         if (structuredJson === null) {
-          // Native structured streams should always end with the complete
-          // event; falling back to accumulated text means the adapter didn't
-          // emit it (version drift) — the trailing Zod parse still guards.
-          logger.warn(
-            `[LLM:${logName}:cf] No structured-output.complete event received; falling back to accumulated text`
+          throw new NonRetryableError(
+            `[LLM:${logName}:cf] Stream ended without a structured-output.complete event`
           );
         }
         logger.info(`[LLM:${logName}:cf] Streaming call succeeded`);
         return {
-          jsonText: structuredJson ?? accumulated,
+          jsonText: structuredJson,
           costMicros: llmCostFromUsage(usageCapture.get(), modelId),
           keySource: llmKeyInfo.source,
         };
@@ -589,9 +578,5 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
     });
   }
 
-  // Normally the orchestrator-validated object (serialized off the
-  // structured-output.complete event); the fence-tolerant parse covers the
-  // degraded accumulated-text path. The Zod parse runs either way — it's
-  // what narrows to the schema's inferred type.
-  return config.responseSchema.parse(parseJsonObjectResponse(jsonText));
+  return config.responseSchema.parse(JSON.parse(jsonText));
 }

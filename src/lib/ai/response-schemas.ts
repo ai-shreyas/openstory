@@ -94,7 +94,7 @@ export const locationMatchResponseSchema = z.object({
  * two independent calls; the workflow reconciles tags after the join
  * (`tag-reconcile.ts`) instead of trusting agreement.
  */
-const sceneBoundarySchema = z.object({
+export const sceneBoundarySchema = z.object({
   hintLine: z.number().meta({
     description:
       '1-based line number (from the numbered gutter) where the scene starts',
@@ -115,17 +115,21 @@ export const sceneMetaEntrySchema = sceneMetadataSchema.extend({
   }),
 });
 
-export const sceneSplitScenesResultSchema = z.object({
-  projectMetadata: projectMetadataSchema,
-  boundaries: z.array(sceneBoundarySchema).meta({
-    description:
-      'One entry per scene in script order; scene 1 starts at the top of the script and every scene runs until the next boundary',
-  }),
-  sceneMeta: z.array(sceneMetaEntrySchema).meta({
-    description:
-      'Index-aligned with boundaries: sceneMeta[i] describes the scene starting at boundaries[i]',
-  }),
-});
+export const sceneSplitScenesResultSchema = z
+  .object({
+    projectMetadata: projectMetadataSchema,
+    boundaries: z.array(sceneBoundarySchema).meta({
+      description:
+        'One entry per scene in script order; scene 1 starts at the top of the script and every scene runs until the next boundary',
+    }),
+    sceneMeta: z.array(sceneMetaEntrySchema).meta({
+      description:
+        'Index-aligned with boundaries: sceneMeta[i] describes the scene starting at boundaries[i]',
+    }),
+  })
+  .refine((r) => r.boundaries.length === r.sceneMeta.length, {
+    message: 'sceneMeta must be index-aligned with boundaries (same length)',
+  });
 
 export type SceneSplitScenesResult = z.infer<
   typeof sceneSplitScenesResultSchema

@@ -345,12 +345,11 @@ function validateStructuredOutputSupport(model: string): void {
 }
 
 /**
- * Anthropic compiles strict structured output into a grammar with a hard,
- * model-dependent size budget (~3.6KB of converted JSON Schema, measured live
- * 2026-07-03). Since #1035 every response schema fits — enforced by
- * `response-schema-budget.test.ts` — so all structured-output calls go through
- * native `outputSchema`; the old size-conditional `json_object` +
- * schema-in-prompt fallback (PR #1009) is gone.
+ * Anthropic compiles strict structured output into a grammar with a hard
+ * size cap (providers reject around ~3.6KB of converted JSON Schema, measured
+ * live 2026-07-03). We fail CI at 3,000 bytes as a margin
+ * (`response-schema-budget.test.ts`). Every structured call uses native
+ * `outputSchema` — no `json_object` fallback.
  */
 export const ANTHROPIC_GRAMMAR_BUDGET_BYTES = 3_000;
 
@@ -360,15 +359,6 @@ export function structuredOutputSchemaBytes(schema: z.ZodType): number {
     forStructuredOutput: true,
   });
   return JSON.stringify(converted).length;
-}
-
-/** Parse a JSON response, tolerating an accidental ```json fence. */
-export function parseJsonObjectResponse(text: string): unknown {
-  const unfenced = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '');
-  return JSON.parse(unfenced);
 }
 
 function baseChatOptions(params: LLMRequestParams) {
@@ -423,12 +413,11 @@ function logOutgoingPrompt(
 }
 
 /**
- * Every structured-output model — Anthropic included — now goes through the
- * native `outputSchema` path. The response schemas are kept under Anthropic's
- * strict-grammar limits (≤16 union-typed params; see the note in
- * `scene-analysis.schema.ts`), so the old `json_object` + schema-in-prompt
- * fallback for Anthropic is gone: native structured output GUARANTEES
- * conformance, where the lenient fallback could silently drop required fields.
+ * Every structured-output model — Anthropic included — goes through the
+ * native `outputSchema` path. Schemas stay under Anthropic's strict-grammar
+ * limits (≤16 union-typed params; see `scene-analysis.schema.ts`). Native
+ * structured output guarantees conformance; a lenient `json_object` path
+ * could silently drop required fields.
  *
  * @tanstack/ai's chat orchestrator validates `outputSchema` upstream and surfaces
  * the parsed object through the terminal `structured-output.complete` event (stream)

@@ -46,11 +46,33 @@ describe('resolveBoundaries', () => {
   });
 
   it('pins the first boundary to offset 0 even when its quote matches later', () => {
-    const { offsets } = resolveBoundaries(script, [
+    const { offsets, repairs } = resolveBoundaries(script, [
       { hintLine: 3, quote: 'Sarah types.' },
       { hintLine: 5, quote: 'EXT. STREET - NIGHT' },
     ]);
     expect(offsets[0]).toBe(0);
+    // Pin-to-0 is the product rule, not a repair — a 1-scene titled script
+    // must not trip isExcessivelyRepaired.
+    expect(repairs).toBe(0);
+  });
+
+  it('resolves repeated identical quotes to later occurrences via the monotonic cursor', () => {
+    const returning = [
+      'INT. OFFICE - DAY',
+      'Sarah types.',
+      'INT. OFFICE - DAY',
+      'Sarah returns.',
+    ].join('\n');
+    const { offsets, dropped } = resolveBoundaries(returning, [
+      { hintLine: 1, quote: 'INT. OFFICE - DAY' },
+      { hintLine: 3, quote: 'INT. OFFICE - DAY' },
+    ]);
+    expect(dropped).toEqual([]);
+    expect(offsets).toEqual([0, returning.indexOf('INT. OFFICE - DAY', 1)]);
+    const slices = sliceScenes(returning, offsets);
+    expect(slices).toHaveLength(2);
+    expect(slices[1]?.startsWith('INT. OFFICE - DAY')).toBe(true);
+    expect(slices.join('')).toBe(returning);
   });
 
   it('repairs smart-quote and dash drift via normalized compare', () => {

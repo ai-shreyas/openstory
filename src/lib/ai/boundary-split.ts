@@ -11,8 +11,10 @@
  * Resolution ladder per boundary (each rung past the first counts as a
  * "repair"): exact substring search → normalization-tolerant compare
  * (comparison-only; mapped back to raw offsets) → fuzzy prefix scan windowed
- * around `hintLine`. An unresolvable or non-monotonic boundary is dropped —
- * its scene merges into the predecessor — never a workflow failure.
+ * around `hintLine`. The first boundary is always kept and pinned to offset 0
+ * (leading text belongs to scene 1) — that pin is not a repair. Later
+ * unresolvable or non-monotonic boundaries are dropped and merge into their
+ * predecessor.
  */
 
 import type { DialogueLine } from './scene-analysis.schema';
@@ -225,10 +227,11 @@ export function resolveBoundaries(
     if (i === 0) {
       offsets.push(0);
       kept.push(0);
-      // Still count a repair if the quote doesn't sit at the script start —
-      // signal quality feeds the retry policy.
+      // Pin-to-0 is the product rule (leading text belongs to scene 1), not
+      // a repair. Count a repair only when the quote itself needed the
+      // normalized/fuzzy rung or did not resolve.
       const match = resolveOne(script, norm, boundary, 0);
-      if (!match || match.repaired || match.rawOffset !== 0) repairs++;
+      if (!match || match.repaired) repairs++;
       cursor = 1;
       continue;
     }
@@ -283,9 +286,11 @@ export function sceneIndexForLine(
 }
 
 /**
- * Whether resolution degraded enough to warrant one retry with feedback
- * (and, failing that, the heuristic `fastSceneSplit` fallback): more than a
- * quarter of the boundaries dropped, or half needed fuzzy/normalized repair.
+ * Whether resolution degraded enough to warrant one retry with feedback.
+ * More than a quarter of the boundaries dropped (always tolerates a single
+ * drop), or more than half needed fuzzy/normalized repair. An empty
+ * boundary list is treated as degraded. A second degraded result keeps the
+ * first-pass LLM scenes rather than swapping in a heuristic split.
  */
 export function isExcessivelyRepaired(
   resolution: ResolvedBoundaries,

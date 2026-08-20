@@ -133,6 +133,21 @@ describe('durableLLMCallCf usage cost capture', () => {
     // Sanity: ZERO and a real cost micros stay distinct for callers.
     expect(ZERO_MICROS).not.toBe(usdToMicros(0.07));
   });
+
+  it('throws when no structured-output.complete event arrives', async () => {
+    mockChat.mockReturnValue(
+      (async function* () {
+        yield {
+          type: 'TEXT_MESSAGE_CONTENT',
+          delta: '{"visual":{"fullPrompt":"no event"}}',
+        };
+      })()
+    );
+
+    await expect(
+      durableLLMCallCf(step, callConfig, nonStreamContext)
+    ).rejects.toThrow(/structured-output\.complete/);
+  });
 });
 
 describe('durableStreamingLLMCallCf structured-output.complete', () => {
@@ -163,7 +178,7 @@ describe('durableStreamingLLMCallCf structured-output.complete', () => {
     expect(result).toEqual(validObject);
   });
 
-  it('falls back to accumulated text when no complete event arrives', async () => {
+  it('throws when no structured-output.complete event arrives', async () => {
     const validJson = '{"visual":{"fullPrompt":"Fallback shot"}}';
     mockChat.mockReturnValue(
       (async function* () {
@@ -171,12 +186,9 @@ describe('durableStreamingLLMCallCf structured-output.complete', () => {
       })()
     );
 
-    const result = await durableStreamingLLMCallCf(
-      step,
-      callConfig,
-      callContext
-    );
-    expect(result).toEqual({ visual: { fullPrompt: 'Fallback shot' } });
+    await expect(
+      durableStreamingLLMCallCf(step, callConfig, callContext)
+    ).rejects.toThrow(/structured-output\.complete/);
   });
 
   it('still rejects when both the text is malformed and no event arrives', async () => {
