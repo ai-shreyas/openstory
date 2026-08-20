@@ -275,9 +275,18 @@ export function createSequencesMethods(
     ...createSequencesReadMethods(db, teamId),
 
     create: async (params: {
+      /** Pre-allocated id, for callers that bind rows to the sequence first. */
+      id?: string;
       title: string;
       script?: string | null;
       styleId: string;
+      /**
+       * Automatic style (#1213): the style row is a placeholder until the
+       * storyboard run derives the recipe, so no snapshot is taken here — a
+       * null `styleConfig` is what tells the launcher the derivation is still
+       * pending. The run writes the snapshot via `update({ styleId })`.
+       */
+      deferStyleSnapshot?: boolean;
       aspectRatio?: AspectRatio;
       analysisModel?: string;
       imageModel?: string;
@@ -288,8 +297,11 @@ export function createSequencesMethods(
       suggestedTalentIds?: string[];
       suggestedLocationIds?: string[];
     }): Promise<Sequence> => {
-      const styleConfig = await snapshotConfigForStyleId(db, params.styleId);
+      const styleConfig = params.deferStyleSnapshot
+        ? null
+        : await snapshotConfigForStyleId(db, params.styleId);
       const sequenceData: NewSequence = {
+        ...(params.id ? { id: params.id } : {}),
         teamId,
         createdBy: userId,
         updatedBy: userId,
@@ -398,6 +410,12 @@ export function createSequencesMethods(
 
     delete: async (sequenceId: string): Promise<void> => {
       await db.delete(sequences).where(eq(sequences.id, sequenceId));
+      // An automatic style has no FK to its sequence (#1213); drop it here.
+      await db
+        .delete(styles)
+        .where(
+          and(eq(styles.sequenceId, sequenceId), eq(styles.teamId, teamId))
+        );
     },
 
     updateTitle: async (sequenceId: string, title: string): Promise<void> => {

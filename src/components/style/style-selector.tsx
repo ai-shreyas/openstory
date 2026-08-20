@@ -14,6 +14,7 @@ import {
   RECOMMENDED_STYLE_SLOT_COUNT,
   resolveRecommendedStyles,
 } from '@/lib/style/prioritize-recommended-styles';
+import { AutoStyleTile } from '@/components/style/auto-style-tile';
 import { StyleDetailDialog } from '@/components/style/style-detail-dialog';
 import { StyleInlineTile } from '@/components/style/style-inline-tile';
 import { StyleSelectionDialog } from './style-selection-dialog';
@@ -66,6 +67,10 @@ type StyleSelectorProps = {
   /** Handles the detail dialog's "Try" — swap the composer's script for this
    *  style's sample (the composer confirms first over user-written text). */
   onTryStyle?: (styleId: string) => void;
+  /** Automatic style (#1213) — the leading tile; selected when the composer
+   *  asked for a script-derived style. */
+  autoSelected?: boolean;
+  onSelectAuto?: () => void;
 };
 
 export function StyleSelector({
@@ -78,6 +83,8 @@ export function StyleSelector({
   recommendationsLoading = false,
   categoryFilter = ALL_COMPOSER_STYLE_CATEGORIES,
   onTryStyle,
+  autoSelected = false,
+  onSelectAuto,
 }: StyleSelectorProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailStyle, setDetailStyle] = useState<Style | null>(null);
@@ -95,7 +102,9 @@ export function StyleSelector({
   // unmeasured, the grid is clamped to one row in CSS instead.
   const [measured, setMeasured] = useState(false);
 
-  const reservedSlots = 1;
+  // The trailing "More" tile plus the leading Automatic tile.
+  const autoSlots = onSelectAuto ? 1 : 0;
+  const reservedSlots = 1 + autoSlots;
 
   useEffect(() => {
     const container = gridRef.current;
@@ -182,7 +191,8 @@ export function StyleSelector({
     [pinnedStyle, selectedStyle]
   );
 
-  const moreIndex = recommendationSlotCount + visibleCatalogueStyles.length;
+  const moreIndex =
+    autoSlots + recommendationSlotCount + visibleCatalogueStyles.length;
   const totalItems = moreIndex + 1;
 
   const shownStyleIds = useMemo(() => {
@@ -198,11 +208,16 @@ export function StyleSelector({
   );
 
   useEffect(() => {
+    if (autoSelected && autoSlots > 0) {
+      setFocusableIndex(0);
+      return;
+    }
+
     const recIndex = recommendedStyles.findIndex(
       (s) => s.id === selectedStyleId
     );
     if (recIndex !== -1) {
-      setFocusableIndex(recIndex);
+      setFocusableIndex(autoSlots + recIndex);
       return;
     }
 
@@ -210,12 +225,14 @@ export function StyleSelector({
       (s) => s.id === selectedStyleId
     );
     if (catalogueIndex !== -1) {
-      setFocusableIndex(recommendationSlotCount + catalogueIndex);
+      setFocusableIndex(autoSlots + recommendationSlotCount + catalogueIndex);
       return;
     }
 
     if (totalItems > 0) setFocusableIndex(0);
   }, [
+    autoSelected,
+    autoSlots,
     selectedStyleId,
     recommendedStyles,
     visibleCatalogueStyles,
@@ -295,6 +312,15 @@ export function StyleSelector({
           ))
         ) : (
           <>
+            {onSelectAuto && (
+              <AutoStyleTile
+                selected={autoSelected}
+                disabled={disabled}
+                tabIndex={focusableIndex === 0 ? 0 : -1}
+                onSelect={onSelectAuto}
+                onKeyDown={(e) => handleKeyDown(e, 0)}
+              />
+            )}
             {showRecommendationSkeleton
               ? Array.from({ length: RECOMMENDED_STYLE_SLOT_COUNT }, (_, i) => (
                   <Skeleton
@@ -311,15 +337,15 @@ export function StyleSelector({
                     recommended
                     priority={index < 4}
                     reasoning={reasoningByStyleId.get(style.id)}
-                    tabIndex={index === focusableIndex ? 0 : -1}
+                    tabIndex={autoSlots + index === focusableIndex ? 0 : -1}
                     onSelect={onStyleSelect}
                     onShowDetails={() => setDetailStyle(style)}
-                    onKeyDown={(e) => handleKeyDown(e, index)}
+                    onKeyDown={(e) => handleKeyDown(e, autoSlots + index)}
                   />
                 ))}
 
             {visibleCatalogueStyles.map((style, index) => {
-              const unifiedIndex = recommendationSlotCount + index;
+              const unifiedIndex = autoSlots + recommendationSlotCount + index;
               return (
                 <StyleInlineTile
                   key={style.id}

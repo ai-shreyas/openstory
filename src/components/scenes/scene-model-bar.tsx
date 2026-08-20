@@ -88,7 +88,7 @@ export const SceneModelBar: React.FC<SceneModelBarProps> = ({
       {showSequenceSettings && (
         <div className="space-y-2">
           <SettingRow label="Style">
-            <StyleBadge styleId={styleId} />
+            <StyleBadge styleId={styleId} sequenceId={sequenceId} />
           </SettingRow>
           <SettingRow label="Aspect ratio">
             <span className="flex items-center gap-1.5">

@@ -16,6 +16,7 @@ type StyleTemplateEntry = Omit<
   Style,
   | 'id'
   | 'teamId'
+  | 'sequenceId'
   | 'createdAt'
   | 'updatedAt'
   | 'createdBy'
@@ -3246,6 +3247,7 @@ export const DEFAULT_STYLE_TEMPLATES: StyleTemplateEntry[] = [
 export const DEFAULT_SYSTEM_STYLES: Omit<Style, 'id' | 'teamId'>[] =
   DEFAULT_STYLE_TEMPLATES.map((style) => ({
     ...style,
+    sequenceId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     createdBy: 'system',

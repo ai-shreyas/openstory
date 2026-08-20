@@ -49,6 +49,9 @@ type StyleDetailDialogProps = {
    * text) and close the dialog, instead of navigating to a fresh composer.
    */
   onTryStyle?: (styleId: string) => void;
+  /** Hide the "Use this style" CTA — for a sequence-bound automatic style
+   *  (#1213), which no other sequence can select until it is promoted. */
+  readOnly?: boolean;
 };
 
 /** A still that removes itself if the source 404s (some older styles render
@@ -157,6 +160,7 @@ export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
   onOpenChange,
   onUseStyle,
   onTryStyle,
+  readOnly = false,
 }) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -180,6 +184,7 @@ export const StyleDetailDialog: FC<StyleDetailDialogProps> = ({
                   }
                 : undefined
             }
+            readOnly={readOnly}
           />
         )}
       </DialogContent>
@@ -191,7 +196,8 @@ const StyleDetailContent: FC<{
   style: Style;
   onUseStyle?: () => void;
   onTryStyle?: () => void;
-}> = ({ style, onUseStyle, onTryStyle }) => {
+  readOnly?: boolean;
+}> = ({ style, onUseStyle, onTryStyle, readOnly = false }) => {
   const canonicalUrl = styleCanonicalVideoUrl(style);
   const videoSrc = canonicalUrl ? optimizedVideoUrl(canonicalUrl) : null;
   const poster = canonicalUrl ? videoPosterUrl(canonicalUrl) : undefined;
@@ -345,7 +351,7 @@ const StyleDetailContent: FC<{
             from the video's "Try", which also seeds the sample brief. From the
             composer it selects in place (onUseStyle); from the styles page it
             navigates to a fresh composer seeded with this style. */}
-        {onUseStyle ? (
+        {readOnly ? null : onUseStyle ? (
           <Button
             onClick={onUseStyle}
             aria-label={`Use the ${style.name} style`}

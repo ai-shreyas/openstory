@@ -4,6 +4,7 @@
  */
 
 import { requireTeamAdminAccess } from '@/lib/auth/action-utils';
+import { NotFoundError, ValidationError } from '@/lib/errors';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import {
   createStyleSchema,
@@ -133,4 +134,43 @@ export const deleteStyleFn = createServerFn({ method: 'POST' })
     await context.scopedDb.styles.delete(data.styleId);
 
     return { success: true };
+  });
+
+// ============================================================================
+// Promote an automatic (sequence-bound) style into the library (#1213)
+// ============================================================================
+
+const promoteSequenceStyleInputSchema = z.object({
+  sequenceId: ulidSchema,
+  name: z.string().trim().min(1).max(255),
+});
+
+/**
+ * Add a sequence's automatic style to the team library under `name`. The
+ * sequence's poster becomes the style's preview; the sequence keeps pointing
+ * at the same (now library) row.
+ */
+export const promoteSequenceStyleFn = createServerFn({ method: 'POST' })
+  .middleware([authWithTeamMiddleware])
+  .validator(zodValidator(promoteSequenceStyleInputSchema))
+  .handler(async ({ data, context }) => {
+    const sequence = await context.scopedDb.sequences.getForUser({
+      sequenceId: data.sequenceId,
+    });
+    const style = await context.scopedDb.styles.getBoundToSequence(
+      data.sequenceId
+    );
+    if (!style || style.id !== sequence.styleId) {
+      throw new NotFoundError('This sequence has no automatic style');
+    }
+    if (sequence.styleConfig == null) {
+      throw new ValidationError(
+        'The automatic style is still being derived from the script'
+      );
+    }
+    return context.scopedDb.styles.promoteToLibrary({
+      styleId: style.id,
+      name: data.name,
+      previewUrl: sequence.posterUrl ?? null,
+    });
   });

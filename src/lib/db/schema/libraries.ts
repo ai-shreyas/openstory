@@ -45,6 +45,12 @@ export const styles = snakeCase.table(
     teamId: text()
       .notNull()
       .references(() => teams.id, { onDelete: 'cascade' }),
+    // Set on an automatic style (#1213): derived from one sequence's script,
+    // visible only through that sequence, excluded from every library list and
+    // the slug-uniqueness check. Cleared by promotion. No FK: `sequences`
+    // already references `styles`, and the owning sequence's delete path
+    // removes its bound style explicitly.
+    sequenceId: text(),
     name: text({ length: 255 }).notNull(),
     description: text(),
     // StoredStyleConfig (v1 | v2) until the backfill lands (#858): typing the
@@ -81,7 +87,10 @@ export const styles = snakeCase.table(
       onDelete: 'set null',
     }),
   },
-  (table) => [index('idx_styles_team_id').on(table.teamId)]
+  (table) => [
+    index('idx_styles_team_id').on(table.teamId),
+    index('idx_styles_sequence_id').on(table.sequenceId),
+  ]
 );
 
 /**

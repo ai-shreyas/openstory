@@ -13,7 +13,19 @@ import {
 } from '@/lib/schemas/style.schemas';
 import { stripServerManagedColumns } from './server-managed';
 import { styleSlug } from '@/lib/style/style-slug';
-import { and, asc, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import type { AutoStyleDraft } from '@/lib/style/auto-style';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -28,6 +40,14 @@ type StylesListOptions = {
   orderBy?: 'popular' | 'sortOrder';
 };
 
+/** The team's library: own + public rows, never a sequence-bound one. */
+function libraryVisibleTo(teamId: string) {
+  return and(
+    or(eq(styles.teamId, teamId), eq(styles.isPublic, true)),
+    isNull(styles.sequenceId)
+  );
+}
+
 /**
  * A style's URL/asset slug is derived from its name (`styleSlug`) and is the key
  * the `?style=<slug>` composer prefill (and every style asset path) resolves on.
@@ -38,6 +58,9 @@ type StylesListOptions = {
  *
  * This guards against the future where teams can author styles; public styles
  * are seeded with already-unique names.
+ *
+ * Sequence-bound (automatic) styles are outside the library, so they neither
+ * need a unique slug nor count as a clash — until promotion, which checks here.
  */
 async function assertSlugAvailable(
   db: Database,
@@ -51,7 +74,7 @@ async function assertSlugAvailable(
     .from(styles)
     .where(
       and(
-        or(eq(styles.teamId, teamId), eq(styles.isPublic, true)),
+        libraryVisibleTo(teamId),
         excludeId ? ne(styles.id, excludeId) : undefined
       )
     );
@@ -75,8 +98,20 @@ function createStylesReadMethods(db: Database, teamId: string) {
       return await db
         .select()
         .from(styles)
-        .where(or(eq(styles.teamId, teamId), eq(styles.isPublic, true)))
+        .where(libraryVisibleTo(teamId))
         .orderBy(...order);
+    },
+
+    /** The automatic style bound to one of this team's sequences, if any. */
+    getBoundToSequence: async (sequenceId: string): Promise<Style | null> => {
+      const result = await db
+        .select()
+        .from(styles)
+        .where(
+          and(eq(styles.sequenceId, sequenceId), eq(styles.teamId, teamId))
+        )
+        .limit(1);
+      return result[0] ?? null;
     },
 
     getById: async (styleId: string): Promise<Style | null> => {
@@ -125,7 +160,7 @@ export function createPublicStylesReadMethods(db: Database) {
       return await db
         .select()
         .from(styles)
-        .where(eq(styles.isPublic, true))
+        .where(and(eq(styles.isPublic, true), isNull(styles.sequenceId)))
         .orderBy(asc(styles.sortOrder), asc(styles.name));
     },
   };
@@ -182,6 +217,101 @@ export function createStylesMethods(
       await db
         .delete(styles)
         .where(and(eq(styles.id, styleId), eq(styles.teamId, teamId)));
+    },
+
+    /**
+     * Automatic style (#1213): a row bound to one sequence. Created at
+     * sequence creation with a placeholder recipe and filled in by the
+     * storyboard run's first step. Outside the library, so no slug check.
+     */
+    createForSequence: async (params: {
+      sequenceId: string;
+      draft: AutoStyleDraft;
+    }): Promise<Style> => {
+      const result = await db
+        .insert(styles)
+        .values({
+          ...params.draft,
+          sequenceId: params.sequenceId,
+          teamId,
+          createdBy: userId,
+        })
+        .returning();
+      const style = result[0];
+      if (!style) {
+        throw new Error(
+          `Failed to create automatic style for sequence ${params.sequenceId}`
+        );
+      }
+      return style;
+    },
+
+    /**
+     * Write the script-derived recipe onto a sequence-bound style. Scoped to
+     * the binding so a stale run can never rewrite a promoted (library) row.
+     * Returns false when the row is no longer bound to that sequence.
+     */
+    setGeneratedForSequence: async (params: {
+      styleId: string;
+      sequenceId: string;
+      draft: AutoStyleDraft;
+    }): Promise<boolean> => {
+      const rows = await db
+        .update(styles)
+        .set({ ...params.draft, updatedAt: new Date() })
+        .where(
+          and(
+            eq(styles.id, params.styleId),
+            eq(styles.sequenceId, params.sequenceId),
+            eq(styles.teamId, teamId)
+          )
+        )
+        .returning({ id: styles.id });
+      return rows.length > 0;
+    },
+
+    /**
+     * Promote a sequence-bound style into the team library: clears the
+     * binding under the library's slug-uniqueness rule. The sequence keeps
+     * pointing at the same row, so nothing downstream re-snapshots.
+     */
+    promoteToLibrary: async (params: {
+      styleId: string;
+      name: string;
+      previewUrl: string | null;
+    }): Promise<Style> => {
+      await assertSlugAvailable(db, teamId, params.name);
+      const rows = await db
+        .update(styles)
+        .set({
+          sequenceId: null,
+          name: params.name,
+          previewUrl: params.previewUrl,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(styles.id, params.styleId),
+            eq(styles.teamId, teamId),
+            isNotNull(styles.sequenceId)
+          )
+        )
+        .returning();
+      const style = rows[0];
+      if (!style) {
+        throw new ValidationError(
+          'Only an automatic style that is still bound to a sequence can be added to the library'
+        );
+      }
+      return style;
+    },
+
+    deleteBoundToSequence: async (sequenceId: string): Promise<void> => {
+      await db
+        .delete(styles)
+        .where(
+          and(eq(styles.sequenceId, sequenceId), eq(styles.teamId, teamId))
+        );
     },
 
     incrementUsage: async (styleId: string): Promise<void> => {

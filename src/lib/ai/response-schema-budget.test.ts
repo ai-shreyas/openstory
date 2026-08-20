@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import type { z } from 'zod';
 import { elementVisionResponseSchema } from './element-vision';
+import { autoStyleResponseSchema } from '@/lib/style/auto-style';
 import {
   ANTHROPIC_GRAMMAR_BUDGET_BYTES,
   structuredOutputSchemaBytes,
@@ -47,6 +48,7 @@ const MEASURED_SCHEMAS: Record<string, z.ZodType> = {
   motionPromptSchema,
   visualPromptResultSchema,
   elementVisionResponseSchema,
+  autoStyleResponseSchema,
 };
 
 describe('structured-output schema budget', () => {

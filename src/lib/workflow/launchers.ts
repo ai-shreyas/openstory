@@ -150,6 +150,10 @@ async function resolveStoryboardPayload(
   if (!hasSnapshot && !style) {
     throw new NotFoundError('No style found');
   }
+  // No snapshot + a style bound to this sequence = an automatic style whose
+  // recipe is still the placeholder (#1213). The run derives it first.
+  const pendingAutoStyleId =
+    !hasSnapshot && style?.sequenceId === sequenceId ? style.id : undefined;
 
   const elements = await scopedDb.sequenceElements.list(sequenceId);
 
@@ -185,6 +189,7 @@ async function resolveStoryboardPayload(
       snapshot: sequence.styleConfig,
       live: style?.config,
     }),
+    pendingAutoStyleId,
     analysisModelId:
       getAnalysisModelById(sequence.analysisModel)?.id ??
       DEFAULT_ANALYSIS_MODEL,

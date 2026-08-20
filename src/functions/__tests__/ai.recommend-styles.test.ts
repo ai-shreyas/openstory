@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 function makeStyle(overrides: Partial<Style> & { id: string }): Style {
   return {
     teamId: 'team-1',
+    sequenceId: null,
     name: 'Style',
     description: 'A style',
     config: {

@@ -8,6 +8,7 @@ import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
 import { musicPromptStalenessKey, sequenceKeys } from '@/hooks/use-sequences';
+import { styleKeys } from '@/hooks/use-styles';
 import type { Sequence } from '@/types/database';
 import type { ShotView } from '@/lib/shots/shot-view';
 import type { QueryClient } from '@tanstack/react-query';
@@ -419,6 +420,20 @@ export function updateQueryCacheFromEvent(
         queryClient.setQueryData<Sequence>(
           sequenceKeys.detail(sequenceId),
           (old) => (old ? { ...old, posterUrl } : old)
+        );
+      }
+      break;
+    }
+
+    case 'generation.style:ready': {
+      // The automatic style row now carries its derived name + recipe (#1213);
+      // the badge and detail dialog read it through the style detail query.
+      const styleId = getString(data, 'styleId');
+      if (styleId) {
+        debouncedInvalidate(
+          queryClient,
+          styleKeys.detail(styleId),
+          `style:${styleId}`
         );
       }
       break;

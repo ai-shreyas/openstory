@@ -14,6 +14,7 @@ function makeStyle(overrides: Partial<Style> = {}): Style {
   return {
     id: 'style_1',
     teamId: 'team_1',
+    sequenceId: null,
     name: 'Product Ad',
     description: 'A polished product spot.',
     config: {

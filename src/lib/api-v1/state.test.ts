@@ -161,6 +161,7 @@ function makeStyle(overrides: Partial<Style> = {}): Style {
   return {
     id: 'style-1',
     teamId: 'team-1',
+    sequenceId: null,
     name: 'Cinematic Noir',
     description: null,
     config: {

@@ -2,13 +2,18 @@ import {
   recommendStylesForScriptFn,
   type StyleRecommendation,
 } from '@/functions/ai';
-import { getPublicStylesFn, getStyleFn, getStylesFn } from '@/functions/styles';
+import {
+  getPublicStylesFn,
+  getStyleFn,
+  getStylesFn,
+  promoteSequenceStyleFn,
+} from '@/functions/styles';
 import { usePublicOrTeamQuery } from '@/hooks/use-public-or-team-query';
 import { useAuthSession } from '@/lib/auth/session-query';
 import { publicStylesQueryKey } from '@/lib/style/public-styles-query';
 import { simpleHash } from '@/lib/utils/hash';
 import type { Style } from '@/types/database';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 // Query keys
 export const styleKeys = {
@@ -85,5 +90,21 @@ export function useRecommendedStyles(
       isAuthenticated &&
       trimmed.length >= MIN_RECOMMEND_SCRIPT_LENGTH,
     staleTime: Infinity,
+  });
+}
+
+/**
+ * Add a sequence's automatic style to the team library (#1213). The style row
+ * keeps its id, so the sequence badge only needs the detail + list refreshed.
+ */
+export function usePromoteSequenceStyle() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { sequenceId: string; name: string }) =>
+      promoteSequenceStyleFn({ data: input }),
+    onSuccess: (style) => {
+      queryClient.setQueryData<Style>(styleKeys.detail(style.id), style);
+      void queryClient.invalidateQueries({ queryKey: styleKeys.lists() });
+    },
   });
 }

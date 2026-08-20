@@ -66,6 +66,7 @@ import {
   type ShotImageSceneSnapshot,
   resolveSceneShotImageReferences,
 } from '@/lib/workflows/sheet-snapshots';
+import { deriveAutoStyle } from '@/lib/workflows/auto-style-step';
 import { waitForElementVision } from '@/lib/workflows/wait-for-sheets';
 import type {
   CharacterMinimal,
@@ -92,7 +93,8 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       sequenceId,
       script,
       aspectRatio,
-      styleConfig,
+      styleConfig: inputStyleConfig,
+      pendingAutoStyleId,
       analysisModelId,
       elementIds,
       imageModel,
@@ -130,7 +132,9 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     await step.do('phase-1-start', async () => {
       await getGenerationChannel(sequenceId).emit('generation.phase:start', {
         phase: 1,
-        phaseName: 'Analyzing script…',
+        phaseName: pendingAutoStyleId
+          ? 'Analyzing script & deriving a style…'
+          : 'Analyzing script…',
       });
     });
 
@@ -190,32 +194,48 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       consistencyTag: el.consistencyTag,
     }));
 
-    const sceneSplitResult = await spawnAndAwaitChild<
-      SceneSplitWorkflowInput,
-      SceneSplitWorkflowResult
-    >(step, {
-      binding: this.env.SCENE_SPLIT_WORKFLOW,
-      parentBindingName: 'ANALYZE_SCRIPT_WORKFLOW',
-      parentInstanceId: event.instanceId,
-      childId: `scene-split:${sequenceId ?? 'no-seq'}`,
-      childPayload: {
-        userId: input.userId,
-        teamId: input.teamId,
-        sequenceId,
-        promptName: 'phase/scene-splitting-boundaries-chat',
-        aspectRatio,
-        script: sanitizeScriptContent(script),
-        styleConfig,
-        modelId: analysisModelId,
-        elements: elementsMinimal,
-      },
-      spawnStepName: 'spawn-scene-split',
-      awaitStepName: 'await-scene-split',
-      // LLM-only child, but under a many-sequence burst the engine's notify
-      // delivery alone has been observed to lag >25 minutes — every await in
-      // this workflow carries explicit burst headroom.
-      timeout: '45 minutes',
-    });
+    // Automatic style (#1213): derived from the script in parallel with
+    // scene-split, which only needs a style for its preview stills — those
+    // render style-free on an automatic run. Every later phase uses the result.
+    const [sceneSplitResult, styleConfig] = await Promise.all([
+      spawnAndAwaitChild<SceneSplitWorkflowInput, SceneSplitWorkflowResult>(
+        step,
+        {
+          binding: this.env.SCENE_SPLIT_WORKFLOW,
+          parentBindingName: 'ANALYZE_SCRIPT_WORKFLOW',
+          parentInstanceId: event.instanceId,
+          childId: `scene-split:${sequenceId ?? 'no-seq'}`,
+          childPayload: {
+            userId: input.userId,
+            teamId: input.teamId,
+            sequenceId,
+            promptName: 'phase/scene-splitting-boundaries-chat',
+            aspectRatio,
+            script: sanitizeScriptContent(script),
+            styleConfig: pendingAutoStyleId ? undefined : inputStyleConfig,
+            modelId: analysisModelId,
+            elements: elementsMinimal,
+          },
+          spawnStepName: 'spawn-scene-split',
+          awaitStepName: 'await-scene-split',
+          // LLM-only child, but under a many-sequence burst the engine's notify
+          // delivery alone has been observed to lag >25 minutes — every await in
+          // this workflow carries explicit burst headroom.
+          timeout: '45 minutes',
+        }
+      ),
+      pendingAutoStyleId && sequenceId
+        ? deriveAutoStyle(step, {
+            scopedDb,
+            workflowRunId: parentInstanceId,
+            sequenceId,
+            styleId: pendingAutoStyleId,
+            script,
+            aspectRatio,
+            analysisModelId,
+          })
+        : Promise.resolve(inputStyleConfig),
+    ]);
 
     const { scenes, shotMapping, characterBible, locationBible, elementBible } =
       sceneSplitResult;

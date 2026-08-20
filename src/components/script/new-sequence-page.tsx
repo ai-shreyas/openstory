@@ -7,6 +7,7 @@ import { useBillingGate } from '@/hooks/use-billing-gate';
 import { useSequence } from '@/hooks/use-sequences';
 import { useStyles } from '@/hooks/use-styles';
 import { useUser } from '@/hooks/use-user';
+import { AUTO_STYLE_ID } from '@/lib/style/auto-style';
 import { briefForStyle } from '@/lib/style/brief-for-style';
 import { styleSlug } from '@/lib/style/style-slug';
 import { Link, useNavigate } from '@tanstack/react-router';
@@ -109,9 +110,13 @@ export function NewSequencePage({
   }
   // Distinguish the two seed modes so switching between "Try" and "Use this
   // style" for the same style still re-seeds.
+  // `?style=auto` seeds the Automatic tile (#1213) — no sample to prefill.
+  const seedAuto = styleParam === AUTO_STYLE_ID;
   const candidateKey = seedStyle
     ? `seed:${seedStyle.id}:${styleOnly ? 'style' : 'full'}`
-    : 'blank';
+    : seedAuto
+      ? `seed:${AUTO_STYLE_ID}`
+      : 'blank';
 
   // Adopt the URL's seed unless this `?style=` is the composer echoing its own
   // pick back — then keep the frozen seed so the composer stays mounted and the
@@ -122,7 +127,7 @@ export function NewSequencePage({
     seedRef.current = {
       key: candidateKey,
       script: candidateScript,
-      styleId: seedStyle?.id,
+      styleId: seedStyle?.id ?? (seedAuto ? AUTO_STYLE_ID : undefined),
     };
   }
   const {
@@ -137,8 +142,8 @@ export function NewSequencePage({
   const handleStyleChange = useCallback(
     (styleId: string) => {
       const selected = styles?.find((s) => s.id === styleId);
-      if (!selected) return;
-      const slug = styleSlug(selected.name);
+      if (!selected && styleId !== AUTO_STYLE_ID) return;
+      const slug = selected ? styleSlug(selected.name) : AUTO_STYLE_ID;
       lastSelfSyncRef.current = slug;
       void navigate({
         to: composerPath,

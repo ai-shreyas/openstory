@@ -330,6 +330,7 @@ export function useGenerationStream(
       'generation.location:matched',
       'generation.character-sheet:progress',
       'generation.poster:ready',
+      'generation.style:ready',
       'generation.preview:replaced',
       'generation.stale:detected',
       'generation.complete',
