@@ -17,6 +17,8 @@ describe('buildRootDocument', () => {
     expect(doc.instructions).toMatch(/Authorization: Bearer/);
     expect(doc.instructions).toMatch(/\?wait=/);
     expect(doc.instructions).toMatch(/_links/);
+    expect(doc.instructions).toMatch(/POST\s+\/api\/v1\/device\/code/);
+    expect(doc.instructions).toMatch(/428 authorization_pending/);
   });
 
   it('embeds the request JSON Schema for tool callers', () => {
@@ -27,6 +29,10 @@ describe('buildRootDocument', () => {
   it('links every operation with a method (and write links with examples)', () => {
     const { _links } = buildRootDocument();
     expect(_links.self?.method).toBe('GET');
+    expect(_links['device-authorize']).toMatchObject({
+      method: 'POST',
+      href: '/api/v1/device/code',
+    });
     expect(_links['sequence-status']?.templated).toBe(true);
 
     const create = _links['create-sequence'];

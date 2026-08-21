@@ -7,6 +7,7 @@ import { generateId } from '@/lib/db/id';
 import {
   account,
   apikey,
+  deviceCode,
   passkey,
   session,
   user,
@@ -30,7 +31,9 @@ import {
   isGoogleAuthConfigured,
   isLocalRequestHost,
 } from '@/lib/utils/environment';
+import { DEVICE_VERIFICATION_PATH } from '@/lib/api-v1/device-auth';
 import { apiKey } from '@better-auth/api-key';
+import { deviceAuthorization } from 'better-auth/plugins/device-authorization';
 import { passkey as passkeyPlugin } from '@better-auth/passkey';
 
 import { captureProductEvent } from '@/lib/observability/product-events';
@@ -85,7 +88,8 @@ let _authInstance: ReturnType<typeof createAuth> | undefined;
  * Create Better Auth instance
  * Separated for type inference - the return type is used for the singleton cache
  */
-function createAuth() {
+/** `db` is injectable only for `bun auth:generate` (schema generation never queries). */
+export function createAuth(db: ReturnType<typeof getDb> = getDb()) {
   const runtimeEnv = getEnv();
 
   return betterAuth({
@@ -111,7 +115,7 @@ function createAuth() {
         }
       },
     },
-    database: drizzleAdapter(getDb(), {
+    database: drizzleAdapter(db, {
       provider: 'sqlite',
       schema: {
         user: user,
@@ -120,6 +124,7 @@ function createAuth() {
         verification: verification,
         passkey: passkey,
         apikey: apikey,
+        deviceCode: deviceCode,
       },
     }),
     secret: runtimeEnv.BETTER_AUTH_SECRET,
@@ -187,6 +192,21 @@ function createAuth() {
       }),
       lastLoginMethod(),
       passkeyPlugin(),
+      // Device-code login for the public API (#1219, RFC 8628). The plugin
+      // owns the code lifecycle; `src/lib/api-v1/device-auth.ts` wraps it to
+      // hand back an API key instead of a session.
+      deviceAuthorization({
+        expiresIn: '10m',
+        interval: '5s',
+        // Must be absolute: the plugin resolves a relative URI against
+        // `baseURL`, which we leave request-derived (unset) — and server-side
+        // `auth.api.*` calls have no request. The /api/v1 wrapper re-derives
+        // the URL from the live request origin anyway (previews, local ports).
+        verificationUri: new URL(
+          DEVICE_VERIFICATION_PATH,
+          runtimeEnv.VITE_APP_URL || 'http://localhost:3000'
+        ).toString(),
+      }),
       // Public-API authentication. `enableSessionForAPIKeys` makes the plugin
       // resolve a full session for the key's owner whenever a request carries a
       // key header — so the existing `getSession`/`requireUser` path works

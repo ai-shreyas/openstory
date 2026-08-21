@@ -96,6 +96,7 @@ function makeEvent(
   return {
     payload,
     instanceId: 'storyboard_run_A',
+    workflowName: 'storyboard',
     timestamp: new Date(0),
   };
 }

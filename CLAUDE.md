@@ -282,6 +282,7 @@ bun db:migrate   # Apply migrations to local.db
 
 - Schema in `src/lib/db/schema/` (Drizzle auto-infers types).
 - **NEVER** hand-write migration SQL.
+- **NEVER hand-write Better Auth tables.** Adding/changing a Better Auth plugin → run `bun auth:generate` (Better Auth CLI against the real config via `src/lib/auth/cli-config.ts`; emits `auth-schema.ts` at the root), port the new table(s) verbatim into `src/lib/db/schema/auth.ts` (same `snakeCase.table` style as the neighbours), then `bun db:generate`. Field names/types must match the plugin exactly or the adapter silently breaks.
 - **ULID** primary keys (not UUID).
 - **Typed JSONB:** `frame.metadata` typed as `Scene`.
 

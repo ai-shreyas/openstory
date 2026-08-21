@@ -99,6 +99,17 @@
       "name": "SEND_EMAIL",
     },
   ],
+  // Per-IP throttle for the unauthenticated device-code login endpoints
+  // (/api/v1/device/*, #1219). Native Workers rate limiting (per-colo, no
+  // storage). Not inherited by env blocks — redeclared below. Local dev:
+  // Miniflare simulates it.
+  "ratelimits": [
+    {
+      "name": "DEVICE_LOGIN_RATE_LIMITER",
+      "namespace_id": "1219",
+      "simple": { "limit": 30, "period": 60 },
+    },
+  ],
   "workflows": [
     // All durable async work runs on Cloudflare Workflows. Each class is
     // re-exported from src/server.ts (so it lands in the Worker bundle) and
@@ -341,6 +352,14 @@
       "send_email": [
         {
           "name": "SEND_EMAIL",
+        },
+      ],
+      // Device-code login throttle (not inherited; see top-level block).
+      "ratelimits": [
+        {
+          "name": "DEVICE_LOGIN_RATE_LIMITER",
+          "namespace_id": "1219",
+          "simple": { "limit": 30, "period": 60 },
         },
       ],
       // Workflow bindings are NOT inherited from the top-level block, so
@@ -623,6 +642,14 @@
       "send_email": [
         {
           "name": "SEND_EMAIL",
+        },
+      ],
+      // Device-code login throttle (not inherited; see top-level block).
+      "ratelimits": [
+        {
+          "name": "DEVICE_LOGIN_RATE_LIMITER",
+          "namespace_id": "1219",
+          "simple": { "limit": 30, "period": 60 },
         },
       ],
       // Workflow bindings are NOT inherited from the top-level block, so

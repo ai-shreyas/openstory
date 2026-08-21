@@ -32,6 +32,8 @@ describe('buildOpenApiDocument', () => {
     expect(doc.paths['/api/v1/sequences/{id}'].get).toBeDefined();
     expect(doc.paths['/api/v1/openapi.json'].get).toBeDefined();
     expect(doc.paths['/api/v1/scripts/enhance'].post).toBeDefined();
+    expect(doc.paths['/api/v1/device/code'].post).toBeDefined();
+    expect(doc.paths['/api/v1/device/token'].get).toBeDefined();
   });
 
   it('documents the list endpoint with limit/cursor params and a result schema', () => {
