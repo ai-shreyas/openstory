@@ -52,9 +52,9 @@ Enhance only (no sequence):
 
 Styles (create your own look):
   POST /api/v1/styles creates a team-owned library style you can then pass as
-  'style' to POST /api/v1/sequences. Send a 'name' plus EXACTLY ONE of
-  'brief' (prose describing the look and motion — a billed LLM call derives the
-  full recipe) or 'config' (a complete v2 style recipe, no LLM). Responds 201
+  'style' to POST /api/v1/sequences. Send a 'name' and a complete v2 'config'
+  (look: mood, artStyle, lighting, colorPalette, colorGrading; motion: camera,
+  pace, energy) plus optional description/category/tags. Responds 201
   with the style document and a 'create-sequence' link pre-filled with its id;
   409 if the name's URL slug collides with a style you can already see.
   GET /api/v1/styles lists your library styles plus the public templates as
@@ -144,13 +144,26 @@ export function enhanceScriptLink(): HalLink {
   };
 }
 
-/** A representative `POST /api/v1/styles` body (the brief form). */
+/** A representative `POST /api/v1/styles` body. */
+export const EXAMPLE_CREATE_STYLE_BODY = {
+  name: 'Rain-slick Neon Noir',
+  category: 'film',
+  tags: ['noir', 'neon'],
+  config: {
+    version: 2,
+    look: {
+      mood: 'tense, rain-soaked nocturne',
+      artStyle: 'photorealistic live action',
+      lighting: 'cyan and magenta neon practicals, wet reflections',
+      colorPalette: ['#0a0a12', '#00e5ff', '#ff2bd6'],
+      colorGrading: 'crushed blacks, teal-magenta split tone',
+    },
+    motion: { camera: 'handheld, close coverage', pace: 'measured', energy: 3 },
+  },
+};
+
 function exampleCreateStyleBody(): unknown {
-  return apiCreateStyleSchema.parse({
-    name: 'Rain-slick Neon Noir',
-    brief:
-      'Wet asphalt, cyan-magenta practicals, handheld coverage, measured pace.',
-  });
+  return apiCreateStyleSchema.parse(EXAMPLE_CREATE_STYLE_BODY);
 }
 
 /** The `create-style` affordance, advertised in the root document. */
@@ -158,8 +171,7 @@ export function createStyleLink(): HalLink {
   return {
     href: STYLES_PATH,
     method: 'POST',
-    title:
-      'Create a team style from a prose brief (billed LLM) or a full v2 config. Responds 201.',
+    title: 'Create a team style from a complete v2 config. Responds 201.',
     contentType: 'application/json',
     examples: [exampleCreateStyleBody()],
   };

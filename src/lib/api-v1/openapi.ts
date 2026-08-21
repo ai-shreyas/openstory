@@ -16,6 +16,7 @@ import { SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
 import { apiEnhanceScriptSchema } from './enhance-input-schema';
 import { API_V1_BASE } from './hal';
 import { apiCreateSequenceSchema } from './input-schema';
+import { EXAMPLE_CREATE_STYLE_BODY } from './discovery';
 import { apiCreateStyleSchema } from './style-input-schema';
 import { z, type ZodType } from 'zod';
 
@@ -97,13 +98,6 @@ const EXAMPLE_ENHANCE_BODY: JsonObject = {
   script: 'A lighthouse keeper befriends a stranded whale.',
   style: 'Cinematic Noir',
   targetSeconds: 30,
-};
-
-/** A representative create-style body (brief form), embedded as the request example. */
-const EXAMPLE_CREATE_STYLE_BODY: JsonObject = {
-  name: 'Rain-slick Neon Noir',
-  brief:
-    'Wet asphalt, cyan-magenta practicals, handheld coverage, measured pace.',
 };
 
 const statusEnum = (values: JsonValue[]): JsonObject => ({
@@ -480,7 +474,7 @@ export function buildOpenApiDocument(): JsonObject {
           tags: ['styles'],
           summary: 'Create a style',
           description:
-            'Create a team-owned library style to pass as `style` when creating sequences. Send `name` plus EXACTLY ONE of `brief` (prose — one billed LLM call derives the full v2 recipe) or `config` (a complete v2 style recipe, validated as-is; no LLM). Public/template flags, usage counts and sequence binding are server-managed and cannot be set.',
+            'Create a team-owned library style to pass as `style` when creating sequences. Send `name` and a complete v2 `config` (validated as-is; v1 is rejected). Public/template flags, usage counts and sequence binding are server-managed and cannot be set.',
           requestBody: {
             required: true,
             content: {
@@ -500,13 +494,8 @@ export function buildOpenApiDocument(): JsonObject {
                 },
               },
             },
-            '400': errorResponse(
-              'Invalid JSON or request body (incl. both or neither of brief/config).'
-            ),
+            '400': errorResponse('Invalid JSON or request body.'),
             '401': errorResponse('Missing or invalid API key.'),
-            '402': errorResponse(
-              'Insufficient credits for the brief LLM call.'
-            ),
             '403': errorResponse('No team associated with the key.'),
             '409': errorResponse(
               "The name's URL slug collides with a style visible to this team."

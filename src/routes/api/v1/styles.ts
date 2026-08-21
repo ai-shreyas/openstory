@@ -1,8 +1,7 @@
 /**
  * /api/v1/styles — the team's style library (#1227).
  *
- * POST creates a team-owned library style from either a prose `brief` (one
- * billed LLM call derives the recipe) or a ready v2 `config`. Responds 201 with
+ * POST creates a team-owned library style from a complete v2 `config`. Responds 201 with
  * the full document and a `create-sequence` affordance pre-filled with the new
  * style id. 409 when the name's slug collides with a visible style.
  *
@@ -15,7 +14,7 @@ import { apiJsonError, runApiV1Handler } from '@/lib/api-v1/errors';
 import { createStyleLink } from '@/lib/api-v1/discovery';
 import { API_V1_BASE, getLink, STYLES_PATH, withLinks } from '@/lib/api-v1/hal';
 import { apiCreateStyleSchema } from '@/lib/api-v1/style-input-schema';
-import { createStyle, styleCard, styleDocument } from '@/lib/api-v1/styles';
+import { styleCard, styleDocument } from '@/lib/api-v1/styles';
 import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/api/v1/styles')({
@@ -49,12 +48,9 @@ export const Route = createFileRoute('/api/v1/styles')({
               'Request body must be valid JSON.'
             );
           }
-          const input = apiCreateStyleSchema.parse(body);
-          const style = await createStyle(input, {
-            scopedDb: context.scopedDb,
-            user: context.user,
-            teamId: context.teamId,
-          });
+          const style = await context.scopedDb.styles.create(
+            apiCreateStyleSchema.parse(body)
+          );
           return Response.json(styleDocument(style), { status: 201 });
         }),
     },
