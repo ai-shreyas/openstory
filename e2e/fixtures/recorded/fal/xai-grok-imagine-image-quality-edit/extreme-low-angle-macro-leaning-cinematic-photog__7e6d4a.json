@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "Extreme low-angle macro-leaning cinematic photograph, camera body half-buried at sand level in glossy wet sand right at the waterline, lens almost touching the film of retreating seawater. The slim lipstick from (CORAL_LIPSTICK (Image 4)) lies on its side in a shallow bed of white foam, half-cradled by sand, water sluicing past it and carving a bright braided channel around it, a bead of specular sunlight flaring off its metal band, tiny sand grains and salt droplets clinging to its glossy surface, one edge partially occluded by a lip of collapsing foam. Entering frame from the right, the sun-tanned hand of Stranger at Kiosk Window (Image 2) — slim fingers, short unpainted nails, bare tanned forearm, no other clothing visible — plunges down into the shallow water mid-snatch, fingers spread and tensed a hair above the tube, water beading on the knuckles, foam splashing up around the wrist. Just behind, out of focus in the upper third, Scarlett Doyle (Image 1) stands soaked to the thigh in a pale kiosk uniform polo with loose collar and hem half-tucked into denim cutoff shorts, bare wet legs, hair elastic on her wrist and kiosk keys on a ring, blurred into a warm silhouette against the surf. Beyond her, wide empty Bondi wet sand mirrors the sky, small shorebreak waves collapse into sheets of white, turquoise-to-navy sea and a soft haze of headland on the horizon, a phone tripod knocked sideways and half-sunk in the sand at the edge of frame. Late-afternoon sun sits low and behind, throwing hard raking backlight that turns the foam translucent, edges every water droplet with a golden rim, scatters glitter across the wet sand and stretches long shadows toward camera. Shot on a wide macro lens at very shallow depth of field, water droplets speckling the front element, crisp true-to-life color, crisp whites, warm lifted highlights, airy clean grade with the coral accent popping against tan sand and white foam, 16:9.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 3 (location): EXT. SHORELINE — AFTERNOON - The open wet-sand shorebreak zone of Bondi Beach",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b7b/lPnjkCWfUU89Nq7Yv_OQ3_h4SrevX8.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "lPnjkCWfUU89Nq7Yv_OQ3_h4SrevX8.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

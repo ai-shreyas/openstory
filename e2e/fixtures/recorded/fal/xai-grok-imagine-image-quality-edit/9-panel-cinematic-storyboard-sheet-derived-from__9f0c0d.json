@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "9-panel cinematic storyboard sheet derived from Image 1. Mix Wide, Medium, and Tight shots of the same scene. No borders between panels.\n\nLayout: 3x3 grid (9 panels) in a 16:9 landscape image.\n\nScene: Punchy editorial social-first product photography, locked head-on medium shot, 16:9. SCARLETT leans out through the aluminium sliding service hatch of a small beachside kiosk, wearing her pale white kiosk uniform polo with the collar loose and hem half-tucked into denim cutoff shorts, an elastic hair tie around one wrist and a ring of kiosk keys hooked at her waistband. She is caught mid-motion, one forearm braced flat on the thick gloss-white painted timber counter ledge, the other hand sliding a sweating paper cup of frozen yellow pineapple across the paint toward the waiting sun-tanned fingers of a STRANGER entering frame from the lower right, only their bare tanned forearm and short unpainted nails visible as the fingertips hover a centimetre from the cup. Condensation beads run down the cup's side and pool in a small wet ring on the ledge. Her eyebrows are flicked up in a cheeky beat directed straight at the lens, mouth closed and glossy. Behind her the kiosk interior reads as a shallow dark slot, a hand-lettered menu board and a cluster of faded cold-drink stickers just inside the window frame, chipped gloss enamel and a low awning cropping the top of frame. Direct on-camera flash lighting, hard-edged black shadows thrown crisply off her arm and the cup onto the white paintwork, specular hotspot skimming the wet cup, highlights slightly warm, background falling off fast into shadow. Locked tripod frame, 35mm lens, deep enough focus for tactile texture, crisp true-to-life color, high-key whites against warm yellow and black.\n\nEvery panel is a shot of the same scene as Image 1 — keep the characters, wardrobe, lighting, color grade, and texture consistent across all panels.\n\nNo text, dialogue bubbles, scene numbers, or watermarks.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 1 (primary): Primary source scene — generate 9 variant shots from this image\nImage 2 (character): Scarlett Doyle\nImage 3 (character): Stranger at Kiosk Window - Only hands visible — slim\nImage 4 (location): EXT. KIOSK WINDOW - The service hatch of a small beachside food kiosk\nImage 5 (element): CORAL_LIPSTICK - A slim cylindrical lipstick roughly 75mm tall and 20mm in diameter",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b71/gBwoQ_BRUOL3ihIyloQDL_MW9jbP0B.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "gBwoQ_BRUOL3ihIyloQDL_MW9jbP0B.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

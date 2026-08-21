@@ -28,7 +28,7 @@ function comparableScene(scene: SceneSplittingScene) {
 describe('recorded e2e scene replay', () => {
   it('visual-prompt CURRENT_SCENE JSON matches slice-derived scenes', () => {
     const { scenes } = replayRecordedE2eScenes();
-    expect(scenes).toHaveLength(11);
+    expect(scenes).toHaveLength(12);
 
     const fixtures = loadOpenrouterStage('visual-prompts');
     expect(fixtures.length).toBeGreaterThan(0);
@@ -103,6 +103,7 @@ describe('recorded e2e scene replay', () => {
     const aspectRatio = '16:9';
 
     for (const file of loadOpenrouterStage('motion-prompts')) {
+      if (file.fixtures[0]?.response.content === undefined) continue;
       const recordedMessage = file.fixtures[0]?.match.userMessage;
       if (!recordedMessage)
         throw new Error('motion fixture missing userMessage');
@@ -150,7 +151,7 @@ describe('recorded e2e scene replay', () => {
 
   it('fal quality/edit matchers equal the live Image-N reconstruction', () => {
     const reconstructed = reconstructRecordedFalEditPrompts();
-    expect(reconstructed).toHaveLength(22);
+    expect(reconstructed).toHaveLength(24);
 
     const falDir = resolve(
       import.meta.dirname,

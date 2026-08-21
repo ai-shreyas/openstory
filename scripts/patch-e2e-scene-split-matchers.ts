@@ -112,8 +112,12 @@ for (const file of visualFiles) {
     fixture.match.userMessage,
     user.content
   );
+  const responseContent = fixture.response.content;
+  if (responseContent === undefined) {
+    throw new Error(`visual prompt ${file.name}: no response content`);
+  }
   const parsed = visualPromptResponseSchema.parse(
-    JSON.parse(fixture.response.content) as unknown
+    JSON.parse(responseContent) as unknown
   );
   visualSummaryBySceneId[scene.sceneId] = parsed.visual?.fullPrompt ?? '';
 }

@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "9-panel cinematic storyboard sheet derived from Image 1. Mix Wide, Medium, and Tight shots of the same scene. No borders between panels.\n\nLayout: 3x3 grid (9 panels) in a 16:9 landscape image.\n\nScene: Waist-up lifestyle beauty frame, modern social-first editorial product photography, of Scarlett Doyle (Image 2) wearing her pale kiosk uniform polo shirt with the collar loose and the hem half-tucked into denim cutoff shorts, fabric damp and clinging at the hip, an elastic hair tie around one wrist and a ring of kiosk keys hooked at her waistband, caught in the exact instant she has just clicked the cap shut on the lipstick from (CORAL_LIPSTICK (Image 3)) — the closed tube pinched between thumb and fingers, wrist cocked and beginning to flick upward, forearm tendons tensed, lips freshly pressed together, chin turning away from the lens toward the water, a bright fleck of dried salt whitening the skin of her forearm, one heel already lifting from the wet sand. Behind her the open shoreline stretches out in the late afternoon: a broad glassy sheet of receding water reflecting the low sun in long molten ribbons, small collapsing waves throwing white spray, darker rippled tide-lines in the packed sand, scattered wet shell fragments and a fading fringe of foam, distant blurred swimmers and a soft haze of sea mist thinning into a pale bleached horizon. Late-afternoon golden sunlight rakes in low from behind camera-left, clean directional shadow off her arm across the sand, warm rim light burning along her shoulder and catching a single bright specular flare on the tube's metal band, salt spray sparkling as backlit pinpoints in the air, high-key and airy with lifted shadows and crisp whites, true-to-life warm skin tones and one coral accent popping against the neutral sand and sky. Shot handheld with subtle micro-movement on a 50mm lens at f/2.0, eye-level and very slightly above, shallow depth of field rendering the surf into soft creamy bokeh, fine 35mm film grain, clean minimally processed grade.\n\nEvery panel is a shot of the same scene as Image 1 — keep the characters, wardrobe, lighting, color grade, and texture consistent across all panels.\n\nNo text, dialogue bubbles, scene numbers, or watermarks.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 1 (primary): Primary source scene — generate 9 variant shots from this image",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b70/iYRlDTYjat2NI2DhPmIFr_KnHJWHkq.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "iYRlDTYjat2NI2DhPmIFr_KnHJWHkq.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

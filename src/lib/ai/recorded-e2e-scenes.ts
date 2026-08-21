@@ -36,7 +36,7 @@ const fixtureFileSchema = z.object({
         userMessage: z.string(),
         model: z.string().optional(),
       }),
-      response: z.object({ content: z.string() }),
+      response: z.object({ content: z.string().optional() }).passthrough(),
     })
   ),
 });

@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "9-panel cinematic storyboard sheet derived from Image 1. Mix Wide, Medium, and Tight shots of the same scene. No borders between panels.\n\nLayout: 3x3 grid (9 panels) in a 16:9 landscape image.\n\nScene: Locked overhead flat-lay shot, camera directly above looking straight down, modern social-first product photography with tactile editorial energy, 16:9 frame. A folded crisp white cotton towel fills the center of the frame, laid on a pale laminate folding table in a cramped Bondi share-house laundry room. Arranged on the towel in a curated but lived-in spread: the lipstick from (CORAL_LIPSTICK (Image 4)) resting near the middle, a small ring of kiosk keys, a stubby tub of zinc-white sunscreen with a smear across its lid, a half-eaten frozen pineapple stick beading condensation into a small dark damp patch on the cotton, and a thin elastic hair tie curled loose. SCARLETT's hand enters from the right edge of frame — she wears a pale white kiosk uniform polo with loose collar, sleeve just visible at the wrist — fingers spread and tensed a breath above the keys, about to pluck them, the towel already beginning to pucker under her palm, the lipstick caught mid-roll a fraction of a turn out of place. Around the edges of the frame the environment bleeds in: square white ceramic wall tiles, torn cardboard mailer flap and crumpled cream tissue paper pushed to one corner, the top edge of a front-load dryer, a coiled cable. Hard directional morning sunlight through aluminium louvre window slats lays clean parallel stripes of gold-white light and crisp shadow across the towel and the objects, punched with a soft circular ring-light fill that lifts the shadows and throws a faint round catchlight on the glossy surfaces and a bright specular flare along the metal band. Bright high-key exposure, true-to-life color, crisp whites, warm highlights, lifted airy shadows, one coral accent popping against neutrals. Shot on a 35mm macro-capable prime, shallow-ish depth of field with the center razor sharp and the table edges softening, fine cotton weave and condensation droplet detail, clean digital capture with subtle film grain.\n\nEvery panel is a shot of the same scene as Image 1 — keep the characters, wardrobe, lighting, color grade, and texture consistent across all panels.\n\nNo text, dialogue bubbles, scene numbers, or watermarks.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 1 (primary): Primary source scene — generate 9 variant shots from this image\nImage 2 (character): Scarlett Doyle\nImage 3 (location): INT. BONDI SHARE-HOUSE LAUNDRY — MORNING - A cramped domestic laundry room in a beachside share-house",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b70/Qlw8IaP0GHq6EQmivFTu9_DKWvxvW0.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "Qlw8IaP0GHq6EQmivFTu9_DKWvxvW0.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

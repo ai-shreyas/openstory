@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "Handheld social-first lifestyle cinematography, 16:9, medium-wide shot on the wet-sand shorebreak zone of Bondi Beach in bright late afternoon. Scarlett Doyle (Image 1) wears her pale kiosk uniform polo shirt with the collar loose and the hem half-tucked into denim cutoff shorts, barefoot on glossy wet sand, an elastic hair tie around one wrist and a ring of kiosk keys hooked at her waistband; she has just backed up two steps from a small phone tripod planted in the sand and is caught mid-breath at the start of a rehearsed, chin-lifted piece-to-camera, shoulders squared, one hip cocked, weight forward on the balls of her feet, holding the product from (CORAL_LIPSTICK (Image 4)) lightly pinched between thumb and forefinger of her raised right hand, angled toward the lens with a bright specular flare skating across its metal band. Behind her ankles a low shorebreak wave is already surging up the sand in a broad advancing sheet of white foam, the water climbing over her feet and undercutting the tripod's splayed legs so the whole rig is beginning to lean, sand liquefying and darkening beneath it. The flat wet sand mirrors the sky in long silver streaks, retreating foam has carved bright braided channels down the slope, scattered tide-line kelp and shell fragments in the shallows, wide empty beach and a distant headland softened by salt haze, turquoise-to-navy sea stacked with small collapsing waves on the horizon. Hard raking natural side light rakes across the sand grain and foam, throwing a long shadow, warm amber glow lifting the highlights, spray droplets catching the sun as tiny hot points, crisp whites and true-to-life warm skin tones with lifted airy shadows. Shot slightly below eye level on a 35mm lens, handheld with visible micro-shake, the horizon just beginning to cant, shallow-ish depth of field with the near foam breaking into soft bokeh, clean bright grade with one coral accent popping against neutral sand.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 2 (character): Stranger at Kiosk Window - Only hands visible — slim\nImage 3 (location): EXT. SHORELINE — AFTERNOON - The open wet-sand shorebreak zone of Bondi Beach",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b67/MEumwYdcP5DG3Lab6Xcwj_dHSM1hll.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "MEumwYdcP5DG3Lab6Xcwj_dHSM1hll.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

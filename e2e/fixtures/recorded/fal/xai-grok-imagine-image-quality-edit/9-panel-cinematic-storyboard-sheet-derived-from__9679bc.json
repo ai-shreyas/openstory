@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "9-panel cinematic storyboard sheet derived from Image 1. Mix Wide, Medium, and Tight shots of the same scene. No borders between panels.\n\nLayout: 3x3 grid (9 panels) in a 16:9 landscape image.\n\nScene: Handheld eye-level medium shot, modern social-first editorial lifestyle photography, 16:9. SCARLETT wearing her pale kiosk uniform polo shirt with the collar loose and the hem half-tucked into denim cutoff shorts, an elastic hair tie around her wrist and a ring of kiosk keys clipped at her waistband, drops into frame mid-motion and slams both palms down onto a plain cardboard mailer on a cramped folding table, one hand hooked under a peeling strip of packing tape at the exact instant before it rips free, shoulders dropped, weight leaning in, chin lifting as her eyes cut off-camera toward a phone mounted on a small tabletop tripod, caught mid-breath with mouth just parting. The room is a tight beachside share-house laundry: square white ceramic wall tiles behind her with grout lines catching the light, laminate benching and exposed plumbing at the edges of frame, a front-load dryer to one side with a circular ring light clipped to its top, cream tissue paper spilling from the torn mailer, an aluminium louvre window just out of frame left. Hard directional morning sunlight rakes through the louvre slats and lays crisp clean stripes of gold across white cardboard, tissue and tile, layered over the soft circular fill of the ring light, high-key and airy with lifted shadows and a slight warmth in the highlights. Shot on a 35mm lens, natural micro-shake, shallow-ish depth of field softening the tile background, true-to-life color grading with crisp whites, warm natural skin tones and a single coral accent popping against the neutral base.\n\nEvery panel is a shot of the same scene as Image 1 — keep the characters, wardrobe, lighting, color grade, and texture consistent across all panels.\n\nNo text, dialogue bubbles, scene numbers, or watermarks.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 1 (primary): Primary source scene — generate 9 variant shots from this image\nImage 2 (character): Scarlett Doyle\nImage 3 (location): INT. BONDI SHARE-HOUSE LAUNDRY — MORNING - A cramped domestic laundry room in a beachside share-house",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b70/Use-julJKMWhF58LeOQrH_tMVZ7VOU.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "Use-julJKMWhF58LeOQrH_tMVZ7VOU.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 10
+      }
+    }
+  ]
+}

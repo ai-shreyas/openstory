@@ -1,0 +1,28 @@
+{
+  "fixtures": [
+    {
+      "match": {
+        "endpoint": "fal",
+        "userMessage": "Wide handheld lifestyle beauty frame, 16:9, modern social-first editorial photography with true-to-life clean color. SCARLETT wears a pale white kiosk uniform polo shirt with a small logo, collar loose and hem half-tucked into denim cutoff shorts, soaked dark to the thigh, barefoot in the wet sand, an elastic hair tie on one wrist and a ring of kiosk keys hooked at her waistband. She is caught mid-motion doubled over with laughter, one arm braced across her knee, the other flung up in triumph holding the lipstick (CORAL_LIPSTICK (Image 2)) high above her head, water beading and running off its glossy surface, a hard specular flare skating across the metal band. Her shoulders are still shaking, chest mid-breath, weight shifting as she begins to straighten, chin lifting toward the lens, hair plastered wet across one cheek and shedding droplets. Around her the Bondi shoreline runs wide and open: dark mirror-slick wet sand reflecting the sky, white foam sliding back in lace-thin sheets around her ankles, a small toppled phone tripod half-sunk in the sand beside her, turquoise-to-navy shorebreak stacking behind, sun-blurred swimmers and a distant headland soft in the bokeh. Late-afternoon sun sits low and raking from behind camera-left, throwing a long shadow across the sand, igniting a glowing rim on her wet arms and salt-strung hair, spray suspended as tiny lit sparks in the air. Crisp whites, warm natural skin tones, lifted airy shadows, one coral accent popping against the neutral sand and sea. Shot on a 35mm lens at eye level, slightly wide handheld with natural micro-movement, shallow depth of field on her raised hand, faint salt haze and lens spatter at the edges of frame.\n\nReference images define identity — keep every referenced character, object, and location consistent with its reference image; never render a reference image itself as a separate panel or subject.\nImage 1 (character): Scarlett Doyle",
+        "model": "xai/grok-imagine-image/quality/edit"
+      },
+      "response": {
+        "json": {
+          "images": [
+            {
+              "url": "https://v3b.fal.media/files/b/0aa73b68/Ku-jktF4hpCKay0ZSsX2D_7Aj5PkOA.jpg",
+              "content_type": "image/jpeg",
+              "file_name": "Ku-jktF4hpCKay0ZSsX2D_7Aj5PkOA.jpg",
+              "file_size": null,
+              "width": 2816,
+              "height": 1584
+            }
+          ],
+          "revised_prompt": null
+        },
+        "status": 200,
+        "billableUnits": 9
+      }
+    }
+  ]
+}
