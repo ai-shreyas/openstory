@@ -41,7 +41,7 @@ function wranglerBindingsBanner(): Plugin {
         );
         // Real JSONC parse: a regex stripper choked on `/*` inside a `//`
         // comment (a glob like `/api/v1/device/*` swallowed the file).
-        const cfg = parseJsonc(raw) as WranglerConfig;
+        const cfg: WranglerConfig = parseJsonc(raw);
 
         const rows: Array<[string, string, boolean]> = [];
         for (const b of cfg.d1_databases ?? [])
