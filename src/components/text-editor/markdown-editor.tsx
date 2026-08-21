@@ -221,11 +221,20 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       handleDOMEvents: {
         beforeinput: (view, event) => {
           if (!(event instanceof InputEvent)) return false;
-          if (event.inputType !== 'insertText' || !event.data?.includes('\n')) {
+          const newlineInput =
+            event.inputType === 'insertLineBreak' ||
+            event.inputType === 'insertParagraph';
+          const data = newlineInput ? `\n${event.data ?? ''}` : event.data;
+          if (
+            (event.inputType !== 'insertText' &&
+              event.inputType !== 'insertReplacementText' &&
+              !newlineInput) ||
+            !data?.includes('\n')
+          ) {
             return false;
           }
           event.preventDefault();
-          return insertTextWithNewlines(view, event.data);
+          return insertTextWithNewlines(view, data);
         },
       },
       transformPastedText: (text) => normalizeScreenplayNewlines(text),

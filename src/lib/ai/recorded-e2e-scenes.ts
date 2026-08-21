@@ -22,6 +22,7 @@ import {
   type SceneSplittingScene,
 } from './streaming-scene-parser';
 import { reconcileSceneTags } from './tag-reconcile';
+import { buildCastCharacterBible } from '@/lib/prompts/character-prompt';
 
 const OPENROUTER_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -174,10 +175,31 @@ export function replayRecordedE2eScenes(): {
     elementBible,
   });
 
+  // Analyze-script casts matched talent onto the bible BEFORE visual/motion
+  // prompts (#867). Replay the recorded Maisie → Sienna Blake match so
+  // CHARACTER_BIBLE JSON matches live, not the pre-cast split output.
+  const talentCast = z
+    .object({
+      matches: z.array(
+        z.object({
+          characterId: z.string(),
+          talentId: z.string(),
+        })
+      ),
+    })
+    .parse(parseJson(responseContent('talent-cast/talent-cast.json')));
+  const characterBible = buildCastCharacterBible(
+    bibles.characterBible,
+    talentCast.matches.map((match) => ({
+      characterId: match.characterId,
+      talentName: 'Sienna Blake',
+    }))
+  );
+
   return {
     script,
     scenes,
-    characterBible: bibles.characterBible,
+    characterBible,
     locationBible,
     elementBible,
   };

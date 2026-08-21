@@ -237,7 +237,14 @@ SUPER:  CORAL.  OUT NOW.
       // Script input is now a TipTap-backed contenteditable, not a <textarea>.
       // Playwright's .fill() works on contenteditable elements.
       const scriptTextarea = await waitForScriptEditor(page);
+      await scriptTextarea.click();
       await scriptTextarea.fill(script);
+      // Playwright fill uses insertText; if newlines didn't land as hard
+      // breaks the enhance body misses the recorded fixture and Stop hangs.
+      await expect(scriptTextarea).toContainText(
+        'EXT. BONDI BEACH - SHORELINE',
+        { timeout: 5_000 }
+      );
 
       // 4. Enhance script (LLM streaming via aimock OpenRouter passthrough).
       await expect(

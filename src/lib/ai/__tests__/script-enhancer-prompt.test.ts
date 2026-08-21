@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { z } from 'zod';
 import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
+import { DEFAULT_STYLE_TEMPLATES } from '@/lib/style/style-templates';
 import { toEnhanceInputs } from '../enhance-inputs';
 import { createUserPrompt } from '../script-enhancer';
 
@@ -78,6 +82,70 @@ describe('createUserPrompt (issue #855)', () => {
     expect(prompt).not.toContain('undefined');
     expect(prompt).not.toContain('Shot selection:');
     expect(prompt).not.toContain('Energy:');
+  });
+
+  it('matches the recorded full-pipeline enhance fixture for the Bondi script', () => {
+    const productAd = DEFAULT_STYLE_TEMPLATES.find(
+      (style) => style.name === 'Product Ad'
+    );
+    if (!productAd) throw new Error('Product Ad template missing');
+    const script = `CORAL — A SUMMER LAUNCH
+
+Bondi Studio - Morning in front of her microphone
+
+Sunlight floods a white vanity. SCARLETT (19, blonde, sun-kissed),
+a Bondi influencer, unboxes a coral lipstick and turns it slowly
+to camera.
+
+SCARLETT (V.O.)
+One shade. One summer.
+
+CLOSE ON THE TUBE — the coral bullet twists up and catches the
+light. Scarlett smiles at her reflection, the colour already hers.
+
+EXT. BONDI BEACH PROMENADE - CONTINUOUS
+
+Scarlett walks the promenade, blonde hair lifting in the breeze,
+surfers cresting behind her. She glances back at camera.
+
+SCARLETT (V.O.)
+Made for the water. Wear it everywhere.
+
+EXT. BONDI BEACH - SHORELINE - CONTINUOUS
+
+She laughs as a wave breaks at her feet. The lipstick lands
+beside the brand mark in the sand.
+
+SUPER:  CORAL.  OUT NOW.`;
+    const prompt = createUserPrompt(script, {
+      style: {
+        name: productAd.name,
+        category: productAd.category ?? undefined,
+        description: productAd.description,
+        tags: productAd.tags ?? [],
+        config: productAd.config,
+      },
+      aspectRatio: '16:9',
+      targetDuration: 60,
+    });
+    const fixture = z
+      .object({
+        fixtures: z.array(
+          z.object({ match: z.object({ userMessage: z.string() }) })
+        ),
+      })
+      .parse(
+        JSON.parse(
+          readFileSync(
+            resolve(
+              import.meta.dirname,
+              '../../../../e2e/fixtures/recorded/openrouter/script-enhance/script-enhance.json'
+            ),
+            'utf8'
+          )
+        )
+      );
+    expect(prompt).toBe(fixture.fixtures[0]?.match.userMessage);
   });
 
   it('renders authored motion refinements when present', () => {
