@@ -207,6 +207,8 @@
   "overrides": {
     "@better-auth/core": "1.6.26",
     "@better-auth/utils": "0.4.2",
+    "prosemirror-model": "1.25.11",
+    "prosemirror-view": "1.42.2",
     "qs": "6.15.2",
     "ws": "^8.21.0"
   },

@@ -14,4 +14,15 @@ describe('MarkdownEditor empty placeholder', () => {
     expect(html).toContain('A one-liner is enough');
     expect(html).toContain('<p');
   });
+
+  it('does not SSR the placeholder over seeded content', () => {
+    const html = renderToStaticMarkup(
+      <MarkdownEditor
+        value="INT. ROOM - NIGHT"
+        onValueChange={() => undefined}
+        placeholder="A one-liner is enough"
+      />
+    );
+    expect(html).not.toContain('A one-liner is enough');
+  });
 });

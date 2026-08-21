@@ -1484,9 +1484,10 @@ export const ScriptView: FC<{
             </div>
           )}
           {/* Grows with content above the editor floor (2 rows on phones, 4 on
-              md+ — see ScriptEditor) — so the card resizes with the script,
-              and samples of different lengths change its height on Shuffle. */}
-          <div className="flex flex-col">
+              md+ — see ScriptEditor) until the card hits max-h-full, then the
+              editor scrolls. min-h-0 lets this flex child shrink so overflow
+              stays on the editor, not CardContent (#1220). */}
+          <div className="flex min-h-0 flex-1 flex-col">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}

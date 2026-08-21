@@ -1,6 +1,7 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
-import { type Editor, EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor } from '@tiptap/react';
+import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
   Markdown,
@@ -13,43 +14,44 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { MentionOptions } from '@tiptap/extension-mention';
 import type { MentionItem } from '@/components/scenes/prompt-mention/mention-items';
 import { PromptMention } from './mention/mention-extension';
+import { createMentionSuggestion } from './mention/mention-suggestion';
+import { tagifyMarkdown } from './mention/tagify';
 
 type MentionConfigure = Partial<MentionOptions>;
 
 /**
  * Collapse every line-break form to `\n`. Web/Docs/Word often put U+2028
- * (LINE SEPARATOR) between lines — that is not matched by `\n` splits, so
- * multi-line paste looked empty or landed as one run-on line.
+ * (LINE SEPARATOR) between lines — ProseMirror's default paste splitter only
+ * matches `\n` / `\r`, so those pastes looked empty or run-on.
  */
 export const normalizeScreenplayNewlines = (text: string): string =>
   text
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
-    // LINE SEPARATOR, PARAGRAPH SEPARATOR, NEXT LINE (NEL)
     .replace(/[\u2028\u2029\u0085]/g, '\n');
 
-// markdown-it parses two trailing spaces + `\n` as a hard break, so converting
-// single newlines (but not paragraph-separating blank lines) keeps a pasted
-// multi-line screenplay block in one paragraph instead of shredding each line
-// into its own paragraph. Exported for unit testing.
-export const toHardBreakMarkdown = (text: string): string =>
-  normalizeScreenplayNewlines(text).replace(/(?<!\n)\n(?!\n)/g, '  \n');
-
-// Decide what to insert for a paste. The script editor must only ever ingest
-// plain text — never the arbitrary inline styling (fonts, colours, sizes) that
-// rich `text/html` clipboard payloads from Word / Google Docs / web pages
-// carry. Returns null when there is no usable text (image-only paste). Exported
-// for unit testing.
-export const plainTextPasteAsMarkdown = (
-  html: string,
-  text: string
-): string | null => {
-  if (!text) return null; // image-only / non-text paste — leave to default
-  void html;
-  return toHardBreakMarkdown(text);
+/**
+ * Playwright `.fill()` (and other `insertText` with embedded newlines) cannot
+ * put `\n` in a ProseMirror text node. Map each newline to a hard break so
+ * `getMarkdown()` round-trips the source script — including the recorded
+ * aimock enhance body. Paste is not handled here; ProseMirror owns that.
+ */
+const insertTextWithNewlines = (view: EditorView, text: string): boolean => {
+  const normalized = normalizeScreenplayNewlines(text);
+  const { schema, tr, selection } = view.state;
+  const hardBreak = schema.nodes.hardBreak;
+  if (!hardBreak) return false;
+  const nodes = normalized.split('\n').flatMap((line, i, lines) => {
+    const out = [];
+    if (line.length > 0) out.push(schema.text(line));
+    if (i < lines.length - 1) out.push(hardBreak.create());
+    return out;
+  });
+  if (nodes.length === 0) return true;
+  if (!selection.empty) tr.deleteSelection();
+  view.dispatch(tr.insert(tr.selection.from, nodes).scrollIntoView());
+  return true;
 };
-import { createMentionSuggestion } from './mention/mention-suggestion';
-import { tagifyMarkdown } from './mention/tagify';
 
 declare module '@tiptap/core' {
   interface Storage {
@@ -148,10 +150,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   const onFocusRef = useRef(onFocus);
   onFocusRef.current = onFocus;
 
-  // handlePaste is captured at editor init (before `editor` is assigned), so it
-  // reads the live instance through this ref to insert markdown at the caret.
-  const editorRef = useRef<Editor | null>(null);
-
   // The suggestion plugin fires on every `@` keystroke; the items it pulls
   // must reflect the parent's latest list (it grows as the user adds cast /
   // elements / locations to the sequence) even though the editor's extensions
@@ -183,7 +181,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         html: hasMentions,
         linkify: true,
         breaks: true,
-        transformPastedText: true,
+        // Off: tiptap-markdown's clipboard parser uses `{ inline: true }`,
+        // which drops multi-line paste. Default ProseMirror paste is enough.
+        transformPastedText: false,
         transformCopiedText: true,
       }),
       Placeholder.configure({
@@ -218,79 +218,23 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         class: cn(proseClasses, placeholderClasses),
       },
       handleKeyDown: (_view, event) => onKeyDownRef.current?.(event) === true,
-      // Bulk inputs that carry embedded newlines (Playwright .fill, drag-drop
-      // of multi-line text, programmatic execCommand('insertText', …)) would
-      // otherwise split each line into a separate paragraph and shred
-      // screenplay structure. Intercept beforeinput and convert single \n
-      // into HardBreak nodes so the line layout survives the round-trip;
-      // getMarkdown() then emits each as a single \n (with breaks:true).
-      // Enter keypresses arrive as a separate inputType ('insertParagraph')
-      // and aren't touched here, so typing a new paragraph still works.
       handleDOMEvents: {
         beforeinput: (view, event) => {
           if (!(event instanceof InputEvent)) return false;
           if (event.inputType !== 'insertText' || !event.data?.includes('\n')) {
             return false;
           }
-          const { schema, tr, selection } = view.state;
-          const hardBreak = schema.nodes.hardBreak;
-          if (!hardBreak) return false;
           event.preventDefault();
-          const parts = event.data.split('\n');
-          const nodes = parts.flatMap((part, i) => {
-            const out = [];
-            if (part.length > 0) out.push(schema.text(part));
-            if (i < parts.length - 1) out.push(hardBreak.create());
-            return out;
-          });
-          // Same delete-then-insert as handlePaste so a selected range doesn't
-          // stay selected around the inserted text.
-          if (!selection.empty) tr.deleteSelection();
-          view.dispatch(tr.insert(tr.selection.from, nodes));
-          return true;
+          return insertTextWithNewlines(view, event.data);
         },
       },
-      // Always paste plain text only (strip Word/Docs/HTML styling). Use the
-      // same hard-break insertion path as beforeinput — do not use
-      // insertContent: tiptap-markdown forces inline markdown parse and drops
-      // multi-line pastes after preventDefault. Also normalize U+2028 etc.
-      handlePaste: (view, event) => {
-        const clipboard = event.clipboardData;
-        if (!clipboard) return false;
-        const raw = clipboard.getData('text/plain');
-        if (!raw) return false; // image-only / non-text — leave to default
-        event.preventDefault();
-
-        const text = normalizeScreenplayNewlines(raw);
-        const { schema, tr, selection } = view.state;
-        const hardBreak = schema.nodes.hardBreak;
-        if (!hardBreak) return false;
-
-        const lines = text.split('\n');
-        const nodes = lines.flatMap((line, i) => {
-          const out = [];
-          if (line.length > 0) out.push(schema.text(line));
-          if (i < lines.length - 1) out.push(hardBreak.create());
-          return out;
-        });
-        if (nodes.length === 0) return true;
-
-        // Delete first, then insert at the collapsed caret: a replaceWith over
-        // a range maps the old selection to span the inserted text (select-all
-        // + paste left the paste selected). A collapsed caret maps past it.
-        if (!selection.empty) tr.deleteSelection();
-        view.dispatch(tr.insert(tr.selection.from, nodes).scrollIntoView());
-        return true;
-      },
-      // Backup path for non-handlePaste clipboard inserts: normalize + hard breaks.
-      transformPastedText: (text) => toHardBreakMarkdown(text),
+      transformPastedText: (text) => normalizeScreenplayNewlines(text),
     },
     onUpdate: ({ editor: e }) => {
       onValueChange(e.storage.markdown.getMarkdown());
     },
     onFocus: () => onFocusRef.current?.(),
   });
-  editorRef.current = editor;
 
   // Canonical Tiptap external-value sync (mirrors the Vue v-model example in
   // their docs): only setContent if the editor's current markdown differs
@@ -369,7 +313,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         editor.commands.focus('end');
       }}
     >
-      {!value && placeholder ? (
+      {placeholder && (editor ? editor.isEmpty : !value) ? (
         <p className="pointer-events-none absolute inset-x-0 top-0 px-2.5 py-2 text-base text-muted-foreground md:text-sm">
           {placeholder}
         </p>
