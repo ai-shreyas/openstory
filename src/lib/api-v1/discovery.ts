@@ -44,8 +44,20 @@ Enhance only (no sequence):
   as an 'event: error' shot.
 
 Authentication:
-  Every endpoint except this root requires an API key. Create one in the
-  dashboard under Settings → Developer. Send it as either
+  Every endpoint except this root and the device-login pair requires an API
+  key. Two ways to get one:
+  - Device-code login (RFC 8628 shape, no copy-pasting secrets): POST
+    /api/v1/device/code, show the user the returned user_code and
+    verification_url (or open verification_url_complete), then GET the 'poll'
+    link — /api/v1/device/token?device_code=…&wait=60s — until it returns 200
+    { api_key, team }. While the user decides you get 428 authorization_pending
+    (keep polling; ?wait blocks server-side so you needn't sleep), 429 slow_down
+    if you poll faster than 'interval' without ?wait, 403 access_denied, or 410
+    expired_token (codes last 10 minutes; start again). The key is a normal
+    team-scoped key the user can revoke under Settings → Developer.
+  - Manually: the user creates a key in the dashboard under Settings →
+    Developer and gives it to you.
+  Send the key as either
   'Authorization: Bearer <key>' or 'x-api-key: <key>'. Keys are team-scoped and
   rate limited to 10 requests/second.
 
@@ -135,6 +147,14 @@ export function buildRootDocument(): RootDocument {
         href: API_V1_BASE,
         method: 'GET',
         title: 'API root / instructions',
+      },
+      'device-authorize': {
+        href: `${API_V1_BASE}/device/code`,
+        method: 'POST',
+        title:
+          'Start a device-code login to obtain an API key (no auth required). Returns user_code + verification_url; poll the returned link.',
+        contentType: 'application/json',
+        examples: [{}],
       },
       'create-sequence': createSequenceLink(),
       'list-sequences': {

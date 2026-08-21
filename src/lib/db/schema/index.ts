@@ -6,7 +6,15 @@
  * (Drizzle Relations v2 — single consolidated definition, no per-table relations() calls).
  */
 
-import { account, apikey, passkey, session, user, verification } from './auth';
+import {
+  account,
+  apikey,
+  deviceCode,
+  passkey,
+  session,
+  user,
+  verification,
+} from './auth';
 
 import { teamInvitations, teamMembers, teams } from './teams';
 
@@ -99,7 +107,7 @@ import {
 } from './compliance';
 
 // Better Auth tables
-export { account, apikey, passkey, session, user, verification };
+export { account, apikey, deviceCode, passkey, session, user, verification };
 
 export type { User } from './auth';
 
@@ -385,6 +393,7 @@ export const schema = {
   verification,
   passkey,
   apikey,
+  deviceCode,
 
   // Teams
   teams,

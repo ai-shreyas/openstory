@@ -6,6 +6,7 @@ export default {
     'src/routes/**/*.{ts,tsx}', // file-based routes
     'src/functions/**/*.ts', // createServerFn endpoints
     'scripts/**/*.ts',
+    'src/lib/auth/cli-config.ts', // `bun auth:generate` (Better Auth CLI) — was wrongly swept as dead code once
     '.storybook/**/*.{ts,tsx}',
     'content-collections.ts', // content-collections build config (root)
     // MSW request mocks (registered by path, not statically imported).
