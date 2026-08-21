@@ -7,7 +7,13 @@
 
 import { getDb } from '#db-client';
 import type { Sequence, User } from '@/lib/db/schema';
-import { sequences, teamMembers, teams, user } from '@/lib/db/schema';
+import {
+  deviceCode,
+  sequences,
+  teamMembers,
+  teams,
+  user,
+} from '@/lib/db/schema';
 import type { TeamMemberRole } from '@/lib/db/schema/teams';
 import { createAdminMethods } from '@/lib/db/scoped/admin';
 import { createApiKeysMethods } from '@/lib/db/scoped/api-keys';
@@ -61,13 +67,22 @@ import {
 } from '@/lib/db/scoped/talent';
 import { createTalentSheetVariantsMethods } from '@/lib/db/scoped/talent-sheet-variants';
 import { createTeamManagementMethods } from '@/lib/db/scoped/team-management';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'db', 'scoped']);
 
 export type { UserActivityRow } from '@/lib/db/scoped/admin';
+
+/**
+ * Unscoped by nature (#1219): device codes belong to no team until approved,
+ * and Better Auth's plugin only deletes a code when someone polls it after
+ * expiry — never-polled codes would accumulate forever.
+ */
+export async function pruneExpiredDeviceCodes(): Promise<void> {
+  await getDb().delete(deviceCode).where(lt(deviceCode.expiresAt, new Date()));
+}
 
 /**
  * Resolve a user's default team (highest-role team).

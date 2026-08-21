@@ -23,6 +23,11 @@ const codeSchema = z.object({ userCode: z.string().min(1).max(16) });
 const normalizeUserCode = (raw: string) =>
   raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+/** Plugin row status, or `invalid` for unknown/expired codes. */
+export type DeviceGrantStatus = 'pending' | 'approved' | 'denied' | 'invalid';
+
+const grantStatus = z.enum(['pending', 'approved', 'denied']);
+
 export const lookupDeviceGrantFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(codeSchema))
@@ -30,50 +35,52 @@ export const lookupDeviceGrantFn = createServerFn({ method: 'GET' })
     async ({
       data,
       context,
-    }): Promise<{ pending: boolean; teamName: string }> => {
+    }): Promise<{ status: DeviceGrantStatus; teamName: string }> => {
       const team = await resolveUserTeam(context.user.id);
-      let pending = false;
+      let status: DeviceGrantStatus = 'invalid';
       try {
         // With a session this also *claims* the code for the user — the
-        // plugin refuses to approve an unclaimed code.
+        // plugin refuses to approve an unclaimed code. (A code already
+        // claimed by another account still reads `pending`; approving it
+        // then fails with `access_denied`.)
         const found = await getAuth().api.deviceVerify({
           headers: getRequestHeaders(),
           query: { user_code: normalizeUserCode(data.userCode) },
         });
-        pending = found.status === 'pending';
+        status = grantStatus.safeParse(found.status).data ?? 'invalid';
       } catch (error) {
         if (!(error instanceof APIError)) throw error;
       }
-      return { pending, teamName: team?.teamName ?? '' };
+      return { status, teamName: team?.teamName ?? '' };
     }
   );
 
+/** Plugin OAuth error code on failure (e.g. `access_denied` = claimed by another user). */
 export const decideDeviceGrantFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(codeSchema.extend({ approve: z.boolean() })))
-  .handler(async ({ data, context }): Promise<{ ok: boolean }> => {
+  .handler(async ({ data, context }): Promise<{ error: string | null }> => {
     const auth = getAuth();
     const args = {
       headers: getRequestHeaders(),
       body: { userCode: normalizeUserCode(data.userCode) },
     };
-    let ok = true;
-    let reason: unknown;
+    let error: string | null = null;
     try {
       await (data.approve
         ? auth.api.deviceApprove(args)
         : auth.api.deviceDeny(args));
-    } catch (error) {
-      if (!(error instanceof APIError)) throw error;
-      ok = false;
-      reason = error.body;
+    } catch (err) {
+      if (!(err instanceof APIError)) throw err;
+      error =
+        z.object({ error: z.string() }).safeParse(err.body).data?.error ??
+        String(err.status);
     }
-    logger.info('device grant decided', {
+    logger[error ? 'warn' : 'info']('device grant decided', {
       userId: context.user.id,
       teamId: context.teamId,
       approve: data.approve,
-      ok,
-      reason,
+      error,
     });
-    return { ok };
+    return { error };
   });

@@ -10,14 +10,21 @@
  * 403 `access_denied`, 410 `expired_token` (also for unknown/used codes).
  */
 
-import { exchangeDeviceCode } from '@/lib/api-v1/device-auth';
+import {
+  assertDeviceLoginRate,
+  exchangeDeviceCode,
+} from '@/lib/api-v1/device-auth';
 import { apiJsonError, runApiV1Handler } from '@/lib/api-v1/errors';
 import { API_V1_BASE } from '@/lib/api-v1/hal';
 import { getWaitMs, longPoll } from '@/lib/api-v1/wait';
 import { ValidationError } from '@/lib/errors';
 import { createFileRoute } from '@tanstack/react-router';
 
-/** Matches the plugin's `interval`, so server-side re-polls never trip `slow_down`. */
+/**
+ * Matches the plugin's `interval`. The last poll before the `?wait` deadline
+ * can still land early (longPoll clamps the final sleep to the remaining
+ * time), which the `slow_down` case below absorbs.
+ */
 const POLL_INTERVAL_MS = 5_000;
 
 export const Route = createFileRoute('/api/v1/device/token')({
@@ -25,6 +32,7 @@ export const Route = createFileRoute('/api/v1/device/token')({
     handlers: {
       GET: async ({ request }) =>
         runApiV1Handler(async () => {
+          await assertDeviceLoginRate(request);
           const waitMs = getWaitMs(request);
           const deviceCode = new URL(request.url).searchParams.get(
             'device_code'
@@ -61,7 +69,9 @@ export const Route = createFileRoute('/api/v1/device/token')({
               return apiJsonError(
                 429,
                 'slow_down',
-                'Polling too fast. Wait `interval` seconds between polls, or use ?wait.'
+                'Polling too fast. Wait `interval` seconds between polls, or use ?wait.',
+                undefined,
+                { 'Retry-After': String(POLL_INTERVAL_MS / 1000) }
               );
             case 'access_denied':
               return apiJsonError(

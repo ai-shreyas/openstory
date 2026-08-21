@@ -248,6 +248,7 @@ function makeEvent(): Readonly<WorkflowEvent<SceneSplitWorkflowInput>> {
   return {
     payload: INPUT,
     instanceId: 'split_run_A',
+    workflowName: 'scene-split',
     timestamp: new Date(0),
   };
 }

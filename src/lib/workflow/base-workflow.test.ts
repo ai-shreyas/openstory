@@ -73,6 +73,7 @@ function makeEvent(withParent: boolean): Readonly<WorkflowEvent<TestPayload>> {
       ...(withParent ? { _parent: PARENT_HINT } : {}),
     },
     instanceId: 'child_run_A',
+    workflowName: 'child',
     timestamp: new Date(0),
   };
 }

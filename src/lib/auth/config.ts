@@ -31,6 +31,7 @@ import {
   isGoogleAuthConfigured,
   isLocalRequestHost,
 } from '@/lib/utils/environment';
+import { DEVICE_VERIFICATION_PATH } from '@/lib/api-v1/device-auth';
 import { apiKey } from '@better-auth/api-key';
 import { deviceAuthorization } from 'better-auth/plugins/device-authorization';
 import { passkey as passkeyPlugin } from '@better-auth/passkey';
@@ -192,10 +193,8 @@ export function createAuth(db: ReturnType<typeof getDb> = getDb()) {
       lastLoginMethod(),
       passkeyPlugin(),
       // Device-code login for the public API (#1219, RFC 8628). The plugin
-      // owns the code lifecycle (`device_code` table, user-code generation,
-      // poll throttling, approve/deny). Its `/device/token` mints a *session*;
-      // `/api/v1/device/token` wraps it and swaps that for an `osk_` API key so
-      // the result is a normal, revocable Settings → Developer key.
+      // owns the code lifecycle; `src/lib/api-v1/device-auth.ts` wraps it to
+      // hand back an API key instead of a session.
       deviceAuthorization({
         expiresIn: '10m',
         interval: '5s',
@@ -204,7 +203,7 @@ export function createAuth(db: ReturnType<typeof getDb> = getDb()) {
         // `auth.api.*` calls have no request. The /api/v1 wrapper re-derives
         // the URL from the live request origin anyway (previews, local ports).
         verificationUri: new URL(
-          '/device',
+          DEVICE_VERIFICATION_PATH,
           runtimeEnv.VITE_APP_URL || 'http://localhost:3000'
         ).toString(),
       }),

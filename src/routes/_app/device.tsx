@@ -19,7 +19,11 @@ import {
   lookupDeviceGrantFn,
 } from '@/functions/device-auth';
 import { requireSessionOrRedirect } from '@/lib/auth/route-guards';
-import { useMutation, useSuspenseQuery } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+} from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { Suspense, useState } from 'react';
 import { toast } from 'sonner';
@@ -90,14 +94,20 @@ function GrantDecision({ userCode }: { userCode: string }) {
     queryKey: ['deviceGrant', userCode],
     queryFn: () => lookupDeviceGrantFn({ data: { userCode } }),
   });
+  const queryClient = useQueryClient();
   const decide = useMutation({
     mutationFn: (approve: boolean) =>
       decideDeviceGrantFn({ data: { userCode, approve } }),
-    onSuccess: ({ ok }, approve) => {
-      if (!ok) {
+    onSuccess: ({ error }, approve) => {
+      if (error) {
         toast.error(
-          'This code is no longer valid. Ask your agent for a new one.'
+          error === 'access_denied'
+            ? 'This code was requested under a different account. Sign in as that account to approve it.'
+            : 'This code is no longer valid. Ask your agent for a new one.'
         );
+        void queryClient.invalidateQueries({
+          queryKey: ['deviceGrant', userCode],
+        });
         return;
       }
       setDecided(approve ? 'approved' : 'denied');
@@ -121,7 +131,15 @@ function GrantDecision({ userCode }: { userCode: string }) {
       </output>
     );
   }
-  if (!data.pending) {
+  if (data.status === 'approved' || data.status === 'denied') {
+    return (
+      <output className="block">
+        Code <code className="font-mono">{userCode}</code> has already been{' '}
+        {data.status}.
+      </output>
+    );
+  }
+  if (data.status === 'invalid') {
     return (
       <p role="alert">
         Code <code className="font-mono">{userCode}</code> isn’t valid or has

@@ -68,3 +68,22 @@ describe('exchangeDeviceCode', () => {
     );
   });
 });
+
+describe('exchangeDeviceCode failures after the plugin consumed the code', () => {
+  it('surfaces OAuth error_description instead of an empty message', async () => {
+    deviceToken.mockRejectedValueOnce(
+      new APIError('INTERNAL_SERVER_ERROR', {
+        error: 'server_error',
+        error_description: 'User not found',
+      })
+    );
+    await expect(exchangeDeviceCode('dc')).rejects.toThrow('User not found');
+  });
+
+  it('drops the carrier session even when it cannot be found', async () => {
+    deviceToken.mockResolvedValueOnce({ access_token: 'gone' });
+    findSession.mockResolvedValueOnce(null);
+    await expect(exchangeDeviceCode('dc')).rejects.toThrow('vanished');
+    expect(deleteSession).toHaveBeenCalledWith('gone');
+  });
+});

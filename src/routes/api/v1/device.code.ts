@@ -8,8 +8,10 @@
  */
 
 import {
+  assertDeviceLoginRate,
   DEVICE_CLIENT_ID,
   DEVICE_VERIFICATION_PATH,
+  pruneExpiredDeviceCodes,
 } from '@/lib/api-v1/device-auth';
 import { runApiV1Handler } from '@/lib/api-v1/errors';
 import { API_V1_BASE } from '@/lib/api-v1/hal';
@@ -21,11 +23,14 @@ export const Route = createFileRoute('/api/v1/device/code')({
     handlers: {
       POST: async ({ request }) =>
         runApiV1Handler(async () => {
+          await assertDeviceLoginRate(request);
+          await pruneExpiredDeviceCodes();
           const code = await getAuth().api.deviceCode({
             body: { client_id: DEVICE_CLIENT_ID },
           });
-          // The plugin builds its URI from Better Auth's baseURL, which is
-          // request-derived here — so use the origin the agent actually reached.
+          // The plugin's verification_uri is built from VITE_APP_URL, a
+          // deploy-time constant; use the origin the agent actually reached
+          // (PR previews, other local ports).
           const verificationUrl = new URL(
             DEVICE_VERIFICATION_PATH,
             new URL(request.url).origin
@@ -50,7 +55,7 @@ export const Route = createFileRoute('/api/v1/device/code')({
                 },
               },
             },
-            { status: 201 }
+            { status: 201, headers: { 'Cache-Control': 'no-store' } }
           );
         }),
     },

@@ -63,6 +63,7 @@ function makeEvent(): Readonly<WorkflowEvent<MotionPromptBatchWorkflowInput>> {
   return {
     payload: makeInput(),
     instanceId: 'mpb_run_A',
+    workflowName: 'motion-prompt-batch',
     timestamp: new Date(0),
   };
 }
