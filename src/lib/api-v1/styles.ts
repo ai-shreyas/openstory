@@ -5,13 +5,34 @@
  */
 
 import type { Style } from '@/lib/db/schema/libraries';
-import { parseStyleConfig } from '@/lib/style/style-config';
+import { parseStyleConfig, StyleConfigSchema } from '@/lib/style/style-config';
+import { z } from 'zod';
 import { createSequenceLink } from './discovery';
 import { getLink, STYLES_PATH, withLinks } from './hal';
 
+/** Response body (minus `_links`) — the OpenAPI `StyleDocument` component derives from this. */
+export const styleDocumentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  category: z.string().nullable(),
+  tags: z.array(z.string()),
+  useCases: z.array(z.string()),
+  isTemplate: z.boolean().meta({
+    description:
+      'True for a public template; false for a style your team owns.',
+  }),
+  defaultAspectRatio: z.string().nullable(),
+  recommendedImageModel: z.string().nullable(),
+  recommendedVideoModel: z.string().nullable(),
+  previewUrl: z.string().nullable(),
+  config: StyleConfigSchema,
+  createdAt: z.iso.datetime(),
+});
+
 export function styleDocument(style: Style) {
   return withLinks(
-    {
+    styleDocumentSchema.parse({
       id: style.id,
       name: style.name,
       description: style.description,
@@ -25,7 +46,7 @@ export function styleDocument(style: Style) {
       previewUrl: style.previewUrl,
       config: parseStyleConfig(style.config),
       createdAt: style.createdAt.toISOString(),
-    },
+    }),
     {
       self: getLink(`${STYLES_PATH}/${style.id}`, 'Full style document'),
       'create-sequence': {

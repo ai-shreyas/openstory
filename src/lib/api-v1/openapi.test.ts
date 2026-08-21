@@ -46,8 +46,11 @@ describe('buildOpenApiDocument', () => {
     expect(op.responses['409']).toBeDefined();
     expect(doc.components.schemas).toHaveProperty('CreateStyleRequest');
     expect(doc.components.schemas).toHaveProperty('StyleDocument');
-    expect(doc.components.schemas.StyleConfig.properties).toHaveProperty(
-      'look'
+    const styleDoc = doc.components.schemas.StyleDocument;
+    expect(styleDoc.properties.config.properties).toHaveProperty('look');
+    expect(styleDoc.required).toContain('_links');
+    expect(styleDoc.properties._links.$ref).toBe(
+      '#/components/schemas/HalLinks'
     );
     const example = op.requestBody.content['application/json'].example;
     expect(() => apiCreateStyleSchema.parse(example)).not.toThrow();

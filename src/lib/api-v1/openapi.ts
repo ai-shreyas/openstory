@@ -20,7 +20,7 @@ import {
   apiCreateStyleSchema,
   EXAMPLE_CREATE_STYLE_BODY,
 } from './style-input-schema';
-import { StyleConfigSchema } from '@/lib/style/style-config';
+import { styleDocumentSchema } from './styles';
 import { z, type ZodType } from 'zod';
 
 type JsonValue =
@@ -170,8 +170,13 @@ export function buildOpenApiDocument(): JsonObject {
   );
   const { root: createStyleRequest, defs: styleDefs } =
     requestSchemas(apiCreateStyleSchema);
-  const { root: styleConfig, defs: styleConfigDefs } =
-    requestSchemas(StyleConfigSchema);
+  // `_links` is tagged with the id of the hand-authored HalLinks component
+  // below, so Zod emits a $ref to it (its own stub def is overridden by spread order).
+  const { root: styleDoc, defs: styleDocDefs } = requestSchemas(
+    styleDocumentSchema.extend({
+      _links: z.record(z.string(), z.unknown()).meta({ id: 'HalLinks' }),
+    })
+  );
 
   const waitParam: JsonObject = {
     name: 'wait',
@@ -672,43 +677,8 @@ export function buildOpenApiDocument(): JsonObject {
         ...enhanceDefs,
         CreateStyleRequest: createStyleRequest,
         ...styleDefs,
-        StyleConfig: styleConfig,
-        ...styleConfigDefs,
-        StyleDocument: {
-          type: 'object',
-          required: [
-            'id',
-            'name',
-            'description',
-            'category',
-            'tags',
-            'useCases',
-            'isTemplate',
-            'config',
-            'createdAt',
-            '_links',
-          ],
-          properties: {
-            id: { type: 'string' },
-            name: { type: 'string' },
-            description: nullableString,
-            category: nullableString,
-            tags: { type: 'array', items: { type: 'string' } },
-            useCases: { type: 'array', items: { type: 'string' } },
-            isTemplate: {
-              type: 'boolean',
-              description:
-                'True for a public template; false for a style your team owns.',
-            },
-            defaultAspectRatio: nullableString,
-            recommendedImageModel: nullableString,
-            recommendedVideoModel: nullableString,
-            previewUrl: nullableString,
-            config: { $ref: '#/components/schemas/StyleConfig' },
-            createdAt: { type: 'string', format: 'date-time' },
-            _links: { $ref: '#/components/schemas/HalLinks' },
-          },
-        },
+        ...styleDocDefs,
+        StyleDocument: styleDoc,
         StyleListResult: {
           type: 'object',
           required: ['styles', '_links'],
