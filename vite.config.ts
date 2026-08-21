@@ -157,6 +157,15 @@ function envIcons(): Plugin {
 export default defineConfig({
   resolve: {
     tsconfigPaths: true,
+    // TipTap/ProseMirror use instanceof Node. Nested 1.25.7 copies next to
+    // @tiptap/pm's 1.25.11 make wrap/split (default paste) fail and log
+    // "prosemirror-model is loaded more than once".
+    dedupe: [
+      'prosemirror-model',
+      'prosemirror-state',
+      'prosemirror-view',
+      'prosemirror-transform',
+    ],
   },
   server: {
     port: 3000,
