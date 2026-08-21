@@ -1,7 +1,11 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { getChatPrompt } from '@/lib/prompts';
 import { StyleConfigSchema } from '@/lib/style/style-config';
 import { narrowShotPromptContext } from './prompt-context';
+import { reconstructRecordedFalEditPrompts } from './recorded-e2e-fal-prompts';
 import {
   extractTaggedJson,
   loadOpenrouterStage,
@@ -141,6 +145,37 @@ describe('recorded e2e scene replay', () => {
       );
       const user = messages.find((m) => m.role === 'user');
       expect(user?.content).toBe(recordedMessage);
+    }
+  });
+
+  it('fal quality/edit matchers equal the live Image-N reconstruction', () => {
+    const reconstructed = reconstructRecordedFalEditPrompts();
+    expect(reconstructed).toHaveLength(22);
+
+    const falDir = resolve(
+      import.meta.dirname,
+      '../../../e2e/fixtures/recorded/fal/xai-grok-imagine-image-quality-edit'
+    );
+    const falFileSchema = z.object({
+      fixtures: z.array(
+        z.object({ match: z.object({ userMessage: z.string() }) })
+      ),
+    });
+    const recorded = readdirSync(falDir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => {
+        const raw: unknown = JSON.parse(
+          readFileSync(resolve(falDir, name), 'utf8')
+        );
+        return falFileSchema.parse(raw);
+      })
+      .map((file) => file.fixtures[0]?.match.userMessage)
+      .filter((message): message is string => typeof message === 'string');
+
+    for (const item of reconstructed) {
+      expect(recorded, `scene ${item.sceneNumber} ${item.kind}`).toContainEqual(
+        item.prompt
+      );
     }
   });
 });
