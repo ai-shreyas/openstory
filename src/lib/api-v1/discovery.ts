@@ -19,7 +19,7 @@ import {
   STYLES_PATH,
 } from './hal';
 import { apiCreateSequenceSchema } from './input-schema';
-import { apiCreateStyleSchema } from './style-input-schema';
+import { EXAMPLE_CREATE_STYLE_BODY } from './style-input-schema';
 import { z } from 'zod';
 
 const INSTRUCTIONS = `OpenStory public API v1 — create AI video sequences from a script in one call.
@@ -144,28 +144,6 @@ export function enhanceScriptLink(): HalLink {
   };
 }
 
-/** A representative `POST /api/v1/styles` body. */
-export const EXAMPLE_CREATE_STYLE_BODY = {
-  name: 'Rain-slick Neon Noir',
-  category: 'film',
-  tags: ['noir', 'neon'],
-  config: {
-    version: 2,
-    look: {
-      mood: 'tense, rain-soaked nocturne',
-      artStyle: 'photorealistic live action',
-      lighting: 'cyan and magenta neon practicals, wet reflections',
-      colorPalette: ['#0a0a12', '#00e5ff', '#ff2bd6'],
-      colorGrading: 'crushed blacks, teal-magenta split tone',
-    },
-    motion: { camera: 'handheld, close coverage', pace: 'measured', energy: 3 },
-  },
-};
-
-function exampleCreateStyleBody(): unknown {
-  return apiCreateStyleSchema.parse(EXAMPLE_CREATE_STYLE_BODY);
-}
-
 /** The `create-style` affordance, advertised in the root document. */
 export function createStyleLink(): HalLink {
   return {
@@ -173,16 +151,8 @@ export function createStyleLink(): HalLink {
     method: 'POST',
     title: 'Create a team style from a complete v2 config. Responds 201.',
     contentType: 'application/json',
-    examples: [exampleCreateStyleBody()],
+    examples: [EXAMPLE_CREATE_STYLE_BODY],
   };
-}
-
-/** The `list-styles` affordance. */
-export function listStylesLink(): HalLink {
-  return getLink(
-    STYLES_PATH,
-    "List your team's library styles and the public templates"
-  );
 }
 
 export type RootDocument = HalResource<{
@@ -224,7 +194,10 @@ export function buildRootDocument(): RootDocument {
       },
       'enhance-script': enhanceScriptLink(),
       'create-style': createStyleLink(),
-      'list-styles': listStylesLink(),
+      'list-styles': getLink(
+        STYLES_PATH,
+        "List your team's library styles and the public templates"
+      ),
       style: {
         href: `${STYLES_PATH}/{id}`,
         method: 'GET',

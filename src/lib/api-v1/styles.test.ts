@@ -1,19 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Style } from '@/lib/db/schema/libraries';
-import { apiCreateStyleSchema } from './style-input-schema';
+import {
+  apiCreateStyleSchema,
+  EXAMPLE_CREATE_STYLE_BODY,
+} from './style-input-schema';
 import { styleDocument } from './styles';
 
-const V2_CONFIG = {
-  version: 2,
-  look: {
-    mood: 'rain-slick noir',
-    artStyle: 'photorealistic',
-    lighting: 'neon practicals',
-    colorPalette: ['#0a0a12', '#00e5ff', '#ff2bd6'],
-    colorGrading: 'teal-magenta split',
-  },
-  motion: { camera: 'handheld, close', pace: 'measured', energy: 3 },
-};
+const V2_CONFIG = EXAMPLE_CREATE_STYLE_BODY.config;
 
 describe('apiCreateStyleSchema', () => {
   it('requires a v2 config and drops server-managed fields', () => {

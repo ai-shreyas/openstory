@@ -16,8 +16,10 @@ import { SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
 import { apiEnhanceScriptSchema } from './enhance-input-schema';
 import { API_V1_BASE } from './hal';
 import { apiCreateSequenceSchema } from './input-schema';
-import { EXAMPLE_CREATE_STYLE_BODY } from './discovery';
-import { apiCreateStyleSchema } from './style-input-schema';
+import {
+  apiCreateStyleSchema,
+  EXAMPLE_CREATE_STYLE_BODY,
+} from './style-input-schema';
 import { z, type ZodType } from 'zod';
 
 type JsonValue =

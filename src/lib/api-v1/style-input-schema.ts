@@ -32,3 +32,21 @@ export const apiCreateStyleSchema = z.object({
       'The complete v2 style recipe (look + motion). v1 configs are not accepted.',
   }),
 });
+
+/** A representative `POST /api/v1/styles` body (also the OpenAPI example). */
+export const EXAMPLE_CREATE_STYLE_BODY = {
+  name: 'Rain-slick Neon Noir',
+  category: 'film',
+  tags: ['noir', 'neon'],
+  config: {
+    version: 2,
+    look: {
+      mood: 'tense, rain-soaked nocturne',
+      artStyle: 'photorealistic live action',
+      lighting: 'cyan and magenta neon practicals, wet reflections',
+      colorPalette: ['#0a0a12', '#00e5ff', '#ff2bd6'],
+      colorGrading: 'crushed blacks, teal-magenta split tone',
+    },
+    motion: { camera: 'handheld, close coverage', pace: 'measured', energy: 3 },
+  },
+} satisfies z.input<typeof apiCreateStyleSchema>;

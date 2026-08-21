@@ -6,31 +6,10 @@
 
 import type { Style } from '@/lib/db/schema/libraries';
 import { parseStyleConfig } from '@/lib/style/style-config';
-import { createSequenceLink, listStylesLink } from './discovery';
-import { getLink, type HalResource, STYLES_PATH, withLinks } from './hal';
+import { createSequenceLink } from './discovery';
+import { getLink, STYLES_PATH, withLinks } from './hal';
 
-/** Compact card for the list endpoint. */
-export type StyleCard = {
-  id: string;
-  name: string;
-  category: string | null;
-  tags: string[];
-  isTemplate: boolean;
-};
-
-/** Full document for create/get. */
-export type StyleDocument = StyleCard & {
-  description: string | null;
-  useCases: string[];
-  defaultAspectRatio: string | null;
-  recommendedImageModel: string | null;
-  recommendedVideoModel: string | null;
-  previewUrl: string | null;
-  config: ReturnType<typeof parseStyleConfig>;
-  createdAt: string;
-};
-
-export function styleCard(style: Style): HalResource<StyleCard> {
+export function styleCard(style: Style) {
   return withLinks(
     {
       id: style.id,
@@ -43,7 +22,7 @@ export function styleCard(style: Style): HalResource<StyleCard> {
   );
 }
 
-export function styleDocument(style: Style): HalResource<StyleDocument> {
+export function styleDocument(style: Style) {
   const card = styleCard(style);
   return withLinks(
     {
@@ -69,7 +48,7 @@ export function styleDocument(style: Style): HalResource<StyleDocument> {
           },
         ],
       },
-      'list-styles': listStylesLink(),
+      'list-styles': getLink(STYLES_PATH, "List your team's library styles"),
     }
   );
 }
