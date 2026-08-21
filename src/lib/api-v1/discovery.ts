@@ -57,8 +57,8 @@ Styles (create your own look):
   pace, energy) plus optional description/category/tags. Responds 201
   with the style document and a 'create-sequence' link pre-filled with its id;
   409 if the name's URL slug collides with a style you can already see.
-  GET /api/v1/styles lists your library styles plus the public templates as
-  compact cards; GET /api/v1/styles/{id} returns the full document.
+  GET /api/v1/styles lists your library styles plus the public templates
+  (full documents incl. config); GET /api/v1/styles/{id} returns one.
 
 Authentication:
   Every endpoint except this root and the device-login pair requires an API

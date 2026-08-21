@@ -46,6 +46,9 @@ describe('buildOpenApiDocument', () => {
     expect(op.responses['409']).toBeDefined();
     expect(doc.components.schemas).toHaveProperty('CreateStyleRequest');
     expect(doc.components.schemas).toHaveProperty('StyleDocument');
+    expect(doc.components.schemas.StyleConfig.properties).toHaveProperty(
+      'look'
+    );
     const example = op.requestBody.content['application/json'].example;
     expect(() => apiCreateStyleSchema.parse(example)).not.toThrow();
   });

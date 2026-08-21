@@ -20,6 +20,7 @@ import {
   apiCreateStyleSchema,
   EXAMPLE_CREATE_STYLE_BODY,
 } from './style-input-schema';
+import { StyleConfigSchema } from '@/lib/style/style-config';
 import { z, type ZodType } from 'zod';
 
 type JsonValue =
@@ -169,6 +170,8 @@ export function buildOpenApiDocument(): JsonObject {
   );
   const { root: createStyleRequest, defs: styleDefs } =
     requestSchemas(apiCreateStyleSchema);
+  const { root: styleConfig, defs: styleConfigDefs } =
+    requestSchemas(StyleConfigSchema);
 
   const waitParam: JsonObject = {
     name: 'wait',
@@ -457,10 +460,10 @@ export function buildOpenApiDocument(): JsonObject {
           tags: ['styles'],
           summary: 'List styles',
           description:
-            "Your team's library styles plus the public templates, as compact cards. Sequence-bound automatic styles are excluded.",
+            "Your team's library styles plus the public templates, as full documents. Sequence-bound automatic styles are excluded.",
           responses: {
             '200': {
-              description: 'The style cards.',
+              description: 'The style documents.',
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/StyleListResult' },
@@ -669,45 +672,42 @@ export function buildOpenApiDocument(): JsonObject {
         ...enhanceDefs,
         CreateStyleRequest: createStyleRequest,
         ...styleDefs,
-        StyleCard: {
+        StyleConfig: styleConfig,
+        ...styleConfigDefs,
+        StyleDocument: {
           type: 'object',
-          required: ['id', 'name', 'category', 'tags', 'isTemplate', '_links'],
+          required: [
+            'id',
+            'name',
+            'description',
+            'category',
+            'tags',
+            'useCases',
+            'isTemplate',
+            'config',
+            'createdAt',
+            '_links',
+          ],
           properties: {
             id: { type: 'string' },
             name: { type: 'string' },
+            description: nullableString,
             category: nullableString,
             tags: { type: 'array', items: { type: 'string' } },
+            useCases: { type: 'array', items: { type: 'string' } },
             isTemplate: {
               type: 'boolean',
               description:
                 'True for a public template; false for a style your team owns.',
             },
+            defaultAspectRatio: nullableString,
+            recommendedImageModel: nullableString,
+            recommendedVideoModel: nullableString,
+            previewUrl: nullableString,
+            config: { $ref: '#/components/schemas/StyleConfig' },
+            createdAt: { type: 'string', format: 'date-time' },
             _links: { $ref: '#/components/schemas/HalLinks' },
           },
-        },
-        StyleDocument: {
-          allOf: [
-            { $ref: '#/components/schemas/StyleCard' },
-            {
-              type: 'object',
-              required: ['description', 'useCases', 'config', 'createdAt'],
-              properties: {
-                description: nullableString,
-                useCases: { type: 'array', items: { type: 'string' } },
-                defaultAspectRatio: nullableString,
-                recommendedImageModel: nullableString,
-                recommendedVideoModel: nullableString,
-                previewUrl: nullableString,
-                config: {
-                  type: 'object',
-                  additionalProperties: true,
-                  description:
-                    'The v2 style recipe (same shape as the create request config).',
-                },
-                createdAt: { type: 'string', format: 'date-time' },
-              },
-            },
-          ],
         },
         StyleListResult: {
           type: 'object',
@@ -715,7 +715,7 @@ export function buildOpenApiDocument(): JsonObject {
           properties: {
             styles: {
               type: 'array',
-              items: { $ref: '#/components/schemas/StyleCard' },
+              items: { $ref: '#/components/schemas/StyleDocument' },
             },
             _links: { $ref: '#/components/schemas/HalLinks' },
           },

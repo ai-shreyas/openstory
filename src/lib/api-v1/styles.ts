@@ -9,26 +9,16 @@ import { parseStyleConfig } from '@/lib/style/style-config';
 import { createSequenceLink } from './discovery';
 import { getLink, STYLES_PATH, withLinks } from './hal';
 
-export function styleCard(style: Style) {
+export function styleDocument(style: Style) {
   return withLinks(
     {
       id: style.id,
       name: style.name,
+      description: style.description,
       category: style.category,
       tags: style.tags ?? [],
-      isTemplate: style.isTemplate ?? false,
-    },
-    { self: getLink(`${STYLES_PATH}/${style.id}`, 'Full style document') }
-  );
-}
-
-export function styleDocument(style: Style) {
-  const card = styleCard(style);
-  return withLinks(
-    {
-      ...card,
-      description: style.description,
       useCases: style.useCases ?? [],
+      isTemplate: style.isTemplate ?? false,
       defaultAspectRatio: style.defaultAspectRatio,
       recommendedImageModel: style.recommendedImageModel,
       recommendedVideoModel: style.recommendedVideoModel,
@@ -37,7 +27,7 @@ export function styleDocument(style: Style) {
       createdAt: style.createdAt.toISOString(),
     },
     {
-      ...card._links,
+      self: getLink(`${STYLES_PATH}/${style.id}`, 'Full style document'),
       'create-sequence': {
         ...createSequenceLink(),
         title: 'Create a video sequence in this style',

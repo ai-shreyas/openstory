@@ -5,8 +5,7 @@
  * the full document and a `create-sequence` affordance pre-filled with the new
  * style id. 409 when the name's slug collides with a visible style.
  *
- * GET lists this team's library styles plus the public templates as compact
- * cards — never sequence-bound automatic styles.
+ * GET lists this team's library styles plus the public templates — never sequence-bound automatic styles.
  */
 
 import { authWithTeamRequestMiddleware } from '@/functions/middleware';
@@ -14,7 +13,7 @@ import { apiJsonError, runApiV1Handler } from '@/lib/api-v1/errors';
 import { createStyleLink } from '@/lib/api-v1/discovery';
 import { API_V1_BASE, getLink, STYLES_PATH, withLinks } from '@/lib/api-v1/hal';
 import { apiCreateStyleSchema } from '@/lib/api-v1/style-input-schema';
-import { styleCard, styleDocument } from '@/lib/api-v1/styles';
+import { styleDocument } from '@/lib/api-v1/styles';
 import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/api/v1/styles')({
@@ -26,7 +25,7 @@ export const Route = createFileRoute('/api/v1/styles')({
           const styles = await context.scopedDb.styles.list();
           return Response.json(
             withLinks(
-              { styles: styles.map(styleCard) },
+              { styles: styles.map(styleDocument) },
               {
                 self: getLink(STYLES_PATH),
                 'create-style': createStyleLink(),
