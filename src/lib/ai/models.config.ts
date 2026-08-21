@@ -57,6 +57,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     contextWindow: 2_000_000,
     vision: true,
     description: 'Lowest hallucination rate, flagship agentic model',
+    hidden: true,
   },
   {
     id: 'anthropic/claude-opus-5-fast',
@@ -77,6 +78,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     contextWindow: 1_000_000,
     vision: true,
     description: 'Frontier reasoning and coding',
+    hidden: true,
   },
   {
     id: 'mistralai/mistral-small-2603',
@@ -198,6 +200,16 @@ export function isValidAnalysisModelId(
     typeof value === 'string' &&
     SCRIPT_ANALYSIS_MODELS.some((model) => model.id === value)
   );
+}
+
+/** Retired ids stay in the registry for old sequences; they are not pickable. */
+export function isSelectableAnalysisModelId(
+  value: unknown
+): value is AnalysisModelId {
+  if (!isValidAnalysisModelId(value)) return false;
+  const model = getAnalysisModelById(value);
+  if (!model) return false;
+  return !('hidden' in model && model.hidden);
 }
 
 /**

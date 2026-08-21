@@ -1,5 +1,6 @@
 import { BaseModelSelector } from './base-model-selector';
 import {
+  isSelectableAnalysisModelId,
   isValidAnalysisModelId,
   SCRIPT_ANALYSIS_MODELS,
   type AnalysisModelId,
@@ -24,7 +25,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const models = useMemo(
     () =>
       [...SCRIPT_ANALYSIS_MODELS]
-        .filter((m) => !('hidden' in m))
+        .filter((m) => isSelectableAnalysisModelId(m.id))
         .sort((a, b) => a.qualityRank - b.qualityRank)
         .map((m) => ({
           id: m.id,
