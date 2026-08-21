@@ -17,7 +17,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
   {
     id: 'x-ai/grok-4.6',
     name: 'Grok 4.6',
-    vendor: 'xAI',
+    vendor: 'SpaceXAI',
     license: 'proprietary' as const,
     qualityRank: 1,
     contextWindow: 500_000,
@@ -51,7 +51,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
   {
     id: 'x-ai/grok-4.20',
     name: 'Grok 4.20',
-    vendor: 'xAI',
+    vendor: 'SpaceXAI',
     license: 'proprietary' as const,
     qualityRank: 4,
     contextWindow: 2_000_000,

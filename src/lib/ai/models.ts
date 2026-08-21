@@ -36,7 +36,7 @@ export const IMAGE_TO_VIDEO_MODELS = {
   grok_imagine_video_1_5: {
     id: 'xai/grok-imagine-video/v1.5/image-to-video',
     name: 'Grok Imagine Video 1.5',
-    vendor: 'Grok',
+    vendor: 'SpaceXAI',
     license: 'proprietary' as const,
     qualityRank: 1,
     maxPromptLength: 2500,
@@ -123,7 +123,7 @@ export const IMAGE_MODELS = {
   grok_imagine_image: {
     id: 'xai/grok-imagine-image/quality/text-to-image' as const,
     name: 'Grok Imagine Image Quality',
-    vendor: 'Grok',
+    vendor: 'SpaceXAI',
     license: 'proprietary' as const,
     qualityRank: 3,
     description: 'High-quality aesthetic image generation with low censoring',

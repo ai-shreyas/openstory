@@ -15,7 +15,7 @@ These LLM models analyze your script, extract scenes, characters, and locations,
 | ------------------ | --------- | -------------- | ------------------------- |
 | **Claude Opus 5**  | Anthropic | 1M tokens      | Proprietary (default)     |
 | Claude Opus 5 Fast | Anthropic | 1M tokens      | Proprietary (scene-split) |
-| Grok 4.5           | xAI       | 500K tokens    | Proprietary               |
+| Grok 4.5           | SpaceXAI  | 500K tokens    | Proprietary               |
 | Claude Fable 5     | Anthropic | 1M tokens      | Proprietary               |
 | Claude Sonnet 5    | Anthropic | 1M tokens      | Proprietary               |
 | Mistral Small 4    | Mistral   | 262K tokens    | Open Source (Apache 2.0)  |
@@ -36,7 +36,7 @@ These models create the visual images for each scene. You can select multiple mo
 | -------------------------- | ----------------- | ------------------------ | ----------------------------------------- |
 | **Nano Banana 2**          | Google            | Proprietary              | Fast generation and editing (default)     |
 | Nano Banana Pro            | Google            | Proprietary              | Enhanced realism and typography           |
-| Grok Imagine Image Quality | Grok              | Proprietary              | High-quality aesthetic with low censoring |
+| Grok Imagine Image Quality | SpaceXAI          | Proprietary              | High-quality aesthetic with low censoring |
 | FLUX.2 Max                 | Black Forest Labs | Proprietary              | Exceptional realism                       |
 | Phota                      | Phota             | Proprietary              | Character consistency via profiles        |
 | Hunyuan Image v3           | Tencent           | Open Source              | Strong composition                        |
@@ -58,7 +58,7 @@ These models animate still images into video clips.
 | **LTX 2.3 Pro**    | Lightricks | ~15s      | Open Source | Best quality ranking  |
 | Veo 3.1            | Google     | ~25s      | Proprietary | 20K max prompt length |
 | Kling v3 Pro       | Kling      | ~20s      | Proprietary |                       |
-| Grok Imagine Video | Grok       | ~20s      | Proprietary |                       |
+| Grok Imagine Video | SpaceXAI   | ~20s      | Proprietary |                       |
 | MiniMax Hailuo 02  | MiniMax    | ~15s      | Proprietary |                       |
 | **Seedance 2.0**   | ByteDance  | ~15s      | Proprietary | Default; native audio |
 
