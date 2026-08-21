@@ -73,6 +73,7 @@ import { Route as ApiTestVerifyRouteImport } from './routes/api/test/verify'
 import { Route as ApiV1IndexRouteImport } from './routes/api/v1/index'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
 import { Route as ApiV1SequencesRouteImport } from './routes/api/v1/sequences'
+import { Route as ApiV1StylesRouteImport } from './routes/api/v1/styles'
 import { Route as AppModelsFamilySplatRouteImport } from './routes/_app/models/family/$'
 import { Route as AppSequencesIdElementsRouteImport } from './routes/_app/sequences/$id/elements'
 import { Route as AppSequencesIdMusicRouteImport } from './routes/_app/sequences/$id/music'
@@ -83,6 +84,7 @@ import { Route as ApiV1DeviceCodeRouteImport } from './routes/api/v1/device.code
 import { Route as ApiV1DeviceTokenRouteImport } from './routes/api/v1/device.token'
 import { Route as ApiV1ScriptsEnhanceRouteImport } from './routes/api/v1/scripts.enhance'
 import { Route as ApiV1SequencesIdRouteImport } from './routes/api/v1/sequences.$id'
+import { Route as ApiV1StylesIdRouteImport } from './routes/api/v1/styles.$id'
 import { Route as AppSequencesIdCastIndexRouteImport } from './routes/_app/sequences/$id/cast/index'
 import { Route as AppSequencesIdCastCharacterIdRouteImport } from './routes/_app/sequences/$id/cast/$characterId'
 import { Route as AppSequencesIdLocationsIndexRouteImport } from './routes/_app/sequences/$id/locations/index'
@@ -407,6 +409,11 @@ const ApiV1SequencesRoute = ApiV1SequencesRouteImport.update({
   path: '/api/v1/sequences',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1StylesRoute = ApiV1StylesRouteImport.update({
+  id: '/api/v1/styles',
+  path: '/api/v1/styles',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppModelsFamilySplatRoute = AppModelsFamilySplatRouteImport.update({
   id: '/models/family/$',
   path: '/models/family/$',
@@ -456,6 +463,11 @@ const ApiV1SequencesIdRoute = ApiV1SequencesIdRouteImport.update({
   id: '/$id',
   path: '/$id',
   getParentRoute: () => ApiV1SequencesRoute,
+} as any)
+const ApiV1StylesIdRoute = ApiV1StylesIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiV1StylesRoute,
 } as any)
 const AppSequencesIdCastIndexRoute = AppSequencesIdCastIndexRouteImport.update({
   id: '/cast/',
@@ -541,6 +553,7 @@ export interface FileRoutesByFullPath {
   '/api/test/verify': typeof ApiTestVerifyRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/sequences': typeof ApiV1SequencesRouteWithChildren
+  '/api/v1/styles': typeof ApiV1StylesRouteWithChildren
   '/gallery/': typeof AppGalleryIndexRoute
   '/locations/': typeof AppLocationsIndexRoute
   '/models/': typeof AppModelsIndexRoute
@@ -559,6 +572,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/device/token': typeof ApiV1DeviceTokenRoute
   '/api/v1/scripts/enhance': typeof ApiV1ScriptsEnhanceRoute
   '/api/v1/sequences/$id': typeof ApiV1SequencesIdRouteWithChildren
+  '/api/v1/styles/$id': typeof ApiV1StylesIdRoute
   '/sequences/$id/cast/$characterId': typeof AppSequencesIdCastCharacterIdRoute
   '/sequences/$id/locations/$locationId': typeof AppSequencesIdLocationsLocationIdRoute
   '/api/v1/sequences/$id/exports': typeof ApiV1SequencesIdExportsRoute
@@ -618,6 +632,7 @@ export interface FileRoutesByTo {
   '/api/test/verify': typeof ApiTestVerifyRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/sequences': typeof ApiV1SequencesRouteWithChildren
+  '/api/v1/styles': typeof ApiV1StylesRouteWithChildren
   '/gallery': typeof AppGalleryIndexRoute
   '/locations': typeof AppLocationsIndexRoute
   '/models': typeof AppModelsIndexRoute
@@ -636,6 +651,7 @@ export interface FileRoutesByTo {
   '/api/v1/device/token': typeof ApiV1DeviceTokenRoute
   '/api/v1/scripts/enhance': typeof ApiV1ScriptsEnhanceRoute
   '/api/v1/sequences/$id': typeof ApiV1SequencesIdRouteWithChildren
+  '/api/v1/styles/$id': typeof ApiV1StylesIdRoute
   '/sequences/$id/cast/$characterId': typeof AppSequencesIdCastCharacterIdRoute
   '/sequences/$id/locations/$locationId': typeof AppSequencesIdLocationsLocationIdRoute
   '/api/v1/sequences/$id/exports': typeof ApiV1SequencesIdExportsRoute
@@ -700,6 +716,7 @@ export interface FileRoutesById {
   '/api/test/verify': typeof ApiTestVerifyRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/sequences': typeof ApiV1SequencesRouteWithChildren
+  '/api/v1/styles': typeof ApiV1StylesRouteWithChildren
   '/_app/gallery/': typeof AppGalleryIndexRoute
   '/_app/locations/': typeof AppLocationsIndexRoute
   '/_app/models/': typeof AppModelsIndexRoute
@@ -718,6 +735,7 @@ export interface FileRoutesById {
   '/api/v1/device/token': typeof ApiV1DeviceTokenRoute
   '/api/v1/scripts/enhance': typeof ApiV1ScriptsEnhanceRoute
   '/api/v1/sequences/$id': typeof ApiV1SequencesIdRouteWithChildren
+  '/api/v1/styles/$id': typeof ApiV1StylesIdRoute
   '/_app/sequences/$id/cast/$characterId': typeof AppSequencesIdCastCharacterIdRoute
   '/_app/sequences/$id/locations/$locationId': typeof AppSequencesIdLocationsLocationIdRoute
   '/api/v1/sequences/$id/exports': typeof ApiV1SequencesIdExportsRoute
@@ -781,6 +799,7 @@ export interface FileRouteTypes {
     | '/api/test/verify'
     | '/api/v1/openapi.json'
     | '/api/v1/sequences'
+    | '/api/v1/styles'
     | '/gallery/'
     | '/locations/'
     | '/models/'
@@ -799,6 +818,7 @@ export interface FileRouteTypes {
     | '/api/v1/device/token'
     | '/api/v1/scripts/enhance'
     | '/api/v1/sequences/$id'
+    | '/api/v1/styles/$id'
     | '/sequences/$id/cast/$characterId'
     | '/sequences/$id/locations/$locationId'
     | '/api/v1/sequences/$id/exports'
@@ -858,6 +878,7 @@ export interface FileRouteTypes {
     | '/api/test/verify'
     | '/api/v1/openapi.json'
     | '/api/v1/sequences'
+    | '/api/v1/styles'
     | '/gallery'
     | '/locations'
     | '/models'
@@ -876,6 +897,7 @@ export interface FileRouteTypes {
     | '/api/v1/device/token'
     | '/api/v1/scripts/enhance'
     | '/api/v1/sequences/$id'
+    | '/api/v1/styles/$id'
     | '/sequences/$id/cast/$characterId'
     | '/sequences/$id/locations/$locationId'
     | '/api/v1/sequences/$id/exports'
@@ -939,6 +961,7 @@ export interface FileRouteTypes {
     | '/api/test/verify'
     | '/api/v1/openapi.json'
     | '/api/v1/sequences'
+    | '/api/v1/styles'
     | '/_app/gallery/'
     | '/_app/locations/'
     | '/_app/models/'
@@ -957,6 +980,7 @@ export interface FileRouteTypes {
     | '/api/v1/device/token'
     | '/api/v1/scripts/enhance'
     | '/api/v1/sequences/$id'
+    | '/api/v1/styles/$id'
     | '/_app/sequences/$id/cast/$characterId'
     | '/_app/sequences/$id/locations/$locationId'
     | '/api/v1/sequences/$id/exports'
@@ -986,6 +1010,7 @@ export interface RootRouteChildren {
   ApiStorageUploadRoute: typeof ApiStorageUploadRoute
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
   ApiV1SequencesRoute: typeof ApiV1SequencesRouteWithChildren
+  ApiV1StylesRoute: typeof ApiV1StylesRouteWithChildren
   ApiV1IndexRoute: typeof ApiV1IndexRoute
   ApiV1DeviceCodeRoute: typeof ApiV1DeviceCodeRoute
   ApiV1DeviceTokenRoute: typeof ApiV1DeviceTokenRoute
@@ -1442,6 +1467,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1SequencesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/styles': {
+      id: '/api/v1/styles'
+      path: '/api/v1/styles'
+      fullPath: '/api/v1/styles'
+      preLoaderRoute: typeof ApiV1StylesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/models/family/$': {
       id: '/_app/models/family/$'
       path: '/models/family/$'
@@ -1511,6 +1543,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/v1/sequences/$id'
       preLoaderRoute: typeof ApiV1SequencesIdRouteImport
       parentRoute: typeof ApiV1SequencesRoute
+    }
+    '/api/v1/styles/$id': {
+      id: '/api/v1/styles/$id'
+      path: '/$id'
+      fullPath: '/api/v1/styles/$id'
+      preLoaderRoute: typeof ApiV1StylesIdRouteImport
+      parentRoute: typeof ApiV1StylesRoute
     }
     '/_app/sequences/$id/cast/': {
       id: '/_app/sequences/$id/cast/'
@@ -1744,6 +1783,18 @@ const ApiV1SequencesRouteWithChildren = ApiV1SequencesRoute._addFileChildren(
   ApiV1SequencesRouteChildren,
 )
 
+interface ApiV1StylesRouteChildren {
+  ApiV1StylesIdRoute: typeof ApiV1StylesIdRoute
+}
+
+const ApiV1StylesRouteChildren: ApiV1StylesRouteChildren = {
+  ApiV1StylesIdRoute: ApiV1StylesIdRoute,
+}
+
+const ApiV1StylesRouteWithChildren = ApiV1StylesRoute._addFileChildren(
+  ApiV1StylesRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   AppRouteRoute: AppRouteRouteWithChildren,
   AuthRouteRoute: AuthRouteRouteWithChildren,
@@ -1766,6 +1817,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiStorageUploadRoute: ApiStorageUploadRoute,
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
   ApiV1SequencesRoute: ApiV1SequencesRouteWithChildren,
+  ApiV1StylesRoute: ApiV1StylesRouteWithChildren,
   ApiV1IndexRoute: ApiV1IndexRoute,
   ApiV1DeviceCodeRoute: ApiV1DeviceCodeRoute,
   ApiV1DeviceTokenRoute: ApiV1DeviceTokenRoute,

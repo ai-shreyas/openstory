@@ -11,8 +11,15 @@
  */
 
 import { apiEnhanceScriptSchema } from './enhance-input-schema';
-import { API_V1_BASE, type HalLink, type HalResource } from './hal';
+import {
+  API_V1_BASE,
+  getLink,
+  type HalLink,
+  type HalResource,
+  STYLES_PATH,
+} from './hal';
 import { apiCreateSequenceSchema } from './input-schema';
+import { EXAMPLE_CREATE_STYLE_BODY } from './style-input-schema';
 import { z } from 'zod';
 
 const INSTRUCTIONS = `OpenStory public API v1 — create AI video sequences from a script in one call.
@@ -42,6 +49,16 @@ Enhance only (no sequence):
   'create-sequence' affordance embeds a ready-to-POST example body using the
   enhanced script (with enhance: "off"). Errors after streaming starts arrive
   as an 'event: error' shot.
+
+Styles (create your own look):
+  POST /api/v1/styles creates a team-owned library style you can then pass as
+  'style' to POST /api/v1/sequences. Send a 'name' and a complete v2 'config'
+  (look: mood, artStyle, lighting, colorPalette, colorGrading; motion: camera,
+  pace, energy) plus optional description/category/tags. Responds 201
+  with the style document and a 'create-sequence' link pre-filled with its id;
+  409 if the name's URL slug collides with a style you can already see.
+  GET /api/v1/styles lists your library styles plus the public templates
+  (full documents incl. config); GET /api/v1/styles/{id} returns one.
 
 Authentication:
   Every endpoint except this root and the device-login pair requires an API
@@ -127,6 +144,17 @@ export function enhanceScriptLink(): HalLink {
   };
 }
 
+/** The `create-style` affordance, advertised in the root document. */
+export function createStyleLink(): HalLink {
+  return {
+    href: STYLES_PATH,
+    method: 'POST',
+    title: 'Create a team style from a complete v2 config. Responds 201.',
+    contentType: 'application/json',
+    examples: [EXAMPLE_CREATE_STYLE_BODY],
+  };
+}
+
 export type RootDocument = HalResource<{
   name: string;
   version: string;
@@ -165,6 +193,17 @@ export function buildRootDocument(): RootDocument {
           "List your team's sequences (most recent first; cursor-paginated)",
       },
       'enhance-script': enhanceScriptLink(),
+      'create-style': createStyleLink(),
+      'list-styles': getLink(
+        STYLES_PATH,
+        "List your team's library styles and the public templates"
+      ),
+      style: {
+        href: `${STYLES_PATH}/{id}`,
+        method: 'GET',
+        templated: true,
+        title: 'Get one style (full document incl. config)',
+      },
       'sequence-status': {
         href: `${API_V1_BASE}/sequences/{id}{?wait}`,
         method: 'GET',
