@@ -14,7 +14,11 @@ import type { CATALOG_LAG_MODELS } from './create-adapter';
 import type { AnalysisModelId } from './models.config';
 
 type CatalogId = keyof OpenRouterModelOptionsByName;
-type LagId = (typeof CATALOG_LAG_MODELS)[number]['name'];
+type LagId = (typeof CATALOG_LAG_MODELS)['length'] extends 0
+  ? never
+  : (typeof CATALOG_LAG_MODELS)[number] extends { name: infer N }
+    ? N
+    : never;
 
 /** Lag ids the upstream catalog now includes — must stay `never`. */
 type StaleLagEntries = Extract<CatalogId, LagId>;
