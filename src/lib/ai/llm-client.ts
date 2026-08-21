@@ -232,6 +232,7 @@ const STRUCTURED_OUTPUT_MODELS = new Set([
   'anthropic/claude-fable-5',
   'anthropic/claude-sonnet-5',
   'x-ai/grok-4.20',
+  'anthropic/claude-opus-5',
   'anthropic/claude-opus-5-fast',
   'anthropic/claude-opus-4.8',
   'deepseek/deepseek-v3.2',
@@ -276,9 +277,9 @@ export const PROMPT_REASONING = {
 } as const satisfies NonNullable<LLMRequestParams['reasoning']>;
 
 /**
- * Reasoning for script enhancement. Always on at `low`: Grok 4.6 (the default
- * enhance model) cannot disable thinking, and omitting the param falls through
- * to xAI's `high` default — so sending `low` is the fastest we can ask for.
+ * Reasoning for script enhancement. Always on at `low`: some providers
+ * (Grok) cannot disable thinking, and omitting the param falls through to
+ * a high default — so sending `low` is the fastest we can ask for.
  * Workflows keep {@link PROMPT_REASONING} (`medium`); latency is hidden there.
  */
 export const ENHANCE_REASONING = {

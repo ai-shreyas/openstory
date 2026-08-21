@@ -5,6 +5,16 @@
 
 export const SCRIPT_ANALYSIS_MODELS = [
   {
+    id: 'anthropic/claude-opus-5',
+    name: 'Claude Opus 5',
+    vendor: 'Anthropic',
+    license: 'proprietary' as const,
+    qualityRank: 1,
+    contextWindow: 1_000_000,
+    vision: true,
+    description: 'Default analysis model; frontier reasoning and coding',
+  },
+  {
     id: 'x-ai/grok-4.6',
     name: 'Grok 4.6',
     vendor: 'xAI',
@@ -51,7 +61,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
   {
     id: 'anthropic/claude-opus-5-fast',
     name: 'Claude Opus 5 Fast',
-    provider: 'Anthropic',
+    vendor: 'Anthropic',
     license: 'proprietary' as const,
     qualityRank: 5,
     contextWindow: 1_000_000,
@@ -246,7 +256,8 @@ export function resolveVisionModel(
 /**
  * Default model to use when none is specified
  */
-export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId = 'x-ai/grok-4.6';
+export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId =
+  'anthropic/claude-opus-5';
 
 /**
  * Boundary-annotation scenes call only. Grok 4.6 + medium reasoning

@@ -11,6 +11,12 @@ export type OpenRouterPricing = {
 };
 
 export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
+  'anthropic/claude-opus-5': {
+    name: 'Claude Opus 5',
+    promptPerMillionTokens: 5,
+    completionPerMillionTokens: 25,
+    webSearchPerQuery: 0.01,
+  },
   'x-ai/grok-4.6': {
     name: 'SpaceXAI: Grok 4.6',
     promptPerMillionTokens: 2,
@@ -99,4 +105,4 @@ export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
   },
 };
 
-export const OPENROUTER_PRICING_LAST_UPDATED = '2026-08-21T04:44:05.645Z';
+export const OPENROUTER_PRICING_LAST_UPDATED = '2026-08-21T04:57:10.073Z';
