@@ -20,7 +20,6 @@ import {
   CONTENT_REJECTION_RETRY_EVENT,
   isContentRejectionError,
 } from '@/lib/ai/content-rejection';
-import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import { computeVideoManifestInputHash } from '@/lib/ai/input-hash';
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
@@ -33,13 +32,14 @@ import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
 import {
   calculateMotionMetadata,
+  motionCostFromUsage,
   pollMotionJob,
   submitMotionJob,
 } from '@/lib/motion/motion-generation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { gateEstimate } from '@/lib/billing/cost-estimation';
+import type { TokenUsage } from '@tanstack/ai';
 import { buildVideoManifest } from '@/lib/motion/render-segments';
-import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
 import { uploadVideoToStorage } from '@/lib/motion/video-storage';
 import { recordProvenance } from '@/lib/compliance/provenance';
 import { buildR2Key, STORAGE_BUCKETS } from '@/lib/storage/buckets';
@@ -85,7 +85,7 @@ const MAX_MOTION_ATTEMPTS = 3;
  *  whole submit→poll cycle; a non-content `failed` is a hard stop as today. */
 type MotionPollOutcome =
   | { kind: 'pending' }
-  | { kind: 'completed'; url: string; unitsBilled?: number }
+  | { kind: 'completed'; url: string; usage?: TokenUsage }
   | { kind: 'rejected'; rejection: string }
   | { kind: 'failed'; error: string };
 
@@ -333,7 +333,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     // Step 2: Prepare start image — use Cloudflare Image Resizing if Kling model and image exceeds 10MB
     const startImageUrl = await step.do('prepare-start-image', async () => {
       const modelConfig = IMAGE_TO_VIDEO_MODELS[model];
-      if (modelConfig.provider !== 'Kling') {
+      if (modelConfig.vendor !== 'Kling') {
         return input.imageUrl;
       }
 
@@ -360,9 +360,9 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     // exhausts its budget fails only its own slot — motion-batch's
     // Promise.allSettled keeps sibling clips and the sequence alive.
     let videoUrl = '';
-    // Real quantity fal billed for the clip that succeeded — drives the exact
-    // credit deduction below (the check-credits estimate only gates affordability).
-    let billedUnits: number | undefined;
+    // Raw usage for the clip that succeeded — `motionCostFromUsage` turns
+    // this into a billed cost + unit count below, switching on the job's via.
+    let billedUsage: TokenUsage | undefined;
     let lastRejection: string | null = null;
     // The job behind the clip that ultimately succeeded — its `submittedAt` /
     // `usedOwnKey` drive observation timing and credit deduction below.
@@ -458,7 +458,8 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
                 pollResult = await pollMotionJob(
                   job.jobId,
                   job.modelKey,
-                  scopedDb.credentials
+                  scopedDb.credentials,
+                  job.via
                 );
               } catch (error) {
                 if (isContentRejectionError(error)) {
@@ -493,7 +494,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
                   return {
                     kind: 'completed',
                     url: pollResult.url,
-                    unitsBilled: pollResult.usage?.unitsBilled,
+                    usage: pollResult.usage,
                   };
                 }
                 return classifyMotionFailure(
@@ -517,7 +518,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
 
         if (poll.kind === 'completed') {
           videoUrl = poll.url;
-          billedUnits = poll.unitsBilled;
+          billedUsage = poll.usage;
           break;
         }
         if (poll.kind === 'rejected') {
@@ -592,34 +593,35 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
     // narrowing (a `let` could be reassigned, so TS widens it inside closures).
     const job = succeededJob;
 
-    // Exact charge from fal's reported billed units (the check-credits `cost`
-    // was only an estimate for the affordability gate). Price against the
-    // endpoint actually submitted to — Seedance with refs bills on its
-    // reference-to-video endpoint, not image-to-video (#873).
-    const { endpointId: billedEndpointId } = resolveMotionEndpoint(
-      model,
-      (input.referenceImages?.length ?? 0) > 0
-    );
-    // In its own step: this reads live pricing from D1, and every fal
+    // Exact charge from the via's reported usage (the check-credits `cost`
+    // was only an estimate for the affordability gate). The via owns endpoint
+    // aliasing (fal Seedance-with-refs bills on its reference-to-video
+    // endpoint, #873) and unit normalisation.
+    //
+    // In its own step: this reads live pricing from D1, and every provider
     // interaction above is already memoized in completed steps, so a failed
     // read replays just this lookup instead of falling through to a $0 charge
     // that the `actualCost > 0` guard below would silently skip (#1069).
-    const actualCost = await step.do('price-motion-generation', async () =>
-      falCostFromUnits(billedEndpointId, billedUnits)
+    const billing = await step.do('price-motion-generation', async () =>
+      motionCostFromUsage(job.via, billedUsage, {
+        modelKey: job.modelKey,
+        hasReferenceImages: (input.referenceImages?.length ?? 0) > 0,
+      })
     );
+    const actualCost = billing.cost;
 
-    // Motion is submitted to fal's queue and collected by polling, so the
+    // Motion is submitted to an async queue and collected by polling, so the
     // `generateVideo()` call returns before the video exists — a middleware
     // span there would time the submit and carry no cost, duration, or
     // output. Record it here instead, where all three are known.
     await step.do('record-motion-observation', async () => {
       recordMediaGenerationSpan({
         model,
-        provider: 'fal',
+        provider: job.via,
         activity: 'video',
         durationMs: Date.now() - job.submittedAt,
         costMicros: actualCost,
-        unitsBilled: billedUnits,
+        unitsBilled: billing.unitsBilled,
         usedOwnKey: job.usedOwnKey,
         prompt: input.prompt,
         outputUrl: videoUrl,
@@ -631,14 +633,17 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
       });
     });
 
-    // Before the deduction guard — see recordFalUsageStep (#1069).
-    const falUsage = await recordFalUsageStep(step, scopedDb, {
-      endpointId: billedEndpointId,
-      unitsBilled: billedUnits,
-      // The adapter's jobId is fal's request id — joins this charge to its
-      // billing-events record for the hourly reconcile.
-      requestId: job.jobId,
-    });
+    // Before the deduction guard — see recordFalUsageStep (#1069). Native
+    // providers whose units would corrupt a fal median skip the sample.
+    const falUsage = billing.recordFalUsage
+      ? await recordFalUsageStep(step, scopedDb, {
+          endpointId: billing.endpointId,
+          unitsBilled: billing.unitsBilled,
+          // The adapter's jobId is fal's request id — joins this charge to its
+          // billing-events record for the hourly reconcile.
+          requestId: job.jobId,
+        })
+      : {};
 
     // Deduct credits (skip if team used own fal key). Routed through
     // deductWorkflowCredits so insufficient balances warn-and-skip (with an

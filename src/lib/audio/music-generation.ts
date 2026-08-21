@@ -8,7 +8,7 @@ import {
   type AudioModelConfig,
 } from '@/lib/ai/models';
 import { type Microdollars } from '@/lib/billing/money';
-import type { FalCredentialScopedDb } from '@/lib/db/scoped-workflow';
+import type { CredentialScopedDb } from '@/lib/db/scoped-workflow';
 import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
@@ -23,7 +23,7 @@ import { getLogger } from '@/lib/observability/logger';
 const logger = getLogger(['openstory', 'audio', 'music-generation']);
 
 export type GenerateMusicOptions = {
-  scopedDb?: FalCredentialScopedDb;
+  scopedDb?: CredentialScopedDb;
   /** PostHog LLM-analytics metadata for the generation span. */
   observability?: AIObservabilityMeta;
   /** Style/mood prompt for the music (e.g., "tense orchestral, dark atmosphere") */
@@ -46,7 +46,7 @@ export type MusicResult = {
   audioUrl?: string;
   metadata: {
     model: string;
-    provider: string;
+    vendor: string;
     /** Fal endpoint submitted to (billing denominator). */
     endpointId: string;
     /** Fal-reported billed unit count. Recorded as a `model_usage_observations`
@@ -202,7 +202,7 @@ async function callFalAudio(
     shape.duration ?? clampDuration(options.duration, modelConfig);
 
   logger.info(`Generating music with model: ${modelConfig.id}`, {
-    provider: modelConfig.provider,
+    vendor: modelConfig.vendor,
     promptLength: shape.prompt.length,
     duration: shape.duration ?? '(fixed by model)',
   });
@@ -240,7 +240,7 @@ async function callFalAudio(
     requestId: result.id,
     metadata: {
       model: modelConfig.id,
-      provider: modelConfig.provider,
+      vendor: modelConfig.vendor,
       endpointId: modelConfig.id,
       unitsBilled: result.usage?.unitsBilled,
       duration: billedDuration,
