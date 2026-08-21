@@ -7,10 +7,7 @@
  * prompt assembly and reference-image binding join on these tags.
  */
 
-import {
-  matchElementsToScene,
-  matchLocationsToScene,
-} from '@/lib/workflows/scene-matching';
+import { matchLocationsToScene } from '@/lib/workflows/scene-matching';
 import type { SceneSplitBiblesResult } from './response-schemas';
 import type { SceneSplittingScene } from './streaming-scene-parser';
 
@@ -41,6 +38,22 @@ function characterMentioned(extract: string, name: string): boolean {
   if (wholeWord(haystack, nameUpper)) return true;
   const first = nameUpper.split(/\s+/)[0];
   return Boolean(first && first.length >= 3 && wholeWord(haystack, first));
+}
+
+/**
+ * Split tokens are UPPER_SNAKE; the script often names the object in prose
+ * ("coral lipstick") rather than echoing `CORAL_LIPSTICK`. Underscores fold
+ * to spaces so the phrase still matches as a whole.
+ */
+function elementMentioned(extract: string, token: string): boolean {
+  const haystack = extract.toUpperCase();
+  const tokenUpper = token.toUpperCase().trim();
+  if (tokenUpper.length < 2) return false;
+  if (wholeWord(haystack, tokenUpper)) return true;
+  const prose = tokenUpper.replace(/_/g, ' ').trim();
+  if (prose.length < 4) return false;
+  if (prose.includes(' ')) return haystack.includes(prose);
+  return wholeWord(haystack, prose);
 }
 
 export type TagReconcileStats = {
@@ -93,16 +106,16 @@ export function reconcileSceneTags(
       : '';
     if (environmentTag) stats.assignedEnvironmentTags++;
 
-    const matchedElements = matchElementsToScene(
-      bibles.elementBible,
-      [],
-      extract
-    );
-    const elementTags =
-      matchedElements.length > 0
-        ? matchedElements.map((e) => e.token.toUpperCase())
-        : null;
-    if (elementTags) stats.assignedElementTags += elementTags.length;
+    const elementTagsList: string[] = [];
+    for (const entry of bibles.elementBible) {
+      if (!elementMentioned(extract, entry.token)) continue;
+      const token = entry.token.toUpperCase();
+      if (!elementTagsList.includes(token)) {
+        elementTagsList.push(token);
+        stats.assignedElementTags++;
+      }
+    }
+    const elementTags = elementTagsList.length > 0 ? elementTagsList : null;
 
     return {
       ...scene,
@@ -118,6 +131,26 @@ export function reconcileSceneTags(
       },
     };
   });
+
+  // Continuation slices often name nobody ("She leans into the mirror")
+  // and never repeat the product token. Keep the previous scene's tags so
+  // reference-image binding and fal Image-N numbering stay stable.
+  for (let i = 1; i < reconciled.length; i++) {
+    const scene = reconciled[i];
+    const previous = reconciled[i - 1];
+    if (!scene || !previous) continue;
+    if (
+      scene.continuity.characterTags.length === 0 &&
+      previous.continuity.characterTags.length > 0
+    ) {
+      scene.continuity.characterTags = [...previous.continuity.characterTags];
+      stats.assignedCharacterTags += previous.continuity.characterTags.length;
+    }
+    if (!scene.continuity.elementTags && previous.continuity.elementTags) {
+      scene.continuity.elementTags = [...previous.continuity.elementTags];
+      stats.assignedElementTags += previous.continuity.elementTags.length;
+    }
+  }
 
   return { scenes: reconciled, stats };
 }

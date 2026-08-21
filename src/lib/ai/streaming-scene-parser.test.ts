@@ -70,6 +70,37 @@ describe('createStreamingSceneParser', () => {
     ]);
   });
 
+  it('inherits location onto a continuation slice with no slugline', () => {
+    const continuation = [
+      'EXT. BONDI BEACH CAR PARK - EARLY MORNING',
+      'A tote slams onto the bonnet.',
+      '',
+      'She leans into the wing mirror.',
+    ].join('\n');
+    const parser = createStreamingSceneParser(
+      continuation,
+      (() => {
+        let n = 0;
+        return () => `id-${++n}`;
+      })()
+    );
+    const events = parser.feed(
+      JSON.stringify({
+        projectMetadata: { title: 'Bondi' },
+        boundaries: [
+          { hintLine: 1, quote: 'EXT. BONDI BEACH CAR PARK - EARLY MORNING' },
+          { hintLine: 4, quote: 'She leans into the wing mirror.' },
+        ],
+      }),
+      true
+    );
+    const sceneEvents = events.filter((e) => e.type === 'scene');
+    expect(sceneEvents[1]?.scene.metadata.location).toBe(
+      'EXT. BONDI BEACH CAR PARK - EARLY MORNING'
+    );
+    expect(sceneEvents[1]?.scene.metadata.timeOfDay).toBe('early morning');
+  });
+
   it('finalizes every scene on the done feed', () => {
     const parser = makeParser();
     const events = parser.feed(JSON.stringify(fullResponse), true);

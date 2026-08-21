@@ -18,7 +18,10 @@ import {
   sliceScenes,
 } from './boundary-split';
 import { sceneBoundarySchema } from './response-schemas';
-import { buildSceneFromSlice } from './scene-from-slice';
+import {
+  buildSceneFromSlice,
+  inheritMissingLocation,
+} from './scene-from-slice';
 import type {
   Continuity,
   DialogueLine,
@@ -76,6 +79,12 @@ export function assembleScenes(
   const scenes = slices.map((slice, i) =>
     buildSceneFromSlice(sceneIdFor(i), i, slice)
   );
+  for (let i = 1; i < scenes.length; i++) {
+    const scene = scenes[i];
+    const previous = scenes[i - 1];
+    if (!scene) continue;
+    scenes[i] = inheritMissingLocation(scene, previous);
+  }
   return { scenes, resolution, slices };
 }
 
@@ -93,6 +102,7 @@ export function createStreamingSceneParser(
 ) {
   let titleEmitted = false;
   let emittedScenes = 0;
+  let previousEmitted: SceneSplittingScene | undefined;
   const sceneIds = new Map<number, string>();
 
   const idFor = (index: number): string => {
@@ -162,9 +172,14 @@ export function createStreamingSceneParser(
       for (let i = emittedScenes; i < finalized; i++) {
         const slice = slices[i];
         if (slice === undefined) break;
+        const scene = inheritMissingLocation(
+          buildSceneFromSlice(idFor(i), i, slice),
+          previousEmitted
+        );
+        previousEmitted = scene;
         events.push({
           type: 'scene',
-          scene: buildSceneFromSlice(idFor(i), i, slice),
+          scene,
           index: i,
         });
         emittedScenes = i + 1;

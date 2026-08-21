@@ -121,11 +121,37 @@ describe('reconcileSceneTags', () => {
     expect(stats.assignedElementTags).toBe(1);
   });
 
+  it('assigns an element when the script names it in prose, not as the token', () => {
+    const { scenes } = reconcileSceneTags(
+      [makeScene('A slim coral lipstick tube tumbles after them.')],
+      { characterBible: [], locationBible: [], elementBible }
+    );
+    expect(scenes[0]?.continuity.elementTags).toEqual(['CORAL_LIPSTICK']);
+  });
+
   it('keeps elementTags null when no token appears', () => {
     const { scenes } = reconcileSceneTags(
       [makeScene('She walks on. Nothing in her hands.')],
       { characterBible: [], locationBible: [], elementBible }
     );
     expect(scenes[0]?.continuity.elementTags).toBeNull();
+  });
+
+  it('inherits character and element tags onto a nameless continuation slice', () => {
+    const { scenes } = reconcileSceneTags(
+      [
+        makeScene('JACK pockets the coral lipstick and walks on.'),
+        makeScene('She leans into the wing mirror.'),
+      ],
+      { characterBible, locationBible: [], elementBible }
+    );
+    expect(scenes[0]?.continuity.characterTags).toEqual([
+      'jack_denim_weathered',
+    ]);
+    expect(scenes[0]?.continuity.elementTags).toEqual(['CORAL_LIPSTICK']);
+    expect(scenes[1]?.continuity.characterTags).toEqual([
+      'jack_denim_weathered',
+    ]);
+    expect(scenes[1]?.continuity.elementTags).toEqual(['CORAL_LIPSTICK']);
   });
 });

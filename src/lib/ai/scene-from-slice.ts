@@ -14,8 +14,13 @@ import type {
 } from './scene-analysis.schema';
 
 const SCENE_HEADING_PREFIX = /^(?:INT\.|EXT\.|INT\/EXT\.|I\/E\.)(?:\s|$)/i;
-const TIME_SUFFIX =
-  /\s*[-–—]\s*(DAY|NIGHT|DAWN|DUSK|EVENING|MORNING|CONTINUOUS|LATER|SAME)\b.*$/i;
+const TIME_WORD = 'DAY|NIGHT|DAWN|DUSK|EVENING|MORNING|CONTINUOUS|LATER|SAME';
+const TIME_SUFFIX = new RegExp(
+  `\\s*[-–—]\\s*((?:EARLY|LATE|MID)\\s+)?(${TIME_WORD})\\b.*$`,
+  'i'
+);
+/** Enhancer labels like `Scene 3 — 5s` — duration, not a location heading. */
+const DURATION_LABEL = /^Scene\s+\d+\s*[–—-]\s*(\d+)\s*s\b/i;
 const TRANSITION =
   /^(?:CUT TO:|DISSOLVE TO:|FADE IN:|FADE OUT[.:]?|SMASH CUT TO:|MATCH CUT TO:|WIPE TO:)\s*$/i;
 const PARENTHETICAL = /^\([^)]+\)$/;
@@ -44,7 +49,10 @@ export function parseSceneHeading(firstLine: string): SceneHeading {
   }
 
   const timeMatch = trimmed.match(TIME_SUFFIX);
-  const timeOfDay = timeMatch?.[1]?.toLowerCase() ?? '';
+  const timeOfDay = [timeMatch?.[1]?.trim(), timeMatch?.[2]]
+    .filter((part): part is string => Boolean(part))
+    .join(' ')
+    .toLowerCase();
   const isHeading = SCENE_HEADING_PREFIX.test(trimmed) || timeMatch !== null;
 
   if (!isHeading) {
@@ -64,12 +72,31 @@ export function parseSceneHeading(firstLine: string): SceneHeading {
   };
 }
 
-function firstNonEmptyLine(slice: string): string {
+function parseDurationLabel(trimmed: string): number | null {
+  const match = trimmed.match(DURATION_LABEL);
+  if (!match?.[1]) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds : null;
+}
+
+type SliceLead = {
+  headingLine: string;
+  durationSeconds: number | null;
+};
+
+function sliceLead(slice: string): SliceLead {
+  let durationSeconds: number | null = null;
   for (const line of slice.split('\n')) {
     const trimmed = line.trim();
-    if (trimmed.length > 0) return trimmed;
+    if (trimmed.length === 0) continue;
+    const labeled = parseDurationLabel(trimmed);
+    if (labeled !== null && durationSeconds === null) {
+      durationSeconds = labeled;
+      continue;
+    }
+    return { headingLine: trimmed, durationSeconds };
   }
-  return '';
+  return { headingLine: '', durationSeconds };
 }
 
 function isSceneHeading(trimmed: string): boolean {
@@ -156,7 +183,8 @@ export function buildSceneFromSlice(
   metadata: SceneMetadata;
   continuity: Continuity;
 } {
-  const heading = parseSceneHeading(firstNonEmptyLine(slice));
+  const lead = sliceLead(slice);
+  const heading = parseSceneHeading(lead.headingLine);
   const title = heading.title || `Scene ${index + 1}`;
   return {
     sceneId,
@@ -167,11 +195,31 @@ export function buildSceneFromSlice(
     },
     metadata: {
       title,
-      durationSeconds: estimateDurationSeconds(slice),
+      durationSeconds: lead.durationSeconds ?? estimateDurationSeconds(slice),
       location: heading.location,
       timeOfDay: heading.timeOfDay,
       storyBeat: '',
     },
     continuity: { ...EMPTY_CONTINUITY },
+  };
+}
+
+/**
+ * Continuation slices often have no slugline. Copy location/time from the
+ * previous scene so environment tags still bind (screenplay default: stay
+ * at the last heading until a new one appears).
+ */
+export function inheritMissingLocation<T extends { metadata: SceneMetadata }>(
+  scene: T,
+  previous: T | undefined
+): T {
+  if (scene.metadata.location || !previous?.metadata.location) return scene;
+  return {
+    ...scene,
+    metadata: {
+      ...scene.metadata,
+      location: previous.metadata.location,
+      timeOfDay: scene.metadata.timeOfDay || previous.metadata.timeOfDay,
+    },
   };
 }
