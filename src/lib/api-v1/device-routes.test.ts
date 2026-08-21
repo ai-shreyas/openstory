@@ -20,8 +20,8 @@ vi.doMock('@/lib/db/scoped', () => ({
 const real = await import('@/lib/api-v1/device-auth');
 vi.doMock('@/lib/api-v1/device-auth', () => ({ ...real, exchangeDeviceCode }));
 
-const { Route: TokenRoute } = await import('../device.token');
-const { Route: CodeRoute } = await import('../device.code');
+const { Route: TokenRoute } = await import('@/routes/api/v1/device.token');
+const { Route: CodeRoute } = await import('@/routes/api/v1/device.code');
 
 type Handler = (ctx: { request: Request }) => Promise<Response>;
 const handlerSchema = z.custom<Handler>((v) => typeof v === 'function');

@@ -1,5 +1,6 @@
 // vite.config.ts
 import { copyFileSync, readFileSync } from 'node:fs';
+import { parse as parseJsonc } from 'jsonc-parser';
 import { resolve } from 'node:path';
 import { cloudflare } from '@cloudflare/vite-plugin';
 import contentCollections from '@content-collections/vite';
@@ -38,12 +39,9 @@ function wranglerBindingsBanner(): Plugin {
           resolve(import.meta.dirname, 'wrangler.jsonc'),
           'utf-8'
         );
-        // Strip line + block comments + trailing commas so JSON.parse accepts it.
-        const stripped = raw
-          .replace(/\/\*[\s\S]*?\*\//g, '')
-          .replace(/^\s*\/\/.*$/gm, '')
-          .replace(/,(\s*[}\]])/g, '$1');
-        const cfg: WranglerConfig = JSON.parse(stripped);
+        // Real JSONC parse: a regex stripper choked on `/*` inside a `//`
+        // comment (a glob like `/api/v1/device/*` swallowed the file).
+        const cfg: WranglerConfig = parseJsonc(raw);
 
         const rows: Array<[string, string, boolean]> = [];
         for (const b of cfg.d1_databases ?? [])

@@ -1345,6 +1345,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 scenes={scenes}
                 selectedSceneIds={selectedScenes.map((s) => s.id)}
                 onSelectScene={handleFocusScene}
+                splittingScript={isProcessing ? sequence.script : undefined}
               />
             ) : (
               <SceneCanvas
