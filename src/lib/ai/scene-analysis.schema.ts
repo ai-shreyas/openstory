@@ -223,7 +223,7 @@ const motionPromptParametersSchema = z.object({
     .meta({ description: 'Precise camera control parameters' }),
 });
 
-export const dialogueLineSchema = z.object({
+const dialogueLineSchema = z.object({
   character: z.string().meta({
     description: 'Character name speaking the line, or empty for narrator',
   }),
@@ -361,7 +361,7 @@ const audioDesignSchema = z.object({
 // Continuity Schema
 // ============================================================================
 
-export const continuitySchema = z.object({
+const continuitySchema = z.object({
   characterTags: z.array(z.string()).meta({
     description:
       "Snake_case slug of each character's name as written in the script (e.g., 'GIRL ONE' → 'girl_one'). Optional descriptive context may be appended after the name slug (e.g., 'girl_one_bathroom_morning'). One entry per character appearing in the scene.",

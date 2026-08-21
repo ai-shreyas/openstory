@@ -3,16 +3,17 @@ import type { SceneSplittingScene } from './streaming-scene-parser';
 import { reconcileSceneTags } from './tag-reconcile';
 
 function makeScene(
-  continuity: Partial<SceneSplittingScene['continuity']>
+  extract: string,
+  location = 'INT. OFFICE - DAY'
 ): SceneSplittingScene {
   return {
     sceneId: 'scene-1',
     sceneNumber: 1,
-    originalScript: { extract: 'JACK enters.', dialogue: [] },
+    originalScript: { extract, dialogue: [] },
     metadata: {
       title: 'Test',
       durationSeconds: 3,
-      location: 'INT. OFFICE - DAY',
+      location,
       timeOfDay: 'day',
       storyBeat: '',
     },
@@ -23,7 +24,6 @@ function makeScene(
       colorPalette: '',
       lightingSetup: '',
       styleTag: '',
-      ...continuity,
     },
   };
 }
@@ -51,8 +51,8 @@ const locationBible = [
     description: '',
     architecturalStyle: '',
     keyFeatures: '',
-    colorPalette: '',
-    lightingSetup: '',
+    colorPalette: 'cool steel',
+    lightingSetup: 'overhead fluorescents',
     ambiance: '',
     consistencyTag: 'office_modern_steel',
     firstMention: {
@@ -73,69 +73,59 @@ const elementBible = [
 ];
 
 describe('reconcileSceneTags', () => {
-  it('canonicalizes drifted character tags onto the bible consistencyTag', () => {
+  it('assigns a character tag when the bible name appears in the slice', () => {
     const { scenes, stats } = reconcileSceneTags(
-      [makeScene({ characterTags: ['jack_office_morning'] })],
+      [makeScene('JACK enters the office.')],
       { characterBible, locationBible: [], elementBible: [] }
     );
     expect(scenes[0]?.continuity.characterTags).toEqual([
       'jack_denim_weathered',
     ]);
-    expect(stats.rewrittenCharacterTags).toBe(1);
+    expect(stats.assignedCharacterTags).toBe(1);
   });
 
-  it('keeps unmatched character tags rather than dropping or inventing', () => {
+  it('does not invent tags for characters who are not in the slice', () => {
     const { scenes, stats } = reconcileSceneTags(
-      [makeScene({ characterTags: ['mystery_stranger'] })],
+      [makeScene('An empty corridor. No one here.')],
       { characterBible, locationBible: [], elementBible: [] }
     );
-    expect(scenes[0]?.continuity.characterTags).toEqual(['mystery_stranger']);
-    expect(stats.unmatchedCharacterTags).toBe(1);
+    expect(scenes[0]?.continuity.characterTags).toEqual([]);
+    expect(stats.assignedCharacterTags).toBe(0);
   });
 
-  it('dedupes two scene tags that resolve to the same bible character', () => {
-    const { scenes } = reconcileSceneTags(
-      [makeScene({ characterTags: ['jack', 'jack_denim'] })],
-      { characterBible, locationBible: [], elementBible: [] }
-    );
-    expect(scenes[0]?.continuity.characterTags).toEqual([
-      'jack_denim_weathered',
-    ]);
-  });
-
-  it('canonicalizes the environment tag onto the location bible', () => {
+  it('assigns the location tag from the scene heading', () => {
     const { scenes, stats } = reconcileSceneTags(
-      [makeScene({ environmentTag: 'office_interior' })],
+      [makeScene('INT. OFFICE - DAY\n\nJACK types.', 'INT. OFFICE - DAY')],
       { characterBible: [], locationBible, elementBible: [] }
     );
     expect(scenes[0]?.continuity.environmentTag).toBe('office_modern_steel');
-    expect(stats.rewrittenEnvironmentTags).toBe(1);
+    expect(scenes[0]?.continuity.colorPalette).toBe('cool steel');
+    expect(scenes[0]?.continuity.lightingSetup).toBe('overhead fluorescents');
+    expect(stats.assignedEnvironmentTags).toBe(1);
   });
 
-  it('leaves an empty environment tag alone', () => {
-    const { scenes, stats } = reconcileSceneTags(
-      [makeScene({ environmentTag: '' })],
+  it('leaves environment empty when the heading matches no bible location', () => {
+    const { scenes } = reconcileSceneTags(
+      [makeScene('EXT. ALLEY - NIGHT\n\nRain.', 'EXT. ALLEY - NIGHT')],
       { characterBible: [], locationBible, elementBible: [] }
     );
     expect(scenes[0]?.continuity.environmentTag).toBe('');
-    expect(stats.unmatchedEnvironmentTags).toBe(0);
   });
 
-  it('canonicalizes element tags onto bible tokens (substring drift)', () => {
+  it('assigns element tokens found in the slice', () => {
     const { scenes, stats } = reconcileSceneTags(
-      [makeScene({ elementTags: ['LIPSTICK'] })],
+      [makeScene('She pockets the CORAL_LIPSTICK and walks on.')],
       { characterBible: [], locationBible: [], elementBible }
     );
     expect(scenes[0]?.continuity.elementTags).toEqual(['CORAL_LIPSTICK']);
-    expect(stats.rewrittenElementTags).toBe(1);
+    expect(stats.assignedElementTags).toBe(1);
   });
 
-  it('keeps null elementTags as null', () => {
-    const { scenes } = reconcileSceneTags([makeScene({ elementTags: null })], {
-      characterBible: [],
-      locationBible: [],
-      elementBible,
-    });
+  it('keeps elementTags null when no token appears', () => {
+    const { scenes } = reconcileSceneTags(
+      [makeScene('She walks on. Nothing in her hands.')],
+      { characterBible: [], locationBible: [], elementBible }
+    );
     expect(scenes[0]?.continuity.elementTags).toBeNull();
   });
 });

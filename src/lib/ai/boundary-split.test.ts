@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   addLineGutter,
   isExcessivelyRepaired,
-  repairDialogueLines,
   resolveBoundaries,
   sceneIndexForLine,
   sliceScenes,
@@ -203,32 +202,5 @@ describe('isExcessivelyRepaired', () => {
         10
       )
     ).toBe(true);
-  });
-});
-
-describe('repairDialogueLines', () => {
-  const slice = 'Sarah types. “We ship tonight,” she mutters.';
-
-  it('keeps exact-match lines untouched', () => {
-    const lines = [
-      { character: 'SARAH', line: '“We ship tonight,”', tone: 'tense' },
-    ];
-    expect(repairDialogueLines(slice, lines)).toEqual(lines);
-  });
-
-  it('repairs normalization drift from the source slice', () => {
-    const repaired = repairDialogueLines(slice, [
-      { character: 'SARAH', line: '"We ship tonight,"', tone: 'tense' },
-    ]);
-    expect(repaired[0]?.line).toBe('“We ship tonight,”');
-    expect(repaired[0]?.character).toBe('SARAH');
-    expect(repaired[0]?.tone).toBe('tense');
-  });
-
-  it('keeps unmatched lines as-is', () => {
-    const lines = [
-      { character: 'SARAH', line: 'Words that never appear', tone: 'calm' },
-    ];
-    expect(repairDialogueLines(slice, lines)).toEqual(lines);
   });
 });

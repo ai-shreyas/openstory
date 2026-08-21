@@ -9,13 +9,10 @@ import { z } from 'zod';
 
 import {
   characterBibleEntrySchema,
-  continuitySchema,
-  dialogueLineSchema,
   elementBibleEntrySchema,
   locationBibleEntrySchema,
   musicDesignSchema,
   projectMetadataSchema,
-  sceneMetadataSchema,
 } from './scene-analysis.schema';
 
 /**
@@ -83,16 +80,15 @@ export const locationMatchResponseSchema = z.object({
  * It is replaced by two independent calls over the same script, run
  * concurrently:
  *
- *   1. Scenes call — a BOUNDARY-ANNOTATION contract. The LLM never re-emits
- *      script text: it returns `{ hintLine, quote }` anchors against a
- *      line-gutter copy of the script plus index-aligned scene metadata, and
- *      `boundary-split.ts` slices the ORIGINAL script into byte-verbatim
- *      adjacent extracts. Scene ids / numbers are minted server-side.
+ *   1. Scenes call — BOUNDARY ANNOTATION ONLY (#1218). The LLM never
+ *      re-emits script text or per-scene metadata: it returns
+ *      `{ hintLine, quote }` anchors against a line-gutter copy of the
+ *      script. `boundary-split.ts` slices the ORIGINAL script into
+ *      byte-verbatim adjacent extracts; title/location/dialogue/duration
+ *      are derived locally from each slice; continuity tags are assigned
+ *      from bibles ∩ slice after the join. Scene ids / numbers are minted
+ *      server-side.
  *   2. Bibles call — character/location/element bibles only.
- *
- * `continuity` (scene call) and bible `consistencyTag`s can disagree across
- * two independent calls; the workflow reconciles tags after the join
- * (`tag-reconcile.ts`) instead of trusting agreement.
  */
 export const sceneBoundarySchema = z.object({
   hintLine: z.number().meta({
@@ -105,31 +101,13 @@ export const sceneBoundarySchema = z.object({
   }),
 });
 
-export const sceneMetaEntrySchema = sceneMetadataSchema.extend({
-  // Scene membership lives here (not in the visual-prompt call) so downstream
-  // prompt workflows can narrow their bible inputs. See #867.
-  continuity: continuitySchema,
-  dialogue: z.array(dialogueLineSchema).meta({
+export const sceneSplitScenesResultSchema = z.object({
+  projectMetadata: projectMetadataSchema,
+  boundaries: z.array(sceneBoundarySchema).meta({
     description:
-      'Dialogue lines spoken in this scene, verbatim from the script',
+      'One entry per scene in script order; scene 1 starts at the top of the script and every scene runs until the next boundary',
   }),
 });
-
-export const sceneSplitScenesResultSchema = z
-  .object({
-    projectMetadata: projectMetadataSchema,
-    boundaries: z.array(sceneBoundarySchema).meta({
-      description:
-        'One entry per scene in script order; scene 1 starts at the top of the script and every scene runs until the next boundary',
-    }),
-    sceneMeta: z.array(sceneMetaEntrySchema).meta({
-      description:
-        'Index-aligned with boundaries: sceneMeta[i] describes the scene starting at boundaries[i]',
-    }),
-  })
-  .refine((r) => r.boundaries.length === r.sceneMeta.length, {
-    message: 'sceneMeta must be index-aligned with boundaries (same length)',
-  });
 
 export type SceneSplitScenesResult = z.infer<
   typeof sceneSplitScenesResultSchema

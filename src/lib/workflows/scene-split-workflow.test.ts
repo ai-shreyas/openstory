@@ -121,6 +121,15 @@ vi.doMock('@/lib/ai/streaming-scene-parser', async () => {
 
 // Dynamic import so the mocks above apply (vi.doMock is not hoisted).
 const { SceneSplitWorkflow } = await import('./scene-split-workflow');
+const { callLLMStream } = await import('@/lib/ai/llm-client');
+
+function sceneSplittingLlmCalls() {
+  return vi
+    .mocked(callLLMStream)
+    .mock.calls.filter(
+      ([params]) => params.observationName === 'phase-1-scene-splitting'
+    );
+}
 
 function makeScene(n: number): SceneSplittingScene {
   return {
@@ -156,11 +165,6 @@ const SCENES_RESULT = {
     { hintLine: 2, quote: 'Scene 2 action' },
     { hintLine: 3, quote: 'Scene 3 action' },
   ],
-  sceneMeta: SCENES.map((scene) => ({
-    ...scene.metadata,
-    continuity: scene.continuity,
-    dialogue: [],
-  })),
 };
 
 const BIBLES_RESULT = {
@@ -253,19 +257,18 @@ function makeEvent(): Readonly<WorkflowEvent<SceneSplitWorkflowInput>> {
   };
 }
 
+let lastDoMock: ReturnType<typeof vi.fn>;
+
 function makeStep(): WorkflowStep {
+  lastDoMock = vi.fn(
+    (
+      _name: string,
+      configOrFn: WorkflowStepConfig | (() => Promise<unknown>),
+      maybeFn?: () => Promise<unknown>
+    ) => (typeof configOrFn === 'function' ? configOrFn() : maybeFn?.())
+  );
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowStep stub: runImpl only uses `do`
-  return {
-    // Both `do` overloads: steps that pass a retry config (the streaming step
-    // caps its budget — see STREAM_STEP_RETRIES) hand the callback third.
-    do: vi.fn(
-      (
-        _name: string,
-        configOrFn: WorkflowStepConfig | (() => Promise<unknown>),
-        maybeFn?: () => Promise<unknown>
-      ) => (typeof configOrFn === 'function' ? configOrFn() : maybeFn?.())
-    ),
-  } as unknown as WorkflowStep;
+  return { do: lastDoMock } as unknown as WorkflowStep;
 }
 
 /**
@@ -429,11 +432,43 @@ const DEGRADED_RESULT = {
   ],
 };
 
+/** Quotes that resolve via the normalized rung (extra spaces), never drop. */
+const FUZZY_ONLY_RESULT = {
+  ...SCENES_RESULT,
+  boundaries: [
+    { hintLine: 1, quote: 'Scene  1 action' },
+    { hintLine: 2, quote: 'Scene  2 action' },
+    { hintLine: 3, quote: 'Scene  3 action' },
+  ],
+};
+
+describe('SceneSplitWorkflow stream step config', () => {
+  beforeEach(() => {
+    triggerWorkflow.mockReset();
+    triggerWorkflow.mockResolvedValue('run_1');
+    streamChunks = singleDoneChunk();
+    feed.mockReset();
+  });
+
+  test('times the stream step for a first pass plus one repair retry (#1218)', async () => {
+    await makeWorkflow().split(makeEvent(), makeStep(), makeScopedDb());
+
+    const streamDo = lastDoMock.mock.calls.find(
+      (call) => call[0] === 'scene-splitting-stream'
+    );
+    expect(streamDo?.[1]).toMatchObject({
+      retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' },
+      timeout: '20 minutes',
+    });
+  });
+});
+
 describe('SceneSplitWorkflow degraded boundary retry', () => {
   beforeEach(() => {
     triggerWorkflow.mockReset();
     triggerWorkflow.mockResolvedValue('run_1');
     emit.mockReset();
+    vi.mocked(callLLMStream).mockClear();
     streamChunks = [
       {
         done: true,
@@ -445,21 +480,41 @@ describe('SceneSplitWorkflow degraded boundary retry', () => {
     feed.mockReset();
   });
 
-  test('keeps first-pass LLM scenes when retry is still degraded (no heuristic split)', async () => {
+  test('does not start a second LLM call when every quote repaired locally (#1218)', async () => {
+    streamChunks = [
+      {
+        done: true,
+        accumulated: '{}',
+        parsed: FUZZY_ONLY_RESULT,
+        usage: undefined,
+      },
+    ];
+
     const result = await makeWorkflow().split(
       makeEvent(),
       makeStep(),
       makeScopedDb()
     );
 
-    // Two unresolvable quotes merge into scene 1; the LLM title/meta stay.
-    // fastSceneSplit would title from the first line ("Scene 1 action").
+    expect(sceneSplittingLlmCalls()).toHaveLength(1);
+    expect(result.scenes).toHaveLength(SCENES.length);
+    expect(result.title).toBe('Test Film');
+  });
+
+  test('retries when quotes are dropped, then keeps first-pass LLM scenes if still degraded', async () => {
+    const result = await makeWorkflow().split(
+      makeEvent(),
+      makeStep(),
+      makeScopedDb()
+    );
+
+    expect(sceneSplittingLlmCalls()).toHaveLength(2);
+    // Two unresolvable quotes merge into scene 1; the LLM title stays.
     expect(result.scenes).toHaveLength(1);
     expect(result.title).toBe('Test Film');
     const scene = result.scenes[0];
-    // LLM sceneMeta (location 'A room'), not fastSceneSplit / placeholder.
-    expect(scene?.metadata?.location).toBe('A room');
     expect(scene?.originalScript.extract).toBe(SCRIPT);
+    expect(scene?.metadata?.title).toBe('Scene 1 action');
     expect(emit).toHaveBeenCalledWith(
       'generation.error',
       expect.objectContaining({

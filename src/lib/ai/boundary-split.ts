@@ -17,8 +17,6 @@
  * predecessor.
  */
 
-import type { DialogueLine } from './scene-analysis.schema';
-
 export type BoundaryAnnotation = {
   /** 1-based line number from the gutter the model saw. Windows the fuzzy scan only. */
   hintLine: number;
@@ -33,8 +31,8 @@ export type ResolvedBoundaries = {
    */
   offsets: number[];
   /**
-   * For each kept scene, the index of the boundary (and its index-aligned
-   * `sceneMeta` entry) it came from. `kept[0] === 0`.
+   * For each kept scene, the index of the boundary it came from.
+   * `kept[0] === 0`.
    */
   kept: number[];
   /** Input boundary indices that were dropped (merged into their predecessor). */
@@ -301,30 +299,4 @@ export function isExcessivelyRepaired(
     resolution.dropped.length > Math.max(1, Math.floor(boundaryCount * 0.25)) ||
     resolution.repairs > boundaryCount / 2
   );
-}
-
-/**
- * Verify dialogue lines against the scene's verbatim slice and repair drifted
- * text from the source. The LLM's `character`/`tone` attributions are kept —
- * those are genuinely generative — but when the spoken text matches the slice
- * only after normalization, the raw slice substring replaces it so downstream
- * audio gets the user's exact words. Lines with no match are kept as-is.
- */
-export function repairDialogueLines(
-  slice: string,
-  lines: DialogueLine[]
-): DialogueLine[] {
-  const norm = normalizeWithMap(slice);
-  const lower = norm.text.toLowerCase();
-  return lines.map((line) => {
-    if (slice.includes(line.line)) return line;
-    const normLine = normalizeWithMap(line.line).text;
-    if (normLine.length === 0) return line;
-    const hit = lower.indexOf(normLine.toLowerCase());
-    if (hit === -1) return line;
-    const rawStart = norm.map[hit];
-    const lastRaw = norm.map[hit + normLine.length - 1];
-    if (rawStart === undefined || lastRaw === undefined) return line;
-    return { ...line, line: slice.slice(rawStart, lastRaw + 1) };
-  });
 }
