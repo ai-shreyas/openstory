@@ -17,6 +17,7 @@
  */
 
 import { migrateStyleConfigV1ToV2 } from '@/lib/style/style-config';
+import { SCENE_SPLIT_MODEL } from '@/lib/ai/models.config';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type {
   WorkflowEvent,
@@ -460,6 +461,19 @@ describe('SceneSplitWorkflow stream step config', () => {
       retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' },
       timeout: '20 minutes',
     });
+  });
+
+  test('runs the scenes call on SCENE_SPLIT_MODEL, bibles on the analysis model', async () => {
+    await makeWorkflow().split(makeEvent(), makeStep(), makeScopedDb());
+
+    const sceneCall = sceneSplittingLlmCalls()[0]?.[0];
+    expect(sceneCall?.model).toBe(SCENE_SPLIT_MODEL);
+    const bibleCall = vi
+      .mocked(callLLMStream)
+      .mock.calls.find(
+        ([params]) => params.observationName === 'phase-1-scene-bibles'
+      )?.[0];
+    expect(bibleCall?.model).toBe(INPUT.modelId);
   });
 });
 

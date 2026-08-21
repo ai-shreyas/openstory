@@ -41,7 +41,7 @@ import {
   PROMPT_REASONING,
 } from '@/lib/ai/llm-client';
 import { PREVIEW_IMAGE_MODEL } from '@/lib/ai/models';
-import { getContextWindow } from '@/lib/ai/models.config';
+import { getContextWindow, SCENE_SPLIT_MODEL } from '@/lib/ai/models.config';
 import {
   type SceneSplitBiblesResult,
   type SceneSplitScenesResult,
@@ -325,7 +325,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     // Both calls see the same numbered-gutter copy of the script: the scenes
     // call reports hintLine against it, the bibles call firstMention lines.
     const gutteredScript = addLineGutter(script);
-    const maxTokens = Math.floor(getContextWindow(modelId) * 0.65);
+    const splitMaxTokens = Math.floor(
+      getContextWindow(SCENE_SPLIT_MODEL) * 0.65
+    );
+    const biblesMaxTokens = Math.floor(getContextWindow(modelId) * 0.65);
 
     // The two LLM calls are independent given the script, so their steps run
     // concurrently — output length drives latency and the scenes stream is
@@ -344,7 +347,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         logger.info(
           `[SceneSplitWorkflow:cf] [LLM:${LOG_NAME}] Starting streaming call`,
           {
-            model: modelId,
+            model: SCENE_SPLIT_MODEL,
             keySource: llmKeyInfo.source,
             keyVia: llmKeyInfo.via,
             messageCount: messages.length,
@@ -375,9 +378,9 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           let parsed: SceneSplitScenesResult | undefined;
           let usage: TokenUsage | undefined;
           for await (const chunk of callLLMStream<SceneSplitScenesResult>({
-            model: modelId,
+            model: SCENE_SPLIT_MODEL,
             messages: passMessages,
-            max_tokens: maxTokens,
+            max_tokens: splitMaxTokens,
             responseSchema: sceneSplitScenesResultSchema,
             apiKey: llmKeyInfo,
             reasoning: PROMPT_REASONING,
@@ -498,7 +501,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           throw new NonRetryableError(
             `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Stream ended without a validated structured-output payload. ` +
               `chunks=${chunkCount} chars=${finalText.length} ` +
-              `streamedScenes=${shotMapping.length} model=${modelId}. ` +
+              `streamedScenes=${shotMapping.length} model=${SCENE_SPLIT_MODEL}. ` +
               `Likely cause: provider did not honor responseFormat:json_schema.`
           );
         }
@@ -511,7 +514,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         let assembled = assembleScenes(script, parsedResult, sceneIdFor);
         let resolvedTitle = parsedResult.projectMetadata.title;
         let finalBoundaries = parsedResult.boundaries;
-        let llmCostMicros = llmCostFromUsage(firstPass.usage, modelId);
+        let llmCostMicros = llmCostFromUsage(
+          firstPass.usage,
+          SCENE_SPLIT_MODEL
+        );
 
         const degraded = isExcessivelyRepaired(
           assembled.resolution,
@@ -548,7 +554,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           if (retryPass.parsed) {
             llmCostMicros = addMicros(
               llmCostMicros,
-              llmCostFromUsage(retryPass.usage, modelId)
+              llmCostFromUsage(retryPass.usage, SCENE_SPLIT_MODEL)
             );
             const retryAssembled = assembleScenes(
               script,
@@ -664,7 +670,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
       for await (const chunk of callLLMStream<SceneSplitBiblesResult>({
         model: modelId,
         messages,
-        max_tokens: maxTokens,
+        max_tokens: biblesMaxTokens,
         responseSchema: sceneSplitBiblesResultSchema,
         apiKey: llmKeyInfo,
         reasoning: PROMPT_REASONING,
@@ -1005,10 +1011,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         scopedDb,
         costMicros: streamResult.llmCostMicros,
         usedOwnKey: streamResult.llmKeySource === 'team',
-        description: `LLM analysis (${modelId})`,
+        description: `LLM analysis (${SCENE_SPLIT_MODEL})`,
         idempotencyKey: `${event.instanceId}:llm-${STEP_NAME}`,
         metadata: {
-          model: modelId,
+          model: SCENE_SPLIT_MODEL,
           phase: PHASE.number,
           phaseName: PHASE.name,
           stepName: STEP_NAME,

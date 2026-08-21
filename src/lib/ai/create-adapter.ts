@@ -74,8 +74,9 @@ let loggedRetryMode = false;
  * entries with `createModel` from '@tanstack/ai':
  * `createModel('vendor/model-id', { input: [...], features: [...] })`.
  *
- * Empty after @tanstack/ai-openrouter@0.18.1 shipped `x-ai/grok-4.6`.
- * Restore `extendAdapter` around the factories when the next lag id lands.
+ * Empty after @tanstack/ai-openrouter@0.18.1 shipped `x-ai/grok-4.6`
+ * and `anthropic/claude-opus-5-fast`. Restore `extendAdapter` around the
+ * factories when the next lag id lands.
  */
 export const CATALOG_LAG_MODELS = [] as const;
 
