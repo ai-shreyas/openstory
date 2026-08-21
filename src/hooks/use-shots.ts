@@ -335,18 +335,16 @@ export function useSelectVariant() {
         variantIndex: result.variantIndex,
       };
     },
-    onSuccess: async (data, { sequenceId, shotId }) => {
-      // Update shot queries with the new still. The url patch only applies when
-      // a selected variant row already exists — the refetch below fills in the
-      // row itself; the frame's status is what drives the visible transition.
+    onSuccess: async (_data, { sequenceId, shotId }) => {
+      // Flip the frame to generating and keep the current still on screen. The
+      // returned thumbnailUrl is a `/cdn-cgi/image/trim=` crop that only
+      // resolves through the Cloudflare edge — patching it into `image.url`
+      // rendered a broken image until the upscale landed (#1193). The refetch
+      // below picks up the real still once the workflow writes it.
       queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (oldShot) => {
         if (!oldShot) return oldShot;
         return {
           ...oldShot,
-          image: oldShot.image
-            ? { ...oldShot.image, url: data.thumbnailUrl }
-            : null,
-          // Upscale is running
           frame: { ...oldShot.frame, imageStatus: 'generating' as const },
         };
       });
@@ -359,9 +357,6 @@ export function useSelectVariant() {
             f.id === shotId
               ? {
                   ...f,
-                  image: f.image
-                    ? { ...f.image, url: data.thumbnailUrl }
-                    : null,
                   frame: { ...f.frame, imageStatus: 'generating' as const },
                 }
               : f

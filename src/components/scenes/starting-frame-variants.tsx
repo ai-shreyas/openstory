@@ -70,13 +70,16 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
 
   const handleSelect = useCallback(
     async (index: number) => {
+      // Close immediately (#1193): the select fn reads the sheet header, prices
+      // and triggers the upscale, which is seconds the picker shouldn't hang
+      // open for. Failure surfaces as a toast.
+      setOpen(false);
       try {
         await selectVariant.mutateAsync({
           sequenceId,
           shotId: shot.id,
           variantIndex: index,
         });
-        setOpen(false);
       } catch (error) {
         toast.error('Failed to select variant', {
           description: error instanceof Error ? error.message : 'Unknown error',
