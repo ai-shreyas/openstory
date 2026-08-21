@@ -37,11 +37,9 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
 }) => {
   const handleChange = useCallback(
     (markdown: string) => {
-      if (!maxLength || markdown.length <= maxLength) {
-        onValueChange(markdown);
-      }
+      onValueChange(markdown);
     },
-    [onValueChange, maxLength]
+    [onValueChange]
   );
 
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
@@ -78,7 +76,7 @@ export const ScriptEditor: React.FC<ScriptEditorProps> = ({
           disabled={disabled}
           aria-invalid={hasError}
           className={cn(
-            'min-h-[2lh] md:min-h-[4lh] flex-1 bg-transparent dark:bg-transparent border-none shadow-none focus-within:ring-0 focus-within:border-input overscroll-contain pb-10',
+            'min-h-[2lh] md:min-h-[4lh] flex-1 bg-transparent dark:bg-transparent border-none shadow-none focus-within:ring-0 focus-within:border-input pb-10',
             hasError && 'border-destructive focus-within:ring-destructive/20'
           )}
           data-testid="script-editor-textarea"

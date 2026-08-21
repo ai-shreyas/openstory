@@ -7,6 +7,7 @@
  */
 
 import { test, expect } from 'playwright/test';
+import { waitForScriptEditor } from '../fixtures/test-utils';
 
 test.describe('Sequences', () => {
   test('can access sequences list page', async ({ page }) => {
@@ -24,6 +25,43 @@ test.describe('Sequences', () => {
     // resilient to internal ProseMirror DOM shape.
     const editor = page.locator('[data-slot="markdown-editor"]');
     await expect(editor).toBeVisible();
+  });
+
+  test('long multi-scene script scrolls inside the editor', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    const prose = await waitForScriptEditor(page);
+    const script = Array.from(
+      { length: 30 },
+      (_, i) => `INT. SCENE ${i + 1} - NIGHT\n\nAction line ${i + 1}.`
+    ).join('\n\n');
+
+    await prose.click();
+    await page.keyboard.press('ControlOrMeta+A');
+    await prose.evaluate((el, text) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      const ev = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'clipboardData', { value: dt });
+      el.dispatchEvent(ev);
+    }, script);
+
+    const paragraphs = page.locator(
+      '[data-slot="markdown-editor"] .ProseMirror p'
+    );
+    await expect(paragraphs).toHaveCount(60);
+
+    const editor = page.locator('[data-slot="markdown-editor"]');
+    const metrics = await editor.evaluate((el) => {
+      el.scrollTop = 400;
+      return {
+        canScroll: el.scrollHeight > el.clientHeight + 1,
+        scrollTopAfter: el.scrollTop,
+      };
+    });
+    expect(metrics.canScroll).toBe(true);
+    expect(metrics.scrollTopAfter).toBeGreaterThan(100);
   });
 
   test('composer style row defaults to cinematic and can switch family', async ({
