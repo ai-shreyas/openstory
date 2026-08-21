@@ -5,7 +5,7 @@
 
 import { test as baseTest } from 'playwright/test';
 import { expect, test } from '../fixtures/auth.fixture';
-import { waitForScriptEditor } from '../fixtures/test-utils';
+import { fillScriptEditor } from '../fixtures/test-utils';
 
 // Route Protection Tests (no auth fixture needed)
 baseTest.describe('Route Protection', () => {
@@ -43,8 +43,8 @@ baseTest.describe('Route Protection', () => {
 
       // Composing a draft is allowed while logged out… (the script input is a
       // TipTap contenteditable, not a <textarea>)
-      const scriptEditor = await waitForScriptEditor(page);
-      await scriptEditor.fill(
+      await fillScriptEditor(
+        page,
         'INT. KITCHEN - DAY\n\nA cat knocks a glass off the counter.'
       );
 

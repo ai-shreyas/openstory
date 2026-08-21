@@ -34,10 +34,7 @@ import {
   getSystemTalentByName,
   type TestTalent,
 } from '../fixtures/talent.fixture';
-import {
-  selectComposerStyle,
-  waitForScriptEditor,
-} from '../fixtures/test-utils';
+import { fillScriptEditor, selectComposerStyle } from '../fixtures/test-utils';
 import { t } from '../recording-mode';
 
 const fullPipeline = process.env.PLAYWRIGHT_FULL_PIPELINE === 'true';
@@ -234,17 +231,7 @@ beside the brand mark in the sand.
 
 SUPER:  CORAL.  OUT NOW.
       `.trim();
-      // Script input is now a TipTap-backed contenteditable, not a <textarea>.
-      // Playwright's .fill() works on contenteditable elements.
-      const scriptTextarea = await waitForScriptEditor(page);
-      await scriptTextarea.click();
-      await scriptTextarea.fill(script);
-      // Playwright fill uses insertText; if newlines didn't land as hard
-      // breaks the enhance body misses the recorded fixture and Stop hangs.
-      await expect(scriptTextarea).toContainText(
-        'EXT. BONDI BEACH - SHORELINE',
-        { timeout: 5_000 }
-      );
+      await fillScriptEditor(page, script);
 
       // 4. Enhance script (LLM streaming via aimock OpenRouter passthrough).
       await expect(

@@ -1,6 +1,7 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
 import { EditorContent, useEditor } from '@tiptap/react';
+import { AllSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
@@ -31,6 +32,32 @@ export const normalizeScreenplayNewlines = (text: string): string =>
     .replace(/[\u2028\u2029\u0085]/g, '\n');
 
 /**
+ * Playwright `.fill()` selects via `Range.selectNodeContents` on the
+ * contenteditable, then CDP `Input.insertText`. ProseMirror keeps its own
+ * selection and will still have a caret, so a naive insert appends onto the
+ * style sample instead of replacing it. True when the DOM range already
+ * covers the whole editor.
+ */
+const domSelectionCoversEditor = (view: EditorView): boolean => {
+  const { dom } = view;
+  const sel = dom.ownerDocument.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  const ancestor = range.commonAncestorContainer;
+  if (ancestor !== dom && !dom.contains(ancestor)) return false;
+  const whole = dom.ownerDocument.createRange();
+  whole.selectNodeContents(dom);
+  try {
+    return (
+      range.compareBoundaryPoints(Range.START_TO_START, whole) <= 0 &&
+      range.compareBoundaryPoints(Range.END_TO_END, whole) >= 0
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Playwright `.fill()` (and other `insertText` with embedded newlines) cannot
  * put `\n` in a ProseMirror text node. Map each newline to a hard break so
  * `getMarkdown()` round-trips the source script — including the recorded
@@ -38,7 +65,7 @@ export const normalizeScreenplayNewlines = (text: string): string =>
  */
 const insertTextWithNewlines = (view: EditorView, text: string): boolean => {
   const normalized = normalizeScreenplayNewlines(text);
-  const { schema, tr, selection } = view.state;
+  const { schema } = view.state;
   const hardBreak = schema.nodes.hardBreak;
   if (!hardBreak) return false;
   const nodes = normalized.split('\n').flatMap((line, i, lines) => {
@@ -48,7 +75,11 @@ const insertTextWithNewlines = (view: EditorView, text: string): boolean => {
     return out;
   });
   if (nodes.length === 0) return true;
-  if (!selection.empty) tr.deleteSelection();
+  const { tr } = view.state;
+  if (view.state.selection.empty && domSelectionCoversEditor(view)) {
+    tr.setSelection(new AllSelection(tr.doc));
+  }
+  if (!tr.selection.empty) tr.deleteSelection();
   view.dispatch(tr.insert(tr.selection.from, nodes).scrollIntoView());
   return true;
 };
@@ -308,6 +339,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       aria-invalid={ariaInvalid}
       data-testid={dataTestId}
       data-slot="markdown-editor"
+      data-markdown={value}
       // The ProseMirror node only spans its text, so the empty area below the
       // last line (the box's min-height) is otherwise a dead zone — clicking
       // it should place the caret at the end, like a textarea. Scrollbar
