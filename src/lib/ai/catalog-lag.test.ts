@@ -2,11 +2,11 @@
  * Guards for CATALOG_LAG_MODELS (create-adapter.ts) — the registry model ids
  * that @tanstack/ai-openrouter's generated catalog doesn't know yet.
  *
- * The prune check is compile-time: when a package bump ships a lag id in the
- * upstream catalog, `bun typecheck` fails here naming the id — delete its
- * entry from CATALOG_LAG_MODELS in the same PR. The model-freshness routine
- * (#792) runs these gates on every @tanstack/ai* bump, so the cleanup lands
- * in the bump PR automatically.
+ * The prune check is compile-time: when an @tanstack/ai-openrouter bump ships a
+ * lag id in the upstream catalog, `bun typecheck` fails here naming the id —
+ * delete its entry from CATALOG_LAG_MODELS in the same PR. That dependency bump
+ * is Dependabot's (the model-freshness routine, #792, no longer touches npm
+ * deps), so the prune lands alongside the version bump that made it stale.
  */
 import type { OpenRouterModelOptionsByName } from '@tanstack/ai-openrouter';
 import { describe, expectTypeOf, it } from 'vitest';
