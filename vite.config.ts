@@ -199,6 +199,8 @@ export default defineConfig({
       srcDirectory: 'src',
       router: {
         routesDirectory: 'routes',
+        // `__tests__/` sits alongside routes (CLAUDE.md); don't treat tests as routes.
+        routeFileIgnorePattern: '\\.test\\.tsx?$',
       },
     }),
     viteReact(),
