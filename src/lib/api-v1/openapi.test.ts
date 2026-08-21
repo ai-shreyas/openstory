@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { apiEnhanceScriptSchema } from './enhance-input-schema';
 import { apiCreateSequenceSchema } from './input-schema';
+import { apiCreateStyleSchema } from './style-input-schema';
 import { buildOpenApiDocument } from './openapi';
 
 /** Collect every `$ref` string anywhere in the document. */
@@ -34,6 +35,19 @@ describe('buildOpenApiDocument', () => {
     expect(doc.paths['/api/v1/scripts/enhance'].post).toBeDefined();
     expect(doc.paths['/api/v1/device/code'].post).toBeDefined();
     expect(doc.paths['/api/v1/device/token'].get).toBeDefined();
+    expect(doc.paths['/api/v1/styles'].get).toBeDefined();
+    expect(doc.paths['/api/v1/styles'].post).toBeDefined();
+    expect(doc.paths['/api/v1/styles/{id}'].get).toBeDefined();
+  });
+
+  it('documents the create-style endpoint with a valid example and a 409', () => {
+    const op = doc.paths['/api/v1/styles'].post;
+    expect(op.responses['201']).toBeDefined();
+    expect(op.responses['409']).toBeDefined();
+    expect(doc.components.schemas).toHaveProperty('CreateStyleRequest');
+    expect(doc.components.schemas).toHaveProperty('StyleDocument');
+    const example = op.requestBody.content['application/json'].example;
+    expect(() => apiCreateStyleSchema.parse(example)).not.toThrow();
   });
 
   it('documents the list endpoint with limit/cursor params and a result schema', () => {

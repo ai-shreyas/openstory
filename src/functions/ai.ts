@@ -90,8 +90,8 @@ function enforceRateLimit(limiter: RateLimiter, key: string): void {
  * either their OpenRouter key or their fal key routed through fal's
  * OpenRouter endpoint (issue #895).
  */
-async function prepareBilling(
-  scopedDb: ScopedDb,
+export async function prepareBilling(
+  scopedDb: Pick<ScopedDb, 'apiKeys' | 'billing'>,
   description: string,
   metadata?: Record<string, unknown>
 ): Promise<{

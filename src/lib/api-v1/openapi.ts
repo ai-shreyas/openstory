@@ -16,6 +16,7 @@ import { SHOT_GENERATION_STATUSES } from '@/lib/db/schema/shots';
 import { apiEnhanceScriptSchema } from './enhance-input-schema';
 import { API_V1_BASE } from './hal';
 import { apiCreateSequenceSchema } from './input-schema';
+import { apiCreateStyleSchema } from './style-input-schema';
 import { z, type ZodType } from 'zod';
 
 type JsonValue =
@@ -98,6 +99,13 @@ const EXAMPLE_ENHANCE_BODY: JsonObject = {
   targetSeconds: 30,
 };
 
+/** A representative create-style body (brief form), embedded as the request example. */
+const EXAMPLE_CREATE_STYLE_BODY: JsonObject = {
+  name: 'Rain-slick Neon Noir',
+  brief:
+    'Wet asphalt, cyan-magenta practicals, handheld coverage, measured pace.',
+};
+
 const statusEnum = (values: JsonValue[]): JsonObject => ({
   type: 'string',
   enum: values,
@@ -163,6 +171,8 @@ export function buildOpenApiDocument(): JsonObject {
   const { root: enhanceRequest, defs: enhanceDefs } = requestSchemas(
     apiEnhanceScriptSchema
   );
+  const { root: createStyleRequest, defs: styleDefs } =
+    requestSchemas(apiCreateStyleSchema);
 
   const waitParam: JsonObject = {
     name: 'wait',
@@ -194,6 +204,7 @@ export function buildOpenApiDocument(): JsonObject {
       { name: 'auth', description: 'Obtain an API key via device-code login.' },
       { name: 'sequences', description: 'Create and watch video sequences.' },
       { name: 'scripts', description: 'Enhance scripts without generating.' },
+      { name: 'styles', description: 'Create and browse team styles.' },
     ],
     paths: {
       [API_V1_BASE]: {
@@ -445,6 +456,96 @@ export function buildOpenApiDocument(): JsonObject {
           },
         },
       },
+      [`${API_V1_BASE}/styles`]: {
+        get: {
+          tags: ['styles'],
+          summary: 'List styles',
+          description:
+            "Your team's library styles plus the public templates, as compact cards. Sequence-bound automatic styles are excluded.",
+          responses: {
+            '200': {
+              description: 'The style cards.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StyleListResult' },
+                },
+              },
+            },
+            '401': errorResponse('Missing or invalid API key.'),
+            '403': errorResponse('No team associated with the key.'),
+            '429': errorResponse('Per-key rate limit exceeded (10 req/s).'),
+          },
+        },
+        post: {
+          tags: ['styles'],
+          summary: 'Create a style',
+          description:
+            'Create a team-owned library style to pass as `style` when creating sequences. Send `name` plus EXACTLY ONE of `brief` (prose — one billed LLM call derives the full v2 recipe) or `config` (a complete v2 style recipe, validated as-is; no LLM). Public/template flags, usage counts and sequence binding are server-managed and cannot be set.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CreateStyleRequest' },
+                example: EXAMPLE_CREATE_STYLE_BODY,
+              },
+            },
+          },
+          responses: {
+            '201': {
+              description:
+                'The created style document, with a `create-sequence` link pre-filled with its id.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StyleDocument' },
+                },
+              },
+            },
+            '400': errorResponse(
+              'Invalid JSON or request body (incl. both or neither of brief/config).'
+            ),
+            '401': errorResponse('Missing or invalid API key.'),
+            '402': errorResponse(
+              'Insufficient credits for the brief LLM call.'
+            ),
+            '403': errorResponse('No team associated with the key.'),
+            '409': errorResponse(
+              "The name's URL slug collides with a style visible to this team."
+            ),
+            '429': errorResponse('Per-key rate limit exceeded (10 req/s).'),
+          },
+        },
+      },
+      [`${API_V1_BASE}/styles/{id}`]: {
+        get: {
+          tags: ['styles'],
+          summary: 'Get a style',
+          description:
+            'The full style document (incl. the v2 `config` recipe). Resolves your own library styles and public templates.',
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              description: 'The style id (ULID).',
+              schema: { type: 'string' },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'The style document.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StyleDocument' },
+                },
+              },
+            },
+            '401': errorResponse('Missing or invalid API key.'),
+            '403': errorResponse('No team associated with the key.'),
+            '404': errorResponse('Style not found.'),
+            '429': errorResponse('Per-key rate limit exceeded (10 req/s).'),
+          },
+        },
+      },
       [`${API_V1_BASE}/sequences/{id}`]: {
         get: {
           tags: ['sequences'],
@@ -575,6 +676,59 @@ export function buildOpenApiDocument(): JsonObject {
         ...defs,
         EnhanceScriptRequest: enhanceRequest,
         ...enhanceDefs,
+        CreateStyleRequest: createStyleRequest,
+        ...styleDefs,
+        StyleCard: {
+          type: 'object',
+          required: ['id', 'name', 'category', 'tags', 'isTemplate', '_links'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            category: nullableString,
+            tags: { type: 'array', items: { type: 'string' } },
+            isTemplate: {
+              type: 'boolean',
+              description:
+                'True for a public template; false for a style your team owns.',
+            },
+            _links: { $ref: '#/components/schemas/HalLinks' },
+          },
+        },
+        StyleDocument: {
+          allOf: [
+            { $ref: '#/components/schemas/StyleCard' },
+            {
+              type: 'object',
+              required: ['description', 'useCases', 'config', 'createdAt'],
+              properties: {
+                description: nullableString,
+                useCases: { type: 'array', items: { type: 'string' } },
+                defaultAspectRatio: nullableString,
+                recommendedImageModel: nullableString,
+                recommendedVideoModel: nullableString,
+                previewUrl: nullableString,
+                config: {
+                  type: 'object',
+                  additionalProperties: true,
+                  description:
+                    'The v2 style recipe (same shape as the create request config).',
+                },
+                createdAt: { type: 'string', format: 'date-time' },
+              },
+            },
+          ],
+        },
+        StyleListResult: {
+          type: 'object',
+          required: ['styles', '_links'],
+          properties: {
+            styles: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/StyleCard' },
+            },
+            _links: { $ref: '#/components/schemas/HalLinks' },
+          },
+        },
         HalLink: {
           type: 'object',
           required: ['href'],

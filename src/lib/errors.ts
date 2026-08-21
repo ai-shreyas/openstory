@@ -73,6 +73,13 @@ export class ValidationError extends OpenStoryError {
   }
 }
 
+/** The write collides with an existing resource (e.g. a duplicate slug). */
+export class ConflictError extends OpenStoryError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, 'CONFLICT', 409, details);
+  }
+}
+
 export class ConfigurationError extends OpenStoryError {
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'CONFIGURATION_ERROR', 500, details);

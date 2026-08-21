@@ -6,7 +6,7 @@
 import type { Database } from '@/lib/db/client';
 import type { NewStyle, Style } from '@/lib/db/schema';
 import { styles } from '@/lib/db/schema';
-import { ValidationError } from '@/lib/errors';
+import { ConflictError, ValidationError } from '@/lib/errors';
 import {
   SERVER_MANAGED_STYLE_COLUMNS,
   type ServerManagedStyleColumn,
@@ -84,7 +84,7 @@ async function assertSlugAvailable(
     );
   const clash = visible.find((s) => styleSlug(s.name) === slug);
   if (clash) {
-    throw new ValidationError(
+    throw new ConflictError(
       `A style named “${clash.name}” already exists, which would share the URL slug “${slug}”. Choose a more distinct name.`,
       { slug, conflictsWith: clash.name }
     );
