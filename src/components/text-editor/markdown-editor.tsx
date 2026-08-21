@@ -1,6 +1,7 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
 import { EditorContent, useEditor } from '@tiptap/react';
+import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import {
   Markdown,
@@ -28,6 +29,29 @@ export const normalizeScreenplayNewlines = (text: string): string =>
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .replace(/[\u2028\u2029\u0085]/g, '\n');
+
+/**
+ * Playwright `.fill()` (and other `insertText` with embedded newlines) cannot
+ * put `\n` in a ProseMirror text node. Map each newline to a hard break so
+ * `getMarkdown()` round-trips the source script — including the recorded
+ * aimock enhance body. Paste is not handled here; ProseMirror owns that.
+ */
+const insertTextWithNewlines = (view: EditorView, text: string): boolean => {
+  const normalized = normalizeScreenplayNewlines(text);
+  const { schema, tr, selection } = view.state;
+  const hardBreak = schema.nodes.hardBreak;
+  if (!hardBreak) return false;
+  const nodes = normalized.split('\n').flatMap((line, i, lines) => {
+    const out = [];
+    if (line.length > 0) out.push(schema.text(line));
+    if (i < lines.length - 1) out.push(hardBreak.create());
+    return out;
+  });
+  if (nodes.length === 0) return true;
+  if (!selection.empty) tr.deleteSelection();
+  view.dispatch(tr.insert(tr.selection.from, nodes).scrollIntoView());
+  return true;
+};
 
 declare module '@tiptap/core' {
   interface Storage {
@@ -194,6 +218,16 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         class: cn(proseClasses, placeholderClasses),
       },
       handleKeyDown: (_view, event) => onKeyDownRef.current?.(event) === true,
+      handleDOMEvents: {
+        beforeinput: (view, event) => {
+          if (!(event instanceof InputEvent)) return false;
+          if (event.inputType !== 'insertText' || !event.data?.includes('\n')) {
+            return false;
+          }
+          event.preventDefault();
+          return insertTextWithNewlines(view, event.data);
+        },
+      },
       transformPastedText: (text) => normalizeScreenplayNewlines(text),
     },
     onUpdate: ({ editor: e }) => {
