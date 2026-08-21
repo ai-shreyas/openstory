@@ -18,9 +18,9 @@ import {
   DEFAULT_VIDEO_MODEL,
   IMAGE_TO_VIDEO_MODELS,
   type ImageToVideoModel,
-  type MotionReferenceEndpointConfig,
 } from '@/lib/ai/models';
 import { assertMediaVia, type MediaVia } from '@/lib/ai/via';
+import { workersSafeFetch } from '@/lib/ai/workers-safe-fetch';
 import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
 import { ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
 import { type AspectRatio } from '@/lib/constants/aspect-ratios';
@@ -44,8 +44,8 @@ import {
 } from '@tanstack/ai';
 import { falVideo } from '@tanstack/ai-fal';
 import { createGrokVideo } from '@tanstack/ai-grok';
+import { buildGrokVideoRequest } from './build-grok-video-request';
 import { buildModelInput, buildMotionRequest } from './build-model-input';
-import { buildReferenceVideoPrompt } from './build-reference-video-prompt';
 import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
 export type GenerateMotionOptions = {
@@ -122,40 +122,9 @@ async function resolveOptionalXaiKey(
 function createNativeMotionAdapter(apiKey: string) {
   const env = getEnv();
   return createGrokVideo(NATIVE_GROK_VIDEO_MODEL, apiKey, {
+    fetch: workersSafeFetch,
     ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
   });
-}
-
-function isGrokVideoResolution(
-  value: string | undefined
-): value is '480p' | '720p' | '1080p' {
-  return value === '480p' || value === '720p' || value === '1080p';
-}
-
-/**
- * Imagine 1.5 reference-to-video: still first, then up to 6 library refs
- * (API max 7). Prompt tokens are `<IMAGE_0>`, `<IMAGE_1>`, … in that order
- * — TanStack's grok adapter documents 0-based tags, and xAI forbids mixing
- * a start-frame `image` with `reference_images`.
- */
-const GROK_VIDEO_REFERENCE_CONFIG = {
-  endpointId: NATIVE_GROK_VIDEO_MODEL,
-  tag: (position: number) => `<IMAGE_${position - 1}>`,
-  maxImages: 7,
-} satisfies MotionReferenceEndpointConfig;
-
-type GrokVideoPromptPart =
-  | { type: 'text'; content: string }
-  | {
-      type: 'image';
-      source: { type: 'url'; value: string };
-      metadata: { role: 'start_frame' | 'reference' | 'character' };
-    };
-
-function grokReferencePartRole(
-  role: ReferenceImageDescription['role']
-): 'reference' | 'character' {
-  return role === 'character' ? 'character' : 'reference';
 }
 
 async function inlineGrokReferenceImages(
@@ -166,57 +135,6 @@ async function inlineGrokReferenceImages(
     references.map(async (ref) => ({
       ...ref,
       referenceImageUrl: await toDataOrCdnUrl(ref.referenceImageUrl),
-    }))
-  );
-}
-
-function grokVideoPromptParts(
-  text: string,
-  images: Array<{
-    url: string;
-    role: 'start_frame' | 'reference' | 'character';
-  }>
-): GrokVideoPromptPart[] {
-  return [
-    { type: 'text', content: text },
-    ...images.map((image) => ({
-      type: 'image' as const,
-      source: { type: 'url' as const, value: image.url },
-      metadata: { role: image.role },
-    })),
-  ];
-}
-
-function buildGrokNativeVideoPrompt(
-  options: GenerateMotionOptions,
-  modelKey: ImageToVideoModel,
-  imageUrl: string,
-  references: ReferenceImageDescription[],
-  truncatedPrompt: string
-): GrokVideoPromptPart[] {
-  const attached = references.filter((ref) => ref.referenceImageUrl);
-  if (attached.length === 0) {
-    return grokVideoPromptParts(truncatedPrompt, [
-      { url: imageUrl, role: 'start_frame' },
-    ]);
-  }
-
-  const { prompt, imageUrls } = buildReferenceVideoPrompt(
-    GROK_VIDEO_REFERENCE_CONFIG,
-    options.prompt,
-    imageUrl,
-    references,
-    IMAGE_TO_VIDEO_MODELS[modelKey].maxPromptLength
-  );
-  const usable = attached.slice(0, GROK_VIDEO_REFERENCE_CONFIG.maxImages - 1);
-  return grokVideoPromptParts(
-    prompt,
-    imageUrls.map((url, index) => ({
-      url,
-      role:
-        index === 0
-          ? 'reference'
-          : grokReferencePartRole(usable[index - 1]?.role),
     }))
   );
 }
@@ -250,45 +168,24 @@ export async function submitMotionJob(
         throw new Error('xAI motion via selected with no xAI key');
       }
       // Start frame and refs are inlined as data URIs so this path needs no
-      // fal key. Image-to-video: one `start_frame` part. Reference-to-video
-      // (Imagine 1.5): library refs as `reference`/`character` parts — xAI
-      // rejects combining those with a start frame, so the still rides as
-      // the first reference and the prompt tags it `<IMAGE_0>`.
+      // fal key. Same payload as the scene editor's Grok preview.
       const imageUrl = await toDataOrCdnUrl(options.imageUrl);
       const referenceImages = await inlineGrokReferenceImages(
         options.referenceImages
       );
-      const { prompt: truncatedPrompt, ...modelInput } = buildMotionRequest(
-        { ...options, imageUrl, referenceImages, model: modelKey },
-        modelKey
-      ).input;
-      if (typeof truncatedPrompt !== 'string') {
-        throw new Error('Truncated prompt is not a string');
-      }
-      const hasGrokReferences = referenceImages.some(
-        (ref) => ref.referenceImageUrl
-      );
-      const resolution =
-        'resolution' in modelInput && typeof modelInput.resolution === 'string'
-          ? modelInput.resolution
-          : undefined;
-      const grokResolution =
-        hasGrokReferences && resolution === '1080p' ? '720p' : resolution;
-      const size =
-        options.aspectRatio && isGrokVideoResolution(grokResolution)
-          ? (`${options.aspectRatio}_${grokResolution}` as const)
-          : options.aspectRatio;
+      const { input } = buildGrokVideoRequest({
+        prompt: options.prompt,
+        imageUrl,
+        duration: snapDuration(options.duration, modelKey),
+        aspectRatio: options.aspectRatio,
+        referenceImages,
+        model: modelKey,
+      });
       const job = await generateVideo({
         adapter: createNativeMotionAdapter(xaiKey.key),
-        prompt: buildGrokNativeVideoPrompt(
-          options,
-          modelKey,
-          imageUrl,
-          referenceImages,
-          truncatedPrompt
-        ),
-        duration: snapDuration(options.duration, modelKey),
-        ...(size && { size }),
+        prompt: input.prompt,
+        duration: input.duration,
+        ...(input.size && { size: input.size }),
         timeout: FAL_REQUEST_TIMEOUT_MS,
         debug: false,
       });

@@ -9,6 +9,7 @@ import {
   nativeGrokImageModel,
 } from '@/lib/ai/grok-native';
 import type { MediaVia } from '@/lib/ai/via';
+import { workersSafeFetch } from '@/lib/ai/workers-safe-fetch';
 import { type Microdollars } from '@/lib/billing/money';
 import type { ResolvedApiKey } from '@/lib/db/scoped/api-keys';
 import type { CredentialScopedDb } from '@/lib/db/scoped-workflow';
@@ -177,6 +178,7 @@ async function generateImageInternal(
       );
       const env = getEnv();
       const grokAdapter = {
+        fetch: workersSafeFetch,
         ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
       };
       const prompt = referenceParts.length

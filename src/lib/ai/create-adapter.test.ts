@@ -238,7 +238,11 @@ describe('native xAI routing (issue #1167)', () => {
     createAdapter(MODEL, { key: 'xai-team', via: 'xai' });
 
     expect(grokCalls).toStrictEqual([
-      { model: 'grok-4.6', key: 'xai-team', config: {} },
+      {
+        model: 'grok-4.6',
+        key: 'xai-team',
+        config: expect.objectContaining({ fetch: expect.any(Function) }),
+      },
     ]);
     // The OpenRouter factories must not also fire — a double-construct would
     // mean the request shape and the adapter disagreed.

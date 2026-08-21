@@ -14,6 +14,7 @@ import {
   type NativeGrokTextModel,
 } from '@/lib/ai/grok-native';
 import type { TextModel } from '@/lib/ai/models';
+import { workersSafeFetch } from '@/lib/ai/workers-safe-fetch';
 import { HTTPClient } from '@openrouter/sdk/lib/http';
 import { createModel, extendAdapter } from '@tanstack/ai';
 import { createGrokText } from '@tanstack/ai-grok';
@@ -138,6 +139,7 @@ export function createAdapter(model: TextModel, keyInfo?: LlmKeyInfo) {
   const nativeModel = resolveNativeGrokModel(model, resolved);
   if (nativeModel && key) {
     return createGrokTextExtended(nativeModel, key, {
+      fetch: workersSafeFetch,
       // XAI_BASE_URL points aimock at the native path in e2e, mirroring what
       // OPENROUTER_BASE_URL does for the OpenRouter path below.
       ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
