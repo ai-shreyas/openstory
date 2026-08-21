@@ -227,6 +227,97 @@ describe('Motion Service', () => {
       expect(result.via).toBe('fal');
       expect(mockCreateGrokVideo).not.toHaveBeenCalled();
     });
+
+    it('sends the start frame as a start_frame image part', async () => {
+      testEnv.XAI_API_KEY = 'platform-xai';
+      mockGenerateVideo.mockResolvedValue({
+        jobId: 'xai-job-frame',
+        model: 'grok-imagine-video-1.5',
+      });
+
+      await submitMotionJob({
+        imageUrl: 'https://example.com/image.jpg',
+        prompt: 'A person walking',
+        model: 'grok_imagine_video_1_5',
+        duration: 5,
+      });
+
+      expect(mockGenerateVideo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: [
+            { type: 'text', content: 'A person walking' },
+            {
+              type: 'image',
+              source: { type: 'url', value: 'https://example.com/image.jpg' },
+              metadata: { role: 'start_frame' },
+            },
+          ],
+        })
+      );
+    });
+
+    it('sends library refs as reference/character parts and tags the prompt', async () => {
+      testEnv.XAI_API_KEY = 'platform-xai';
+      mockGenerateVideo.mockResolvedValue({
+        jobId: 'xai-job-refs',
+        model: 'grok-imagine-video-1.5',
+      });
+
+      await submitMotionJob({
+        imageUrl: 'https://example.com/still.jpg',
+        prompt: 'SCARLETT lifts the CORAL_LIPSTICK',
+        model: 'grok_imagine_video_1_5',
+        duration: 5,
+        referenceImages: [
+          {
+            referenceImageUrl: 'https://example.com/scarlett.png',
+            description: 'Scarlett - athletic',
+            role: 'character',
+            token: 'SCARLETT',
+          },
+          {
+            referenceImageUrl: 'https://example.com/lipstick.png',
+            description: 'CORAL_LIPSTICK - a coral tube',
+            role: 'element',
+            token: 'CORAL_LIPSTICK',
+          },
+        ],
+      });
+
+      expect(mockGenerateVideo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: [
+            {
+              type: 'text',
+              content: expect.stringMatching(
+                /Use <IMAGE_0> as the starting frame\.\n<IMAGE_1> lifts the <IMAGE_2>/
+              ),
+            },
+            {
+              type: 'image',
+              source: { type: 'url', value: 'https://example.com/still.jpg' },
+              metadata: { role: 'reference' },
+            },
+            {
+              type: 'image',
+              source: {
+                type: 'url',
+                value: 'https://example.com/scarlett.png',
+              },
+              metadata: { role: 'character' },
+            },
+            {
+              type: 'image',
+              source: {
+                type: 'url',
+                value: 'https://example.com/lipstick.png',
+              },
+              metadata: { role: 'reference' },
+            },
+          ],
+        })
+      );
+    });
   });
 
   describe('motionCostFromUsage', () => {

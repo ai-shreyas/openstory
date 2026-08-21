@@ -82,7 +82,8 @@ The AI model for generating scene images. You can select **multiple image models
 | -------------------------- | ----------------- | ---------------------------------------------------- |
 | Nano Banana 2              | Google            | Fast generation and editing (default)                |
 | Nano Banana Pro            | Google            | Enhanced realism and typography                      |
-| Grok Imagine Image Quality | SpaceXAI          | High-quality aesthetic generation with low censoring |
+| Grok Imagine Image 2.0     | SpaceXAI          | Newest Imagine image model, 1K/2K, edit up to 3 refs |
+| Grok Imagine Image Quality | SpaceXAI          | Quality Mode — higher fidelity, stronger text        |
 | FLUX.2 Max                 | Black Forest Labs | Exceptional realism and consistency                  |
 | Phota                      | Phota             | Character consistency via profiles                   |
 | Hunyuan Image v3           | Tencent           | Open source with strong composition                  |

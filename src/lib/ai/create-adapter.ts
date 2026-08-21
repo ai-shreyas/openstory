@@ -96,14 +96,10 @@ let loggedRetryMode = false;
  */
 export const CATALOG_LAG_MODELS = [] as const;
 
-/** {@link CATALOG_LAG_MODELS} for the Grok adapter, whose generated catalog
- *  knows only `grok-4.3` / `grok-build-0.1`. Same contract: prune as it
- *  catches up. */
+/** {@link CATALOG_LAG_MODELS} for the Grok adapter. Native `grok-4.6` is
+ *  in the 0.16 catalog; `grok-4.20-0309-reasoning` is still lag-bridged.
+ *  Same prune contract as the OpenRouter list. */
 const GROK_CATALOG_LAG_MODELS = [
-  createModel('grok-4.6', {
-    input: ['text', 'image'],
-    features: ['reasoning', 'structured_outputs'],
-  }),
   createModel('grok-4.20-0309-reasoning', {
     input: ['text', 'image'],
     features: ['reasoning', 'structured_outputs'],

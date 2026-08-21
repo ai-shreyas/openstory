@@ -31,13 +31,38 @@ export function nativeGrokTextModel(
   return NATIVE_TEXT_MODEL_BY_ID.get(model);
 }
 
-// Our fal endpoint is the `quality` tier, so the native equivalent is the
-// quality model, not the base one.
-export const NATIVE_GROK_IMAGE_MODEL = 'grok-imagine-image-quality';
+/** Registry key → xAI Imagine image model. Fal ids in `IMAGE_MODELS` match. */
+const NATIVE_IMAGE_MODELS = {
+  grok_imagine_image: 'grok-imagine-image-2.0',
+  grok_imagine_image_quality: 'grok-imagine-image-quality',
+} as const;
+
+export type NativeGrokImageModel =
+  (typeof NATIVE_IMAGE_MODELS)[keyof typeof NATIVE_IMAGE_MODELS];
+
+const NATIVE_IMAGE_MODEL_BY_KEY = new Map<string, NativeGrokImageModel>(
+  typedEntries(NATIVE_IMAGE_MODELS)
+);
+
+const NATIVE_IMAGE_ENDPOINT_IDS = new Set<string>(
+  Object.values(NATIVE_IMAGE_MODELS)
+);
+
 export const NATIVE_GROK_VIDEO_MODEL = 'grok-imagine-video-1.5';
 
+export function nativeGrokImageModel(
+  model: TextToImageModel
+): NativeGrokImageModel | undefined {
+  return NATIVE_IMAGE_MODEL_BY_KEY.get(model);
+}
+
 export function isNativeGrokImageModel(model: TextToImageModel): boolean {
-  return model === 'grok_imagine_image';
+  return NATIVE_IMAGE_MODEL_BY_KEY.has(model);
+}
+
+/** True when this endpoint id is an xAI Imagine image model, not a fal id. */
+export function isNativeGrokImageEndpoint(endpointId: string): boolean {
+  return NATIVE_IMAGE_ENDPOINT_IDS.has(endpointId);
 }
 
 export function isNativeGrokVideoModel(model: ImageToVideoModel): boolean {
@@ -45,10 +70,11 @@ export function isNativeGrokVideoModel(model: ImageToVideoModel): boolean {
 }
 
 /**
- * Published xAI rates (docs.x.ai/docs/models, read 2026-08-13). Transcribed
- * provider rates, not estimates: the adapter reports token counts for chat and
- * images but no cost, so without these a native call bills $0. Video never
- * uses this table — xAI returns the exact charge (see {@link grokVideoCost}).
+ * Published xAI rates (docs.x.ai/developers/models, read 2026-08-21).
+ * Transcribed provider rates, not estimates: the adapter reports token
+ * counts for chat and images but no cost, so without these a native call
+ * bills $0. Video never uses this table — xAI returns the exact charge
+ * (see {@link grokVideoCost}).
  *
  * `highTierFrom` is the prompt-token count at which xAI's long-context tier
  * kicks in and both rates double.
@@ -79,7 +105,10 @@ const TEXT_RATES: Record<
   },
 };
 
-const IMAGE_USD_PER_IMAGE = 0.05;
+const IMAGE_USD_PER_IMAGE: Record<NativeGrokImageModel, number> = {
+  'grok-imagine-image-2.0': 0.04,
+  'grok-imagine-image-quality': 0.05,
+};
 const VIDEO_USD_PER_SECOND = 0.08;
 
 /** Undefined when the adapter reported no usage — the caller reports that as a
@@ -102,8 +131,11 @@ export function grokTextCostFromUsage(
 }
 
 /** Exact, not an estimate: xAI bills a flat rate per image returned. */
-export function grokImageCost(numImages: number): Microdollars {
-  return usdToMicros(numImages * IMAGE_USD_PER_IMAGE);
+export function grokImageCost(
+  numImages: number,
+  model: NativeGrokImageModel
+): Microdollars {
+  return usdToMicros(numImages * IMAGE_USD_PER_IMAGE[model]);
 }
 
 /** Pre-flight estimate; the charge that lands comes from {@link grokVideoCost}. */

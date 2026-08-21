@@ -19,7 +19,7 @@ export const TEST_FAL_PRICING: Record<string, EffectiveFalPricing> = {
     unit: 'units',
     typicalUnitsPerCall: 0.22,
   },
-  'xai/grok-imagine-image/quality/text-to-image': {
+  'xai/grok-imagine-image/v2.0/text-to-image': {
     unitPrice: micros(170),
     unit: 'compute seconds',
   },

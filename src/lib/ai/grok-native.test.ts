@@ -10,6 +10,8 @@ import {
   grokTextCostFromUsage,
   grokVideoCost,
   grokVideoDurationCost,
+  isNativeGrokImageEndpoint,
+  nativeGrokImageModel,
   nativeGrokTextModel,
 } from './grok-native';
 
@@ -59,10 +61,32 @@ describe('grokTextCostFromUsage', () => {
   });
 });
 
+describe('nativeGrokImageModel', () => {
+  it('maps registry keys onto the Imagine models xAI serves', () => {
+    expect(nativeGrokImageModel('grok_imagine_image')).toBe(
+      'grok-imagine-image-2.0'
+    );
+    expect(nativeGrokImageModel('grok_imagine_image_quality')).toBe(
+      'grok-imagine-image-quality'
+    );
+    expect(nativeGrokImageModel('flux_2_max')).toBeUndefined();
+  });
+
+  it('treats both Imagine image endpoints as native', () => {
+    expect(isNativeGrokImageEndpoint('grok-imagine-image-2.0')).toBe(true);
+    expect(isNativeGrokImageEndpoint('grok-imagine-image-quality')).toBe(true);
+    expect(
+      isNativeGrokImageEndpoint('xai/grok-imagine-image/v2.0/text-to-image')
+    ).toBe(false);
+  });
+});
+
 describe('grokImageCost', () => {
-  it('bills the published flat rate per image returned', () => {
-    expect(grokImageCost(1)).toBe(50_000);
-    expect(grokImageCost(4)).toBe(200_000);
+  it('bills each Imagine image model at its published flat rate', () => {
+    expect(grokImageCost(1, 'grok-imagine-image-2.0')).toBe(40_000);
+    expect(grokImageCost(4, 'grok-imagine-image-2.0')).toBe(160_000);
+    expect(grokImageCost(1, 'grok-imagine-image-quality')).toBe(50_000);
+    expect(grokImageCost(4, 'grok-imagine-image-quality')).toBe(200_000);
   });
 });
 

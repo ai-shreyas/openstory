@@ -6,7 +6,7 @@ import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import {
   grokImageCost,
   isNativeGrokImageModel,
-  NATIVE_GROK_IMAGE_MODEL,
+  nativeGrokImageModel,
 } from '@/lib/ai/grok-native';
 import type { MediaVia } from '@/lib/ai/via';
 import { type Microdollars } from '@/lib/billing/money';
@@ -162,6 +162,12 @@ async function generateImageInternal(
       if (!xaiKey) {
         throw new Error('xAI image via selected with no xAI key');
       }
+      const nativeModel = nativeGrokImageModel(rawParams.model);
+      if (!nativeModel) {
+        throw new Error(
+          `xAI image via selected for a non-Grok model: ${rawParams.model}`
+        );
+      }
       const grok = buildGrokImageRequest(rawParams);
       const referenceParts = await Promise.all(
         grok.referenceImageUrls.map(async (url) => ({
@@ -170,19 +176,32 @@ async function generateImageInternal(
         }))
       );
       const env = getEnv();
-      result = await generateImage({
-        adapter: createGrokImage(NATIVE_GROK_IMAGE_MODEL, xaiKey.key, {
-          ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
-        }),
-        prompt: referenceParts.length
-          ? [{ type: 'text' as const, content: grok.prompt }, ...referenceParts]
-          : grok.prompt,
-        size: grok.size,
-        numberOfImages: grok.numImages,
-        timeout: FAL_GENERATION_TIMEOUT_MS,
-        debug: false,
-      });
-      endpoint = NATIVE_GROK_IMAGE_MODEL;
+      const grokAdapter = {
+        ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
+      };
+      const prompt = referenceParts.length
+        ? [{ type: 'text' as const, content: grok.prompt }, ...referenceParts]
+        : grok.prompt;
+      result =
+        nativeModel === 'grok-imagine-image-2.0'
+          ? await generateImage({
+              adapter: createGrokImage(nativeModel, xaiKey.key, grokAdapter),
+              prompt,
+              size: grok.size,
+              numberOfImages: grok.numImages,
+              modelOptions: { quality: 'medium' },
+              timeout: FAL_GENERATION_TIMEOUT_MS,
+              debug: false,
+            })
+          : await generateImage({
+              adapter: createGrokImage(nativeModel, xaiKey.key, grokAdapter),
+              prompt,
+              size: grok.size,
+              numberOfImages: grok.numImages,
+              timeout: FAL_GENERATION_TIMEOUT_MS,
+              debug: false,
+            });
+      endpoint = nativeModel;
       usedOwnKey = xaiKey.source === 'team';
       break;
     }
@@ -236,7 +255,13 @@ async function generateImageInternal(
 
   const processingTimeMs = Date.now() - startTime;
   if (via === 'xai') {
-    cost = grokImageCost(imageUrls.length);
+    const nativeModel = nativeGrokImageModel(params.model);
+    if (!nativeModel) {
+      throw new Error(
+        `xAI image via selected for a non-Grok model: ${params.model}`
+      );
+    }
+    cost = grokImageCost(imageUrls.length, nativeModel);
   }
 
   return {

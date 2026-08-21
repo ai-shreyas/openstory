@@ -287,19 +287,19 @@ SUPER:  CORAL.  OUT NOW.
         resolve(import.meta.dirname, '../fixtures/broadcast-mic.jpg')
       );
 
-      // 7b. Switch image generation to Grok Imagine (quality). Its content
+      // 7b. Switch image generation to Grok Imagine 2.0. Its content
       // checker is far less likeness-strict than GPT Image 2's, which kept
       // rejecting talent-referenced beauty shots during fixture recording
       // (makeup on a referenced face = OpenAI's blocked likeness class).
       await page.getByRole('button', { name: 'Generation settings' }).click();
       await page.getByRole('button', { name: /^Image Models?:/ }).click();
       await page
-        .getByRole('menuitemcheckbox', { name: 'Grok Imagine Image Quality' })
+        .getByRole('menuitemcheckbox', { name: 'Grok Imagine Image 2.0' })
         .click();
       await page.keyboard.press('Escape'); // checkbox items keep the menu open
       await expect(
         page.getByRole('button', {
-          name: 'Image Models: Grok Imagine Image Quality',
+          name: 'Image Models: Grok Imagine Image 2.0',
         })
       ).toBeVisible();
       await page.keyboard.press('Escape'); // close the settings popover

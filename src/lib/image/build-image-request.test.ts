@@ -54,6 +54,23 @@ describe('buildImageRequest — edit endpoints carry their reference images', ()
     expect(input.image_urls).toEqual(many.slice(0, 4));
   });
 
+  it('caps Grok Imagine 2.0 edit refs at 3', () => {
+    const many = Array.from(
+      { length: 5 },
+      (_, i) => `https://example.com/${i}.png`
+    );
+
+    const { endpointId, input } = buildImageRequest({
+      model: 'grok_imagine_image',
+      prompt: 'a lighthouse at dusk',
+      referenceImageUrls: many,
+    });
+
+    expect(endpointId).toBe('xai/grok-imagine-image/v2.0/edit');
+    expect(input.image_urls).toEqual(many.slice(0, 3));
+    expect(input.quality).toBe('medium');
+  });
+
   it('leaves references untouched for a model with no known cap', () => {
     const many = Array.from(
       { length: 7 },
@@ -81,6 +98,34 @@ describe('buildImageRequest — edit endpoints carry their reference images', ()
       expect(input).not.toHaveProperty('image_urls');
     }
   );
+
+  it('routes grok text-to-image to Imagine 2.0', () => {
+    const { endpointId, input } = buildImageRequest({
+      model: 'grok_imagine_image',
+      prompt: 'a lighthouse at dusk',
+    });
+    expect(endpointId).toBe('xai/grok-imagine-image/v2.0/text-to-image');
+    expect(input.quality).toBe('medium');
+  });
+
+  it('routes Quality Mode to the quality fal endpoints without a quality knob', () => {
+    const generate = buildImageRequest({
+      model: 'grok_imagine_image_quality',
+      prompt: 'a lighthouse at dusk',
+    });
+    expect(generate.endpointId).toBe(
+      'xai/grok-imagine-image/quality/text-to-image'
+    );
+    expect(generate.input).not.toHaveProperty('quality');
+
+    const edit = buildImageRequest({
+      model: 'grok_imagine_image_quality',
+      prompt: 'a lighthouse at dusk',
+      referenceImageUrls: ['https://example.com/a.png'],
+    });
+    expect(edit.endpointId).toBe('xai/grok-imagine-image/quality/edit');
+    expect(edit.input).not.toHaveProperty('quality');
+  });
 });
 
 describe('buildGrokImageRequest (issue #1167)', () => {

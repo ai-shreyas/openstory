@@ -9,7 +9,7 @@
  */
 
 import {
-  NATIVE_GROK_IMAGE_MODEL,
+  isNativeGrokImageEndpoint,
   NATIVE_GROK_VIDEO_MODEL,
 } from '@/lib/ai/grok-native';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
@@ -141,7 +141,7 @@ export async function recordFalUsage(
   // Native xAI units are a different denomination — sampling them under the
   // fal endpoint id would corrupt the median the pricing cron reads (#1167).
   if (
-    usage.endpointId === NATIVE_GROK_IMAGE_MODEL ||
+    isNativeGrokImageEndpoint(usage.endpointId) ||
     usage.endpointId === NATIVE_GROK_VIDEO_MODEL
   ) {
     return;
