@@ -30,7 +30,9 @@ export const getScenesFn = createServerFn({ method: 'GET' })
 // editor is a per-request choice that becomes durable when the version it
 // produces is selected; see `@/lib/ai/resolve-asset-models`.
 
-/** Composed sequence script from selected scene versions (#1030). */
+/** Composed sequence script from selected scene versions (#1030). Before the
+ *  split has seeded any versions (mid-analysis, #1225) fall back to the
+ *  original script so "Copy script" isn't dead until the scenes land. */
 export const getComposedScriptFn = createServerFn({ method: 'GET' })
   .middleware([sequenceAccessMiddleware])
   .handler(async ({ context }) => {
@@ -38,7 +40,7 @@ export const getComposedScriptFn = createServerFn({ method: 'GET' })
       context.scopedDb,
       context.sequence.id
     );
-    return { script: composed };
+    return { script: composed || (context.sequence.script ?? '') };
   });
 
 const updateSceneScriptSchema = z.object({
