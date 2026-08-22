@@ -14,9 +14,9 @@ import { computeVisualPromptInputHash } from '@/lib/ai/input-hash';
 import {
   createUsageCapture,
   extractRunError,
-  formatRunErrorMessage,
   llmCostFromUsage,
   PROMPT_REASONING,
+  throwNotedRunError,
 } from '@/lib/ai/llm-client';
 import { getContextWindow } from '@/lib/ai/models.config';
 import { narrowShotPromptContext } from '@/lib/ai/prompt-context';
@@ -212,6 +212,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
           let pendingDelta = '';
           let lastEmitAt = 0;
           let structuredObject: unknown;
+          let runError = null;
 
           const flushDelta = async () => {
             if (!channel || !streamConfig || !pendingDelta) return;
@@ -251,6 +252,11 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
             debug: false,
           })) {
             usageCapture.noteFromStreamEvent(streamEvent);
+            const noted = extractRunError(streamEvent);
+            if (noted) {
+              runError ??= noted;
+              continue;
+            }
             if (
               streamEvent.type === 'TEXT_MESSAGE_CONTENT' &&
               typeof streamEvent.delta === 'string'
@@ -281,15 +287,8 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
               structuredObject = streamEvent.value.object;
               continue;
             }
-            const runError = extractRunError(streamEvent);
-            if (runError) {
-              logger.error(
-                `[FramePromptWorkflow:cf] [LLM:${LOG_NAME}] Streaming call RUN_ERROR`,
-                { runError: runError.event }
-              );
-              throw new Error(formatRunErrorMessage(runError));
-            }
           }
+          throwNotedRunError(runError);
           await flushDelta();
           logger.info(
             `[FramePromptWorkflow:cf] [LLM:${LOG_NAME}] Streaming call succeeded`

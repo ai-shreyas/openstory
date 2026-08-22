@@ -19,8 +19,8 @@ import { createAdapter } from './create-adapter';
 import {
   createUsageCapture,
   extractRunError,
-  formatRunErrorMessage,
   llmCostFromUsage,
+  throwNotedRunError,
 } from './llm-client';
 import { DEFAULT_VISION_MODEL } from './models.config';
 
@@ -122,6 +122,7 @@ export async function describeElementImage(
   const usageCapture = createUsageCapture();
   let structuredObject: unknown;
   let accumulated = '';
+  let runError = null;
   for await (const event of chat({
     adapter,
     systemPrompts,
@@ -143,6 +144,11 @@ export async function describeElementImage(
     debug: false,
   })) {
     usageCapture.noteFromStreamEvent(event);
+    const noted = extractRunError(event);
+    if (noted) {
+      runError ??= noted;
+      continue;
+    }
     if (
       event.type === 'TEXT_MESSAGE_CONTENT' &&
       typeof event.delta === 'string'
@@ -157,11 +163,8 @@ export async function describeElementImage(
       structuredObject = event.value.object;
       continue;
     }
-    const runError = extractRunError(event);
-    if (runError) {
-      throw new Error(formatRunErrorMessage(runError));
-    }
   }
+  throwNotedRunError(runError);
 
   const parsed = elementVisionResponseSchema.parse(
     structuredObject !== undefined ? structuredObject : JSON.parse(accumulated)

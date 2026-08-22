@@ -83,6 +83,52 @@ const UNMATCHED_DUMP_PATH = resolve(
 // `systemFingerprint`, so stamp a value on every text/tool-call response.
 const AIMOCK_SYSTEM_FINGERPRINT = 'fp_aimock';
 
+/**
+ * Unusable OpenRouter recordings — drop them so the request proxies live
+ * instead of replaying a dead answer forever.
+ *
+ * Two shapes qualify, and #1218 produced both from one cause: a vision part
+ * whose declared MIME type disagreed with its bytes made Anthropic return an
+ * empty completion (mostly) or a 400 (occasionally). Recording either one
+ * bakes the failure into the fixture set, where it resurfaces as a bogus
+ * `empty completion` far from the real problem.
+ */
+function isUnusableOpenRouterFixtureFile(filePath: string): boolean {
+  try {
+    const data: unknown = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (!data || typeof data !== 'object' || !('fixtures' in data)) {
+      return false;
+    }
+    const fixtures = data.fixtures;
+    if (!Array.isArray(fixtures) || fixtures[0] == null) return false;
+    return isUnusableOpenRouterFixture(fixtures[0]);
+  } catch {
+    return false;
+  }
+}
+
+function isUnusableOpenRouterFixture(fixture: unknown): boolean {
+  if (!fixture || typeof fixture !== 'object' || !('response' in fixture)) {
+    return false;
+  }
+  const response = fixture.response;
+  if (typeof response === 'function') return false;
+  if (!response || typeof response !== 'object') return false;
+  // A recorded provider error replays that error on every future run.
+  if ('error' in response) return true;
+  if (!('content' in response)) return false;
+  const content = response.content;
+  if (typeof content !== 'string' || content.length > 0) return false;
+  if (
+    'toolCalls' in response &&
+    Array.isArray(response.toolCalls) &&
+    response.toolCalls.length > 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function stampOne(fixture: Fixture): void {
   const response = fixture.response;
   // Response factories (aimock 1.35+) build their response per-request; our
@@ -109,16 +155,24 @@ function stampSystemFingerprint(fixtures: Fixture[]): Fixture[] {
 // array. Wrap `push`/`unshift` so subsequent replays (e.g. workflow retries)
 // also see the stamped `systemFingerprint`.
 function patchFixturesArray(fixtures: Fixture[]): void {
+  const keep = (items: Fixture[]): Fixture[] => {
+    const kept: Fixture[] = [];
+    for (const item of items) {
+      if (isUnusableOpenRouterFixture(item)) {
+        console.warn(
+          '[e2e] aimock: dropping unusable OpenRouter recording so a workflow retry proxies instead of replaying it'
+        );
+        continue;
+      }
+      stampOne(item);
+      kept.push(item);
+    }
+    return kept;
+  };
   const originalPush = fixtures.push.bind(fixtures);
-  fixtures.push = (...items: Fixture[]) => {
-    for (const item of items) stampOne(item);
-    return originalPush(...items);
-  };
+  fixtures.push = (...items: Fixture[]) => originalPush(...keep(items));
   const originalUnshift = fixtures.unshift.bind(fixtures);
-  fixtures.unshift = (...items: Fixture[]) => {
-    for (const item of items) stampOne(item);
-    return originalUnshift(...items);
-  };
+  fixtures.unshift = (...items: Fixture[]) => originalUnshift(...keep(items));
 }
 
 // aimock's `loadFixturesFromDir` is non-recursive (logs and skips subdirs).
@@ -131,7 +185,11 @@ function loadFixturesRecursive(dirPath: string): Fixture[] {
     if (entry.isDirectory()) {
       fixtures.push(...loadFixturesRecursive(fullPath));
     } else if (entry.isFile() && entry.name.endsWith('.json')) {
-      fixtures.push(...loadFixtureFile(fullPath));
+      fixtures.push(
+        ...loadFixtureFile(fullPath).filter(
+          (fixture) => !isUnusableOpenRouterFixture(fixture)
+        )
+      );
     }
   }
   return fixtures;
@@ -505,6 +563,13 @@ function sortStagingFixtures(): void {
   let sorted = 0;
   for (const name of files) {
     const src = resolve(RECORD_STAGING_DIR, name);
+    if (name.startsWith('openai-') && isUnusableOpenRouterFixtureFile(src)) {
+      console.warn(
+        `[e2e] aimock: discarding unusable OpenRouter recording ${name}`
+      );
+      rmSync(src);
+      continue;
+    }
     const userMessage = readUserMessage(src);
     if (name.startsWith('fal-')) {
       const modelSlug = classifyFalModel(src);

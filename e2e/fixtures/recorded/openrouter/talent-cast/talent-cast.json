@@ -2,21 +2,20 @@
   "fixtures": [
     {
       "match": {
-        "userMessage": "Cast the following talent into character roles. The user specifically selected these 1 talent members.\n\nCHARACTERS (2 available):\n- Character ID: char_1\n  Name: Scarlett Doyle\n  Age: 19\n  Gender: Female\n  Ethnicity: White Australian\n  Physical: Slim, athletic build, around 5'6\". Sun-bleached blonde shoulder-length hair, often wind-tossed or wet and stuck to one cheek. Blue-green eyes, tanned skin with heavy sun freckles across nose and cheeks, sun-lightened eyebrows and lashes. Naturally flushed cheeks, bright quick grin, coral-painted lips through most of the film. Salt residue drying white on forearms in later scenes.\n\n- Character ID: char_2\n  Name: Stranger at Kiosk Window\n  Age: 20s\n  Gender: Unspecified\n  Ethnicity: Unspecified\n  Physical: Only hands visible — slim, sun-tanned fingers with short unpainted nails, reaching for a paper cup at the service hatch.\n\nTALENT TO CAST (1 selected by user):\n- Talent ID: 01KRMKES6TWAEC44S2S8PXZBM8\n  Name: Sienna Blake\n  Age: unspecified (infer from name if recognizable)\n  Gender: unspecified (infer from name if recognizable)\n  Ethnicity: unspecified\n  Physical/Description: Golden blonde, beach-tanned skin, effortless Bondi energy. Wide smile, freckles across the nose, the kind of face that sells skincare without trying. Perfect for product ads, lifestyle campaigns, and rom-com leads.\n\nREQUIREMENTS:\n- Match ALL 1 talent to characters (1 talent, 2 characters available)\n- Each talent gets exactly one character\n- Each character can only have one talent\n\n\nRespond with exactly 1 matches.",
+        "userMessage": "Cast the following talent into character roles. The user specifically selected these 1 talent members.\n\nCHARACTERS (1 available):\n- Character ID: char_scarlett_vega\n  Name: SCARLETT VEGA\n  Age: 27\n  Gender: Female\n  Ethnicity: Latina\n  Physical: 5'6\", lean and wiry with a performer's restless energy. Shoulder-length dark brown hair with a loose natural wave, parted slightly off-center and often windblown. Warm olive-tan skin, dark brown almond-shaped eyes, thick unshaped brows, high cheekbones and a wide expressive mouth. Minimal makeup apart from a bold coral lip; a faint sheen of sweat at the temples under stage light.\n\nTALENT TO CAST (1 selected by user):\n- Talent ID: 01KRMKES6TWAEC44S2S8PXZBM8\n  Name: Sienna Blake\n  Age: unspecified (infer from name if recognizable)\n  Gender: unspecified (infer from name if recognizable)\n  Ethnicity: unspecified\n  Physical/Description: Golden blonde, beach-tanned skin, effortless Bondi energy. Wide smile, freckles across the nose, the kind of face that sells skincare without trying. Perfect for product ads, lifestyle campaigns, and rom-com leads.\n\nREQUIREMENTS:\n- Match ALL 1 talent to characters (1 talent, 1 characters available)\n- Each talent gets exactly one character\n- Each character can only have one talent\n\n\nRespond with exactly 1 matches.",
         "model": "anthropic/claude-opus-5",
         "turnIndex": 0,
         "hasToolResult": false
       },
       "response": {
-        "content": "{\"matches\":[{\"characterId\":\"char_1\",\"talentId\":\"01KRMKES6TWAEC44S2S8PXZBM8\",\"confidence\":0.95,\"reason\":\"Sienna Blake's golden blonde hair, beach-tanned skin, freckles across the nose, wide smile and 'Bondi' beach energy align almost exactly with Scarlett Doyle's description of a sun-bleached blonde, tanned, freckled 19-year-old Australian with a bright quick grin. Her suitability for rom-com leads also fits this prominent lead role.\"}]}"
+        "content": "{\"matches\":[{\"characterId\":\"char_scarlett_vega\",\"talentId\":\"01KRMKES6TWAEC44S2S8PXZBM8\",\"confidence\":0.55,\"reason\":\"Sienna Blake reads as a young adult female performer, aligning with Scarlett's age range, gender, and lively expressive screen presence. Physical differences (golden blonde, beach-tanned vs. dark-haired Latina) can be bridged with hair color, styling, and makeup, and her rom-com lead energy suits a charismatic performer role.\"}]}"
       },
       "recordedTimings": {
-        "ttftMs": 4927,
+        "ttftMs": 2379,
         "interChunkDelaysMs": [
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 417, 308, 442, 264, 419, 419, 351,
-          12, 0, 1
+          2, 0, 0, 0, 0, 463, 271, 418, 361, 342, 286, 424, 0, 0, 0
         ],
-        "totalDurationMs": 7560
+        "totalDurationMs": 4946
       },
       "metadata": {
         "systemHash": "b98a3bc5"
