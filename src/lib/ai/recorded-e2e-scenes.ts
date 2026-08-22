@@ -224,13 +224,6 @@ export function extractTaggedJson<T>(
   return schema.parse(parseJson(block(userMessage, tag)));
 }
 
-export function recordedStyleConfig(): unknown {
-  const files = loadOpenrouterStage('visual-prompts');
-  const message = files[0]?.fixtures[0]?.match.userMessage;
-  if (!message) throw new Error('No visual-prompt fixture');
-  return extractTaggedJson(message, 'DIRECTOR_STYLE', z.unknown());
-}
-
 export function parseFixtureFile(raw: string): FixtureFile {
   return fixtureFileSchema.parse(parseJson(raw));
 }
