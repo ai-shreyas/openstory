@@ -8,25 +8,26 @@
  *
  *   - `scene-splitting-stream` — the scenes call. A boundary-annotation
  *     contract: the LLM returns `{ hintLine, quote }` anchors against a
- *     line-gutter copy of the script plus index-aligned scene metadata; the
- *     ORIGINAL script is sliced locally (`boundary-split.ts`), so scene
- *     extracts are byte-verbatim adjacent substrings by construction
- *     (`concat(slices) === script`, asserted below). Scene ids/numbers are
- *     minted server-side. Streaming: boundary k+1 arriving finalizes scene k
- *     via a local slice, so all scene cards appear with real script text in
- *     seconds; `sceneMeta` then streams `scene:updated` upgrades.
+ *     line-gutter copy of the script (no per-scene metadata). The ORIGINAL
+ *     script is sliced locally (`boundary-split.ts`); title/location/
+ *     dialogue/duration come from each slice (`scene-from-slice.ts`). Scene
+ *     ids/numbers are minted server-side. Streaming: boundary k+1 arriving
+ *     finalizes scene k via a local slice, so scene cards appear with real
+ *     script text in seconds.
  *   - `scene-bibles` — character/location/element bibles.
  *
- * After the join, scene continuity tags are reconciled onto bible tags
- * (`tag-reconcile.ts` — two independent calls can disagree) and bible
- * `firstMention`s get their owning scene id derived from the gutter line.
+ * After the join, scene continuity tags are assigned from bibles ∩ slice
+ * (`tag-reconcile.ts`) and bible `firstMention`s get their owning scene id
+ * derived from the gutter line.
  *
- * Excessive boundary-resolution repairs trigger one retry with feedback; a
- * second degraded result keeps the first-pass LLM scenes (verbatim slices +
- * metadata). Dropped boundaries are always logged and emitted as a non-fatal
- * `generation.error`. Preview-image triggers are staggered off the
- * `sceneMeta` stream (one per scene as its meta lands) so the boundary burst
- * can't fan out ~18 image workflows at once (#839/#891).
+ * Excessive *drops* trigger one retry with feedback; a second degraded
+ * result keeps the first-pass LLM scenes (verbatim slices + metadata).
+ * Fuzzy/normalized repairs that still produce a full partition are kept
+ * without a second LLM call — #1218 timed out three times retrying 14
+ * locally-repaired quotes with empty feedback. Dropped boundaries are
+ * always logged and emitted as a non-fatal `generation.error`. Preview-image
+ * triggers fire as each scene finalizes (one per boundary as it settles)
+ * so a burst of boundaries does not wait on a metadata tail.
  *
  * Infrastructure notes (unchanged from the previous version): per-chunk DB
  * writes + realtime emissions run inline inside the streaming step (a step
@@ -40,7 +41,7 @@ import {
   PROMPT_REASONING,
 } from '@/lib/ai/llm-client';
 import { PREVIEW_IMAGE_MODEL } from '@/lib/ai/models';
-import { getContextWindow } from '@/lib/ai/models.config';
+import { getContextWindow, SCENE_SPLIT_MODEL } from '@/lib/ai/models.config';
 import {
   type SceneSplitBiblesResult,
   type SceneSplitScenesResult,
@@ -112,14 +113,22 @@ const logger = getLogger(['openstory', 'workflow', 'scene-split']);
 const PARSE_COALESCE_CHARS = 256;
 
 /**
- * Retry budget for `scene-splitting-stream`.
+ * Retry / timeout budget for `scene-splitting-stream`.
  *
- * Lower than the engine default on purpose. This step owns an entire LLM
- * call, so every retry re-runs and re-bills a full generation. Two retries
- * still cover a genuinely transient provider error.
+ * Retry limit is lower than the engine default on purpose. This step owns
+ * an entire LLM call, so every retry re-runs and re-bills a full generation.
+ * Two retries still cover a genuinely transient provider error.
+ *
+ * Timeout is raised above the engine's 10-minute default (#1218). Grok 4.6
+ * with reasoning can spend several minutes thinking before the first
+ * boundary token; a dropped-quote repair retry is a second pass. 20
+ * minutes covers one pass plus that retry. The previous 10-minute default
+ * killed a usable first pass three times (and billed five generations)
+ * when the call still emitted per-scene metadata.
  */
 const STREAM_STEP_RETRIES = {
   retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' },
+  timeout: '20 minutes',
 } as const satisfies WorkflowStepConfig;
 
 const PHASE = { number: 1, name: 'Analyzing script…' } as const;
@@ -296,7 +305,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     scopedDb: WorkflowScopedDb
   ): Promise<SceneSplitWorkflowResult> {
     const input = event.payload;
-    const { sequenceId, modelId, aspectRatio, elements = [] } = input;
+    const { sequenceId, modelId, elements = [] } = input;
     const script = input.script;
 
     const elementsBlock =
@@ -316,7 +325,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     // Both calls see the same numbered-gutter copy of the script: the scenes
     // call reports hintLine against it, the bibles call firstMention lines.
     const gutteredScript = addLineGutter(script);
-    const maxTokens = Math.floor(getContextWindow(modelId) * 0.65);
+    const splitMaxTokens = Math.floor(
+      getContextWindow(SCENE_SPLIT_MODEL) * 0.65
+    );
+    const biblesMaxTokens = Math.floor(getContextWindow(modelId) * 0.65);
 
     // The two LLM calls are independent given the script, so their steps run
     // concurrently — output length drives latency and the scenes stream is
@@ -327,9 +339,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
       STREAM_STEP_RETRIES,
       async (): Promise<string> => {
         const { messages } = await getChatPrompt(input.promptName, {
-          aspectRatio,
           script: gutteredScript,
-          elements: elementsBlock,
         });
 
         const llmKeyInfo = await scopedDb.credentials.resolveLlmKey();
@@ -337,7 +347,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         logger.info(
           `[SceneSplitWorkflow:cf] [LLM:${LOG_NAME}] Starting streaming call`,
           {
-            model: modelId,
+            model: SCENE_SPLIT_MODEL,
             keySource: llmKeyInfo.source,
             keyVia: llmKeyInfo.via,
             messageCount: messages.length,
@@ -368,9 +378,9 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           let parsed: SceneSplitScenesResult | undefined;
           let usage: TokenUsage | undefined;
           for await (const chunk of callLLMStream<SceneSplitScenesResult>({
-            model: modelId,
+            model: SCENE_SPLIT_MODEL,
             messages: passMessages,
-            max_tokens: maxTokens,
+            max_tokens: splitMaxTokens,
             responseSchema: sceneSplitScenesResultSchema,
             apiKey: llmKeyInfo,
             reasoning: PROMPT_REASONING,
@@ -394,8 +404,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
             }
 
             // The final feed runs with done=true, so the last scene (whose
-            // end is the script end) and trailing sceneMeta upgrades are
-            // still emitted before the loop ends.
+            // end is the script end) is still emitted before the loop ends.
             if (
               !withEvents ||
               (!chunk.done &&
@@ -462,45 +471,16 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
                       orderIndex: ev.index,
                     }
                   );
-                }
-              }
-
-              if (ev.type === 'scene:updated') {
-                logger.info(
-                  `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Scene ${ev.index + 1} meta arrived: "${ev.scene.metadata.title}" (chunk #${chunkCount})`
-                );
-                sceneByIndex.set(ev.index, ev.scene);
-
-                if (sequenceId) {
-                  await persistStreamedSceneAndShot(
-                    scopedDb,
-                    sequenceId,
-                    ev.scene,
-                    ev.index
-                  );
-                  await getGenerationChannel(sequenceId).emit(
-                    'generation.scene:updated',
-                    {
-                      sceneId: ev.scene.sceneId,
-                      sceneNumber: ev.scene.sceneNumber,
-                      title: ev.scene.metadata.title,
-                      scriptExtract: ev.scene.originalScript.extract,
-                      durationSeconds: ev.scene.metadata.durationSeconds,
-                    }
-                  );
-                  // Boundaries land in a burst, so previews are staggered off
-                  // the (much slower) sceneMeta stream instead: one trigger
-                  // per scene as its meta arrives, never ~18 at once
-                  // (#839/#891). Scenes whose meta rode in the 'scene' event
-                  // are swept after the stream.
-                  const shot = shotByIndex.get(ev.index);
-                  if (shot && !previewTriggered.has(ev.index)) {
+                  if (!previewTriggered.has(ev.index)) {
                     previewTriggered.add(ev.index);
                     await triggerPreviewImage({
                       input,
                       sequenceId,
                       parentInstanceId: event.instanceId,
-                      shot,
+                      shot: {
+                        id: shot.id,
+                        frameId: shot.anchorFrameId,
+                      },
                       scene: ev.scene,
                       scopedDb,
                     });
@@ -521,7 +501,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           throw new NonRetryableError(
             `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Stream ended without a validated structured-output payload. ` +
               `chunks=${chunkCount} chars=${finalText.length} ` +
-              `streamedScenes=${shotMapping.length} model=${modelId}. ` +
+              `streamedScenes=${shotMapping.length} model=${SCENE_SPLIT_MODEL}. ` +
               `Likely cause: provider did not honor responseFormat:json_schema.`
           );
         }
@@ -534,17 +514,22 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         let assembled = assembleScenes(script, parsedResult, sceneIdFor);
         let resolvedTitle = parsedResult.projectMetadata.title;
         let finalBoundaries = parsedResult.boundaries;
-        let llmCostMicros = llmCostFromUsage(firstPass.usage, modelId);
+        let llmCostMicros = llmCostFromUsage(
+          firstPass.usage,
+          SCENE_SPLIT_MODEL
+        );
 
-        if (
-          isExcessivelyRepaired(
-            assembled.resolution,
-            parsedResult.boundaries.length
-          )
-        ) {
+        const degraded = isExcessivelyRepaired(
+          assembled.resolution,
+          parsedResult.boundaries.length
+        );
+        if (degraded && assembled.resolution.dropped.length > 0) {
           // One retry with explicit feedback about the quotes that failed to
-          // anchor. A second degraded result (or a retry with no payload)
-          // keeps these first-pass LLM scenes — never a heuristic split.
+          // anchor. Skip when every quote still resolved (fuzzy/normalized
+          // repairs): the feedback list would be empty and a second 5–8 min
+          // generation is what timed out #1218. A second degraded result
+          // (or a retry with no payload) keeps these first-pass LLM scenes
+          // — never a heuristic split.
           const failedQuotes = assembled.resolution.dropped
             .map((i) => parsedResult.boundaries[i]?.quote)
             .filter((q): q is string => typeof q === 'string');
@@ -569,7 +554,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           if (retryPass.parsed) {
             llmCostMicros = addMicros(
               llmCostMicros,
-              llmCostFromUsage(retryPass.usage, modelId)
+              llmCostFromUsage(retryPass.usage, SCENE_SPLIT_MODEL)
             );
             const retryAssembled = assembleScenes(
               script,
@@ -595,6 +580,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
               `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Retry ended without a validated payload; keeping first-pass LLM scenes`
             );
           }
+        } else if (degraded) {
+          logger.warn(
+            `[SceneSplitWorkflow:cf] [Stream:${LOG_NAME}] Boundary resolution used fuzzy/normalized repairs (repairs=${assembled.resolution.repairs} of ${parsedResult.boundaries.length}); keeping first-pass LLM scenes (no dropped quotes to retry)`
+          );
         }
 
         await reportDroppedBoundaries(
@@ -624,8 +613,8 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
           );
         }
 
-        // Preview sweep: scenes whose meta rode in their 'scene' event (or
-        // never arrived) were not triggered above.
+        // Preview sweep: any scene persisted without a trigger (e.g. a
+        // replay that skipped the stream loop) still gets one.
         if (sequenceId) {
           for (const [index, shot] of shotByIndex) {
             if (previewTriggered.has(index)) continue;
@@ -681,7 +670,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
       for await (const chunk of callLLMStream<SceneSplitBiblesResult>({
         model: modelId,
         messages,
-        max_tokens: maxTokens,
+        max_tokens: biblesMaxTokens,
         responseSchema: sceneSplitBiblesResultSchema,
         apiKey: llmKeyInfo,
         reasoning: PROMPT_REASONING,
@@ -765,8 +754,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         },
       })
     );
-    // 2. Scene continuity tags are canonicalized onto bible tags — two
-    // parallel calls can disagree, and downstream joins on these.
+    // 2. Scene continuity tags from bibles ∩ verbatim slice (#1218).
     const { scenes: reconciledScenes, stats: tagStats } = reconcileSceneTags(
       streamResult.scenes,
       {
@@ -776,15 +764,12 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
       }
     );
     if (
-      tagStats.rewrittenCharacterTags +
-        tagStats.unmatchedCharacterTags +
-        tagStats.rewrittenEnvironmentTags +
-        tagStats.unmatchedEnvironmentTags +
-        tagStats.rewrittenElementTags +
-        tagStats.unmatchedElementTags >
+      tagStats.assignedCharacterTags +
+        tagStats.assignedEnvironmentTags +
+        tagStats.assignedElementTags >
       0
     ) {
-      logger.info('[SceneSplitWorkflow:cf] Scene↔bible tag reconcile', {
+      logger.info('[SceneSplitWorkflow:cf] Scene↔bible tag assign', {
         sequenceId,
         ...tagStats,
       });
@@ -1026,10 +1011,10 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         scopedDb,
         costMicros: streamResult.llmCostMicros,
         usedOwnKey: streamResult.llmKeySource === 'team',
-        description: `LLM analysis (${modelId})`,
+        description: `LLM analysis (${SCENE_SPLIT_MODEL})`,
         idempotencyKey: `${event.instanceId}:llm-${STEP_NAME}`,
         metadata: {
-          model: modelId,
+          model: SCENE_SPLIT_MODEL,
           phase: PHASE.number,
           phaseName: PHASE.name,
           stepName: STEP_NAME,

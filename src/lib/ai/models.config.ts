@@ -5,6 +5,16 @@
 
 export const SCRIPT_ANALYSIS_MODELS = [
   {
+    id: 'anthropic/claude-opus-5',
+    name: 'Claude Opus 5',
+    vendor: 'Anthropic',
+    license: 'proprietary' as const,
+    qualityRank: 1,
+    contextWindow: 1_000_000,
+    vision: true,
+    description: 'Default analysis model; frontier reasoning and coding',
+  },
+  {
     id: 'x-ai/grok-4.6',
     name: 'Grok 4.6',
     vendor: 'xAI',
@@ -47,23 +57,35 @@ export const SCRIPT_ANALYSIS_MODELS = [
     contextWindow: 2_000_000,
     vision: true,
     description: 'Lowest hallucination rate, flagship agentic model',
+    hidden: true,
+  },
+  {
+    id: 'anthropic/claude-opus-5-fast',
+    name: 'Claude Opus 5 Fast',
+    vendor: 'Anthropic',
+    license: 'proprietary' as const,
+    qualityRank: 5,
+    contextWindow: 1_000_000,
+    vision: true,
+    description: 'Opus 5 low-latency; used for scene-split',
   },
   {
     id: 'anthropic/claude-opus-4.8',
     name: 'Claude Opus 4.8',
     vendor: 'Anthropic',
     license: 'proprietary' as const,
-    qualityRank: 5,
+    qualityRank: 6,
     contextWindow: 1_000_000,
     vision: true,
     description: 'Frontier reasoning and coding',
+    hidden: true,
   },
   {
     id: 'mistralai/mistral-small-2603',
     name: 'Mistral Small 4',
     vendor: 'Mistral',
     license: 'open-source' as const,
-    qualityRank: 6,
+    qualityRank: 7,
     contextWindow: 262_144,
     vision: true,
     description: 'Apache 2.0, 119B MoE, multimodal + agentic coding',
@@ -73,7 +95,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'DeepSeek V3.2',
     vendor: 'DeepSeek',
     license: 'open-source' as const,
-    qualityRank: 7,
+    qualityRank: 8,
     contextWindow: 163_840,
     // Text-only.
     vision: false,
@@ -84,7 +106,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GLM-5.2',
     vendor: 'Z.ai',
     license: 'open-source' as const,
-    qualityRank: 8,
+    qualityRank: 9,
     contextWindow: 1_048_576,
     // GLM-5.2 is text-only. Image-bearing calls (the vision-conditioned motion
     // path, #929) transparently route to `DEFAULT_VISION_MODEL` — see
@@ -99,7 +121,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Gemini 3.1 Pro',
     vendor: 'Google',
     license: 'proprietary' as const,
-    qualityRank: 9,
+    qualityRank: 10,
     contextWindow: 1_048_576,
     vision: true,
     description: 'Frontier multimodal reasoning with 1M context',
@@ -109,7 +131,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GPT-5.5',
     vendor: 'OpenAI',
     license: 'proprietary' as const,
-    qualityRank: 10,
+    qualityRank: 11,
     contextWindow: 1_050_000,
     vision: true,
     description: 'Latest GPT-5 series with 1M context',
@@ -119,7 +141,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Gemini 3 Flash',
     vendor: 'Google',
     license: 'proprietary' as const,
-    qualityRank: 11,
+    qualityRank: 12,
     contextWindow: 1_048_576,
     vision: true,
     description: 'Fast multimodal with 1M context',
@@ -129,7 +151,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GPT-5.4 Mini',
     vendor: 'OpenAI',
     license: 'proprietary' as const,
-    qualityRank: 12,
+    qualityRank: 13,
     contextWindow: 400_000,
     vision: true,
     description: 'Fast reasoning with configurable effort modes',
@@ -139,7 +161,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'Seed 2.0 Mini',
     vendor: 'ByteDance',
     license: 'proprietary' as const,
-    qualityRank: 13,
+    qualityRank: 14,
     contextWindow: 262_144,
     vision: true,
     description: 'Fast multimodal with 4 reasoning effort modes',
@@ -149,7 +171,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     name: 'GPT-5.4 Nano',
     vendor: 'OpenAI',
     license: 'proprietary' as const,
-    qualityRank: 14,
+    qualityRank: 15,
     contextWindow: 400_000,
     vision: true,
     description: 'Fastest and most cost-efficient GPT-5.4 variant',
@@ -178,6 +200,16 @@ export function isValidAnalysisModelId(
     typeof value === 'string' &&
     SCRIPT_ANALYSIS_MODELS.some((model) => model.id === value)
   );
+}
+
+/** Retired ids stay in the registry for old sequences; they are not pickable. */
+export function isSelectableAnalysisModelId(
+  value: unknown
+): value is AnalysisModelId {
+  if (!isValidAnalysisModelId(value)) return false;
+  const model = getAnalysisModelById(value);
+  if (!model) return false;
+  return !('hidden' in model && model.hidden);
 }
 
 /**
@@ -236,7 +268,18 @@ export function resolveVisionModel(
 /**
  * Default model to use when none is specified
  */
-export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId = 'x-ai/grok-4.6';
+export const DEFAULT_ANALYSIS_MODEL: AnalysisModelId =
+  'anthropic/claude-opus-5';
+
+/**
+ * Boundary-annotation scenes call only. Grok 4.6 + medium reasoning
+ * spends minutes thinking before the first boundary token. Opus 5 Fast
+ * split a prose product-ad in 2.4s (9 beats) and a 19-heading screenplay
+ * in 4s with exact quotes. Bibles and later prompt calls keep the
+ * sequence's analysis model.
+ */
+export const SCENE_SPLIT_MODEL: AnalysisModelId =
+  'anthropic/claude-opus-5-fast';
 
 /**
  * Image generation models are now in src/lib/ai/models.ts

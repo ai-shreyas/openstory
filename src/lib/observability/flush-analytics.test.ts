@@ -15,13 +15,16 @@ vi.doMock('./ai-otel', () => ({ flushAIObservability }));
 const mockLogError = vi.fn(
   (_message: string, _properties?: Record<string, unknown>) => {}
 );
+const mockLogWarn = vi.fn(
+  (_message: string, _properties?: Record<string, unknown>) => {}
+);
 vi.doMock('./logger', async () => {
   const real = await import('./logger');
   return {
     ...real,
     getLogger: () => ({
       error: mockLogError,
-      warn: vi.fn(),
+      warn: mockLogWarn,
       info: vi.fn(),
       debug: vi.fn(),
     }),
@@ -39,6 +42,13 @@ const { flushAnalytics } = await import('./flush-analytics');
 describe('flushAnalytics', () => {
   beforeEach(() => {
     mockLogError.mockClear();
+    mockLogWarn.mockClear();
+    postHogFlush.mockReset();
+    postHogFlush.mockResolvedValue(undefined);
+    flushAIObservability.mockReset();
+    flushAIObservability.mockResolvedValue(undefined);
+    getPostHogClient.mockReset();
+    getPostHogClient.mockReturnValue({ flush: postHogFlush });
   });
 
   it('flushes both events and spans', async () => {
@@ -112,9 +122,16 @@ describe('flushAnalytics', () => {
   describe('when a sink never settles', () => {
     it('still resolves, and says so', async () => {
       vi.useFakeTimers();
+      let resolveHang: () => void = () => {};
       try {
-        // Never resolves, never rejects — the shape allSettled cannot escape.
-        flushAIObservability.mockReturnValueOnce(new Promise<void>(() => {}));
+        // Never resolves until we release it — the shape allSettled cannot
+        // escape. Release after the assertion so the shared in-flight export
+        // does not poison later tests.
+        flushAIObservability.mockReturnValueOnce(
+          new Promise<void>((resolve) => {
+            resolveHang = resolve;
+          })
+        );
 
         const flushed = flushAnalytics();
         let settled = false;
@@ -127,10 +144,37 @@ describe('flushAnalytics', () => {
 
         await vi.advanceTimersByTimeAsync(2);
         await expect(flushed).resolves.toBeUndefined();
-        expect(mockLogError).toHaveBeenCalledWith(
+        expect(mockLogWarn).toHaveBeenCalledWith(
           expect.stringContaining('abandoning the batch')
         );
+        expect(mockLogError).not.toHaveBeenCalled();
       } finally {
+        resolveHang();
+        await Promise.resolve();
+        vi.useRealTimers();
+      }
+    });
+
+    it('shares one export across concurrent waiters and logs the timeout once', async () => {
+      vi.useFakeTimers();
+      let resolveHang: () => void = () => {};
+      try {
+        flushAIObservability.mockReturnValue(
+          new Promise<void>((resolve) => {
+            resolveHang = resolve;
+          })
+        );
+
+        const waiters = Array.from({ length: 20 }, () => flushAnalytics());
+        await vi.advanceTimersByTimeAsync(5_001);
+        await Promise.all(waiters);
+
+        expect(flushAIObservability).toHaveBeenCalledTimes(1);
+        expect(postHogFlush).toHaveBeenCalledTimes(1);
+        expect(mockLogWarn).toHaveBeenCalledTimes(1);
+      } finally {
+        resolveHang();
+        await Promise.resolve();
         vi.useRealTimers();
       }
     });

@@ -34,10 +34,7 @@ import {
   getSystemTalentByName,
   type TestTalent,
 } from '../fixtures/talent.fixture';
-import {
-  selectComposerStyle,
-  waitForScriptEditor,
-} from '../fixtures/test-utils';
+import { fillScriptEditor, selectComposerStyle } from '../fixtures/test-utils';
 import { t } from '../recording-mode';
 
 const fullPipeline = process.env.PLAYWRIGHT_FULL_PIPELINE === 'true';
@@ -203,41 +200,40 @@ testWithUser.describe('Full Sequence Pipeline', () => {
       // land on Action and miss every fal fixture.
       await selectComposerStyle(page, 'Product Ad', 'E-commerce');
 
-      // 3. Type a short script — a 30-second makeup ad.
+      // 3. Type a short script — a 30-second makeup ad. City, not beach:
+      // Grok Imagine Quality's checker rejects swimwear, so a Bondi/surf
+      // brief dies at still generation even when enhance is fine.
       const script = `
-CORAL — A SUMMER LAUNCH
+CORAL — A CITY LAUNCH
 
-Bondi Studio - Morning in front of her microphone
+INT. DOWNTOWN APARTMENT BATHROOM - MORNING
 
-Sunlight floods a white vanity. SCARLETT (19, blonde, sun-kissed),
-a Bondi influencer, unboxes a coral lipstick and turns it slowly
-to camera.
+Hard light off white tile. SCARLETT,
+a city influencer in a black turtleneck,
+unboxes a coral lipstick and turns it slowly to camera.
 
 SCARLETT (V.O.)
-One shade. One summer.
+One shade. One city.
 
 CLOSE ON THE TUBE — the coral bullet twists up and catches the
 light. Scarlett smiles at her reflection, the colour already hers.
 
-EXT. BONDI BEACH PROMENADE - CONTINUOUS
+EXT. DOWNTOWN SIDEWALK - CONTINUOUS
 
-Scarlett walks the promenade, blonde hair lifting in the breeze,
-surfers cresting behind her. She glances back at camera.
+Scarlett walks a crowded crosswalk, taxis stacked at the light,
+office glass behind her. She glances back at camera.
 
 SCARLETT (V.O.)
-Made for the water. Wear it everywhere.
+Made for the street. Wear it everywhere.
 
-EXT. BONDI BEACH - SHORELINE - CONTINUOUS
+EXT. ROOFTOP LEDGE - CONTINUOUS
 
-She laughs as a wave breaks at her feet. The lipstick lands
-beside the brand mark in the sand.
+She laughs as a train rattles past below. The lipstick lands
+beside the brand mark on the concrete ledge.
 
 SUPER:  CORAL.  OUT NOW.
       `.trim();
-      // Script input is now a TipTap-backed contenteditable, not a <textarea>.
-      // Playwright's .fill() works on contenteditable elements.
-      const scriptTextarea = await waitForScriptEditor(page);
-      await scriptTextarea.fill(script);
+      await fillScriptEditor(page, script);
 
       // 4. Enhance script (LLM streaming via aimock OpenRouter passthrough).
       await expect(

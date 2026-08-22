@@ -232,6 +232,8 @@ const STRUCTURED_OUTPUT_MODELS = new Set([
   'anthropic/claude-fable-5',
   'anthropic/claude-sonnet-5',
   'x-ai/grok-4.20',
+  'anthropic/claude-opus-5',
+  'anthropic/claude-opus-5-fast',
   'anthropic/claude-opus-4.8',
   'deepseek/deepseek-v3.2',
   'z-ai/glm-5.2',
@@ -275,9 +277,9 @@ export const PROMPT_REASONING = {
 } as const satisfies NonNullable<LLMRequestParams['reasoning']>;
 
 /**
- * Reasoning for script enhancement. Always on at `low`: Grok 4.6 (the default
- * enhance model) cannot disable thinking, and omitting the param falls through
- * to xAI's `high` default — so sending `low` is the fastest we can ask for.
+ * Reasoning for script enhancement. Always on at `low`: some providers
+ * (Grok) cannot disable thinking, and omitting the param falls through to
+ * a high default — so sending `low` is the fastest we can ask for.
  * Workflows keep {@link PROMPT_REASONING} (`medium`); latency is hidden there.
  */
 export const ENHANCE_REASONING = {
@@ -467,11 +469,12 @@ export async function callLLM<T>(
   // accumulates TEXT_MESSAGE_CONTENT and *ignores RUN_ERROR entirely* — so a
   // 402 (out of credits), 429, or provider overload silently resolves to '' and
   // resurfaces downstream as a bogus "empty completion" / JSON-parse failure
-  // (the #718 scene-split mystery). callLLMStream guards every non-content
-  // event with throwIfRunError, so the real provider error propagates. Non-
-  // streaming `chat()` already issues a streaming request under the hood
-  // (runNonStreamingText wraps runStreamingText), so this keeps the wire shape
-  // — and E2E aimock fixtures — identical.
+  // (the #718 scene-split mystery). callLLMStream records RUN_ERROR while
+  // draining, then `throwNotedRunError` after the generator completes so
+  // TanStack otel `onError` can end the span. Non-streaming `chat()` already
+  // issues a streaming request under the hood (runNonStreamingText wraps
+  // runStreamingText), so this keeps the wire shape — and E2E aimock
+  // fixtures — identical.
   if (params.responseSchema) {
     const responseSchema = params.responseSchema;
     let parsed: T | undefined;
@@ -610,7 +613,7 @@ function extractProviderErrorDetail(rawEvent: unknown): string | undefined {
  * (dug out of `rawEvent`) is appended so the string is actionable even though
  * OpenRouter's top-level `message` is usually just "Provider returned error".
  */
-export function formatRunErrorMessage(detail: RunErrorDetail): string {
+function formatRunErrorMessage(detail: RunErrorDetail): string {
   const tags = [
     detail.code,
     detail.model ? `model=${detail.model}` : undefined,
@@ -621,8 +624,13 @@ export function formatRunErrorMessage(detail: RunErrorDetail): string {
   return `LLM stream error${suffix}: ${detail.message}${detailSuffix}`;
 }
 
-function throwIfRunError(event: unknown): void {
-  const detail = extractRunError(event);
+/**
+ * Rethrow a RUN_ERROR recorded while draining `chat()`. Must run AFTER the
+ * `for await` completes: throwing inside the loop calls `iterator.return()`
+ * (for-await-of close), which skips TanStack's `onError` and leaves the OTel
+ * iteration span un-ended — PostHog never turns those into `$ai_generation`.
+ */
+export function throwNotedRunError(detail: RunErrorDetail | null): void {
   if (!detail) return;
   // Log the formatted string as the message (not as a `{ properties }` field)
   // so the actual error is visible in the dev pretty sink, which omits the
@@ -671,6 +679,7 @@ export async function* callLLMStream<T>(
   }
 
   const responseSchema = params.responseSchema;
+  let runError: RunErrorDetail | null = null;
   if (responseSchema) {
     validateStructuredOutputSupport(params.model);
     for await (const event of chat({
@@ -678,6 +687,11 @@ export async function* callLLMStream<T>(
       outputSchema: responseSchema,
     })) {
       usageCapture.noteFromStreamEvent(event);
+      const noted = extractRunError(event);
+      if (noted) {
+        runError ??= noted;
+        continue;
+      }
       if (
         event.type === 'TEXT_MESSAGE_CONTENT' &&
         typeof event.delta === 'string'
@@ -695,11 +709,15 @@ export async function* callLLMStream<T>(
         parsed = responseSchema.parse(event.value.object);
         continue;
       }
-      throwIfRunError(event);
     }
   } else {
     for await (const event of chat(baseOptions)) {
       usageCapture.noteFromStreamEvent(event);
+      const noted = extractRunError(event);
+      if (noted) {
+        runError ??= noted;
+        continue;
+      }
       if (event.type === 'TEXT_MESSAGE_CONTENT') {
         accumulated += event.delta;
         yield { delta: event.delta, accumulated, done: false };
@@ -717,9 +735,9 @@ export async function* callLLMStream<T>(
         yield { delta: '', accumulated, reasoning: event.delta, done: false };
         continue;
       }
-      throwIfRunError(event);
     }
   }
+  throwNotedRunError(runError);
 
   yield {
     delta: '',

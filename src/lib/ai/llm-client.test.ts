@@ -282,6 +282,44 @@ describe('llm-client', () => {
       );
     });
 
+    it('drains chat() after RUN_ERROR so otel onError can end the span', async () => {
+      let cancelled = false;
+      mockChat.mockReturnValue({
+        [Symbol.asyncIterator]() {
+          let i = 0;
+          const events = [
+            {
+              type: 'RUN_ERROR',
+              message: 'empty-response',
+              code: 'empty-response',
+            },
+          ];
+          return {
+            async next() {
+              if (i < events.length) {
+                return { value: events[i++], done: false as const };
+              }
+              return { done: true as const, value: undefined };
+            },
+            async return() {
+              cancelled = true;
+              return { done: true as const, value: undefined };
+            },
+          };
+        },
+      });
+
+      await expect(
+        drain(
+          callLLMStream({
+            model: 'anthropic/claude-sonnet-5',
+            messages: [{ role: 'user', content: 'test' }],
+          })
+        )
+      ).rejects.toThrow(/empty-response/);
+      expect(cancelled).toBe(false);
+    });
+
     it('preserves event.code in stream errors', () => {
       mockChat.mockReturnValue(
         (async function* () {

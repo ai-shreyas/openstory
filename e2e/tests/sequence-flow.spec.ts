@@ -10,7 +10,7 @@
 import { expect } from 'playwright/test';
 import { test as testWithUser } from '../fixtures/auth.fixture';
 import { setupMockRoutes } from '../mocks/handlers';
-import { waitForScriptEditor } from '../fixtures/test-utils';
+import { fillScriptEditor } from '../fixtures/test-utils';
 import {
   createTestTalentSet,
   cleanupTalentById,
@@ -64,9 +64,6 @@ testWithUser.describe('Sequence Creation Flow', () => {
         page.getByRole('grid', { name: 'Style selection' })
       ).toBeVisible({ timeout: 15000 });
 
-      // Script input is now a TipTap-backed contenteditable, not a <textarea>.
-      // Playwright's .fill() works on contenteditable elements.
-      const scriptTextarea = await waitForScriptEditor(page);
       await expect(page).toHaveURL('/sequences/new');
 
       // Enter a simple test script
@@ -94,7 +91,7 @@ Here's your caffeine fix. How's it going?
       await firstStyle.click();
 
       // Now fill the editor - React is hydrated since style click worked
-      await scriptTextarea.fill(testScript);
+      await fillScriptEditor(page, testScript);
 
       // Wait for "Generate" button to become enabled - this proves:
       // 1. React hydration is complete (event handlers attached)
