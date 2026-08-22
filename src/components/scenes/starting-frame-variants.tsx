@@ -9,9 +9,19 @@ import {
 } from '@/components/ui/dialog';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useGenerateVariants, useSelectVariant } from '@/hooks/use-shots';
+import { useVariantUpscalePreview } from '@/hooks/use-variant-upscale-preview';
 import type { TextToImageModel } from '@/lib/ai/models';
-import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import {
+  type AspectRatio,
+  getVariantGridConfig,
+} from '@/lib/constants/aspect-ratios';
+import { tileBackgroundCss } from '@/lib/image/tile-crop';
+import {
+  clearVariantUpscalePreview,
+  setVariantUpscalePreview,
+} from '@/lib/shots/variant-upscale-preview';
 import type { ShotView } from '@/lib/shots/shot-view';
+import { useQueryClient } from '@tanstack/react-query';
 import { Grid2x2, Loader2 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
@@ -43,18 +53,23 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
   onGenerateStart,
 }) => {
   const [open, setOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const upscale = useVariantUpscalePreview(shot.id);
   const generateVariants = useGenerateVariants();
   const selectVariant = useSelectVariant();
   const { needsBillingSetup: falNeedsBillingSetup, showGate: showFalGate } =
     useFalBillingGate();
 
-  const isGenerating =
+  const isGeneratingGrid =
     generating ||
     shot.gridSheet?.status === 'generating' ||
     generateVariants.isPending;
+  const upscalingIndex = upscale?.variantIndex ?? null;
+  const isUpscaling = upscale !== null || selectVariant.isPending;
 
   const handleGenerate = useCallback(async () => {
     onGenerateStart();
+    clearVariantUpscalePreview(queryClient, shot.id);
     try {
       await generateVariants.mutateAsync({
         sequenceId,
@@ -66,19 +81,33 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
         description: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-  }, [onGenerateStart, generateVariants, sequenceId, shot.id, imageModel]);
+  }, [
+    onGenerateStart,
+    generateVariants,
+    sequenceId,
+    shot.id,
+    imageModel,
+    queryClient,
+  ]);
 
   const handleSelect = useCallback(
     async (index: number) => {
-      // Close immediately (#1193): the select fn reads the sheet header, prices
-      // and triggers the upscale, which is seconds the picker shouldn't hang
-      // open for. Failure surfaces as a toast.
+      // Close immediately (#1193). Persist the picked cell on the QueryClient
+      // so navigating away and back still shows the lo-res tile + Upscaling.
+      if (shot.gridSheet?.url) {
+        setVariantUpscalePreview(queryClient, shot.id, {
+          variantIndex: index,
+          gridUrl: shot.gridSheet.url,
+          aspectRatio,
+        });
+      }
       setOpen(false);
       try {
         await selectVariant.mutateAsync({
           sequenceId,
           shotId: shot.id,
           variantIndex: index,
+          aspectRatio,
         });
       } catch (error) {
         toast.error('Failed to select variant', {
@@ -86,27 +115,71 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
         });
       }
     },
-    [selectVariant, sequenceId, shot.id]
+    [
+      selectVariant,
+      sequenceId,
+      shot.id,
+      shot.gridSheet?.url,
+      aspectRatio,
+      queryClient,
+    ]
   );
+
+  const gridConfig = getVariantGridConfig(upscale?.aspectRatio ?? aspectRatio);
+  const upscalingTileCss =
+    upscalingIndex !== null
+      ? tileBackgroundCss({
+          index: upscalingIndex,
+          gridCols: gridConfig.cols,
+          gridRows: gridConfig.rows,
+        })
+      : null;
 
   return (
     <>
+      {upscalingIndex !== null && upscale?.gridUrl && upscalingTileCss && (
+        <div
+          className="absolute inset-0 z-[6] overflow-hidden"
+          aria-live="polite"
+          aria-label="Upscaling selected variant"
+        >
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage: `url(${upscale.gridUrl})`,
+              backgroundRepeat: 'no-repeat',
+              ...upscalingTileCss,
+            }}
+          />
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-[7] flex justify-center">
+            <span className="flex items-center gap-1.5 rounded-full bg-background/80 px-3 py-1 text-xs font-medium text-foreground backdrop-blur-sm">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Upscaling…
+            </span>
+          </div>
+        </div>
+      )}
       <Button
         type="button"
         variant="ghost"
         size="sm"
         onClick={() => setOpen(true)}
         className="absolute top-2 left-2 z-10 h-8 gap-1.5 bg-black/50 px-2 text-xs text-white hover:bg-black/70"
-        aria-label="Frame variants"
+        aria-label={isUpscaling ? 'Upscaling frame variant' : 'Frame variants'}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-busy={isUpscaling || isGeneratingGrid}
       >
-        {isGenerating ? (
+        {isGeneratingGrid || isUpscaling ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
           <Grid2x2 className="h-4 w-4" />
         )}
-        Frame variants
+        {isUpscaling
+          ? 'Upscaling…'
+          : isGeneratingGrid
+            ? 'Generating…'
+            : 'Frame variants'}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -122,10 +195,10 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
           {shot.gridSheet?.url ? (
             <VariantSelector
               variantImageUrl={shot.gridSheet.url}
-              selectedVariantIndex={null}
+              selectedVariantIndex={upscalingIndex}
               onVariantSelect={(index) => void handleSelect(index)}
-              loading={isGenerating || selectVariant.isPending}
-              disabled={isGenerating || selectVariant.isPending}
+              loading={isUpscaling}
+              disabled={isGeneratingGrid}
               aspectRatio={aspectRatio}
             />
           ) : (
@@ -144,13 +217,13 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
                 }
                 void handleGenerate();
               }}
-              disabled={isGenerating}
+              disabled={isGeneratingGrid}
               className="w-full sm:w-auto"
             >
-              {isGenerating && (
+              {isGeneratingGrid && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
-              {isGenerating
+              {isGeneratingGrid
                 ? 'Generating…'
                 : shot.gridSheet?.url
                   ? 'Regenerate frame variants'

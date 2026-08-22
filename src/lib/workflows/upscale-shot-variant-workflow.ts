@@ -82,6 +82,10 @@ export type PersistUpscaleScopedDb = {
     ScopedDb['frameVariants'],
     'update' | 'selectIfPendingPromoteIs'
   >;
+  frames: Pick<ScopedDb['frames'], 'setImageGenerationStatus'>;
+  liveRead: {
+    frames: Pick<WorkflowScopedDb['liveRead']['frames'], 'getById'>;
+  };
 };
 
 type UpscaleImageProgress = {
@@ -167,8 +171,26 @@ export async function persistUpscaleSelection(params: {
     logger.info(
       `[UpscaleShotVariantWorkflow] Promote claim on frame ${frameId} moved; upscale ${versionId} stays in history`
     );
-    // Settle the spinner without a thumbnail: the client refetches and shows
-    // whatever the frame actually points at now, not this unselected still.
+    // Kickoff flipped imageStatus to generating. If a newer run owns the
+    // claim, leave the spinner — that run is still in flight. If the claim
+    // is gone (history select), settle back to the selected still, never
+    // `failed` — the old still is still good.
+    const frameNow = await scopedDb.liveRead.frames.getById(frameId);
+    if (frameNow && !frameNow.pendingPromoteVersionId) {
+      await scopedDb.frames.setImageGenerationStatus(
+        frameId,
+        {
+          imageStatus: frameNow.selectedImageVersionId
+            ? 'completed'
+            : 'pending',
+          imageWorkflowRunId: null,
+          imageError: null,
+        },
+        { throwOnMissing: false }
+      );
+    }
+    // Settle the spinner without a thumbnail: pushing the unselected
+    // upscale's url would show the user something the frame doesn't point at.
     await emit({ shotId, status: 'completed' });
     return { promoted: false };
   }
@@ -199,11 +221,6 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
     );
 
     const upscaleResult = await step.do('upscale-image', async () => {
-      await getGenerationChannel(sequenceId).emit('generation.image:progress', {
-        shotId,
-        status: 'generating',
-      });
-
       // The frame is the trigger's (payload `frameId`) — checked for existence,
       // never re-resolved, so both this step and the select step write to the
       // same frame.
@@ -236,6 +253,25 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
       // Without the claim the completion below is an unconditional repoint that
       // overwrites a still the user picked from history while the upscale ran.
       await scopedDb.frames.setPendingPromoteVersionId(frame.id, version.id);
+
+      // Same primary-busy flag image gen uses, AFTER the version + claim exist
+      // (#1095). List/canvas/motion all key off `frames.imageStatus`; SSE
+      // alone does not survive a refetch. Failure/claim-miss settle this
+      // back to `completed` (the old still stays selected — never `failed`).
+      await scopedDb.frames.setImageGenerationStatus(
+        frame.id,
+        {
+          imageStatus: 'generating',
+          imageWorkflowRunId: workflowRunId,
+          imageError: null,
+        },
+        { throwOnMissing: false }
+      );
+
+      await getGenerationChannel(sequenceId).emit('generation.image:progress', {
+        shotId,
+        status: 'generating',
+      });
 
       // The cropped tile rides through the builder as the primary reference so
       // the prompt's Image numbering matches the image_urls array — prepending
@@ -418,6 +454,20 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
           pending.id
         );
       }
+    }
+    // Settle the primary-busy flag only if this run set it. A newer upscale
+    // owns `imageWorkflowRunId` / the spinner; don't wipe that. Never `failed`
+    // — the selected still is still good.
+    if (frame?.imageWorkflowRunId === event.instanceId) {
+      await scopedDb.frames.setImageGenerationStatus(
+        frame.id,
+        {
+          imageStatus: frame.selectedImageVersionId ? 'completed' : 'pending',
+          imageWorkflowRunId: null,
+          imageError: null,
+        },
+        { throwOnMissing: false }
+      );
     }
 
     if (input.sequenceId) {

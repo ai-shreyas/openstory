@@ -44,6 +44,14 @@ export const Preview: Story = {
   },
 };
 
+export const GeneratingWithStill: Story = {
+  args: {
+    thumbnailUrl: 'https://picsum.photos/seed/scene1/320/180',
+    thumbnailStatus: 'generating',
+    alt: 'Scene 1 — still visible while upscaling',
+  },
+};
+
 export const Completed: Story = {
   args: {
     thumbnailUrl: 'https://picsum.photos/seed/scene1/320/180',

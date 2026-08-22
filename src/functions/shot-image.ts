@@ -369,6 +369,9 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       col,
       gridCols: gridConfig.cols,
       gridRows: gridConfig.rows,
+      teamId: sequence.teamId,
+      sequenceId: sequence.id,
+      shotId: shot.id,
     });
 
     // Fetch character and location references for upscale consistency
@@ -419,7 +422,7 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       // was rendered against (#1070).
       promptVersionId: frame.selectedImagePromptVersionId,
       croppedTileUrl: cropResult.url,
-      croppedTilePath: '',
+      croppedTilePath: cropResult.path,
       aspectRatio: sequence.aspectRatio,
       characterReferences,
       locationReferences,

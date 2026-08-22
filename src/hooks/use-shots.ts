@@ -1,5 +1,6 @@
 import type { Shot } from '@/types/database';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import type { ShotVariant } from '@/lib/db/schema';
 import type { ImageVariantWithShot } from '@/lib/db/scoped/frame-variants';
 import type { ShotView } from '@/lib/shots/shot-view';
@@ -30,6 +31,19 @@ import {
 import { promptVariantKeys } from '@/hooks/use-prompt-variants';
 import { segmentKeys } from '@/hooks/use-segments';
 import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
+import {
+  type AspectRatio,
+  getVariantGridConfig,
+} from '@/lib/constants/aspect-ratios';
+import { cropGridTileToObjectUrl } from '@/lib/image/crop-grid-tile-client';
+import {
+  isBrowserDisplayableStillUrl,
+  shotAfterVariantSelect,
+} from '@/lib/image/variant-select-preview';
+import {
+  clearVariantUpscalePreview,
+  setVariantUpscalePreview,
+} from '@/lib/shots/variant-upscale-preview';
 import type { GenerateVariantInput as SchemaGenerateVariantInput } from '@/lib/schemas/shot.schemas';
 
 type GenerateVariantInput = SchemaGenerateVariantInput & {
@@ -41,6 +55,7 @@ type SelectVariantInput = {
   sequenceId: string;
   shotId: string;
   variantIndex: number;
+  aspectRatio?: AspectRatio;
 };
 
 // Query keys
@@ -313,11 +328,16 @@ export function useGenerateVariants() {
 // Hook for selecting a variant panel and upscaling it
 export function useSelectVariant() {
   const queryClient = useQueryClient();
+  const previewUrlsRef = useRef<string[]>([]);
 
   return useMutation<
     { shotId: string; thumbnailUrl: string; variantIndex: number },
     Error,
-    SelectVariantInput
+    SelectVariantInput,
+    {
+      previousDetail: ShotView | undefined;
+      previousList: ShotView[] | undefined;
+    }
   >({
     mutationFn: async (input: SelectVariantInput) => {
       const { sequenceId, shotId, variantIndex } = input;
@@ -335,43 +355,102 @@ export function useSelectVariant() {
         variantIndex: result.variantIndex,
       };
     },
-    onSuccess: async (_data, { sequenceId, shotId }) => {
-      // Flip the frame to generating and keep the current still on screen. The
-      // returned thumbnailUrl is a `/cdn-cgi/image/trim=` crop that only
-      // resolves through the Cloudflare edge — patching it into `image.url`
-      // rendered a broken image until the upscale landed (#1193). The refetch
-      // below picks up the real still once the workflow writes it.
-      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (oldShot) => {
-        if (!oldShot) return oldShot;
-        return {
-          ...oldShot,
-          frame: { ...oldShot.frame, imageStatus: 'generating' as const },
-        };
-      });
+    onMutate: async ({ sequenceId, shotId, variantIndex, aspectRatio }) => {
+      await queryClient.cancelQueries({ queryKey: shotKeys.detail(shotId) });
+      await queryClient.cancelQueries({ queryKey: shotKeys.list(sequenceId) });
 
-      queryClient.setQueryData<ShotView[]>(
-        shotKeys.list(sequenceId),
-        (oldShots) => {
-          if (!oldShots) return oldShots;
-          return oldShots.map((f) =>
-            f.id === shotId
-              ? {
-                  ...f,
-                  frame: { ...f.frame, imageStatus: 'generating' as const },
-                }
-              : f
-          );
-        }
+      const previousDetail = queryClient.getQueryData<ShotView>(
+        shotKeys.detail(shotId)
+      );
+      const previousList = queryClient.getQueryData<ShotView[]>(
+        shotKeys.list(sequenceId)
+      );
+      const current =
+        previousDetail ?? previousList?.find((s) => s.id === shotId);
+
+      if (current?.gridSheet?.url) {
+        setVariantUpscalePreview(queryClient, shotId, {
+          variantIndex,
+          gridUrl: current.gridSheet.url,
+          aspectRatio: aspectRatio ?? '16:9',
+        });
+      }
+
+      const apply = (shot: ShotView, imageUrl?: string) =>
+        shotAfterVariantSelect(shot, imageUrl);
+      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (old) =>
+        old ? apply(old) : old
+      );
+      queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+        old?.map((s) => (s.id === shotId ? apply(s) : s))
       );
 
-      // Invalidate queries to ensure consistency
-      await queryClient.invalidateQueries({
-        queryKey: shotKeys.detail(shotId),
-      });
+      if (current?.gridSheet?.url && typeof document !== 'undefined') {
+        const grid = getVariantGridConfig(aspectRatio ?? '16:9');
+        void cropGridTileToObjectUrl({
+          gridUrl: current.gridSheet.url,
+          index: variantIndex,
+          cols: grid.cols,
+          rows: grid.rows,
+        })
+          .then((url) => {
+            previewUrlsRef.current.push(url);
+            queryClient.setQueryData<ShotView>(
+              shotKeys.detail(shotId),
+              (old) => (old ? apply(old, url) : old)
+            );
+            queryClient.setQueryData<ShotView[]>(
+              shotKeys.list(sequenceId),
+              (old) => old?.map((s) => (s.id === shotId ? apply(s, url) : s))
+            );
+          })
+          .catch(() => {
+            // CORS / decode failure — the CSS overlay still shows the tile.
+          });
+      }
 
-      await queryClient.invalidateQueries({
-        queryKey: shotKeys.list(sequenceId),
-      });
+      return { previousDetail, previousList };
+    },
+    onError: (_error, { sequenceId, shotId }, context) => {
+      if (context?.previousDetail) {
+        queryClient.setQueryData(
+          shotKeys.detail(shotId),
+          context.previousDetail
+        );
+      }
+      if (context?.previousList) {
+        queryClient.setQueryData(
+          shotKeys.list(sequenceId),
+          context.previousList
+        );
+      }
+      for (const url of previewUrlsRef.current) {
+        URL.revokeObjectURL(url);
+      }
+      previewUrlsRef.current = [];
+      clearVariantUpscalePreview(queryClient, shotId);
+    },
+    onSuccess: (data, { sequenceId, shotId }) => {
+      // A `/cdn-cgi/image/trim=` URL 404s off the Cloudflare edge (#1193).
+      // Local photon crops and `/r2/` tiles are safe to show; otherwise keep
+      // the client-cropped blob from onMutate. Do not invalidate — a refetch
+      // would restore the previous still until the upscale SSE lands.
+      const nextUrl = isBrowserDisplayableStillUrl(data.thumbnailUrl)
+        ? data.thumbnailUrl
+        : undefined;
+      const apply = (shot: ShotView) => shotAfterVariantSelect(shot, nextUrl);
+      queryClient.setQueryData<ShotView>(shotKeys.detail(shotId), (old) =>
+        old ? apply(old) : old
+      );
+      queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
+        old?.map((s) => (s.id === shotId ? apply(s) : s))
+      );
+      if (nextUrl) {
+        for (const url of previewUrlsRef.current) {
+          URL.revokeObjectURL(url);
+        }
+        previewUrlsRef.current = [];
+      }
     },
   });
 }

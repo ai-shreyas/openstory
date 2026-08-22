@@ -25,6 +25,10 @@ import {
   toShotView,
 } from '@/lib/shots/shot-view';
 import { updateQueryCacheFromEvent } from '@/lib/realtime/query-cache-updater';
+import {
+  getVariantUpscalePreview,
+  setVariantUpscalePreview,
+} from '@/lib/shots/variant-upscale-preview';
 
 const SEQ = 'seq-1';
 const OLD_THUMB = 'https://cdn/old-thumb.jpg';
@@ -137,6 +141,36 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       const shot = getCachedShot(qc);
       expect(shot?.image?.url).toBe(NEW_URL);
       expect(shot?.frame.imageStatus).toBe('completed');
+    });
+
+    it('primary completion clears the in-flight variant-upscale preview', () => {
+      setVariantUpscalePreview(qc, 'shot-1', {
+        variantIndex: 4,
+        gridUrl: '/r2/grid.png',
+        aspectRatio: '16:9',
+      });
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        thumbnailUrl: NEW_URL,
+        model: 'nano_banana_2',
+      });
+      expect(getVariantUpscalePreview(qc, 'shot-1')).toBeNull();
+    });
+
+    it('variant-only completion does not clear the variant-upscale preview', () => {
+      setVariantUpscalePreview(qc, 'shot-1', {
+        variantIndex: 4,
+        gridUrl: '/r2/grid.png',
+        aspectRatio: '16:9',
+      });
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        thumbnailUrl: NEW_URL,
+        variantOnly: true,
+      });
+      expect(getVariantUpscalePreview(qc, 'shot-1')?.variantIndex).toBe(4);
     });
 
     it('primary failure writes the reason onto frame.imageError so the banner shows it live (#881)', () => {
