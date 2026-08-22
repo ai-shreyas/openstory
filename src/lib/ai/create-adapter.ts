@@ -8,7 +8,6 @@
 import { getEnv } from '#env';
 import type { TextModel } from '@/lib/ai/models';
 import { HTTPClient } from '@openrouter/sdk/lib/http';
-import { createModel, extendAdapter } from '@tanstack/ai';
 import { createOpenRouterText, openRouterText } from '@tanstack/ai-openrouter';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -72,22 +71,11 @@ let loggedRetryMode = false;
  * below, telling the bumper (usually the model-freshness routine, #792) to
  * prune it here. Add entries with `createModel` from '@tanstack/ai':
  * `createModel('vendor/model-id', { input: [...], features: [...] })`.
+ *
+ * Empty after @tanstack/ai-openrouter@0.18.1 shipped `x-ai/grok-4.6`.
+ * Restore `extendAdapter` around the factories when the next lag id lands.
  */
-export const CATALOG_LAG_MODELS = [
-  createModel('x-ai/grok-4.6', {
-    input: ['text', 'image'],
-    features: ['reasoning', 'structured_outputs'],
-  }),
-] as const;
-
-const openRouterTextExtended = extendAdapter(
-  openRouterText,
-  CATALOG_LAG_MODELS
-);
-const createOpenRouterTextExtended = extendAdapter(
-  createOpenRouterText,
-  CATALOG_LAG_MODELS
-);
+export const CATALOG_LAG_MODELS = [] as const;
 
 // Callers must say which API a key belongs to (`via`) — a bare string can't:
 // a fal key mistaken for an OpenRouter key gets Bearer auth against
@@ -134,6 +122,6 @@ export function createAdapter(model: TextModel, keyInfo?: LlmKeyInfo) {
   };
 
   return key
-    ? createOpenRouterTextExtended(model, key, config)
-    : openRouterTextExtended(model, config);
+    ? createOpenRouterText(model, key, config)
+    : openRouterText(model, config);
 }
