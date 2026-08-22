@@ -4,8 +4,8 @@
  * table is empty: estimates floor at $0.10 and completed fal calls bill $0
  * (`reportMissingBillingCost`).
  *
- * Called from `scripts/seed.ts --local` / `--test` only — never `--d1` and
- * never the worker cold-start path.
+ * Called from `scripts/seed.ts --local` / `--test`, the e2e worker fetch
+ * self-seed, and workflow start when `E2E_TEST=true`. Never `--d1` / prod.
  */
 
 import { getFalEndpointIds } from '@/lib/ai/fal-endpoints';

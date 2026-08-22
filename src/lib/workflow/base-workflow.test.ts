@@ -26,6 +26,15 @@ import type { UserWorkflowContext } from '@/lib/workflow/types';
 
 const SCOPED_DB = { scoped: true };
 
+vi.doMock('#env', () => ({
+  getEnv: () => ({ E2E_TEST: undefined }),
+}));
+vi.doMock('#db-client', () => ({
+  getDb: vi.fn(),
+}));
+vi.doMock('@/lib/db/seed-model-pricing', () => ({
+  ensureLocalModelPricingSeeded: vi.fn(),
+}));
 vi.doMock('@/lib/db/scoped', () => ({
   createScopedDb: vi.fn(() => SCOPED_DB),
 }));

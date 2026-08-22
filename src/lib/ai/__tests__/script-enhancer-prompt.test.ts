@@ -84,37 +84,39 @@ describe('createUserPrompt (issue #855)', () => {
     expect(prompt).not.toContain('Energy:');
   });
 
-  it('matches the recorded full-pipeline enhance fixture for the Bondi script', () => {
+  it('matches the recorded full-pipeline enhance fixture for the city script', () => {
     const productAd = DEFAULT_STYLE_TEMPLATES.find(
       (style) => style.name === 'Product Ad'
     );
     if (!productAd) throw new Error('Product Ad template missing');
-    const script = `CORAL — A SUMMER LAUNCH
+    // Same brief as e2e/tests/full-sequence.spec.ts (city, not Bondi —
+    // Grok Imagine Quality rejects swimwear).
+    const script = `CORAL — A CITY LAUNCH
 
-Bondi Studio - Morning in front of her microphone
+INT. DOWNTOWN APARTMENT BATHROOM - MORNING
 
-Sunlight floods a white vanity. SCARLETT (19, blonde, sun-kissed),
-a Bondi influencer, unboxes a coral lipstick and turns it slowly
-to camera.
+Hard light off white tile. SCARLETT,
+a city influencer in a black turtleneck,
+unboxes a coral lipstick and turns it slowly to camera.
 
 SCARLETT (V.O.)
-One shade. One summer.
+One shade. One city.
 
 CLOSE ON THE TUBE — the coral bullet twists up and catches the
 light. Scarlett smiles at her reflection, the colour already hers.
 
-EXT. BONDI BEACH PROMENADE - CONTINUOUS
+EXT. DOWNTOWN SIDEWALK - CONTINUOUS
 
-Scarlett walks the promenade, blonde hair lifting in the breeze,
-surfers cresting behind her. She glances back at camera.
+Scarlett walks a crowded crosswalk, taxis stacked at the light,
+office glass behind her. She glances back at camera.
 
 SCARLETT (V.O.)
-Made for the water. Wear it everywhere.
+Made for the street. Wear it everywhere.
 
-EXT. BONDI BEACH - SHORELINE - CONTINUOUS
+EXT. ROOFTOP LEDGE - CONTINUOUS
 
-She laughs as a wave breaks at her feet. The lipstick lands
-beside the brand mark in the sand.
+She laughs as a train rattles past below. The lipstick lands
+beside the brand mark on the concrete ledge.
 
 SUPER:  CORAL.  OUT NOW.`;
     const prompt = createUserPrompt(script, {

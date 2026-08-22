@@ -28,7 +28,8 @@ function comparableScene(scene: SceneSplittingScene) {
 describe('recorded e2e scene replay', () => {
   it('visual-prompt CURRENT_SCENE JSON matches slice-derived scenes', () => {
     const { scenes } = replayRecordedE2eScenes();
-    expect(scenes).toHaveLength(12);
+    // Title/logline is emitted as boundary 0, so 12 labeled scenes → 13 slices.
+    expect(scenes).toHaveLength(13);
 
     const fixtures = loadOpenrouterStage('visual-prompts');
     expect(fixtures.length).toBeGreaterThan(0);
@@ -151,7 +152,7 @@ describe('recorded e2e scene replay', () => {
 
   it('fal quality/edit matchers equal the live Image-N reconstruction', () => {
     const reconstructed = reconstructRecordedFalEditPrompts();
-    expect(reconstructed).toHaveLength(24);
+    expect(reconstructed).toHaveLength(26);
 
     const falDir = resolve(
       import.meta.dirname,

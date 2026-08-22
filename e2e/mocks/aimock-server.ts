@@ -83,6 +83,13 @@ const UNMATCHED_DUMP_PATH = resolve(
 // `systemFingerprint`, so stamp a value on every text/tool-call response.
 const AIMOCK_SYSTEM_FINGERPRINT = 'fp_aimock';
 
+// Recorded OpenRouter fixtures never persist `usage.cost` (aimock emits it
+// only when the fixture supplies it — never defaulted). Replay then has
+// tokens but no cost, `llmCostFromUsage` bills $0, and every completed LLM
+// step logs `Completed AI generation with no billable cost reported`.
+// $0.02 matches `estimateLLMCost` so e2e deduction matches the credit gate.
+const AIMOCK_LLM_COST_USD = 0.02;
+
 /**
  * Unusable OpenRouter recordings — drop them so the request proxies live
  * instead of replaying a dead answer forever.
@@ -143,6 +150,9 @@ function stampOne(fixture: Fixture): void {
   if (!('content' in response) && !('toolCalls' in response)) return;
   if (response.systemFingerprint === undefined) {
     response.systemFingerprint = AIMOCK_SYSTEM_FINGERPRINT;
+  }
+  if (response.usage?.cost === undefined) {
+    response.usage = { ...response.usage, cost: AIMOCK_LLM_COST_USD };
   }
 }
 
