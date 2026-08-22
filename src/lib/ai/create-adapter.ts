@@ -67,9 +67,11 @@ let loggedRetryMode = false;
  * catalog is a codegen snapshot of OpenRouter's live list and lags new
  * releases. `extendAdapter` widens the factories' typed model union so a
  * registry id that is in NEITHER list is a compile error instead of an
- * unsafe cast. `catalog-lag.test.ts` fails once a package bump ships an id
- * below, telling the bumper (usually the model-freshness routine, #792) to
- * prune it here. Add entries with `createModel` from '@tanstack/ai':
+ * unsafe cast. `catalog-lag.test.ts` fails once an `@tanstack/ai-openrouter`
+ * bump ships an id below, telling whoever lands that dependency bump (Dependabot)
+ * to prune it here. Entries are ADDED by the model-freshness routine (#792) when
+ * a text-model bump adopts an id the installed catalog doesn't know yet. Add
+ * entries with `createModel` from '@tanstack/ai':
  * `createModel('vendor/model-id', { input: [...], features: [...] })`.
  *
  * Empty after @tanstack/ai-openrouter@0.18.1 shipped `x-ai/grok-4.6`.
