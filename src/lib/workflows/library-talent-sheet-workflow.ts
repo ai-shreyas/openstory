@@ -33,11 +33,8 @@ import {
 } from '@/lib/prompts/character-prompt';
 import { recordProvenance } from '@/lib/compliance/provenance';
 import { getTalentChannel } from '@/lib/realtime';
-import {
-  STORAGE_BUCKETS,
-  buildR2Key,
-  getPathFromUrl,
-} from '@/lib/storage/buckets';
+import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
+import { copyStoredImage } from '@/lib/storage/copy-stored-image';
 import { uploadResponse } from '@/lib/storage/upload-response';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -110,35 +107,20 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
     if (uploadedSheetUrl) {
       storageResult = await step.do('use-uploaded-sheet', async () => {
         logger.info(
-          `[LibraryTalentSheetWorkflow:cf] Using uploaded character sheet for ${input.talentName}`
+          `[LibraryTalentSheetWorkflow:cf] Copying uploaded character sheet for ${input.talentName}`
         );
         const sheetId = generateId();
-        try {
-          const unprefixed = getPathFromUrl(
-            uploadedSheetUrl,
-            STORAGE_BUCKETS.TALENT
-          );
-          return {
-            sheetId,
-            url: uploadedSheetUrl,
-            path: buildR2Key(STORAGE_BUCKETS.TALENT, unprefixed),
-          };
-        } catch {
-          const response = await fetch(uploadedSheetUrl);
-          if (!response.ok) {
-            throw new Error(
-              `Failed to fetch uploaded sheet: ${response.status}`
-            );
-          }
-          const storagePath = `${input.teamId}/${input.talentId}/${sheetId}.png`;
-          const result = await uploadResponse(
-            response,
-            STORAGE_BUCKETS.TALENT,
-            storagePath,
-            { contentType: 'image/png' }
-          );
-          return { sheetId, url: result.publicUrl, path: result.path };
-        }
+        const storagePath = `${input.teamId}/${input.talentId}/${sheetId}.png`;
+        const result = await copyStoredImage({
+          sourceUrl: uploadedSheetUrl,
+          destBucket: STORAGE_BUCKETS.TALENT,
+          destPath: storagePath,
+        });
+        return {
+          sheetId,
+          url: result.publicUrl,
+          path: result.path,
+        };
       });
     } else {
       // Step 2: Generate the talent sheet image with references
@@ -280,7 +262,12 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
             imageUrl: storageResult.url,
             imagePath: storageResult.path,
             metadata: input.uploadedSheetMetadata,
-            isDefault: sheetSource === 'manual_upload',
+            // Divergent rows and generated rows stay explicit false so they
+            // cannot become the talent identity. Convergent uploads omit
+            // isDefault so the first sheet auto-promotes.
+            ...(decision.kind === 'divergent' || sheetSource !== 'manual_upload'
+              ? { isDefault: false }
+              : {}),
             source: sheetSource,
             inputHash: snapshotHash,
             divergedAt: decision.kind === 'divergent' ? new Date() : null,

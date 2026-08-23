@@ -100,9 +100,10 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
         description: description.trim() || undefined,
         isHuman: depictsRealPerson,
         referenceImageUrls: uploadedUrls,
-        characterSheetImageUrls: uploadedUrls.filter((url) =>
-          sheetUrls.has(url)
-        ),
+        characterSheetImageUrls:
+          sheetUrls.size > 0
+            ? uploadedUrls.filter((url) => sheetUrls.has(url))
+            : undefined,
         portraitAttestation: depictsRealPerson
           ? {
               statementVersion: PORTRAIT_RIGHTS_V1.version,
@@ -262,10 +263,7 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
             <Button type="button" variant="outline" onClick={handleClose}>
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={isPending || isUploading || analyzeMedia.isPending}
-            >
+            <Button type="submit" disabled={isPending || isUploading}>
               {isPending
                 ? 'Creating…'
                 : isUploading

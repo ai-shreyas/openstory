@@ -21,7 +21,7 @@ import {
   listTalentFilterSchema,
   updateTalentSchema,
 } from '@/lib/schemas/talent.schemas';
-import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
+import { r2KeyFromUrl, STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import {
   getExtensionFromUrl,
   getMimeTypeFromExtension,
@@ -32,7 +32,11 @@ import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { createLibraryTalent } from '@/lib/talent/create-library-talent';
-import { analyzeTalentMediaForTeam } from '@/lib/talent/analyze-talent-media';
+import type { CharacterBibleEntry } from '@/lib/ai/scene-analysis.schema';
+import {
+  analyzeTalentMediaForTeam,
+  sheetMetadataFromAnalysis,
+} from '@/lib/talent/analyze-talent-media';
 import { getTalentChannel } from '@/lib/realtime';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
@@ -421,6 +425,22 @@ export const analyzeTalentMediaFn = createServerFn({ method: 'POST' })
     )
   )
   .handler(async ({ context, data }) => {
+    const teamPrefix = `${STORAGE_BUCKETS.TALENT}/${context.teamId}/`;
+    for (const url of data.imageUrls) {
+      const storedKey = r2KeyFromUrl(url);
+      let path = storedKey;
+      if (!path && /^https?:\/\//.test(url)) {
+        try {
+          path = new URL(url).pathname.replace(/^\/+/, '');
+        } catch {
+          path = null;
+        }
+      }
+      if (!path?.startsWith(teamPrefix)) {
+        throw new Error('Image URL is not a talent upload for this team');
+      }
+    }
+
     const result = await analyzeTalentMediaForTeam({
       scopedDb: context.scopedDb,
       userId: context.user.id,
@@ -509,6 +529,7 @@ async function maybePromoteOrGenerateSheet(params: {
   const convergentSheets = talentRecord.sheets.filter((s) => !s.divergedAt);
 
   let uploadedSheetUrl: string | undefined;
+  let uploadedSheetMetadata: CharacterBibleEntry | undefined;
   try {
     const analysis = await analyzeTalentMediaForTeam({
       scopedDb: params.scopedDb,
@@ -518,6 +539,10 @@ async function maybePromoteOrGenerateSheet(params: {
     });
     if (analysis.isCharacterSheet) {
       uploadedSheetUrl = params.imageUrl;
+      uploadedSheetMetadata = sheetMetadataFromAnalysis(
+        talentRecord.name,
+        analysis
+      );
     }
   } catch {
     // Classification is best-effort; fall through to generate-if-missing.
@@ -536,6 +561,7 @@ async function maybePromoteOrGenerateSheet(params: {
     referenceImageUrls: imageMedia.map((m) => m.url).sort(),
     sheetName: uploadedSheetUrl ? 'Uploaded Sheet' : 'Default Sheet',
     uploadedSheetUrl,
+    uploadedSheetMetadata,
   };
   workflowInput.snapshotInputHash =
     await computeLibraryTalentSheetHashFromDto(workflowInput);

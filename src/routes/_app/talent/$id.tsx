@@ -389,7 +389,7 @@ function TalentDetailPage() {
 
         {canManageTalent ? (
           <section className="mb-8 flex flex-col gap-3">
-            <h2 className="text-lg font-semibold">Add reference media</h2>
+            <h2 className="text-lg font-semibold">Drop a sheet or photos</h2>
             <p className="text-sm text-muted-foreground">
               Drop a character sheet to use it as-is, or drop photos to generate
               a sheet.
@@ -415,7 +415,6 @@ function TalentDetailPage() {
                   : undefined
               }
               onComplete={() => {
-                startGenerating();
                 setDropFiles([]);
                 setAttested(false);
                 setAuthorizationBasis('');

@@ -229,7 +229,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
       }
     });
 
-    if (input.reuseTalentSheet && input.referenceImageUrl) {
+    if (input.reuseTalentSheet) {
       return persistReusedTalentSheet({
         event,
         step,

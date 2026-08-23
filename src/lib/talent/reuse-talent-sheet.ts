@@ -2,8 +2,9 @@
  * Decide whether a cast character can keep the talent's existing sheet
  * instead of generating a new costumed one.
  *
- * Default is reuse. We only regenerate when the script's costume or
- * distinguishing features are clearly not already on the talent sheet.
+ * Default is reuse. Regenerate when role clothing/feature tokens do not
+ * overlap the talent look (Jaccard < 0.25 / 0.2). Comparison is metadata
+ * text, not the sheet image.
  */
 
 export type ReuseTalentSheetInput = {
@@ -91,37 +92,43 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
   return intersection / (a.size + b.size - intersection);
 }
 
-function talentLookTokens(input: ReuseTalentSheetInput): Set<string> {
-  return tokenizeAppearance(
-    [
-      input.talentClothing,
-      input.talentFeatures,
-      input.talentPhysical,
-      input.talentDescription,
-    ]
-      .filter(Boolean)
-      .join(' ')
-  );
+function tokensOrFallback(
+  primary: string | null | undefined,
+  fallback: string | null | undefined
+): Set<string> {
+  const fromPrimary = tokenizeAppearance(primary);
+  if (fromPrimary.size > 0) return fromPrimary;
+  return tokenizeAppearance(fallback);
 }
 
 /**
- * True when the talent sheet already matches the role closely enough that
- * generating a new 4-panel would only resample the same person in the same
- * clothes.
+ * True unless the role specifies distinctive clothing or features that do
+ * not overlap the talent look. Empty/generic role wardrobe defaults to
+ * reuse. Comparison is metadata text (Jaccard 0.25 clothing / 0.2
+ * features), not the sheet image. Clothing is compared to talent clothing
+ * (description only if clothing metadata is empty) so a long bio cannot
+ * dilute a matching costume.
  */
 export function shouldReuseTalentSheet(input: ReuseTalentSheetInput): boolean {
   const characterClothes = tokenizeAppearance(input.characterClothing);
   const characterFeatures = tokenizeAppearance(input.characterFeatures);
-  const talentLook = talentLookTokens(input);
+  const talentClothes = tokensOrFallback(
+    input.talentClothing,
+    input.talentDescription
+  );
+  const talentFeatures = tokensOrFallback(
+    input.talentFeatures,
+    [input.talentPhysical, input.talentDescription].filter(Boolean).join(' ')
+  );
 
   if (characterClothes.size > 0) {
-    if (talentLook.size === 0) return false;
-    if (jaccard(characterClothes, talentLook) < 0.25) return false;
+    if (talentClothes.size === 0) return false;
+    if (jaccard(characterClothes, talentClothes) < 0.25) return false;
   }
 
   if (characterFeatures.size > 0) {
-    if (talentLook.size === 0) return false;
-    if (jaccard(characterFeatures, talentLook) < 0.2) return false;
+    if (talentFeatures.size === 0) return false;
+    if (jaccard(characterFeatures, talentFeatures) < 0.2) return false;
   }
 
   return true;

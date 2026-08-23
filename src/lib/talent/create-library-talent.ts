@@ -148,6 +148,26 @@ export async function createLibraryTalent(
         }
       }
     }
+
+    if (uploadedSheetUrl && !uploadedSheetMetadata) {
+      try {
+        const analysis = await analyzeTalentMediaForTeam({
+          scopedDb: ctx.scopedDb,
+          userId: ctx.user.id,
+          imageUrls: [uploadedSheetUrl],
+          idempotencyKey: `talent-vision:create-meta:${newTalent.id}:${uploadedSheetUrl}`,
+        });
+        uploadedSheetMetadata = sheetMetadataFromAnalysis(
+          newTalent.name,
+          analysis
+        );
+      } catch (error) {
+        logger.warn('Uploaded sheet metadata extraction failed', {
+          err: error,
+          talentId: newTalent.id,
+        });
+      }
+    }
   }
 
   // Trigger talent sheet generation. Always runs: if the user uploaded a

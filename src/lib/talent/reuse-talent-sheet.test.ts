@@ -57,6 +57,29 @@ describe('shouldReuseTalentSheet', () => {
     ).toBe(true);
   });
 
+  it('reuses a matching costume even when the talent bio is long', () => {
+    expect(
+      shouldReuseTalentSheet({
+        characterClothing: 'dusty leather duster and a cowboy hat',
+        talentClothing: 'leather duster, cowboy hat, boots',
+        talentDescription:
+          'A weathered ranch hand with sunburnt skin, a slow drawl, and a habit of rolling his sleeves. Forty-word vision dump about lighting, mood, and studio backdrop that must not dilute costume overlap.',
+      })
+    ).toBe(true);
+  });
+
+  it('regenerates when clothes match but distinctive features are missing', () => {
+    expect(
+      shouldReuseTalentSheet({
+        characterClothing: 'leather duster and a cowboy hat',
+        talentClothing: 'leather duster, cowboy hat',
+        characterFeatures: 'deep scar across the left cheek',
+        talentFeatures: '',
+        talentDescription: 'A ranch hand in a duster',
+      })
+    ).toBe(false);
+  });
+
   it('regenerates when the role costume is specific and the talent sheet is not', () => {
     expect(
       shouldReuseTalentSheet({
