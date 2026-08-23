@@ -33,6 +33,7 @@ import {
   type DraftElementUpload,
 } from '@/hooks/use-sequence-elements';
 import type { SequenceElement } from '@/lib/db/schema';
+import { MAX_SEQUENCE_ELEMENTS } from '@/lib/sequence-elements/limits';
 import { cn } from '@/lib/utils';
 import {
   extractImagesFromSnapshot,
@@ -96,8 +97,6 @@ type PersistedModeProps = BaseProps & {
 };
 
 type ElementSelectorProps = DraftModeProps | PersistedModeProps;
-
-const MAX_ELEMENTS = 10;
 
 type LocalEntry = {
   file: File;
@@ -243,7 +242,7 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
         const existingCount = isPersisted
           ? persistedElements.length + next.size
           : draftElementsRef.current.length + next.size;
-        let remaining = MAX_ELEMENTS - existingCount;
+        let remaining = MAX_SEQUENCE_ELEMENTS - existingCount;
         for (const file of images) {
           if (remaining <= 0) break;
           const key = getFileKey(file);
@@ -559,11 +558,11 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
             <div className="flex flex-col gap-1">
               <p className="text-sm font-medium">Upload reference elements</p>
               <p className="text-xs text-muted-foreground">
-                Logos, product shots, screenshots. Reference them by UPPERCASE
-                token in your script.
+                Logos, product shots, screenshots. Type @ in a prompt or script
+                to insert an element.
               </p>
             </div>
-            {currentCount < MAX_ELEMENTS && (
+            {currentCount < MAX_SEQUENCE_ELEMENTS && (
               <div
                 // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- dropzone cannot be a <button> because it contains a nested <Button>
                 role="button"
@@ -616,7 +615,7 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
                   Browse
                 </Button>
                 <span className="text-[11px] text-muted-foreground">
-                  Up to {MAX_ELEMENTS} images
+                  Up to {MAX_SEQUENCE_ELEMENTS} images
                 </span>
               </div>
             )}

@@ -187,12 +187,6 @@ export function useDeleteSequenceElement() {
   });
 }
 
-/**
- * @public Retained for re-wiring into the faceted Scenes element inspector
- * (#992). The old standalone element view was removed in #986; these
- * element-management hooks (rename/replace/progress/shot-counts) are kept so
- * the feature isn't lost before the new inspector adopts them.
- */
 export function useRenameSequenceElementToken() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -227,9 +221,6 @@ export function useRenameSequenceElementToken() {
 /**
  * Shot counts for *all* elements in a sequence, fetched in one query.
  * Use this from the elements grid to avoid the per-card N+1.
- *
- * @public Retained for re-wiring into the faceted Scenes element inspector
- * (#992) after the standalone element view was removed in #986.
  */
 export function useShotCountsForAllElements(sequenceId: string | undefined) {
   return useQuery({
@@ -251,9 +242,6 @@ export function useShotCountsForAllElements(sequenceId: string | undefined) {
  * Without this hook the card's `isReplacing` clears the moment vision flips
  * to `completed`, hiding the per-shot edit phase from the user — and any
  * post-vision failure becomes user-invisible.
- *
- * @public Retained for re-wiring into the faceted Scenes element inspector
- * (#992) after the standalone element view was removed in #986.
  */
 export function useReplaceElementProgress(
   sequenceId: string | undefined,
@@ -346,9 +334,6 @@ export function useReplaceElementProgress(
 /**
  * Replace an element image: presign → R2 → finalize.
  * Triggers per-shot image edits via the replace-element workflow.
- *
- * @public Retained for re-wiring into the faceted Scenes element inspector
- * (#992) after the standalone element view was removed in #986.
  */
 export function useReplaceSequenceElement() {
   const queryClient = useQueryClient();
