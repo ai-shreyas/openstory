@@ -7,6 +7,7 @@ import {
   listPublicTalent,
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
+import type { ScopedDb } from '@/lib/db/scoped';
 import {
   portraitAttestationSchema,
   recordPortraitAttestation,
@@ -31,6 +32,8 @@ import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { createLibraryTalent } from '@/lib/talent/create-library-talent';
+import { analyzeTalentMediaForTeam } from '@/lib/talent/analyze-talent-media';
+import { getTalentChannel } from '@/lib/realtime';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
@@ -341,6 +344,16 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       path: data.path,
     });
 
+    if (data.type === 'image') {
+      await maybePromoteOrGenerateSheet({
+        scopedDb: context.scopedDb,
+        userId: context.user.id,
+        teamId: context.teamId,
+        talentId: data.talentId,
+        imageUrl: data.publicUrl,
+      });
+    }
+
     return { success: true };
   });
 
@@ -369,14 +382,7 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
       );
     }
 
-    const imageMedia =
-      // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-      talentRecord.media?.filter((m) => m.type === 'image') ?? [];
-    if (imageMedia.length === 0) {
-      throw new Error(
-        'Talent must have at least one reference image to generate a sheet'
-      );
-    }
+    const imageMedia = talentRecord.media.filter((m) => m.type === 'image');
 
     const workflowInput: LibraryTalentSheetWorkflowInput = {
       userId: context.user.id,
@@ -390,6 +396,11 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
     workflowInput.snapshotInputHash =
       await computeLibraryTalentSheetHashFromDto(workflowInput);
 
+    await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
+      talentId: talentRecord.id,
+      status: 'generating',
+    });
+
     const runId = await triggerWorkflow(
       '/library-talent-sheet',
       workflowInput,
@@ -398,6 +409,35 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
       }
     );
     return { runId };
+  });
+
+export const analyzeTalentMediaFn = createServerFn({ method: 'POST' })
+  .middleware([authWithTeamMiddleware])
+  .validator(
+    zodValidator(
+      z.object({
+        imageUrls: z.array(mediaUrlSchema).min(1).max(8),
+      })
+    )
+  )
+  .handler(async ({ context, data }) => {
+    const result = await analyzeTalentMediaForTeam({
+      scopedDb: context.scopedDb,
+      userId: context.user.id,
+      imageUrls: data.imageUrls,
+      idempotencyKey: `talent-vision:${data.imageUrls.join('|')}`,
+    });
+    return {
+      isCharacterSheet: result.isCharacterSheet,
+      suggestedName: result.suggestedName,
+      description: result.description,
+      age: result.age,
+      gender: result.gender,
+      ethnicity: result.ethnicity,
+      physicalDescription: result.physicalDescription,
+      standardClothing: result.standardClothing,
+      distinguishingFeatures: result.distinguishingFeatures,
+    };
   });
 
 export const addCharacterToLibraryFn = createServerFn({ method: 'POST' })
@@ -450,3 +490,62 @@ export const addCharacterToLibraryFn = createServerFn({ method: 'POST' })
 
     return newTalent;
   });
+
+async function maybePromoteOrGenerateSheet(params: {
+  scopedDb: ScopedDb;
+  userId: string;
+  teamId: string;
+  talentId: string;
+  imageUrl: string;
+}): Promise<void> {
+  const talentRecord = await params.scopedDb.talent.getWithRelations(
+    params.talentId
+  );
+  if (!talentRecord || !isTeamWritableTalent(talentRecord, params.teamId)) {
+    return;
+  }
+
+  const imageMedia = talentRecord.media.filter((m) => m.type === 'image');
+  const convergentSheets = talentRecord.sheets.filter((s) => !s.divergedAt);
+
+  let uploadedSheetUrl: string | undefined;
+  try {
+    const analysis = await analyzeTalentMediaForTeam({
+      scopedDb: params.scopedDb,
+      userId: params.userId,
+      imageUrls: [params.imageUrl],
+      idempotencyKey: `talent-vision:finalize:${params.talentId}:${params.imageUrl}`,
+    });
+    if (analysis.isCharacterSheet) {
+      uploadedSheetUrl = params.imageUrl;
+    }
+  } catch {
+    // Classification is best-effort; fall through to generate-if-missing.
+  }
+
+  if (!uploadedSheetUrl && convergentSheets.length > 0) {
+    return;
+  }
+
+  const workflowInput: LibraryTalentSheetWorkflowInput = {
+    userId: params.userId,
+    teamId: params.teamId,
+    talentId: talentRecord.id,
+    talentName: talentRecord.name,
+    talentDescription: talentRecord.description ?? undefined,
+    referenceImageUrls: imageMedia.map((m) => m.url).sort(),
+    sheetName: uploadedSheetUrl ? 'Uploaded Sheet' : 'Default Sheet',
+    uploadedSheetUrl,
+  };
+  workflowInput.snapshotInputHash =
+    await computeLibraryTalentSheetHashFromDto(workflowInput);
+
+  await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
+    talentId: talentRecord.id,
+    status: 'generating',
+  });
+
+  await triggerWorkflow('/library-talent-sheet', workflowInput, {
+    label: buildWorkflowLabel(talentRecord.id),
+  });
+}

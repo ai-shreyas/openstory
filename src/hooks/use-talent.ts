@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
+  analyzeTalentMediaFn,
   createTalentFn,
   deleteTalentFn,
   generateTalentSheetFn,
@@ -66,6 +67,16 @@ export function useTalentById(talentId: string) {
     teamFn: () => getTalentByIdFn({ data: { talentId } }),
     publicFn: () => getPublicTalentByIdFn({ data: { talentId } }),
     enabled: !!talentId,
+  });
+}
+
+/**
+ * Classify uploaded talent images and/or draft a description from them.
+ */
+export function useAnalyzeTalentMedia() {
+  return useMutation({
+    mutationFn: (imageUrls: string[]) =>
+      analyzeTalentMediaFn({ data: { imageUrls } }),
   });
 }
 

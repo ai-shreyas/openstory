@@ -69,6 +69,7 @@ const STAGE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ['Generate the motion prompt for this scene', 'motion-prompts'],
   ['Classify music design for each scene', 'music-design'],
   ['Uploaded filename:', 'element-vision'],
+  ['Analyze this talent reference', 'talent-vision'],
 ];
 
 // Diagnostic dump for unmatched requests — written on shutdown so we can diff

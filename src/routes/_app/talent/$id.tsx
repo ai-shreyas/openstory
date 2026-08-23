@@ -1,6 +1,10 @@
+import { useState } from 'react';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { routeParams } from '@/components/layout/breadcrumbs';
 import { EditTalentDialog } from '@/components/talent-library/edit-talent-dialog';
+import { PortraitAttestationFields } from '@/components/talent-library/portrait-attestation-fields';
+import { TalentMediaUpload } from '@/components/talent-library/talent-media-upload';
+import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
 import { PageContainer } from '@/components/layout/page-container';
 import { getCurrentUserProfileFn } from '@/functions/user';
 import { PageDescription } from '@/components/typography/page-description';
@@ -22,6 +26,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import {
   ArrowLeft,
   ImageIcon,
+  Loader2,
   Pencil,
   Sparkles,
   Star,
@@ -63,6 +68,10 @@ function TalentDetailPage() {
   const deleteTalent = useDeleteTalent();
   const generateSheet = useGenerateTalentSheet();
   const setDefaultSheet = useSetDefaultSheet();
+  const [dropFiles, setDropFiles] = useState<File[]>([]);
+  const [attested, setAttested] = useState(false);
+  const [authorizationBasis, setAuthorizationBasis] = useState('');
+  const canUpload = attested && authorizationBasis.trim().length > 0;
 
   const canManageTalent = Boolean(
     isAuthenticated &&
@@ -205,8 +214,7 @@ function TalentDetailPage() {
         </PageHeader>
 
         {/* Media Section */}
-        {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
-        {talent.media && talent.media.length > 0 && (
+        {talent.media.length > 0 && (
           <section>
             <h2 className="text-lg font-semibold mb-4">
               Reference Media ({talent.media.length})
@@ -240,71 +248,72 @@ function TalentDetailPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <ImageIcon className="h-5 w-5" />
-              {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
-              Talent Sheets ({talent.sheets?.length ?? 0})
+              Talent Sheets ({talent.sheets.length})
             </h2>
-            {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
-            {talent.media &&
-              talent.media.filter((m) => m.type === 'image').length > 0 &&
-              canManageTalent && (
+            {canManageTalent && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleGenerateSheet}
+                disabled={isGeneratingSheet}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                {isGeneratingSheet
+                  ? generatingPhase === 'portrait'
+                    ? 'Generating portrait…'
+                    : 'Generating sheet…'
+                  : 'Generate Sheet'}
+              </Button>
+            )}
+          </div>
+
+          {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
+          {isGeneratingSheet && talent.sheets.length === 0 ? (
+            <Card className="p-8 text-center">
+              <Loader2 className="h-12 w-12 mx-auto mb-4 animate-spin text-muted-foreground" />
+              <p className="text-muted-foreground">
+                {generatingPhase === 'portrait'
+                  ? 'Generating portrait from talent sheet…'
+                  : 'Generating talent sheet…'}
+              </p>
+              {sheetError && (
+                <p className="text-destructive text-sm mt-3">{sheetError}</p>
+              )}
+            </Card>
+          ) : talent.sheets.length === 0 ? (
+            <Card className="p-8 text-center">
+              <User className="h-12 w-12 mx-auto mb-4 text-muted-foreground/30" />
+              <p className="text-muted-foreground mb-3">
+                No talent sheets yet. Drop a character sheet or generate one
+                from the name and description.
+              </p>
+              {sheetError && (
+                <p className="text-destructive text-sm mb-3">{sheetError}</p>
+              )}
+              {canManageTalent && (
                 <Button
-                  variant="outline"
-                  size="sm"
                   onClick={handleGenerateSheet}
                   disabled={isGeneratingSheet}
                 >
                   <Sparkles className="h-4 w-4 mr-2" />
-                  {isGeneratingSheet
-                    ? generatingPhase === 'portrait'
-                      ? 'Generating portrait…'
-                      : 'Generating sheet…'
-                    : 'Generate Sheet'}
+                  Generate Sheet
                 </Button>
-              )}
-          </div>
-
-          {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
-          {!talent.sheets || talent.sheets.length === 0 ? (
-            <Card className="p-8 text-center">
-              <User className="h-12 w-12 mx-auto mb-4 text-muted-foreground/30" />
-              {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
-              {talent.media &&
-              talent.media.filter((m) => m.type === 'image').length > 0 &&
-              canManageTalent ? (
-                <div>
-                  <p className="text-muted-foreground mb-3">
-                    {isGeneratingSheet
-                      ? generatingPhase === 'portrait'
-                        ? 'Generating portrait from talent sheet…'
-                        : 'Generating talent sheet…'
-                      : 'No talent sheets yet. Generate one from your reference images.'}
-                  </p>
-                  {sheetError && (
-                    <p className="text-destructive text-sm mb-3">
-                      {sheetError}
-                    </p>
-                  )}
-                  <Button
-                    onClick={handleGenerateSheet}
-                    disabled={isGeneratingSheet}
-                  >
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    {isGeneratingSheet
-                      ? generatingPhase === 'portrait'
-                        ? 'Generating portrait…'
-                        : 'Generating sheet…'
-                      : 'Generate Sheet'}
-                  </Button>
-                </div>
-              ) : (
-                <p className="text-muted-foreground">
-                  Upload reference images to generate a talent sheet, or sheets
-                  will be created when this talent is used in a sequence.
-                </p>
               )}
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {isGeneratingSheet ? (
+                <Card className="overflow-hidden">
+                  <div className="aspect-video bg-muted flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">
+                      {generatingPhase === 'portrait'
+                        ? 'Generating portrait…'
+                        : 'Generating talent sheet…'}
+                    </p>
+                  </div>
+                </Card>
+              ) : null}
               {talent.sheets.map((sheet) => (
                 <Card
                   key={sheet.id}
@@ -377,6 +386,43 @@ function TalentDetailPage() {
             </div>
           )}
         </section>
+
+        {canManageTalent ? (
+          <section className="mb-8 flex flex-col gap-3">
+            <h2 className="text-lg font-semibold">Add reference media</h2>
+            <p className="text-sm text-muted-foreground">
+              Drop a character sheet to use it as-is, or drop photos to generate
+              a sheet.
+            </p>
+            {dropFiles.length > 0 ? (
+              <PortraitAttestationFields
+                attested={attested}
+                onAttestedChange={setAttested}
+                authorizationBasis={authorizationBasis}
+                onAuthorizationBasisChange={setAuthorizationBasis}
+              />
+            ) : null}
+            <TalentMediaUpload
+              files={dropFiles}
+              onFilesChange={setDropFiles}
+              talentId={talent.id}
+              portraitAttestation={
+                canUpload
+                  ? {
+                      statementVersion: PORTRAIT_RIGHTS_V1.version,
+                      authorizationBasis: authorizationBasis.trim(),
+                    }
+                  : undefined
+              }
+              onComplete={() => {
+                startGenerating();
+                setDropFiles([]);
+                setAttested(false);
+                setAuthorizationBasis('');
+              }}
+            />
+          </section>
+        ) : null}
       </PageContainer>
     </div>
   );

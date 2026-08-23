@@ -37,6 +37,12 @@ export const createTalentSchema = createInsertSchema(talent, {
   .omit(SERVER_MANAGED_TALENT_COLUMNS)
   .extend({
     referenceImageUrls: z.array(mediaUrlSchema).optional(),
+    /**
+     * Subset of `referenceImageUrls` that the client classified as an
+     * existing character/talent sheet. Omitted means the server classifies.
+     * Pass `[]` when none of the uploads are sheets.
+     */
+    characterSheetImageUrls: z.array(mediaUrlSchema).optional(),
     /** Required by the server when `referenceImageUrls` is non-empty. */
     portraitAttestation: portraitAttestationSchema.optional(),
   });

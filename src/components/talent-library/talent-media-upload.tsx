@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,6 +12,7 @@ import {
   FileUploadTrigger,
   type FileUploadProps,
 } from '@/components/ui/file-upload';
+import { Badge } from '@/components/ui/badge';
 import { useUploadTalentMedia, useUploadTempMedia } from '@/hooks/use-talent';
 import { getFileKey } from '@/lib/utils/upload';
 import { Upload, X } from 'lucide-react';
@@ -30,6 +31,10 @@ type TalentMediaUploadProps = {
   };
   /** Called when all uploads complete (for talentId mode) */
   onComplete?: () => void;
+  /** Called after each successful upload with the stored URL. */
+  onFileUploaded?: (file: File, url: string) => void;
+  /** File keys (see getFileKey) detected as an existing character sheet. */
+  sheetFileKeys?: ReadonlySet<string>;
   disabled?: boolean;
 };
 
@@ -40,14 +45,19 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
   talentId,
   portraitAttestation,
   onComplete,
+  onFileUploaded,
+  sheetFileKeys,
   disabled = false,
 }) => {
   const [uploadedUrlsMap, setUploadedUrlsMap] = useState<Map<string, string>>(
     new Map()
   );
+  const uploadedKeysRef = useRef(new Set<string>());
+  const flushingPendingRef = useRef(false);
   const { requireAuth } = useAuthGate();
   const uploadTempMedia = useUploadTempMedia();
   const uploadTalentMedia = useUploadTalentMedia();
+  const waitingForAttestation = Boolean(talentId) && !portraitAttestation;
 
   useEffect(() => {
     onUploadedUrlsChange?.(Array.from(uploadedUrlsMap.values()));
@@ -83,6 +93,9 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
         }
         return;
       }
+      if (waitingForAttestation) {
+        return;
+      }
       const uploadPromises = newFiles.map(async (file) => {
         try {
           const type = file.type.startsWith('video/')
@@ -90,13 +103,14 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
             : ('image' as const);
 
           if (talentId) {
-            await uploadTalentMedia.mutateAsync({
+            const result = await uploadTalentMedia.mutateAsync({
               talentId,
               file,
               type,
               onProgress: (percent) => onProgress(file, percent),
               portraitAttestation,
             });
+            onFileUploaded?.(file, result.url);
           } else {
             const result = await uploadTempMedia.mutateAsync({
               file,
@@ -107,8 +121,10 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
             setUploadedUrlsMap((prev) =>
               new Map(prev).set(getFileKey(file), result.url)
             );
+            onFileUploaded?.(file, result.url);
           }
 
+          uploadedKeysRef.current.add(getFileKey(file));
           onProgress(file, 100);
           onSuccess(file);
         } catch (error) {
@@ -128,11 +144,32 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
       requireAuth,
       talentId,
       portraitAttestation,
+      waitingForAttestation,
       uploadTempMedia,
       uploadTalentMedia,
       onComplete,
+      onFileUploaded,
     ]
   );
+
+  useEffect(() => {
+    if (waitingForAttestation || !talentId || !portraitAttestation) return;
+    if (flushingPendingRef.current) return;
+    const pending = files.filter(
+      (file) => !uploadedKeysRef.current.has(getFileKey(file))
+    );
+    if (pending.length === 0) return;
+    flushingPendingRef.current = true;
+    void Promise.resolve(
+      onUpload(pending, {
+        onProgress: () => undefined,
+        onSuccess: () => undefined,
+        onError: () => undefined,
+      })
+    ).finally(() => {
+      flushingPendingRef.current = false;
+    });
+  }, [waitingForAttestation, talentId, portraitAttestation, files, onUpload]);
 
   return (
     <FileUpload
@@ -143,13 +180,7 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
       onValueChange={handleValueChange}
       onUpload={onUpload}
     >
-      <FileUploadDropzone
-        className="min-h-[120px] focus:border-ring/50 focus:bg-accent/30"
-        onClick={(e) => {
-          e.preventDefault();
-          e.currentTarget.focus();
-        }}
-      >
+      <FileUploadDropzone className="min-h-[120px] focus:border-ring/50 focus:bg-accent/30">
         <Upload className="h-8 w-8 text-muted-foreground/50" />
         <p className="text-sm font-medium">Drag & drop or paste</p>
         <FileUploadTrigger asChild>
@@ -182,6 +213,9 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
               }
             />
             <FileUploadItemProgress className="absolute bottom-0 left-0 right-0 h-1" />
+            {sheetFileKeys?.has(getFileKey(file)) ? (
+              <Badge className="absolute bottom-2 left-2">Sheet</Badge>
+            ) : null}
             <FileUploadItemDelete asChild>
               <Button
                 type="button"

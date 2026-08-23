@@ -70,7 +70,7 @@ export function useTalentSheetsRealtime(talentIds: string[] = []) {
             }
           }
 
-          if (lastStatus === 'generating') {
+          if (lastStatus === 'generating' || lastStatus === 'sheet_ready') {
             setGeneratingStatus((prev) => {
               const next = new Map(prev);
               next.set(id, true);
@@ -101,6 +101,11 @@ export function useTalentSheetsRealtime(talentIds: string[] = []) {
           break;
 
         case 'sheet_ready':
+          setGeneratingStatus((prev) => {
+            const next = new Map(prev);
+            next.set(data.talentId, true);
+            return next;
+          });
           // Sheet image is ready but headshot still generating - refresh list to show sheet
           void queryClient.invalidateQueries({
             queryKey: talentKeys.lists(),

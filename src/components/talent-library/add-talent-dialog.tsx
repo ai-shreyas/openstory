@@ -14,10 +14,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useHydrated } from '@/hooks/use-hydrated';
-import { useCreateTalent } from '@/hooks/use-talent';
+import { useAnalyzeTalentMedia, useCreateTalent } from '@/hooks/use-talent';
+import { getFileKey } from '@/lib/utils/upload';
 import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
 import type { Talent } from '@/lib/db/schema';
-import { Plus } from 'lucide-react';
+import { Plus, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { PortraitAttestationFields } from './portrait-attestation-fields';
 import { TalentMediaUpload } from './talent-media-upload';
@@ -35,6 +36,10 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [sheetUrls, setSheetUrls] = useState<Set<string>>(new Set());
+  const [sheetFileKeys, setSheetFileKeys] = useState<Set<string>>(new Set());
   // Portrait-rights attestation (#1180). Required whenever reference media is
   // attached, because that is when a real person's likeness can enter the
   // library — the same condition that sets `isHuman` below.
@@ -44,10 +49,15 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
   const isHydrated = useHydrated();
   const { requireAuth } = useAuthGate();
   const createTalent = useCreateTalent();
+  const analyzeMedia = useAnalyzeTalentMedia();
 
   const closeAndReset = () => {
     setFiles([]);
     setUploadedUrls([]);
+    setName('');
+    setDescription('');
+    setSheetUrls(new Set());
+    setSheetFileKeys(new Set());
     // Cleared with the rest of the form: an attestation must be made afresh for
     // each upload, never inherited from the previous one.
     setAttested(false);
@@ -75,14 +85,6 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
     // add prompts a login.
     if (!requireAuth()) return;
 
-    const formData = new FormData(e.currentTarget);
-    const nameValue = formData.get('name');
-    const descriptionValue = formData.get('description');
-
-    const name = typeof nameValue === 'string' ? nameValue : '';
-    const description =
-      typeof descriptionValue === 'string' ? descriptionValue : '';
-
     if (!name.trim()) return;
 
     const depictsRealPerson = uploadedUrls.length > 0;
@@ -98,6 +100,9 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
         description: description.trim() || undefined,
         isHuman: depictsRealPerson,
         referenceImageUrls: uploadedUrls,
+        characterSheetImageUrls: uploadedUrls.filter((url) =>
+          sheetUrls.has(url)
+        ),
         portraitAttestation: depictsRealPerson
           ? {
               statementVersion: PORTRAIT_RIGHTS_V1.version,
@@ -108,6 +113,11 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
       {
         onSuccess: (talent) => {
           onCreated?.(talent);
+          toast.success(
+            sheetUrls.size > 0
+              ? 'Talent added. Generating portrait from the uploaded sheet…'
+              : 'Talent added. Generating talent sheet…'
+          );
           closeAndReset();
         },
       }
@@ -162,6 +172,8 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
               <Input
                 id="name"
                 name="name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
                 placeholder="Talent name…"
                 autoComplete="off"
                 required
@@ -169,10 +181,44 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="description">Description</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="description">Description</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={uploadedUrls.length === 0 || analyzeMedia.isPending}
+                  onClick={() => {
+                    analyzeMedia.mutate(uploadedUrls, {
+                      onSuccess: (result) => {
+                        setDescription(result.description);
+                        if (!name.trim() && result.suggestedName.trim()) {
+                          setName(result.suggestedName.trim());
+                        }
+                        toast.success('Description generated from photos');
+                      },
+                      onError: (error) => {
+                        toast.error('Could not generate description', {
+                          description:
+                            error instanceof Error
+                              ? error.message
+                              : 'Unknown error',
+                        });
+                      },
+                    });
+                  }}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {analyzeMedia.isPending
+                    ? 'Generating…'
+                    : 'Generate from photos'}
+                </Button>
+              </div>
               <Textarea
                 id="description"
                 name="description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
                 placeholder="Describe the talent's appearance, style…"
                 rows={3}
               />
@@ -184,6 +230,20 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
                 files={files}
                 onFilesChange={setFiles}
                 onUploadedUrlsChange={setUploadedUrls}
+                sheetFileKeys={sheetFileKeys}
+                onFileUploaded={(file, url) => {
+                  if (!file.type.startsWith('image/')) return;
+                  analyzeMedia.mutate([url], {
+                    onSuccess: (result) => {
+                      if (!result.isCharacterSheet) return;
+                      setSheetUrls((prev) => new Set(prev).add(url));
+                      setSheetFileKeys((prev) =>
+                        new Set(prev).add(getFileKey(file))
+                      );
+                      toast.success('Character sheet detected');
+                    },
+                  });
+                }}
                 disabled={isPending}
               />
             </div>
@@ -202,7 +262,10 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
             <Button type="button" variant="outline" onClick={handleClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isPending || isUploading}>
+            <Button
+              type="submit"
+              disabled={isPending || isUploading || analyzeMedia.isPending}
+            >
               {isPending
                 ? 'Creating…'
                 : isUploading

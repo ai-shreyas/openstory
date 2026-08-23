@@ -33,7 +33,11 @@ import {
 } from '@/lib/prompts/character-prompt';
 import { recordProvenance } from '@/lib/compliance/provenance';
 import { getTalentChannel } from '@/lib/realtime';
-import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
+import {
+  STORAGE_BUCKETS,
+  buildR2Key,
+  getPathFromUrl,
+} from '@/lib/storage/buckets';
 import { uploadResponse } from '@/lib/storage/upload-response';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -98,96 +102,140 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       });
     });
 
-    // Step 2: Generate the talent sheet image with references
-    const imageResult = await step.do('generate-sheet-image', async () => {
-      const model = input.imageModel ?? DEFAULT_IMAGE_MODEL;
-      const hasReferenceImages =
-        input.referenceImageUrls && input.referenceImageUrls.length > 0;
-      const prompt = buildLibraryTalentSheetPrompt(
-        input.talentName,
-        input.talentDescription,
-        hasReferenceImages
-      );
+    const uploadedSheetUrl = input.uploadedSheetUrl;
+    let sheetUsage: { requestId?: string | null } = {};
+    let storageResult: { sheetId: string; url: string; path: string };
+    const sheetSource = uploadedSheetUrl ? 'manual_upload' : 'ai_generated';
 
-      logger.info(
-        `[LibraryTalentSheetWorkflow:cf] Generating sheet with model ${model}${hasReferenceImages ? ' (with reference images)' : ' (text-to-image only)'}`
-      );
-
-      const generationParams: ImageGenerationParams = {
-        model,
-        prompt,
-        imageSize: 'landscape_16_9',
-        numImages: 1,
-        resolution: '2K',
-      } satisfies ImageGenerationParams;
-
-      // Only include referenceImageUrls if provided
-      if (hasReferenceImages) {
-        generationParams.referenceImageUrls = input.referenceImageUrls;
-      }
-
-      return await generateImageWithProvider(generationParams, {
-        scopedDb: scopedDb.credentials,
+    if (uploadedSheetUrl) {
+      storageResult = await step.do('use-uploaded-sheet', async () => {
+        logger.info(
+          `[LibraryTalentSheetWorkflow:cf] Using uploaded character sheet for ${input.talentName}`
+        );
+        const sheetId = generateId();
+        try {
+          const unprefixed = getPathFromUrl(
+            uploadedSheetUrl,
+            STORAGE_BUCKETS.TALENT
+          );
+          return {
+            sheetId,
+            url: uploadedSheetUrl,
+            path: buildR2Key(STORAGE_BUCKETS.TALENT, unprefixed),
+          };
+        } catch {
+          const response = await fetch(uploadedSheetUrl);
+          if (!response.ok) {
+            throw new Error(
+              `Failed to fetch uploaded sheet: ${response.status}`
+            );
+          }
+          const storagePath = `${input.teamId}/${input.talentId}/${sheetId}.png`;
+          const result = await uploadResponse(
+            response,
+            STORAGE_BUCKETS.TALENT,
+            storagePath,
+            { contentType: 'image/png' }
+          );
+          return { sheetId, url: result.publicUrl, path: result.path };
+        }
       });
-    });
+    } else {
+      // Step 2: Generate the talent sheet image with references
+      const imageResult = await step.do('generate-sheet-image', async () => {
+        const model = input.imageModel ?? DEFAULT_IMAGE_MODEL;
+        const hasReferenceImages =
+          input.referenceImageUrls && input.referenceImageUrls.length > 0;
+        const prompt = buildLibraryTalentSheetPrompt(
+          input.talentName,
+          input.talentDescription,
+          hasReferenceImages
+        );
 
-    // Before the deduction guard — see recordFalUsageStep (#1069).
-    const sheetUsage = await recordFalUsageStep(
-      step,
-      scopedDb,
-      imageResult.metadata,
-      'record-fal-usage-sheet'
-    );
+        logger.info(
+          `[LibraryTalentSheetWorkflow:cf] Generating sheet with model ${model}${hasReferenceImages ? ' (with reference images)' : ' (text-to-image only)'}`
+        );
 
-    // Deduct credits for sheet generation (skip if team used own fal key)
-    await step.do('deduct-credits-sheet', async () => {
-      await deductWorkflowCredits({
+        const generationParams: ImageGenerationParams = {
+          model,
+          prompt,
+          imageSize: 'landscape_16_9',
+          numImages: 1,
+          resolution: '2K',
+        } satisfies ImageGenerationParams;
+
+        // Only include referenceImageUrls if provided
+        if (hasReferenceImages) {
+          generationParams.referenceImageUrls = input.referenceImageUrls;
+        }
+
+        return await generateImageWithProvider(generationParams, {
+          scopedDb: scopedDb.credentials,
+        });
+      });
+
+      // Before the deduction guard — see recordFalUsageStep (#1069).
+      sheetUsage = await recordFalUsageStep(
+        step,
         scopedDb,
-        costMicros: extractImageCost(imageResult.metadata),
-        usedOwnKey: imageResult.metadata.usedOwnKey,
-        description: `Talent sheet (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
-        idempotencyKey: `${event.instanceId}:sheet`,
-        metadata: {
-          ...sheetUsage,
-          talentId: input.talentId,
-          type: 'sheet',
-        },
-        workflowName: 'LibraryTalentSheetWorkflow',
-      });
-    });
-
-    const imageUrl = imageResult.imageUrls[0];
-    if (!imageUrl) {
-      throw new Error('No image URL returned from generation');
-    }
-
-    // Step 3: Upload to R2 storage
-    const storageResult = await step.do('upload-to-storage', async () => {
-      logger.info(`[LibraryTalentSheetWorkflow:cf] Uploading sheet to storage`);
-
-      // Fetch and stream directly to R2
-      const response = await fetch(imageUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch generated image: ${response.status}`);
-      }
-
-      // Build storage path
-      const sheetId = generateId();
-      const storagePath = `${input.teamId}/${input.talentId}/${sheetId}.png`;
-
-      const result = await uploadResponse(
-        response,
-        STORAGE_BUCKETS.TALENT,
-        storagePath,
-        { contentType: 'image/png' }
+        imageResult.metadata,
+        'record-fal-usage-sheet'
       );
 
-      return {
-        sheetId,
-        url: result.publicUrl,
-        path: result.path,
-      };
-    });
+      // Deduct credits for sheet generation (skip if team used own fal key)
+      await step.do('deduct-credits-sheet', async () => {
+        await deductWorkflowCredits({
+          scopedDb,
+          costMicros: extractImageCost(imageResult.metadata),
+          usedOwnKey: imageResult.metadata.usedOwnKey,
+          description: `Talent sheet (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
+          idempotencyKey: `${event.instanceId}:sheet`,
+          metadata: {
+            ...sheetUsage,
+            talentId: input.talentId,
+            type: 'sheet',
+          },
+          workflowName: 'LibraryTalentSheetWorkflow',
+        });
+      });
+
+      const imageUrl = imageResult.imageUrls[0];
+      if (!imageUrl) {
+        throw new Error('No image URL returned from generation');
+      }
+
+      // Step 3: Upload to R2 storage
+      storageResult = await step.do('upload-to-storage', async () => {
+        logger.info(
+          `[LibraryTalentSheetWorkflow:cf] Uploading sheet to storage`
+        );
+
+        // Fetch and stream directly to R2
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error(
+            `Failed to fetch generated image: ${response.status}`
+          );
+        }
+
+        // Build storage path
+        const sheetId = generateId();
+        const storagePath = `${input.teamId}/${input.talentId}/${sheetId}.png`;
+
+        const result = await uploadResponse(
+          response,
+          STORAGE_BUCKETS.TALENT,
+          storagePath,
+          { contentType: 'image/png' }
+        );
+
+        return {
+          sheetId,
+          url: result.publicUrl,
+          path: result.path,
+        };
+      });
+    }
 
     // Step 4: Divergence-aware sheet record creation. Always create the
     // talent_sheets row; on divergence, attach a variant to it (preserving
@@ -231,8 +279,9 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
             name: input.sheetName ?? 'Generated Sheet',
             imageUrl: storageResult.url,
             imagePath: storageResult.path,
-            isDefault: false,
-            source: 'ai_generated',
+            metadata: input.uploadedSheetMetadata,
+            isDefault: sheetSource === 'manual_upload',
+            source: sheetSource,
             inputHash: snapshotHash,
             divergedAt: decision.kind === 'divergent' ? new Date() : null,
           }));
@@ -275,8 +324,11 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
         assetKind: 'talent_sheet',
         assetId: sheet.id,
         storageKey: storageResult.path,
-        provider: 'fal',
-        model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+        provider: sheetSource === 'manual_upload' ? 'upload' : 'fal',
+        model:
+          sheetSource === 'manual_upload'
+            ? 'manual-upload'
+            : (input.imageModel ?? DEFAULT_IMAGE_MODEL),
         providerRequestId: sheetUsage.requestId ?? null,
         workflowRunId,
         prompt: buildLibraryTalentSheetPrompt(
@@ -337,8 +389,15 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       'generate-headshot-image',
       async () => {
         const model = input.imageModel ?? DEFAULT_IMAGE_MODEL;
-        const hasReferenceImages =
-          input.referenceImageUrls && input.referenceImageUrls.length > 0;
+        const referenceImageUrls = [
+          ...new Set(
+            [
+              input.uploadedSheetUrl,
+              ...(input.referenceImageUrls ?? []),
+            ].filter((url): url is string => Boolean(url))
+          ),
+        ];
+        const hasReferenceImages = referenceImageUrls.length > 0;
         const prompt = buildTalentHeadshotPrompt(
           input.talentName,
           input.talentDescription,
@@ -356,9 +415,8 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
           numImages: 1,
         } satisfies ImageGenerationParams;
 
-        // Only include referenceImageUrls if provided
         if (hasReferenceImages) {
-          generationParams.referenceImageUrls = input.referenceImageUrls;
+          generationParams.referenceImageUrls = referenceImageUrls;
         }
 
         return await generateImageWithProvider(generationParams, {

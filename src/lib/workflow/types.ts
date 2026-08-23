@@ -474,6 +474,12 @@ export interface CharacterSheetWorkflowInput extends SequenceWorkflowContext {
   talentMetadata?: CharacterBibleEntry;
   /** Talent description to include in prompt */
   talentDescription?: string;
+  /**
+   * When true, copy `referenceImageUrl` onto the character instead of
+   * generating a costumed sheet. Snapshotted at trigger time from
+   * `shouldReuseTalentSheet`.
+   */
+  reuseTalentSheet?: boolean;
   /** Sequence style config to apply to the character sheet */
   styleConfig?: StyleConfig;
   /**
@@ -610,6 +616,11 @@ export interface RecastCharacterWorkflowInput extends SequenceWorkflowContext {
   /** Talent description */
   talentDescription?: string;
   /**
+   * Copy the talent sheet onto the character instead of generating a
+   * costumed sheet. Threaded through to the character-sheet child.
+   */
+  reuseTalentSheet?: boolean;
+  /**
    * The upstream talent sheet's `input_hash`, resolved at trigger time. The
    * workflow used to re-derive this two DB reads deep, minutes later — a
    * different talent identity than the one the user recast to.
@@ -645,6 +656,8 @@ export type TalentCharacterMatch = {
   sheetImageUrl: string;
   /** Talent sheet metadata for appearance blending */
   sheetMetadata?: CharacterBibleEntry;
+  /** Talent library description, snapshotted at match time for reuse checks. */
+  talentDescription?: string;
 };
 
 /**
@@ -913,6 +926,14 @@ export interface LibraryTalentSheetWorkflowInput extends UserWorkflowContext {
   imageModel?: TextToImageModel;
   /** Name for the generated sheet */
   sheetName?: string;
+  /**
+   * Existing character/talent sheet the user uploaded. When set, the
+   * workflow stores this image as the sheet instead of generating a new
+   * 4-panel, then still generates a headshot from it.
+   */
+  uploadedSheetUrl?: string;
+  /** Appearance metadata extracted from the uploaded sheet, when available. */
+  uploadedSheetMetadata?: CharacterBibleEntry;
   /** Hash over the inlined DTO; validated by the snapshot middleware. */
   snapshotInputHash?: string;
 }

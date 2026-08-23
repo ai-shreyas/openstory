@@ -11,7 +11,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
-import { toast } from 'sonner';
 import { PortraitAttestationFields } from './portrait-attestation-fields';
 import { TalentMediaUpload } from './talent-media-upload';
 
@@ -54,7 +53,8 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
         <DialogHeader>
           <DialogTitle>Add Reference Media</DialogTitle>
           <DialogDescription>
-            Upload images or videos to use as reference for this talent.
+            Drop a character sheet or reference photos. Confirm likeness
+            authorization before the files upload.
           </DialogDescription>
         </DialogHeader>
 
@@ -67,15 +67,7 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
 
         <TalentMediaUpload
           files={files}
-          onFilesChange={(next) => {
-            if (!canUpload) {
-              toast.error(
-                'Confirm you have authorization for this person’s likeness'
-              );
-              return;
-            }
-            setFiles(next);
-          }}
+          onFilesChange={setFiles}
           talentId={talentId}
           portraitAttestation={
             canUpload
@@ -85,7 +77,6 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
                 }
               : undefined
           }
-          disabled={!canUpload}
           onComplete={() => setUploadCount((c) => c + 1)}
         />
 
@@ -93,8 +84,15 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleClose} disabled={isUploading}>
-            {isUploading ? 'Uploading…' : 'Done'}
+          <Button
+            onClick={handleClose}
+            disabled={isUploading || (files.length > 0 && !canUpload)}
+          >
+            {isUploading
+              ? 'Uploading…'
+              : files.length > 0 && !canUpload
+                ? 'Confirm authorization to upload'
+                : 'Done'}
           </Button>
         </DialogFooter>
       </DialogContent>
