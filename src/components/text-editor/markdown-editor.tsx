@@ -1,6 +1,6 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import { AllSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
@@ -149,8 +149,11 @@ const containerBaseClasses =
 const disabledClasses =
   'cursor-not-allowed bg-input/50 opacity-50 dark:bg-input/80';
 
+// 16px base below md (prose-sm only from md up): an editable surface under
+// 16px makes iOS Safari auto-zoom on focus, and the zoomed page then pans
+// left/right on every tap. Mirrors the container's `text-base md:text-sm`.
 const proseClasses =
-  'prose prose-sm dark:prose-invert max-w-none w-full flex-1 focus:outline-none [&_p]:my-0 [&_p+p]:mt-2 [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:mt-2 [&_h3]:mb-1 [&_ul]:my-1 [&_ol]:my-1 [&_blockquote]:my-1 [&_pre]:my-1';
+  'prose md:prose-sm dark:prose-invert max-w-none w-full flex-1 focus:outline-none [&_p]:my-0 [&_p+p]:mt-2 [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:mt-2 [&_h3]:mb-1 [&_ul]:my-1 [&_ol]:my-1 [&_blockquote]:my-1 [&_pre]:my-1';
 
 const placeholderClasses =
   '[&_.is-editor-empty:first-child::before]:text-muted-foreground [&_.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.is-editor-empty:first-child::before]:float-left [&_.is-editor-empty:first-child::before]:h-0 [&_.is-editor-empty:first-child::before]:pointer-events-none';
@@ -315,6 +318,16 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, mentionItemsKey, hasMentions]);
 
+  // Emptiness must be transaction-reactive, not read off `editor` at render
+  // time: the value-sync effects above apply external content (seeded sample
+  // script, enhance output) with `emitUpdate: false` inside a rAF, which
+  // re-renders nothing — a render-time `editor.isEmpty` then stays stale and
+  // leaves the placeholder overlaid on the script (#1230).
+  const editorIsEmpty = useEditorState({
+    editor,
+    selector: (ctx) => ctx.editor?.isEmpty ?? null,
+  });
+
   // editable is captured at init; mirror prop changes through to the editor.
   useEffect(() => {
     if (!editor) return;
@@ -333,7 +346,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         containerBaseClasses,
         'relative',
         disabled && disabledClasses,
-        'overflow-y-auto',
+        // overscroll-contain: hitting the editor's scroll bounds must not
+        // chain the touch gesture into scrolling the page underneath.
+        'overflow-y-auto overscroll-contain',
         className
       )}
       aria-invalid={ariaInvalid}
@@ -354,7 +369,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         editor.commands.focus('end');
       }}
     >
-      {placeholder && (editor ? editor.isEmpty : !value) ? (
+      {placeholder && (editorIsEmpty ?? !value) ? (
         <p className="pointer-events-none absolute inset-x-0 top-0 px-2.5 py-2 text-base text-muted-foreground md:text-sm">
           {placeholder}
         </p>

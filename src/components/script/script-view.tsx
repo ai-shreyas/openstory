@@ -1434,7 +1434,7 @@ export const ScriptView: FC<{
             (editor floor, see the wrapper below) with the chrome fixed.
             overflow-y-auto is a fallback for viewports too short for even the
             editor floor + Sample-script row — it only engages then. */}
-        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overflow-x-hidden">
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overscroll-contain overflow-x-hidden">
           {/* Shows during the reasoning pass — i.e. while enhancing but before
               any enhanced text has streamed back. Carries the model's own
               reasoning when it sent any (collapsed; see ThinkingBar), and is a
