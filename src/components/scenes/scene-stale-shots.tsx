@@ -153,6 +153,7 @@ export const SceneStaleShots: React.FC<SceneStaleShotsProps> = ({
           <UpdateAllDialog
             open={updateAllOpen}
             onOpenChange={setUpdateAllOpen}
+            staleShots={staleShots.flatMap((s) => staleness?.[s.id] ?? [])}
             onConfirm={(depth: UpdateStaleDepth) => {
               setUpdateAllOpen(false);
               onUpdateAll(depth);

@@ -1362,6 +1362,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           // would just no-op against the dedup.
           isRegenerating={isUpdatingAll || !shotHasStale}
           onRegenerateDepth={shotHasStale ? handleUpdateAll : undefined}
+          staleness={staleness}
         />
       )}
       {shotStaleUnknown && !shotHasStale && !shotHasUpdating && (
