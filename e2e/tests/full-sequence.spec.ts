@@ -291,6 +291,10 @@ SUPER:  CORAL.  OUT NOW.
       // checker is far less likeness-strict than GPT Image 2's, which kept
       // rejecting talent-referenced beauty shots during fixture recording
       // (makeup on a referenced face = OpenAI's blocked likeness class).
+      // Replay is fal (e2e has no XAI_API_KEY), so aimock STRICT matches
+      // `e2e/fixtures/recorded/fal/xai-grok-imagine-image-v2.0-{text-to-image,edit}/`.
+      // Bumping IMAGE_MODELS.grok_imagine_image.id without cloning those
+      // folders 503s LocationSheetWorkflow with "No fixture matched".
       await page.getByRole('button', { name: 'Generation settings' }).click();
       await page.getByRole('button', { name: /^Image Models?:/ }).click();
       await page
