@@ -1376,14 +1376,10 @@ export interface ElementVisionWorkflowResult {
 }
 
 /**
- * Replace element workflow input
- * Orchestrates element image swap + per-shot image edits for affected shots.
+ * Replace element workflow input.
  *
- * Per-shot behaviour: invokes `image-workflow` with the existing shot
- * thumbnail as the PRIMARY SOURCE and the new element image as an ELEMENT REF.
- * The image edit endpoint swaps the element while preserving the rest of the
- * shot — this is by design for elements (vs cast/location which fully
- * regenerate the shot).
+ * Keep this payload. Replace currently persists + vision and leaves shots
+ * stale (#1192). A later "apply to shots" action should reuse this fan-out.
  */
 /**
  * Per-shot source state for `replaceElementWorkflow`, frozen at trigger time.

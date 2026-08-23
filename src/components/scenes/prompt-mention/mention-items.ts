@@ -141,6 +141,32 @@ export function filterMentionItems(
   return items.filter((item) => item.haystack.includes(q));
 }
 
+/**
+ * Attrs written onto the Tiptap mention node when a dropdown row is chosen.
+ *
+ * The suggestion plugin sometimes hands the command the raw `MentionItem`
+ * (`id` is `element:<ulid>` / `character:<ulid>`). Inserting that id produces
+ * a pill the continuity parser never recognises — selecting an element from
+ * the @ dropdown looks like a no-op. Prefer `tag` (the canonical token) when
+ * present; already-mapped `{ id, section, label }` attrs pass through.
+ */
+export function mentionInsertAttrs(item: {
+  id: string | null;
+  section: MentionSection | null;
+  label: string | null;
+  tag?: string;
+}): {
+  id: string | null;
+  section: MentionSection | null;
+  label: string | null;
+} {
+  return {
+    id: item.tag || item.id,
+    section: item.section,
+    label: item.label,
+  };
+}
+
 export const SECTION_LABELS: Record<MentionSection, string> = {
   elements: 'Elements',
   cast: 'Cast',

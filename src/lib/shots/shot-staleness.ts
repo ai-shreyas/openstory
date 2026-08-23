@@ -22,6 +22,7 @@ import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 import type { SequenceStatus } from '@/lib/db/schema/sequences';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
+import { matchElementsToShotImage } from '@/lib/workflows/scene-matching';
 import { getLogger } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'shots', 'staleness']);
@@ -172,13 +173,9 @@ export async function computeShotStaleness(args: {
   );
   const effectivePrompt = selectedPrompt?.text ?? null;
   if (effectivePrompt) {
-    // Distinguish "stored hash absent" from "stored hash matches". No selected
-    // version, or a version with a null hash (the image predates hash tracking,
-    // or came from a pre-fix `generateShotImageFn` that didn't pass a
-    // sceneSnapshot), means we genuinely have no opinion — so 'untracked'
-    // rather than lying with 'fresh'. Once the user regenerates once under the
-    // new path the version carries a hash and the comparison takes over.
-    if (selectedImage?.inputHash == null) {
+    // Null stored hash: 'untracked' (no opinion), unless a named element's
+    // row is newer than the still — replace would otherwise hide it (#1192).
+    if (selectedImage?.inputHash == null && !selectedImage?.url) {
       thumbnail = 'untracked';
     } else {
       try {
@@ -189,6 +186,21 @@ export async function computeShotStaleness(args: {
               scopedDb.sequenceLocations.listWithReferences(sequence.id),
               scopedDb.sequenceElements.list(sequence.id),
             ]);
+
+        if (selectedImage.inputHash == null) {
+          thumbnail = 'untracked';
+          const matched = matchElementsToShotImage(elements, {
+            visualPrompt: effectivePrompt,
+            elementTags: scene?.continuity?.elementTags,
+            sceneExtract: scene?.originalScript.extract,
+          });
+          const stillAt = (
+            selectedImage.generatedAt ?? selectedImage.createdAt
+          ).getTime();
+          if (matched.some((el) => el.updatedAt.getTime() > stillAt)) {
+            thumbnail = 'stale';
+          }
+        }
 
         const snapshot = await buildRegenerateShotSnapshot({
           shot,
@@ -204,19 +216,17 @@ export async function computeShotStaleness(args: {
           ),
           aspectRatio: sequence.aspectRatio,
         });
-
         liveHashes.thumbnail = snapshot.snapshotInputHash;
-        thumbnail =
-          snapshot.snapshotInputHash !== selectedImage.inputHash
-            ? 'stale'
-            : 'fresh';
+        if (selectedImage.inputHash != null) {
+          thumbnail =
+            snapshot.snapshotInputHash !== selectedImage.inputHash
+              ? 'stale'
+              : 'fresh';
+        }
       } catch (error) {
-        // Mirror the visual/motion branches: a thumbnail-hash failure (e.g.
-        // transient D1 read, malformed element/location row) must not throw
-        // out of the whole handler — that would null the entire staleness
-        // result and silently suppress the visual/motion banners too. Report
-        // 'unknown' (fail-open as 'fresh' would lie about freshness).
-        thumbnail = 'unknown';
+        // Fail-open as 'fresh' would lie. Don't clobber a timestamp-stale
+        // verdict if only the snapshot hash failed.
+        if (thumbnail !== 'stale') thumbnail = 'unknown';
         logger.warn(`thumbnail staleness uncomputable for shot ${shot.id}:`, {
           err: error,
         });

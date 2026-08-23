@@ -46,7 +46,7 @@ import type {
 } from '@/lib/workflow/types';
 import {
   matchCharactersToScene,
-  matchElementsToScene,
+  matchElementsToShotImage,
   matchLocationsToScene,
 } from '@/lib/workflows/scene-matching';
 import {
@@ -140,6 +140,9 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
     // stamped hash does not describe.
     const { sceneCharacterMap, sceneLocationMap, sceneElementMap } =
       await step.do('build-reference-maps', async () => {
+        const visualPromptBySceneId = Object.fromEntries(
+          (input.sceneSnapshots ?? []).map((s) => [s.sceneId, s.visualPrompt])
+        );
         return {
           sceneCharacterMap: Object.fromEntries(
             scenesWithVisualPrompts.map((scene) => [
@@ -163,11 +166,11 @@ export class ShotImagesWorkflow extends OpenStoryWorkflowEntrypoint<ShotImagesWo
           sceneElementMap: Object.fromEntries(
             scenesWithVisualPrompts.map((scene) => [
               scene.sceneId,
-              matchElementsToScene(
-                elementsFromInput,
-                scene.continuity?.elementTags || [],
-                scene.originalScript.extract || ''
-              ),
+              matchElementsToShotImage(elementsFromInput, {
+                visualPrompt: visualPromptBySceneId[scene.sceneId] ?? '',
+                elementTags: scene.continuity?.elementTags,
+                sceneExtract: scene.originalScript.extract,
+              }),
             ])
           ),
         };

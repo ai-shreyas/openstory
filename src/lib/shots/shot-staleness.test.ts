@@ -27,7 +27,10 @@ function asStub<T>(stub: unknown): T {
   return stub as T;
 }
 
-const scene = asStub<Scene>({ sceneId: 'scene-1' });
+const scene = asStub<Scene>({
+  sceneId: 'scene-1',
+  originalScript: { extract: '', dialogue: [] },
+});
 const sequence = {
   id: 'seq-1',
   styleId: 'style-1',
@@ -294,4 +297,95 @@ describe('computeShotStaleness', () => {
       });
     }
   );
+
+  it('marks an untracked still stale when a named element was replaced after it (#1192)', async () => {
+    buildRegenerateShotSnapshot.mockResolvedValue({
+      snapshotInputHash: 'image-live',
+    });
+    loadNarrowShotPromptContext.mockResolvedValue({});
+    computeVisualPromptInputHash.mockResolvedValue('visual-stored');
+    computeMotionPromptInputHash.mockResolvedValue('motion-stored');
+
+    const still = asStub<FrameVariant>({
+      id: 'fv-1',
+      inputHash: null,
+      model: null,
+      url: 'https://example.com/still.png',
+      generatedAt: new Date('2026-08-23T00:37:00Z'),
+      createdAt: new Date('2026-08-23T00:36:00Z'),
+    });
+    const result = await computeShotStaleness({
+      scopedDb: makeScopedDb({
+        visualSelected: {
+          text: 'closing around the bottle from (DROPPER_BOTTLE)',
+          inputHash: null,
+        },
+      }),
+      sequence,
+      shot,
+      frame,
+      selectedImage: still,
+      scene,
+      refs: {
+        characters: [],
+        locations: [],
+        elements: [
+          asStub({
+            token: 'DROPPER_BOTTLE',
+            imageUrl: 'https://example.com/bottle-v2.png',
+            updatedAt: new Date('2026-08-23T01:32:00Z'),
+          }),
+        ],
+        style: null,
+      },
+    });
+
+    expect(result.thumbnail).toBe('stale');
+    expect(result.liveHashes.thumbnail).toBe('image-live');
+  });
+
+  it('leaves an untracked still untracked when the named element is older', async () => {
+    buildRegenerateShotSnapshot.mockResolvedValue({
+      snapshotInputHash: 'image-live',
+    });
+    loadNarrowShotPromptContext.mockResolvedValue({});
+    computeVisualPromptInputHash.mockResolvedValue('visual-stored');
+    computeMotionPromptInputHash.mockResolvedValue('motion-stored');
+
+    const still = asStub<FrameVariant>({
+      id: 'fv-1',
+      inputHash: null,
+      model: null,
+      url: 'https://example.com/still.png',
+      generatedAt: new Date('2026-08-23T01:40:00Z'),
+      createdAt: new Date('2026-08-23T01:39:00Z'),
+    });
+    const result = await computeShotStaleness({
+      scopedDb: makeScopedDb({
+        visualSelected: {
+          text: 'closing around the bottle from (DROPPER_BOTTLE)',
+          inputHash: null,
+        },
+      }),
+      sequence,
+      shot,
+      frame,
+      selectedImage: still,
+      scene,
+      refs: {
+        characters: [],
+        locations: [],
+        elements: [
+          asStub({
+            token: 'DROPPER_BOTTLE',
+            imageUrl: 'https://example.com/bottle-v2.png',
+            updatedAt: new Date('2026-08-23T01:32:00Z'),
+          }),
+        ],
+        style: null,
+      },
+    });
+
+    expect(result.thumbnail).toBe('untracked');
+  });
 });

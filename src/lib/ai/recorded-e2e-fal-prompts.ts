@@ -2,7 +2,8 @@
  * Rebuild the Grok quality/edit prompts the full-pipeline e2e sends after
  * slice-derived tags + casting (#1218). Fal matchers key off the full prompt
  * including Image-N bindings, so inherit attaching a location/element shifts
- * the number and misses every still.
+ * the number and misses every still. Element refs follow the visual prompt
+ * (`matchElementsToShotImage`), same as live image stamp.
  */
 
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
@@ -12,7 +13,7 @@ import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt'
 import { getVariantImagePrompt } from '@/lib/prompts/variant-image';
 import {
   matchCharactersToScene,
-  matchElementsToScene,
+  matchElementsToShotImage,
   matchLocationsToScene,
 } from '@/lib/workflows/scene-matching';
 import {
@@ -88,11 +89,11 @@ export function reconstructRecordedFalEditPrompts(): RecordedFalEditPrompt[] {
         )
       ),
       ...buildElementReferenceImages(
-        matchElementsToScene(
-          elements,
-          scene.continuity.elementTags ?? [],
-          scene.originalScript.extract
-        )
+        matchElementsToShotImage(elements, {
+          visualPrompt: fullPrompt,
+          elementTags: scene.continuity.elementTags,
+          sceneExtract: scene.originalScript.extract,
+        })
       ),
     ];
     const hero = buildReferenceImagePrompt(fullPrompt, refs).prompt;

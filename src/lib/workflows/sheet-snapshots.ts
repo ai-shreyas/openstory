@@ -40,7 +40,7 @@ import type {
 } from '@/lib/workflow/types';
 import {
   matchCharactersToScene,
-  matchElementsToScene,
+  matchElementsToShotImage,
   matchLocationsToScene,
 } from './scene-matching';
 
@@ -308,6 +308,10 @@ function sortedRefHashes(values: Array<string | null | undefined>): string[] {
  * input hash: character `sheetInputHash`, location `referenceInputHash`, and
  * element `imageUrl`.
  *
+ * Element matching uses the still's visual prompt when `visualPrompt` is
+ * passed (the same text the image model generated from). Scene extract /
+ * `elementTags` are the fallback only when no prompt exists.
+ *
  * Single source of truth so the image-generation trigger **stamp**
  * (`computeShotImageInputHash` via `prepareShotImageWorkflowInput`) and the staleness **verify**
  * (`buildRegenerateShotSnapshot`) cannot drift — drift on the element /
@@ -327,6 +331,12 @@ export function resolveSceneShotImageReferences(params: {
     metadata?: { location?: string } | null;
     originalScript?: { extract?: string } | null;
   } | null;
+  /**
+   * The still's visual prompt. When present, element matching uses this
+   * text (not scene extract / tags) so a replace only stales stills that
+   * actually named the element. See `matchElementsToShotImage`.
+   */
+  visualPrompt?: string | null;
   characters: CharacterMinimal[];
   locations: SequenceLocationMinimal[];
   elements: SequenceElementMinimal[];
@@ -338,7 +348,7 @@ export function resolveSceneShotImageReferences(params: {
   locationSheetHashes: string[];
   elementReferenceHashes: string[];
 } {
-  const { scene, characters, locations, elements } = params;
+  const { scene, visualPrompt, characters, locations, elements } = params;
   const matchedCharacters = matchCharactersToScene(
     characters,
     scene?.continuity?.characterTags ?? []
@@ -348,11 +358,11 @@ export function resolveSceneShotImageReferences(params: {
     scene?.continuity?.environmentTag ?? '',
     scene?.metadata?.location ?? ''
   );
-  const matchedElements = matchElementsToScene(
-    elements,
-    scene?.continuity?.elementTags ?? [],
-    scene?.originalScript?.extract ?? ''
-  );
+  const matchedElements = matchElementsToShotImage(elements, {
+    visualPrompt,
+    elementTags: scene?.continuity?.elementTags,
+    sceneExtract: scene?.originalScript?.extract,
+  });
   return {
     characters: matchedCharacters,
     locations: matchedLocations,

@@ -506,6 +506,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       scenesWithVisualPrompts.map((scene) => {
         const refs = resolveSceneShotImageReferences({
           scene,
+          visualPrompt: visualPromptBySceneId[scene.sceneId] ?? '',
           characters: charactersWithSheets,
           locations: locationsWithSheets,
           elements: allElements,

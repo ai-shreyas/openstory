@@ -10,6 +10,7 @@
 
 import {
   filterMentionItems,
+  mentionInsertAttrs,
   SECTION_ORDER,
   type MentionItem,
 } from '@/components/scenes/prompt-mention/mention-items';
@@ -20,13 +21,12 @@ import {
   type MentionListProps,
   type MentionListRef,
 } from './mention-list';
-import type { PromptMentionAttrs } from './mention-extension';
 
 const MAX_ITEMS = 8;
 const POPUP_GAP = 6;
 
 type SuggestionConfig = Omit<
-  SuggestionOptions<MentionItem, PromptMentionAttrs>,
+  SuggestionOptions<MentionItem, MentionItem>,
   'editor'
 >;
 
@@ -50,21 +50,29 @@ export function createMentionSuggestion(
     },
 
     command: ({ editor, range, props }) => {
+      const attrs = mentionInsertAttrs(props);
+      // Same space-collapse as Tiptap's default mention command: if the node
+      // after the query is already a space, extend the replace range over it
+      // so we don't insert a double space.
+      const nodeAfter = editor.view.state.selection.$to.nodeAfter;
+      const overrideSpace = nodeAfter?.text?.startsWith(' ');
+      const insertRange = overrideSpace
+        ? { ...range, to: range.to + 1 }
+        : range;
       editor
         .chain()
         .focus()
-        .insertContentAt(range, [
+        .insertContentAt(insertRange, [
           {
             type: 'mention',
-            attrs: {
-              id: props.id,
-              section: props.section,
-              label: props.label,
-            },
+            attrs,
           },
           { type: 'text', text: ' ' },
         ])
         .run();
+      editor.view.dom.ownerDocument.defaultView
+        ?.getSelection()
+        ?.collapseToEnd();
     },
 
     render: () => {
@@ -94,18 +102,14 @@ export function createMentionSuggestion(
       };
 
       return {
-        onStart: (props: SuggestionProps<MentionItem, PromptMentionAttrs>) => {
+        onStart: (props: SuggestionProps<MentionItem, MentionItem>) => {
           component = new ReactRenderer<MentionListRef, MentionListProps>(
             MentionList,
             {
               props: {
                 items: props.items,
                 command: (item: MentionItem) => {
-                  props.command({
-                    id: item.tag,
-                    section: item.section,
-                    label: item.label,
-                  });
+                  props.command(item);
                 },
               },
               editor: props.editor,
@@ -122,15 +126,11 @@ export function createMentionSuggestion(
           position(popup, props.clientRect?.());
         },
 
-        onUpdate: (props: SuggestionProps<MentionItem, PromptMentionAttrs>) => {
+        onUpdate: (props: SuggestionProps<MentionItem, MentionItem>) => {
           component?.updateProps({
             items: props.items,
             command: (item: MentionItem) => {
-              props.command({
-                id: item.tag,
-                section: item.section,
-                label: item.label,
-              });
+              props.command(item);
             },
           });
           if (popup) position(popup, props.clientRect?.());
