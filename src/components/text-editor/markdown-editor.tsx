@@ -1,6 +1,6 @@
 import HardBreak from '@tiptap/extension-hard-break';
 import { Placeholder } from '@tiptap/extensions/placeholder';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import { AllSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
@@ -315,6 +315,16 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, mentionItemsKey, hasMentions]);
 
+  // Emptiness must be transaction-reactive, not read off `editor` at render
+  // time: the value-sync effects above apply external content (seeded sample
+  // script, enhance output) with `emitUpdate: false` inside a rAF, which
+  // re-renders nothing — a render-time `editor.isEmpty` then stays stale and
+  // leaves the placeholder overlaid on the script (#1230).
+  const editorIsEmpty = useEditorState({
+    editor,
+    selector: (ctx) => ctx.editor?.isEmpty ?? null,
+  });
+
   // editable is captured at init; mirror prop changes through to the editor.
   useEffect(() => {
     if (!editor) return;
@@ -354,7 +364,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         editor.commands.focus('end');
       }}
     >
-      {placeholder && (editor ? editor.isEmpty : !value) ? (
+      {placeholder && (editorIsEmpty ?? !value) ? (
         <p className="pointer-events-none absolute inset-x-0 top-0 px-2.5 py-2 text-base text-muted-foreground md:text-sm">
           {placeholder}
         </p>
