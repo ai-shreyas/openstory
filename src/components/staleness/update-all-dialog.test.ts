@@ -1,29 +1,21 @@
 import type { ShotStaleness } from '@/hooks/use-shot-staleness';
 import { describe, expect, it } from 'vitest';
-import { describeStaleShots } from './update-all-dialog';
+import { describeCauses } from './update-all-dialog';
 
-const shot = (o: Partial<ShotStaleness>): ShotStaleness => ({
-  thumbnail: 'fresh',
+const shot = (causes: string[]): ShotStaleness => ({
+  thumbnail: 'stale',
   visualPrompt: 'fresh',
   motionPrompt: 'fresh',
-  ...o,
+  causes,
 });
 
-describe('describeStaleShots', () => {
-  it('names each stale artifact once across shots', () => {
+describe('describeCauses', () => {
+  it('dedupes causes across shots', () => {
     expect(
-      describeStaleShots([
-        shot({ visualPrompt: 'stale', thumbnail: 'stale' }),
-        shot({ motionPrompt: 'stale' }),
-        shot({ visualPrompt: 'stale' }),
-      ])
-    ).toBe(
-      '3 shots have an out-of-date visual prompt, motion prompt and image.'
-    );
+      describeCauses([shot(['Script', 'Character "Woman"']), shot(['Script'])])
+    ).toBe('Changed: Script, Character "Woman"');
   });
-  it('singular shot', () => {
-    expect(describeStaleShots([shot({ thumbnail: 'stale' })])).toBe(
-      'This shot has an out-of-date image.'
-    );
+  it('null when nothing could be named', () => {
+    expect(describeCauses([shot([])])).toBeNull();
   });
 });

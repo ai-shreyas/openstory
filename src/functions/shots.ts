@@ -585,7 +585,8 @@ const toWireStaleness = ({
   thumbnail,
   visualPrompt,
   motionPrompt,
-}: ShotStalenessResult) => ({ thumbnail, visualPrompt, motionPrompt });
+  causes,
+}: ShotStalenessResult) => ({ thumbnail, visualPrompt, motionPrompt, causes });
 
 /**
  * Batched `getShotStalenessFn` (#1077): staleness for every shot in one scene

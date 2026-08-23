@@ -14,7 +14,7 @@ import {
   UPDATE_STALE_DEPTHS,
   type UpdateStaleDepth,
 } from '@/lib/shots/update-stale-depth';
-import type { ShotArtifact, ShotStaleness } from '@/hooks/use-shot-staleness';
+import type { ShotStaleness } from '@/hooks/use-shot-staleness';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 
@@ -23,46 +23,21 @@ type UpdateAllDialogProps = {
   onOpenChange: (open: boolean) => void;
   /** Confirm with the chosen cascade depth; the dialog closes itself. */
   onConfirm: (depth: UpdateStaleDepth) => void;
-  /**
-   * Staleness of each out-of-date shot in scope (#1194) — drives the "what
-   * changed" summary so the depth question has a reason attached.
-   */
+  /** Staleness of each out-of-date shot in scope — supplies the causes (#1194). */
   staleShots: ShotStaleness[];
 };
 
-const ARTIFACT_LABELS: [ShotArtifact, string][] = [
-  ['visualPrompt', 'visual prompt'],
-  ['motionPrompt', 'motion prompt'],
-  ['thumbnail', 'image'],
-];
-
-/**
- * "3 shots have an out-of-date visual prompt, motion prompt and image".
- * Staleness is hash-based — we know WHICH artifacts diverged from their
- * inputs, not which edit did it — so this names the artifacts and the input
- * surface (script, style, characters, locations, shot settings) instead of
- * guessing at the edit.
- */
-export const describeStaleShots = (staleShots: ShotStaleness[]): string => {
-  const parts = ARTIFACT_LABELS.filter(([a]) =>
-    staleShots.some((s) => s[a] === 'stale')
-  ).map(([, label]) => label);
-  const list =
-    parts.length > 1
-      ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
-      : (parts[0] ?? 'artifacts');
-  const n = staleShots.length;
-  return n === 1
-    ? `This shot has an out-of-date ${list}.`
-    : `${n} shots have an out-of-date ${list}.`;
+/** "Changed: Script, Character "Woman"" — deduped across shots, or null. */
+export const describeCauses = (staleShots: ShotStaleness[]): string | null => {
+  const causes = [...new Set(staleShots.flatMap((s) => s.causes))];
+  return causes.length > 0 ? `Changed: ${causes.join(', ')}` : null;
 };
 
 /**
- * "Update all" depth confirmation (#1085). One dialog per trigger site
- * (shot status line, scene/sequence summary): pick how deep the update
- * cascades — prompts → images → videos → music — then confirm. A dialog
- * rather than a menu so each level's cost consequence is readable before
- * anything is billed. Native radios for keyboard/AT semantics.
+ * "Update all" depth confirmation (#1085). Leads with WHAT changed (#1194),
+ * then asks how deep the update cascades — prompts → images → videos → music.
+ * A dialog rather than a menu so each level's cost consequence is readable
+ * before anything is billed. Native radios for keyboard/AT semantics.
  */
 export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
   open,
@@ -79,18 +54,12 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Update out-of-date items</AlertDialogTitle>
-          <AlertDialogDescription className="flex flex-col gap-2">
-            <span>
-              {describeStaleShots(staleShots)} Something they were generated
-              from — the script, style, characters, locations or shot settings —
-              has changed since, so they no longer match your current project.
+          <AlertDialogDescription className="flex flex-col gap-1">
+            <span className="text-foreground">
+              {describeCauses(staleShots) ??
+                'Inputs changed since these were generated.'}
             </span>
-            <span>
-              Regenerating costs credits, and each level depends on the one
-              before it, so choose how far the update goes. Only items that are
-              already out of date (or become out of date from this update) are
-              regenerated — nothing is created for the first time.
-            </span>
+            <span>Regenerate:</span>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <fieldset className="flex flex-col gap-2">

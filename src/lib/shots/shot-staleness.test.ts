@@ -257,6 +257,7 @@ describe('computeShotStaleness', () => {
       visualPrompt: 'generating',
       motionPrompt: 'generating',
       liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
+      causes: [],
     });
     // Short-circuits before any work: the batch fn runs this for every shot in
     // the sequence, on the poll loop that runs hardest during generation.
@@ -387,5 +388,74 @@ describe('computeShotStaleness', () => {
     });
 
     expect(result.thumbnail).toBe('untracked');
+  });
+});
+
+describe('staleness causes (#1194)', () => {
+  it('names inputs touched after the stale artifact was generated', async () => {
+    buildRegenerateShotSnapshot.mockResolvedValue({
+      snapshotInputHash: 'image-live',
+    });
+    loadNarrowShotPromptContext.mockResolvedValue({});
+    computeVisualPromptInputHash.mockResolvedValue('visual-stored');
+    computeMotionPromptInputHash.mockResolvedValue('motion-stored');
+
+    const generated = new Date('2026-01-01T00:00:00Z');
+    const before = new Date('2025-12-31T00:00:00Z');
+    const afterGen = new Date('2026-01-02T00:00:00Z');
+    const scopedDb = makeScopedDb({ motionSelectedHash: 'motion-stored' });
+    Object.assign(scopedDb, {
+      scenes: { getById: vi.fn().mockResolvedValue({ updatedAt: afterGen }) },
+      sceneScriptVersions: {
+        getSelected: vi.fn().mockResolvedValue({ createdAt: afterGen }),
+      },
+      sequenceEvents: {
+        listByTarget: vi.fn().mockResolvedValue([
+          {
+            kind: 'sequence.settings-changed',
+            createdAt: afterGen,
+            data: { fields: ['styleId'] },
+          },
+          {
+            kind: 'sequence.settings-changed',
+            createdAt: before,
+            data: { fields: ['aspectRatio'] },
+          },
+        ]),
+      },
+    });
+    const still = asStub<FrameVariant>({
+      id: 'fv-1',
+      inputHash: 'image-old',
+      model: null,
+      url: null,
+      generatedAt: generated,
+    });
+
+    const result = await computeShotStaleness({
+      scopedDb,
+      sequence,
+      shot: asStub<Shot>({ id: 'shot-1', sceneId: 'scene-1' }),
+      frame,
+      selectedImage: still,
+      scene,
+      refs: asStub({
+        characters: [
+          { name: 'Woman', updatedAt: afterGen, sheetGeneratedAt: null },
+          { name: 'Man', updatedAt: before, sheetGeneratedAt: before },
+        ],
+        locations: [{ name: 'Bathroom', updatedAt: before }],
+        elements: [{ token: 'BOTTLE', updatedAt: afterGen }],
+        style: null,
+      }),
+    });
+
+    expect(result.thumbnail).toBe('stale');
+    expect(result.causes).toEqual([
+      'Script',
+      'Style',
+      'Character "Woman"',
+      'Element BOTTLE',
+    ]);
   });
 });
