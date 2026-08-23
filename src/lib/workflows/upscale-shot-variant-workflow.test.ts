@@ -20,7 +20,9 @@ import type { Frame, NewFrame, NewFrameVariant } from '@/lib/db/schema';
 import { frameFixture, frameVariantFixture } from '@/lib/mocks/frame-fixtures';
 import { describe, expect, it } from 'vitest';
 import {
+  bindUpscaleVersion,
   persistUpscaleSelection,
+  type BindUpscaleVersionScopedDb,
   type PersistUpscaleScopedDb,
 } from './upscale-shot-variant-workflow';
 
@@ -208,11 +210,10 @@ describe('persistUpscaleSelection', () => {
     ]);
     expect(variantUpdates).toHaveLength(1);
     expect(promotes).toHaveLength(1);
-    // Newer kickoff owns pending — don't wipe its generating flag.
+    // Newer kickoff owns pending — don't wipe its generating flag or emit
+    // completed (that would clear the newer overlay on the client).
     expect(statusUpdates).toHaveLength(0);
-    // Settle the spinner, but WITHOUT a thumbnail: pushing the unselected
-    // upscale's url would show the user something the frame doesn't point at.
-    expect(emits).toEqual([{ shotId: 'shot-1', status: 'completed' }]);
+    expect(emits).toEqual([]);
   });
 
   it('settles imageStatus back to completed when the claim is gone (history select)', async () => {
@@ -223,6 +224,7 @@ describe('persistUpscaleSelection', () => {
         selectedImageVersionId: 'old-still',
       },
     });
+    const emits: Array<{ shotId: string; status: string }> = [];
 
     await persistUpscaleSelection({
       scopedDb,
@@ -233,7 +235,9 @@ describe('persistUpscaleSelection', () => {
       path: null,
       actorId: 'user-1',
       generatedAt: NOW,
-      emit: async () => {},
+      emit: async (payload) => {
+        emits.push(payload);
+      },
     });
 
     expect(statusUpdates).toEqual([
@@ -245,6 +249,86 @@ describe('persistUpscaleSelection', () => {
           imageError: null,
         },
       },
+    ]);
+    expect(emits).toEqual([{ shotId: 'shot-1', status: 'completed' }]);
+  });
+});
+
+describe('bindUpscaleVersion', () => {
+  const base = {
+    frameId: 'anchor-frame-id',
+    sequenceId: 'seq-1',
+    upscaleModel: 'nano_banana_2',
+    sourceVariantId: 'sheet-1',
+    promptVersionId: 'prompt-1',
+    workflowRunId: 'run-1',
+  };
+
+  function spy(existing: { id: string } | 'absent') {
+    const appends: unknown[] = [];
+    const updates: Array<{ versionId: string; data: unknown }> = [];
+    const claims: Array<{ frameId: string; versionId: string }> = [];
+    const row = (id: string) =>
+      frameVariantFixture({
+        id,
+        frameId: base.frameId,
+        sequenceId: base.sequenceId,
+      });
+    const scopedDb: BindUpscaleVersionScopedDb = {
+      claims: {
+        frameVariants: {
+          getById: async () =>
+            existing === 'absent' ? null : row(existing.id),
+        },
+      },
+      frameVariants: {
+        update: async (versionId, data) => {
+          updates.push({ versionId, data });
+          return row(versionId);
+        },
+        appendVersion: async (data) => {
+          appends.push(data);
+          return row('minted-1');
+        },
+      },
+      frames: {
+        setPendingPromoteVersionId: async (frameId, versionId) => {
+          if (versionId) claims.push({ frameId, versionId });
+        },
+      },
+    };
+    return { scopedDb, appends, updates, claims };
+  }
+
+  it('reuses the minted version and does not append or re-claim', async () => {
+    const { scopedDb, appends, updates, claims } = spy({ id: 'ver-1' });
+    await expect(
+      bindUpscaleVersion({ scopedDb, versionId: 'ver-1', ...base })
+    ).resolves.toBe('ver-1');
+    expect(appends).toEqual([]);
+    expect(claims).toEqual([]);
+    expect(updates).toEqual([
+      { versionId: 'ver-1', data: { workflowRunId: 'run-1' } },
+    ]);
+  });
+
+  it('skips when the minted version is gone', async () => {
+    const { scopedDb, appends, claims } = spy('absent');
+    await expect(
+      bindUpscaleVersion({ scopedDb, versionId: 'ver-gone', ...base })
+    ).resolves.toBeNull();
+    expect(appends).toEqual([]);
+    expect(claims).toEqual([]);
+  });
+
+  it('mints and claims for a legacy payload with no versionId', async () => {
+    const { scopedDb, appends, claims } = spy('absent');
+    await expect(
+      bindUpscaleVersion({ scopedDb, versionId: undefined, ...base })
+    ).resolves.toBe('minted-1');
+    expect(appends).toHaveLength(1);
+    expect(claims).toEqual([
+      { frameId: 'anchor-frame-id', versionId: 'minted-1' },
     ]);
   });
 });

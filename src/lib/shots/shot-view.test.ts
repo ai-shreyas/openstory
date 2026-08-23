@@ -117,6 +117,12 @@ describe('toShotView', () => {
       pendingUpscaleUrlFromVersion({ ...pending, status: 'completed' })
     ).toBeNull();
     expect(pendingUpscaleUrlFromVersion(null)).toBeNull();
+    expect(
+      pendingUpscaleUrlFromVersion({
+        ...pending,
+        url: '/cdn-cgi/image/trim=0;1;2;3/r2/thumbnails/x.png',
+      })
+    ).toBeNull();
   });
 
   it('projects previewThumbnailUrl from the preview version (#1101)', () => {

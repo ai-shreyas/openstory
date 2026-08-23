@@ -211,7 +211,12 @@ export function toShotView(
 export function pendingUpscaleUrlFromVersion(
   version: FrameVariant | null | undefined
 ): string | null {
-  if (!version || version.status !== 'generating' || !version.url) {
+  if (
+    !version ||
+    version.status !== 'generating' ||
+    !version.url ||
+    !isBrowserDisplayableStillUrl(version.url)
+  ) {
     return null;
   }
   return version.url;

@@ -77,6 +77,54 @@ OUTPUT
  * on a miss would keep compiling and silently turn every claim miss into a
  * wrong-thumbnail promote. The `…If` naming convention is the only guard there.
  */
+export type BindUpscaleVersionScopedDb = {
+  claims: {
+    frameVariants: Pick<WorkflowScopedDb['claims']['frameVariants'], 'getById'>;
+  };
+  frameVariants: Pick<ScopedDb['frameVariants'], 'update' | 'appendVersion'>;
+  frames: Pick<ScopedDb['frames'], 'setPendingPromoteVersionId'>;
+};
+
+export async function bindUpscaleVersion(params: {
+  scopedDb: BindUpscaleVersionScopedDb;
+  versionId: string | undefined;
+  frameId: string;
+  sequenceId: string;
+  upscaleModel: string;
+  sourceVariantId: string | null;
+  promptVersionId: string | null | undefined;
+  workflowRunId: string;
+}): Promise<string | null> {
+  const {
+    scopedDb,
+    versionId,
+    frameId,
+    sequenceId,
+    upscaleModel,
+    sourceVariantId,
+    promptVersionId,
+    workflowRunId,
+  } = params;
+  if (versionId) {
+    const existing = await scopedDb.claims.frameVariants.getById(versionId);
+    if (!existing) return null;
+    await scopedDb.frameVariants.update(existing.id, { workflowRunId });
+    return existing.id;
+  }
+  const version = await scopedDb.frameVariants.appendVersion({
+    frameId,
+    sequenceId,
+    kind: 'framing',
+    model: upscaleModel,
+    sourceVariantId,
+    promptVersionId,
+    status: 'generating',
+    workflowRunId,
+  });
+  await scopedDb.frames.setPendingPromoteVersionId(frameId, version.id);
+  return version.id;
+}
+
 export type PersistUpscaleScopedDb = {
   frameVariants: Pick<
     ScopedDb['frameVariants'],
@@ -188,10 +236,8 @@ export async function persistUpscaleSelection(params: {
         },
         { throwOnMissing: false }
       );
+      await emit({ shotId, status: 'completed' });
     }
-    // Settle the spinner without a thumbnail: pushing the unselected
-    // upscale's url would show the user something the frame doesn't point at.
-    await emit({ shotId, status: 'completed' });
     return { promoted: false };
   }
 
@@ -232,37 +278,21 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         return null;
       }
 
-      // Prefer the version minted at click (`input.versionId`) — it already
-      // holds the crop url so a refresh can overlay it. Do NOT append a
-      // second generating row and do NOT re-claim promote: last click already
-      // won at trigger time, and a slower older run re-claiming here would
-      // steal it back. Legacy payloads (no versionId) still mint in-step.
-      let versionId: string;
-      if (input.versionId) {
-        const existing = await scopedDb.claims.frameVariants.getById(
-          input.versionId
+      const versionId = await bindUpscaleVersion({
+        scopedDb,
+        versionId: input.versionId,
+        frameId: frame.id,
+        sequenceId,
+        upscaleModel,
+        sourceVariantId: input.sourceVariantId ?? null,
+        promptVersionId: input.promptVersionId,
+        workflowRunId,
+      });
+      if (!versionId) {
+        logger.info(
+          `[UpscaleShotVariantWorkflow] Version ${input.versionId} is gone, skipping`
         );
-        if (!existing) {
-          logger.info(
-            `[UpscaleShotVariantWorkflow] Version ${input.versionId} is gone, skipping`
-          );
-          return null;
-        }
-        await scopedDb.frameVariants.update(existing.id, { workflowRunId });
-        versionId = existing.id;
-      } else {
-        const version = await scopedDb.frameVariants.appendVersion({
-          frameId: frame.id,
-          sequenceId,
-          kind: 'framing',
-          model: upscaleModel,
-          sourceVariantId: input.sourceVariantId ?? null,
-          promptVersionId: input.promptVersionId,
-          status: 'generating',
-          workflowRunId,
-        });
-        await scopedDb.frames.setPendingPromoteVersionId(frame.id, version.id);
-        versionId = version.id;
+        return null;
       }
 
       // Same primary-busy flag image gen uses. Trigger already flipped this

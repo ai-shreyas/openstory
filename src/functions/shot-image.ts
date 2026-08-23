@@ -465,34 +465,12 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       sourceModel: sheet.model,
     };
 
+    let workflowRunId: string;
     try {
-      const workflowRunId = await triggerWorkflow(
-        '/upscale-variant',
-        workflowInput,
-        {
-          deduplicationId: `upscale-variant-${shot.id}-${Date.now()}`,
-          label: buildWorkflowLabel(sequence.id),
-        }
-      );
-      await context.scopedDb.frameVariants.update(version.id, {
-        workflowRunId,
+      workflowRunId = await triggerWorkflow('/upscale-variant', workflowInput, {
+        deduplicationId: `upscale-variant-${shot.id}-${Date.now()}`,
+        label: buildWorkflowLabel(sequence.id),
       });
-      await context.scopedDb.frames.setImageGenerationStatus(
-        frame.id,
-        {
-          imageStatus: 'generating',
-          imageWorkflowRunId: workflowRunId,
-          imageError: null,
-        },
-        { throwOnMissing: false }
-      );
-
-      return {
-        shotId: shot.id,
-        thumbnailUrl: cropResult.url,
-        variantIndex: data.variantIndex,
-        upscaleWorkflowRunId: workflowRunId,
-      };
     } catch (error) {
       await context.scopedDb.frameVariants.update(version.id, {
         status: 'failed',
@@ -514,6 +492,25 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       );
       throw error;
     }
+    await context.scopedDb.frameVariants.update(version.id, {
+      workflowRunId,
+    });
+    await context.scopedDb.frames.setImageGenerationStatus(
+      frame.id,
+      {
+        imageStatus: 'generating',
+        imageWorkflowRunId: workflowRunId,
+        imageError: null,
+      },
+      { throwOnMissing: false }
+    );
+
+    return {
+      shotId: shot.id,
+      thumbnailUrl: cropResult.url,
+      variantIndex: data.variantIndex,
+      upscaleWorkflowRunId: workflowRunId,
+    };
   });
 
 // ---------------------------------------------------------------------------
