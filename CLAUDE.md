@@ -236,6 +236,23 @@ frame.metadata = {
 
 Access via `frameService.getSceneData(frame)`, `getVisualPrompt(frame)`, `getMotionPrompt(frame)`, or directly: `frame.metadata.metadata.title`, `frame.metadata.prompts.visual.fullPrompt`. Storing the full scene lets us regenerate without re-analyzing the script and preserves variants for retries.
 
+## Native Grok (xAI)
+
+Grok chat, image, and video go to `api.x.ai` via `@tanstack/ai-grok` instead of
+OpenRouter/fal when an xAI key resolves (team `xai` key → platform
+`XAI_API_KEY` → neither, which falls back to the old path unchanged). e2e never
+sets `XAI_API_KEY`, so fixtures keep exercising the fallback.
+
+`src/lib/ai/grok-native.ts` owns registry id → xAI model name plus the pricing,
+transcribed from docs.x.ai — the adapter reports a cost for video only. Native
+spend bypasses `model_pricing` and the hourly fal reconcile, so it is
+**unaudited**: the #1069 drift detection covers none of it.
+
+Two traps: xAI speaks the Responses API, so `resolveNativeGrokModel` is what
+keeps `llm-client`'s options object and the adapter agreeing on the route; and
+media job ids are via-scoped, so `MotionJobSubmission.via` pins polling to
+whoever the job was submitted to.
+
 ## Fal.ai Integration
 
 **Always check `/llms.txt` before updating models.** Machine-readable, authoritative param specs:

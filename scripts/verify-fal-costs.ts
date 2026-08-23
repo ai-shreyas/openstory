@@ -191,6 +191,7 @@ function buildImageInput(
 
     // Grok Imagine — aspect_ratio only
     case 'grok_imagine_image':
+    case 'grok_imagine_image_quality':
       return { ...base, aspect_ratio: '16:9' };
 
     // HiDream — uses image_size

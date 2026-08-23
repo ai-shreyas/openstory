@@ -341,12 +341,12 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
 
     const imageCostMicros = imageResult.metadata.cost ?? ZERO_MICROS;
     const { teamId, shotId, sequenceId } = input;
-    // Before the deduction guard — see recordFalUsageStep (#1069).
-    const falUsage = await recordFalUsageStep(
-      step,
-      scopedDb,
-      imageResult.metadata
-    );
+    // Before the deduction guard — see recordFalUsageStep (#1069). Native
+    // xAI images have no fal units; sampling them would corrupt fal medians.
+    const falUsage: { requestId?: string } =
+      imageResult.via === 'fal'
+        ? await recordFalUsageStep(step, scopedDb, imageResult.metadata)
+        : {};
 
     if (imageCostMicros > 0 && teamId && !imageResult.metadata.usedOwnKey) {
       await step.do('deduct-credits', async () => {
@@ -532,9 +532,10 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           assetKind: 'frame_variant',
           assetId: prep.versionId,
           storageKey: buildR2Key(STORAGE_BUCKETS.THUMBNAILS, upload.path),
-          provider: 'fal',
+          provider: imageResult.via,
           model: prep.params.model,
-          providerRequestId: falUsage?.requestId ?? null,
+          providerRequestId:
+            falUsage.requestId ?? imageResult.metadata.requestId ?? null,
           workflowRunId: event.instanceId,
           prompt: prep.params.prompt,
           sequenceId,

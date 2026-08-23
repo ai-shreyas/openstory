@@ -161,12 +161,12 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
       });
     });
 
-    // Before the deduction guard — see recordFalUsageStep (#1069).
-    const falUsage = await recordFalUsageStep(
-      step,
-      scopedDb,
-      imageResult.metadata
-    );
+    // Before the deduction guard — see recordFalUsageStep (#1069). Native
+    // xAI images have no fal units; sampling them would corrupt fal medians.
+    const falUsage: { requestId?: string } =
+      imageResult.via === 'fal'
+        ? await recordFalUsageStep(step, scopedDb, imageResult.metadata)
+        : {};
 
     await step.do('deduct-credits', async () => {
       await deductWorkflowCredits({
@@ -248,9 +248,10 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
           assetKind: 'frame_variant',
           assetId: prep.versionId,
           storageKey,
-          provider: 'fal',
+          provider: imageResult.via,
           model: prep.params.model,
-          providerRequestId: falUsage.requestId ?? null,
+          providerRequestId:
+            falUsage.requestId ?? imageResult.metadata.requestId ?? null,
           workflowRunId,
           prompt: prep.params.prompt,
           sequenceId: input.sequenceId,

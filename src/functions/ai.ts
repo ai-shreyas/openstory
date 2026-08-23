@@ -98,7 +98,9 @@ async function prepareBilling(
   llmKey: ResolvedLlmKey;
   deduct?: (actualCost: Microdollars) => Promise<void>;
 }> {
-  const llmKey = await scopedDb.apiKeys.resolveLlmKey();
+  const model =
+    typeof metadata?.model === 'string' ? metadata.model : undefined;
+  const llmKey = await scopedDb.apiKeys.resolveLlmKey(model);
   if (llmKey.source === 'team') return { llmKey };
 
   const estimatedCost = estimateLLMCost(1);
@@ -346,9 +348,15 @@ export async function* streamScriptEnhancement(
   data: EnhanceScriptInput,
   ctx: { scopedDb: ScopedDb; userId: string; teamId: string }
 ): AsyncGenerator<EnhanceChunk> {
+  const model =
+    data.analysisModel && isValidAnalysisModelId(data.analysisModel)
+      ? data.analysisModel
+      : RECOMMENDED_MODELS.creative;
+
   const { llmKey, deduct } = await prepareBilling(
     ctx.scopedDb,
-    'Script enhancement'
+    'Script enhancement',
+    { model }
   );
 
   if (checkForInjectionAttempts(data.script)) {
@@ -364,11 +372,6 @@ export async function* streamScriptEnhancement(
     targetDuration: data.targetDuration,
     elements: elements.length > 0 ? elements : undefined,
   });
-
-  const model =
-    data.analysisModel && isValidAnalysisModelId(data.analysisModel)
-      ? data.analysisModel
-      : RECOMMENDED_MODELS.creative;
 
   const systemMessage = `${compiled}\n\nReturn ONLY the enhanced script text. No JSON, no markdown formatting, no explanations.`;
 

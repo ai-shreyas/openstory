@@ -36,7 +36,7 @@ export const IMAGE_TO_VIDEO_MODELS = {
   grok_imagine_video_1_5: {
     id: 'xai/grok-imagine-video/v1.5/image-to-video',
     name: 'Grok Imagine Video 1.5',
-    vendor: 'Grok',
+    vendor: 'SpaceXAI',
     license: 'proprietary' as const,
     qualityRank: 1,
     maxPromptLength: 2500,
@@ -121,12 +121,23 @@ export const IMAGE_MODELS = {
     maxPromptLength: 32000,
   },
   grok_imagine_image: {
-    id: 'xai/grok-imagine-image/quality/text-to-image' as const,
-    name: 'Grok Imagine Image Quality',
-    vendor: 'Grok',
+    id: 'xai/grok-imagine-image/v2.0/text-to-image' as const,
+    name: 'Grok Imagine Image 2.0',
+    vendor: 'SpaceXAI',
     license: 'proprietary' as const,
     qualityRank: 3,
-    description: 'High-quality aesthetic image generation with low censoring',
+    description:
+      'Newest Imagine image model — 1K/2K, quality medium, edit up to 3 refs',
+    maxPromptLength: 4000,
+  },
+  grok_imagine_image_quality: {
+    id: 'xai/grok-imagine-image/quality/text-to-image' as const,
+    name: 'Grok Imagine Image Quality',
+    vendor: 'SpaceXAI',
+    license: 'proprietary' as const,
+    qualityRank: 3,
+    description:
+      'Quality Mode — higher fidelity and stronger text rendering, edit up to 3 refs',
     maxPromptLength: 4000,
   },
   flux_2_max: {
@@ -492,7 +503,8 @@ export const EDIT_ENDPOINTS: Partial<Record<TextToImageModel, string>> = {
   nano_banana_2: 'fal-ai/nano-banana-2/edit',
   nano_banana_pro: 'fal-ai/nano-banana-pro/edit',
   gpt_image_2: 'openai/gpt-image-2/edit',
-  grok_imagine_image: 'xai/grok-imagine-image/quality/edit',
+  grok_imagine_image: 'xai/grok-imagine-image/v2.0/edit',
+  grok_imagine_image_quality: 'xai/grok-imagine-image/quality/edit',
   flux_2_max: 'fal-ai/flux-2-max/edit',
   phota: 'fal-ai/phota/edit',
   hunyuan_image_v3: 'fal-ai/hunyuan-image/v3/instruct/edit',
@@ -517,6 +529,8 @@ export const EDIT_ENDPOINTS: Partial<Record<TextToImageModel, string>> = {
 const EDIT_REFERENCE_LIMITS: Partial<Record<TextToImageModel, number>> = {
   flux_2_dev: 4,
   flux_2_turbo: 4,
+  grok_imagine_image: 3,
+  grok_imagine_image_quality: 3,
 };
 
 /**

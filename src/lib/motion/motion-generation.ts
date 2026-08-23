@@ -9,15 +9,23 @@ import {
   FAL_REQUEST_TIMEOUT_MS,
 } from '@/lib/ai/fal-deadline-fetch';
 import {
+  grokVideoCost,
+  grokVideoDurationCost,
+  isNativeGrokVideoModel,
+  NATIVE_GROK_VIDEO_MODEL,
+} from '@/lib/ai/grok-native';
+import {
   DEFAULT_VIDEO_MODEL,
   IMAGE_TO_VIDEO_MODELS,
   type ImageToVideoModel,
 } from '@/lib/ai/models';
-import type { Microdollars } from '@/lib/billing/money';
+import { assertMediaVia, type MediaVia } from '@/lib/ai/via';
+import { workersSafeFetch } from '@/lib/ai/workers-safe-fetch';
+import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
+import { ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
 import { type AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { ResolvedApiKey } from '@/lib/db/scoped/api-keys';
 import type { CredentialScopedDb } from '@/lib/db/scoped-workflow';
-import { assertMediaVia, type MediaVia } from '@/lib/ai/via';
 import { MOTION_JSON_SCHEMAS } from '@/lib/motion/endpoint-map';
 import {
   getDurationValues,
@@ -25,13 +33,18 @@ import {
   snapTo,
 } from '@/lib/motion/motion-transform';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
-import { ensureExternallyFetchableUrl } from '@/lib/storage/external-url';
+import {
+  ensureExternallyFetchableUrl,
+  toDataOrCdnUrl,
+} from '@/lib/storage/external-url';
 import {
   generateVideo,
   getVideoJobStatus,
   type TokenUsage,
 } from '@tanstack/ai';
 import { falVideo } from '@tanstack/ai-fal';
+import { createGrokVideo } from '@tanstack/ai-grok';
+import { buildGrokVideoRequest } from './build-grok-video-request';
 import { buildModelInput, buildMotionRequest } from './build-model-input';
 import { resolveMotionEndpoint } from './resolve-motion-endpoint';
 
@@ -50,8 +63,10 @@ export type GenerateMotionOptions = {
   generateAudio?: boolean;
   /**
    * Character + element reference images for identity consistency across the
-   * clip (#873). Only emitted for models that accept reference images (Kling
-   * v3 Pro, via its `elements` field); ignored by every other model.
+   * clip (#873). Emitted when `resolveMotionEndpoint` says they go on the
+   * wire: Kling `elements`, Seedance `image_urls[]`, and Grok Imagine 1.5
+   * native `metadata.role: 'reference' | 'character'` prompt parts. Other
+   * models substitute tokens with descriptions instead.
    */
   referenceImages?: ReferenceImageDescription[];
 };
@@ -94,6 +109,36 @@ async function resolveFalMotionKey(
   return { key: getEnv().FAL_KEY, source: 'platform' };
 }
 
+/** Undefined when the model isn't Grok or no xAI key exists — it then goes to
+ *  fal as before (#1167). */
+async function resolveOptionalXaiKey(
+  scopedDb?: CredentialScopedDb
+): Promise<ResolvedApiKey | undefined> {
+  if (scopedDb) return scopedDb.resolveOptionalKey('xai');
+  const platformKey = getEnv().XAI_API_KEY;
+  return platformKey ? { key: platformKey, source: 'platform' } : undefined;
+}
+
+function createNativeMotionAdapter(apiKey: string) {
+  const env = getEnv();
+  return createGrokVideo(NATIVE_GROK_VIDEO_MODEL, apiKey, {
+    fetch: workersSafeFetch,
+    ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
+  });
+}
+
+async function inlineGrokReferenceImages(
+  references: ReferenceImageDescription[] | undefined
+): Promise<ReferenceImageDescription[]> {
+  if (!references?.length) return [];
+  return Promise.all(
+    references.map(async (ref) => ({
+      ...ref,
+      referenceImageUrl: await toDataOrCdnUrl(ref.referenceImageUrl),
+    }))
+  );
+}
+
 /**
  * Submit a motion generation job without polling.
  * Returns the job ID so the workflow can poll with `context.sleep()` between steps.
@@ -103,63 +148,94 @@ export async function submitMotionJob(
 ): Promise<MotionJobSubmission> {
   const modelKey = options.model || DEFAULT_VIDEO_MODEL;
 
-  // Native PRs try their key first (resolveOptionalKey) and set via. Fal is
-  // the fallback and always claims.
-  const key = await resolveFalMotionKey(options.scopedDb);
+  // Resolve via from keys FIRST for grok video models. Fal is the fallback
+  // and always claims. `resolveKey('fal')` throws with no fal key, so an
+  // xAI-only deployment must not reach it.
+  const xaiKey = isNativeGrokVideoModel(modelKey)
+    ? await resolveOptionalXaiKey(options.scopedDb)
+    : undefined;
+  const via: MediaVia = xaiKey ? 'xai' : 'fal';
 
-  // Locally-served /r2/ image URLs aren't reachable by real fal — swap them
-  // for a fal-storage upload first (no-op in prod and e2e replay).
-  const imageUrl = await ensureExternallyFetchableUrl(
-    options.imageUrl,
-    key.key
-  );
-
-  // Decide which endpoint this run submits to (#873). With cast/element refs,
-  // models that have a dedicated reference-to-video endpoint (Seedance) route
-  // there; everything else (incl. Kling, which carries refs inline as
-  // `elements`) stays on its image-to-video endpoint. `via` is stamped on the
-  // endpoint (pricing Via).
   const hasReferenceImages = (options.referenceImages?.length ?? 0) > 0;
-  const endpoint = resolveMotionEndpoint(modelKey, hasReferenceImages);
-
-  // Reference URLs only need to be fetchable when they go on the wire
-  // (`endpoint` or `inline`). Models with `references: 'none'` keep the raw
-  // URLs: they are never sent, but the builder still needs tokens +
-  // descriptions to substitute entity names in the prompt.
-  const referenceImages =
-    endpoint.references !== 'none' && options.referenceImages?.length
-      ? await Promise.all(
-          options.referenceImages.map(async (ref) => ({
-            ...ref,
-            referenceImageUrl: await ensureExternallyFetchableUrl(
-              ref.referenceImageUrl,
-              key.key
-            ),
-          }))
-        )
-      : options.referenceImages;
-
-  const optionsWithFetchableUrls = {
-    ...options,
-    imageUrl,
-    referenceImages,
-    model: modelKey,
-  };
-  const modelInput = buildMotionRequest(
-    optionsWithFetchableUrls,
-    modelKey
-  ).input;
-
-  const { prompt: optimisedPrompt, ...modelOptions } = modelInput;
-  if (typeof optimisedPrompt !== 'string') {
-    throw new Error('Truncated prompt is not a string');
-  }
+  const endpoint = resolveMotionEndpoint(modelKey, hasReferenceImages, via);
 
   let jobId: string;
-  // Native PRs widen MediaVia; this switch is the seam (#1216).
+  let usedOwnKey: boolean;
+
   switch (endpoint.via) {
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
+    case 'xai': {
+      if (!xaiKey) {
+        throw new Error('xAI motion via selected with no xAI key');
+      }
+      // Start frame and refs are inlined as data URIs so this path needs no
+      // fal key. Same payload as the scene editor's Grok preview.
+      const imageUrl = await toDataOrCdnUrl(options.imageUrl);
+      const referenceImages = await inlineGrokReferenceImages(
+        options.referenceImages
+      );
+      const { input } = buildGrokVideoRequest({
+        prompt: options.prompt,
+        imageUrl,
+        duration: snapDuration(options.duration, modelKey),
+        aspectRatio: options.aspectRatio,
+        referenceImages,
+        model: modelKey,
+      });
+      const job = await generateVideo({
+        adapter: createNativeMotionAdapter(xaiKey.key),
+        prompt: input.prompt,
+        duration: input.duration,
+        ...(input.size && { size: input.size }),
+        timeout: FAL_REQUEST_TIMEOUT_MS,
+        debug: false,
+      });
+      jobId = job.jobId;
+      usedOwnKey = xaiKey.source === 'team';
+      break;
+    }
     case 'fal': {
+      const key = await resolveFalMotionKey(options.scopedDb);
+
+      // Locally-served /r2/ image URLs aren't reachable by real fal — swap them
+      // for a fal-storage upload first (no-op in prod and e2e replay).
+      const imageUrl = await ensureExternallyFetchableUrl(
+        options.imageUrl,
+        key.key
+      );
+
+      // Reference URLs only need to be fetchable when they go on the wire
+      // (`endpoint` or `inline`). Models with `references: 'none'` keep the raw
+      // URLs: they are never sent, but the builder still needs tokens +
+      // descriptions to substitute entity names in the prompt.
+      const referenceImages =
+        endpoint.references !== 'none' && options.referenceImages?.length
+          ? await Promise.all(
+              options.referenceImages.map(async (ref) => ({
+                ...ref,
+                referenceImageUrl: await ensureExternallyFetchableUrl(
+                  ref.referenceImageUrl,
+                  key.key
+                ),
+              }))
+            )
+          : options.referenceImages;
+
+      const optionsWithFetchableUrls = {
+        ...options,
+        imageUrl,
+        referenceImages,
+        model: modelKey,
+      };
+      const modelInput = buildMotionRequest(
+        optionsWithFetchableUrls,
+        modelKey
+      ).input;
+
+      const { prompt: optimisedPrompt, ...modelOptions } = modelInput;
+      if (typeof optimisedPrompt !== 'string') {
+        throw new Error('Truncated prompt is not a string');
+      }
+
       // Bound submit so a hung fal connection fails the step (#826).
       const job = await generateVideo({
         adapter: falVideo(endpoint.endpointId, { apiKey: key.key }),
@@ -169,6 +245,7 @@ export async function submitMotionJob(
         debug: false,
       });
       jobId = job.jobId;
+      usedOwnKey = key.source === 'team';
       break;
     }
   }
@@ -177,7 +254,7 @@ export async function submitMotionJob(
     jobId,
     modelKey,
     via: endpoint.via,
-    usedOwnKey: key.source === 'team',
+    usedOwnKey,
     submittedAt: Date.now(),
   };
 }
@@ -200,9 +277,19 @@ export async function pollMotionJob(
   const via = assertMediaVia(viaStamp);
   const modelConfig = IMAGE_TO_VIDEO_MODELS[modelKey];
 
-  // Native PRs widen MediaVia; this switch is the seam (#1216).
   switch (via) {
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
+    case 'xai': {
+      const key = await resolveOptionalXaiKey(scopedDb);
+      if (!key) {
+        throw new Error(
+          `Motion job ${jobId} was submitted to xAI but no xAI key is available to poll it`
+        );
+      }
+      return await getVideoJobStatus({
+        adapter: createNativeMotionAdapter(key.key),
+        jobId,
+      });
+    }
     case 'fal': {
       const key = await resolveFalMotionKey(scopedDb);
       // Bound a single status fetch — the workflow already budgets total poll
@@ -227,9 +314,23 @@ export async function motionCostFromUsage(
   usage: TokenUsage | undefined,
   ctx: { modelKey: ImageToVideoModel; hasReferenceImages: boolean }
 ) {
-  // Native PRs widen MediaVia; this switch is the seam (#1216).
   switch (via) {
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
+    case 'xai': {
+      const cost = grokVideoCost(usage?.cost);
+      if (cost === undefined) {
+        reportMissingBillingCost({
+          source: 'motion-cost-from-usage-xai',
+          modelId: ctx.modelKey,
+          metadata: { usage },
+        });
+      }
+      return {
+        endpointId: NATIVE_GROK_VIDEO_MODEL,
+        unitsBilled: usage?.unitsBilled,
+        cost: cost ?? ZERO_MICROS,
+        recordFalUsage: false,
+      };
+    }
     case 'fal': {
       const endpointId = resolveMotionEndpoint(
         ctx.modelKey,
@@ -265,6 +366,18 @@ export function calculateMotionMetadata(
   const modelConfig = IMAGE_TO_VIDEO_MODELS[modelKey];
 
   const validatedDuration = snapDuration(options.duration, modelKey);
+
+  // Flat per-second rate, so no `model_pricing` row is needed. Pure, so it
+  // can't know whether a key resolves — over-estimating a Grok render that
+  // lands on fal is the safe direction (fal's rate is within a cent).
+  if (isNativeGrokVideoModel(modelKey)) {
+    return {
+      cost: grokVideoDurationCost(validatedDuration),
+      duration: validatedDuration,
+      model: modelConfig.id,
+      vendor: modelConfig.vendor,
+    };
+  }
 
   const providerInput = buildModelInput(options, modelConfig, modelKey);
   const cost = estimateFalCost(

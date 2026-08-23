@@ -3,18 +3,32 @@ import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import { falCostFromUnits } from '@/lib/ai/fal-cost';
 import { FAL_GENERATION_TIMEOUT_MS } from '@/lib/ai/fal-deadline-fetch';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
+import {
+  grokImageCost,
+  isNativeGrokImageModel,
+  nativeGrokImageModel,
+} from '@/lib/ai/grok-native';
+import type { MediaVia } from '@/lib/ai/via';
+import { workersSafeFetch } from '@/lib/ai/workers-safe-fetch';
 import { type Microdollars } from '@/lib/billing/money';
+import type { ResolvedApiKey } from '@/lib/db/scoped/api-keys';
 import type { CredentialScopedDb } from '@/lib/db/scoped-workflow';
 import type { ImageGenerationParams } from '@/lib/image/build-image-request';
-import { buildImageRequest } from '@/lib/image/build-image-request';
-import type { MediaVia } from '@/lib/ai/via';
+import {
+  buildGrokImageRequest,
+  buildImageRequest,
+} from '@/lib/image/build-image-request';
 import {
   recordMediaGenerationSpan,
   type AIObservabilityMeta,
 } from '@/lib/observability/ai-otel';
-import { ensureExternallyFetchableUrls } from '@/lib/storage/external-url';
+import {
+  ensureExternallyFetchableUrls,
+  toDataOrCdnUrl,
+} from '@/lib/storage/external-url';
 import { generateImage } from '@tanstack/ai';
 import { falImage } from '@tanstack/ai-fal';
+import { createGrokImage } from '@tanstack/ai-grok';
 
 export type { ImageGenerationParams } from '@/lib/image/build-image-request';
 
@@ -75,10 +89,13 @@ export async function generateImageWithProvider(
   };
 
   // Resolve via out here so the failure span names the API that rejected.
-  let via: MediaVia = 'fal';
+  const xaiKey = isNativeGrokImageModel(params.model)
+    ? await resolveOptionalXaiKey(options?.scopedDb)
+    : undefined;
+  let via: MediaVia = xaiKey ? 'xai' : 'fal';
 
   try {
-    const result = await generateImageInternal(params, options);
+    const result = await generateImageInternal(params, options, xaiKey);
     via = result.via;
     recordMediaGenerationSpan({
       ...attribution,
@@ -118,40 +135,103 @@ export async function generateImageWithProvider(
   }
 }
 
+async function resolveOptionalXaiKey(
+  scopedDb?: CredentialScopedDb
+): Promise<ResolvedApiKey | undefined> {
+  if (scopedDb) return scopedDb.resolveOptionalKey('xai');
+  const platformKey = getEnv().XAI_API_KEY;
+  return platformKey ? { key: platformKey, source: 'platform' } : undefined;
+}
+
 async function generateImageInternal(
   rawParams: ImageGenerationParams,
-  options?: ImageGenerationOptions
+  options: ImageGenerationOptions | undefined,
+  xaiKey: ResolvedApiKey | undefined
 ): Promise<ImageGenerationResult> {
-  // Native PRs try their key first (resolveOptionalKey) and switch via.
-  // Fal is the fallback and always claims.
-  const key = options?.scopedDb
-    ? await options.scopedDb.resolveKey('fal')
-    : { key: getEnv().FAL_KEY, source: 'platform' as const };
-
-  // Locally-served /r2/ reference URLs aren't reachable by real fal — swap
-  // them for fal-storage uploads first (no-op in prod and e2e replay).
-  const params: ImageGenerationParams = rawParams.referenceImageUrls?.length
-    ? {
-        ...rawParams,
-        referenceImageUrls: await ensureExternallyFetchableUrls(
-          rawParams.referenceImageUrls,
-          key.key
-        ),
-      }
-    : rawParams;
+  const via: MediaVia = xaiKey ? 'xai' : 'fal';
   const startTime = Date.now();
 
-  // The exact request fal receives — shared with the scene editor's
-  // optimised-prompt preview so the two can never drift. `via` is stamped
-  // on the endpoint (pricing Via); vendor is `IMAGE_MODELS[model].vendor`.
-  const { via, endpointId: endpoint, input } = buildImageRequest(params);
-  const { prompt, ...modelOptions } = input;
+  let result: Awaited<ReturnType<typeof generateImage>>;
+  let endpoint: string;
+  let usedOwnKey: boolean;
+  let params: ImageGenerationParams = rawParams;
+  let unitsBilled: number | undefined;
+  let cost: Microdollars | undefined;
 
-  let result;
-  // Native PRs widen MediaVia; this switch is the seam (#1216).
   switch (via) {
-    // oxlint-disable-next-line typescript/no-unnecessary-condition
-    case 'fal':
+    case 'xai': {
+      if (!xaiKey) {
+        throw new Error('xAI image via selected with no xAI key');
+      }
+      const nativeModel = nativeGrokImageModel(rawParams.model);
+      if (!nativeModel) {
+        throw new Error(
+          `xAI image via selected for a non-Grok model: ${rawParams.model}`
+        );
+      }
+      const grok = buildGrokImageRequest(rawParams);
+      const referenceParts = await Promise.all(
+        grok.referenceImageUrls.map(async (url) => ({
+          type: 'image' as const,
+          source: { type: 'url' as const, value: await toDataOrCdnUrl(url) },
+        }))
+      );
+      const env = getEnv();
+      const grokAdapter = {
+        fetch: workersSafeFetch,
+        ...(env.XAI_BASE_URL && { baseURL: env.XAI_BASE_URL }),
+      };
+      const prompt = referenceParts.length
+        ? [{ type: 'text' as const, content: grok.prompt }, ...referenceParts]
+        : grok.prompt;
+      result =
+        nativeModel === 'grok-imagine-image-2.0'
+          ? await generateImage({
+              adapter: createGrokImage(nativeModel, xaiKey.key, grokAdapter),
+              prompt,
+              size: grok.size,
+              numberOfImages: grok.numImages,
+              modelOptions: { quality: 'medium' },
+              timeout: FAL_GENERATION_TIMEOUT_MS,
+              debug: false,
+            })
+          : await generateImage({
+              adapter: createGrokImage(nativeModel, xaiKey.key, grokAdapter),
+              prompt,
+              size: grok.size,
+              numberOfImages: grok.numImages,
+              timeout: FAL_GENERATION_TIMEOUT_MS,
+              debug: false,
+            });
+      endpoint = nativeModel;
+      usedOwnKey = xaiKey.source === 'team';
+      break;
+    }
+    case 'fal': {
+      const key = options?.scopedDb
+        ? await options.scopedDb.resolveKey('fal')
+        : { key: getEnv().FAL_KEY, source: 'platform' as const };
+
+      // Locally-served /r2/ reference URLs aren't reachable by real fal — swap
+      // them for fal-storage uploads first (no-op in prod and e2e replay).
+      params = rawParams.referenceImageUrls?.length
+        ? {
+            ...rawParams,
+            referenceImageUrls: await ensureExternallyFetchableUrls(
+              rawParams.referenceImageUrls,
+              key.key
+            ),
+          }
+        : rawParams;
+
+      // The exact request fal receives — shared with the scene editor's
+      // optimised-prompt preview so the two can never drift. `via` is stamped
+      // on the endpoint (pricing Via); vendor is `IMAGE_MODELS[model].vendor`.
+      const built = buildImageRequest(params);
+      const { prompt, ...modelOptions } = built.input;
+      endpoint = built.endpointId;
+      usedOwnKey = key.source === 'team';
+
       // Bound so a hung fal.subscribe fails the workflow step and CF can retry
       // (#826). Native activity `timeout` since @tanstack/ai@0.44 / ai-fal@0.10.
       result = await generateImage({
@@ -161,7 +241,10 @@ async function generateImageInternal(
         timeout: FAL_GENERATION_TIMEOUT_MS,
         debug: false,
       });
+      unitsBilled = result.usage?.unitsBilled;
+      cost = await falCostFromUnits(endpoint, unitsBilled);
       break;
+    }
   }
 
   const imageUrls = result.images
@@ -173,10 +256,15 @@ async function generateImageInternal(
   }
 
   const processingTimeMs = Date.now() - startTime;
-
-  // Exact cost from fal's reported billed units (resolution/style premiums are
-  // already baked into the count by fal).
-  const cost = await falCostFromUnits(endpoint, result.usage?.unitsBilled);
+  if (via === 'xai') {
+    const nativeModel = nativeGrokImageModel(params.model);
+    if (!nativeModel) {
+      throw new Error(
+        `xAI image via selected for a non-Grok model: ${params.model}`
+      );
+    }
+    cost = grokImageCost(imageUrls.length, nativeModel);
+  }
 
   return {
     imageUrls,
@@ -188,7 +276,7 @@ async function generateImageInternal(
       prompt: params.prompt,
       model: params.model,
       endpointId: endpoint,
-      unitsBilled: result.usage?.unitsBilled,
+      unitsBilled,
       // What the call actually returned, not what it was asked for: the median
       // divides `unitsBilled` by this, so a partial return (3 of 4 images)
       // recorded as 4 biases the per-image figure LOW — the direction that
@@ -201,7 +289,7 @@ async function generateImageInternal(
       // The adapter sets `id` to fal's request id — the join key to the
       // billing-events record the hourly reconcile audits this charge against.
       requestId: result.id,
-      usedOwnKey: key.source === 'team',
+      usedOwnKey,
     },
   };
 }

@@ -34,9 +34,9 @@ const units = (unitPriceUsd: number, typicalUnitsPerCall = 1): SeedPrice => ({
 
 /**
  * Indicative rates for every endpoint `getFalEndpointIds()` returns.
- * Grok Imagine is billed in `units` at $0.01 (Quality 1K ≈ 5, 2K ≈ 7) — not
- * the pricing-API "compute seconds" lie (#1069). Edit endpoints share the
- * sibling t2i unit/price so a reference-image still has a row.
+ * Grok Imagine is billed in `units` at $0.01 (2.0 ≈ 4 → $0.04; Quality 2K ≈ 7)
+ * — not the pricing-API "compute seconds" lie (#1069). Edit endpoints share
+ * the sibling t2i unit/price so a reference-image still has a row.
  */
 export const LOCAL_FAL_PRICING_SEED: Record<string, SeedPrice> = {
   'fal-ai/nano-banana-2': img(0.08, 1.5),
@@ -45,6 +45,8 @@ export const LOCAL_FAL_PRICING_SEED: Record<string, SeedPrice> = {
   'fal-ai/nano-banana-pro/edit': img(0.14, 1.5),
   'openai/gpt-image-2': units(1, 0.22),
   'openai/gpt-image-2/edit': units(1, 0.22),
+  'xai/grok-imagine-image/v2.0/text-to-image': units(0.01, 4),
+  'xai/grok-imagine-image/v2.0/edit': units(0.01, 4),
   'xai/grok-imagine-image/quality/text-to-image': units(0.01, 7),
   'xai/grok-imagine-image/quality/edit': units(0.01, 7),
   'fal-ai/flux-2-max': { unit: 'megapixels', unitPriceUsd: 0.07 },

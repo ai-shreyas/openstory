@@ -82,7 +82,8 @@ The AI model for generating scene images. You can select **multiple image models
 | -------------------------- | ----------------- | ---------------------------------------------------- |
 | Nano Banana 2              | Google            | Fast generation and editing (default)                |
 | Nano Banana Pro            | Google            | Enhanced realism and typography                      |
-| Grok Imagine Image Quality | Grok              | High-quality aesthetic generation with low censoring |
+| Grok Imagine Image 2.0     | SpaceXAI          | Newest Imagine image model, 1K/2K, edit up to 3 refs |
+| Grok Imagine Image Quality | SpaceXAI          | Quality Mode — higher fidelity, stronger text        |
 | FLUX.2 Max                 | Black Forest Labs | Exceptional realism and consistency                  |
 | Phota                      | Phota             | Character consistency via profiles                   |
 | Hunyuan Image v3           | Tencent           | Open source with strong composition                  |
@@ -100,7 +101,7 @@ The AI model for image-to-video animation. Toggle **Auto-generate motion** to au
 | LTX 2.3 Pro        | Lightricks | ~15s (open-source)           |
 | Veo 3.1            | Google     | ~25s                         |
 | Kling v3 Pro       | Kling      | ~20s                         |
-| Grok Imagine Video | Grok       | ~20s                         |
+| Grok Imagine Video | SpaceXAI   | ~20s                         |
 | MiniMax Hailuo 02  | MiniMax    | ~15s                         |
 | Seedance 2.0       | ByteDance  | ~15s (default; native audio) |
 
