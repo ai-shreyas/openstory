@@ -17,7 +17,6 @@ import { AppImage } from '@/components/ui/app-image';
 import {
   useDeleteSequenceElement,
   useRenameSequenceElementToken,
-  useReplaceElementProgress,
   useSequenceElements,
   useShotCountsForAllElements,
 } from '@/hooks/use-sequence-elements';
@@ -67,16 +66,9 @@ export const ElementDetailView: React.FC<ElementDetailViewProps> = ({
   const affectedShotCount = counts?.shotCount ?? 0;
   const affectedVideoCount = counts?.videoCount ?? 0;
 
-  const { editing: editingShots } = useReplaceElementProgress(
-    sequenceId,
-    elementId,
-    element?.token ?? ''
-  );
-
   const isAnalyzing =
     element?.visionStatus === 'pending' ||
     element?.visionStatus === 'analyzing';
-  const isReplacing = editingShots || isAnalyzing;
 
   const handleRename = async (nextToken: string) => {
     const result = await renameToken.mutateAsync({
@@ -185,12 +177,10 @@ export const ElementDetailView: React.FC<ElementDetailViewProps> = ({
           </p>
 
           <div className="group relative aspect-video overflow-hidden rounded-lg bg-muted">
-            {isReplacing ? (
+            {isAnalyzing ? (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/70 backdrop-blur-sm">
                 <Loader2 className="size-8 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">
-                  {isAnalyzing ? 'Analyzing…' : 'Editing shots…'}
-                </p>
+                <p className="text-sm text-muted-foreground">Analyzing…</p>
               </div>
             ) : null}
             <AppImage
@@ -215,13 +205,13 @@ export const ElementDetailView: React.FC<ElementDetailViewProps> = ({
               token={element.token}
               affectedShotCount={affectedShotCount}
               affectedVideoCount={affectedVideoCount}
-              disabled={isReplacing}
+              disabled={isAnalyzing}
               trigger="button"
             />
             <Button
               type="button"
               variant="outline"
-              disabled={deleteElement.isPending || isReplacing}
+              disabled={deleteElement.isPending || isAnalyzing}
               onClick={() => setDeleteOpen(true)}
               aria-label={`Delete ${element.token}`}
             >

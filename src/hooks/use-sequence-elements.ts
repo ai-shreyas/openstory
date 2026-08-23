@@ -9,31 +9,9 @@ import {
   renameSequenceElementTokenFn,
   replaceSequenceElementFn,
 } from '@/functions/sequence-elements';
-import type {
-  ReplaceElementCompletePayload,
-  ReplaceElementFailedPayload,
-  ReplaceElementStartPayload,
-} from '@/lib/realtime';
-import { useRealtime } from '@/lib/realtime/client';
 import { putToR2 } from '@/lib/utils/upload';
 import { sceneKeys } from '@/hooks/use-scenes';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useState } from 'react';
-import { toast } from 'sonner';
-
-type ReplaceElementEvent =
-  | {
-      event: 'generation.replace-element:start';
-      data: ReplaceElementStartPayload;
-    }
-  | {
-      event: 'generation.replace-element:complete';
-      data: ReplaceElementCompletePayload;
-    }
-  | {
-      event: 'generation.replace-element:failed';
-      data: ReplaceElementFailedPayload;
-    };
 
 const sequenceElementKeys = {
   all: ['sequence-elements'] as const,
@@ -235,105 +213,8 @@ export function useShotCountsForAllElements(sequenceId: string | undefined) {
 }
 
 /**
- * Subscribes to `replace-element:start|complete|failed` for one element so
- * the card can show a spinner across the whole flow (server-fn → :start →
- * vision → per-shot edits → :complete) and surface a final-state toast.
- *
- * Without this hook the card's `isReplacing` clears the moment vision flips
- * to `completed`, hiding the per-shot edit phase from the user — and any
- * post-vision failure becomes user-invisible.
- */
-export function useReplaceElementProgress(
-  sequenceId: string | undefined,
-  elementId: string,
-  token: string
-): { editing: boolean } {
-  const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(false);
-
-  const onData = useCallback(
-    (evt: ReplaceElementEvent) => {
-      if (evt.data.elementId !== elementId) return;
-
-      if (evt.event === 'generation.replace-element:start') {
-        setEditing(true);
-        return;
-      }
-
-      if (evt.event === 'generation.replace-element:complete') {
-        setEditing(false);
-        const {
-          successCount,
-          failedCount,
-          videoSuccessCount,
-          videoFailedCount,
-          renamedTo,
-        } = evt.data;
-        const displayName = renamedTo ?? token;
-        if (renamedTo && renamedTo !== token) {
-          toast.message(`Renamed ${token} → ${renamedTo}`);
-        }
-        if (failedCount > 0) {
-          toast.warning(
-            `${displayName}: ${successCount} edited, ${failedCount} failed`
-          );
-        } else if (successCount > 0) {
-          toast.success(
-            `${displayName}: edited ${successCount} shot${successCount === 1 ? '' : 's'}`
-          );
-        }
-        const vidSuccess = videoSuccessCount ?? 0;
-        const vidFailed = videoFailedCount ?? 0;
-        if (vidSuccess > 0 || vidFailed > 0) {
-          if (vidFailed > 0) {
-            toast.warning(
-              `${displayName} videos: ${vidSuccess} regenerated, ${vidFailed} failed`
-            );
-          } else {
-            toast.success(
-              `${displayName}: regenerated ${vidSuccess} video${vidSuccess === 1 ? '' : 's'}`
-            );
-          }
-        }
-        if (sequenceId) {
-          void queryClient.invalidateQueries({
-            queryKey: sequenceElementKeys.bySequence(sequenceId),
-          });
-        }
-        void queryClient.invalidateQueries({ queryKey: ['shots'] });
-        return;
-      }
-
-      setEditing(false);
-      toast.error(`Replace failed for ${token}`, {
-        description: evt.data.error,
-      });
-      if (sequenceId) {
-        void queryClient.invalidateQueries({
-          queryKey: sequenceElementKeys.bySequence(sequenceId),
-        });
-      }
-    },
-    [elementId, token, sequenceId, queryClient]
-  );
-
-  useRealtime({
-    channels: sequenceId ? [sequenceId] : [],
-    events: [
-      'generation.replace-element:start',
-      'generation.replace-element:complete',
-      'generation.replace-element:failed',
-    ] as const,
-    onData,
-    enabled: Boolean(sequenceId),
-  });
-
-  return { editing };
-}
-
-/**
- * Replace an element image: presign → R2 → finalize.
- * Triggers per-shot image edits via the replace-element workflow.
+ * Replace an element image: presign → R2 → persist + vision.
+ * Affected shots are left stale for the user to update.
  */
 export function useReplaceSequenceElement() {
   const queryClient = useQueryClient();

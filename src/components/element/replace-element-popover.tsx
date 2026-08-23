@@ -32,12 +32,11 @@ type ReplaceElementPopoverProps = {
  *  1. Dropzone — drag/drop, paste, or browse for a new image. Nothing
  *     destructive runs yet.
  *  2. Confirmation — shows the picked file with an explicit "Replace" button
- *     that spells out the cascade (script, shots, videos) before any upload
- *     starts. The user can cancel without touching server state.
+ *     before any upload starts. Affected shots are left stale.
  *
- * The actual upload + replace-element workflow only fires once the user
- * confirms; the popover stays open and shows an uploading state until the
- * mutation resolves, then closes.
+ * The upload + vision re-run only fires once the user confirms; the popover
+ * stays open and shows an uploading state until the mutation resolves, then
+ * closes.
  */
 export const ReplaceElementPopover: React.FC<ReplaceElementPopoverProps> = ({
   sequenceId,
@@ -91,15 +90,15 @@ export const ReplaceElementPopover: React.FC<ReplaceElementPopoverProps> = ({
     replaceMutation.mutate(
       { file: pendingFile, sequenceId, elementId },
       {
-        onSuccess: (result) => {
+        onSuccess: () => {
           setOpen(false);
           setPendingFile(null);
-          const count = result.affectedShotIds.length;
-          toast.info(
-            count > 0
-              ? `Replacing ${token} — editing ${count} shot${count === 1 ? '' : 's'}…`
-              : `Replaced ${token}`
-          );
+          toast.success(`Replaced ${token}`, {
+            description:
+              affectedShotCount > 0
+                ? `${affectedShotCount} shot${affectedShotCount === 1 ? '' : 's'} will show as out of date`
+                : undefined,
+          });
         },
         onError: (err) => {
           toast.error('Failed to replace element', {
@@ -108,7 +107,14 @@ export const ReplaceElementPopover: React.FC<ReplaceElementPopoverProps> = ({
         },
       }
     );
-  }, [elementId, pendingFile, replaceMutation, sequenceId, token]);
+  }, [
+    affectedShotCount,
+    elementId,
+    pendingFile,
+    replaceMutation,
+    sequenceId,
+    token,
+  ]);
 
   const isPending = replaceMutation.isPending;
 
@@ -156,7 +162,13 @@ export const ReplaceElementPopover: React.FC<ReplaceElementPopoverProps> = ({
             </p>
             <p className="text-xs text-muted-foreground">
               {pendingFile
-                ? `Confirming will replace ${token} everywhere it's used — your script, ${affectedShotCount} shot${affectedShotCount === 1 ? '' : 's'}, and ${affectedVideoCount} video${affectedVideoCount === 1 ? '' : 's'} will be updated.`
+                ? affectedShotCount > 0
+                  ? `This replaces the reference. ${affectedShotCount} shot${affectedShotCount === 1 ? '' : 's'}${
+                      affectedVideoCount > 0
+                        ? ` (${affectedVideoCount} with video)`
+                        : ''
+                    } that use it will show as out of date until you update them.`
+                  : `This replaces the reference image for ${token}.`
                 : `Drop a new image to replace ${token}. You'll get a chance to confirm before anything changes.`}
             </p>
           </div>
