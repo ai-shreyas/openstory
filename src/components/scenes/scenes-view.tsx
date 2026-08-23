@@ -677,10 +677,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const staleShotIds = useMemo(() => {
     const set = new Set<string>();
     for (const [shotId, staleness] of Object.entries(scopeStaleness ?? {})) {
-      // Image tab: the rail dots must match the canvas "Out of date" chip
-      // (thumbnail only). `shotIsStale` is any-artifact, so a bible-only
-      // change (element replace nulling description) would otherwise dot
-      // stills that never used the element's image.
       const isStale =
         effectiveTab === 'image-prompt'
           ? staleness.thumbnail === 'stale'
