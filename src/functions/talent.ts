@@ -7,7 +7,6 @@ import {
   listPublicTalent,
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
-import type { ScopedDb } from '@/lib/db/scoped';
 import {
   portraitAttestationSchema,
   recordPortraitAttestation,
@@ -21,7 +20,7 @@ import {
   listTalentFilterSchema,
   updateTalentSchema,
 } from '@/lib/schemas/talent.schemas';
-import { r2KeyFromUrl, STORAGE_BUCKETS } from '@/lib/storage/buckets';
+import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
 import {
   getExtensionFromUrl,
   getMimeTypeFromExtension,
@@ -32,11 +31,9 @@ import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { createLibraryTalent } from '@/lib/talent/create-library-talent';
-import type { CharacterBibleEntry } from '@/lib/ai/scene-analysis.schema';
-import {
-  analyzeTalentMediaForTeam,
-  sheetMetadataFromAnalysis,
-} from '@/lib/talent/analyze-talent-media';
+import { analyzeTalentMediaForTeam } from '@/lib/talent/analyze-talent-media';
+import { maybePromoteOrGenerateSheet } from '@/lib/talent/promote-or-generate-sheet';
+import { isTeamTalentStoredUrl } from '@/lib/storage/copy-stored-image';
 import { getTalentChannel } from '@/lib/realtime';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
@@ -340,11 +337,12 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       },
     });
 
+    const storedUrl = `/r2/${data.path}`;
     await context.scopedDb.talent.media.create({
       id: data.mediaId,
       talentId: data.talentId,
       type: data.type,
-      url: data.publicUrl,
+      url: storedUrl,
       path: data.path,
     });
 
@@ -354,7 +352,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         userId: context.user.id,
         teamId: context.teamId,
         talentId: data.talentId,
-        imageUrl: data.publicUrl,
+        imageUrl: storedUrl,
       });
     }
 
@@ -425,18 +423,8 @@ export const analyzeTalentMediaFn = createServerFn({ method: 'POST' })
     )
   )
   .handler(async ({ context, data }) => {
-    const teamPrefix = `${STORAGE_BUCKETS.TALENT}/${context.teamId}/`;
     for (const url of data.imageUrls) {
-      const storedKey = r2KeyFromUrl(url);
-      let path = storedKey;
-      if (!path && /^https?:\/\//.test(url)) {
-        try {
-          path = new URL(url).pathname.replace(/^\/+/, '');
-        } catch {
-          path = null;
-        }
-      }
-      if (!path?.startsWith(teamPrefix)) {
+      if (!isTeamTalentStoredUrl(url, context.teamId)) {
         throw new Error('Image URL is not a talent upload for this team');
       }
     }
@@ -510,68 +498,3 @@ export const addCharacterToLibraryFn = createServerFn({ method: 'POST' })
 
     return newTalent;
   });
-
-async function maybePromoteOrGenerateSheet(params: {
-  scopedDb: ScopedDb;
-  userId: string;
-  teamId: string;
-  talentId: string;
-  imageUrl: string;
-}): Promise<void> {
-  const talentRecord = await params.scopedDb.talent.getWithRelations(
-    params.talentId
-  );
-  if (!talentRecord || !isTeamWritableTalent(talentRecord, params.teamId)) {
-    return;
-  }
-
-  const imageMedia = talentRecord.media.filter((m) => m.type === 'image');
-  const convergentSheets = talentRecord.sheets.filter((s) => !s.divergedAt);
-
-  let uploadedSheetUrl: string | undefined;
-  let uploadedSheetMetadata: CharacterBibleEntry | undefined;
-  try {
-    const analysis = await analyzeTalentMediaForTeam({
-      scopedDb: params.scopedDb,
-      userId: params.userId,
-      imageUrls: [params.imageUrl],
-      idempotencyKey: `talent-vision:finalize:${params.talentId}:${params.imageUrl}`,
-    });
-    if (analysis.isCharacterSheet) {
-      uploadedSheetUrl = params.imageUrl;
-      uploadedSheetMetadata = sheetMetadataFromAnalysis(
-        talentRecord.name,
-        analysis
-      );
-    }
-  } catch {
-    // Classification is best-effort; fall through to generate-if-missing.
-  }
-
-  if (!uploadedSheetUrl && convergentSheets.length > 0) {
-    return;
-  }
-
-  const workflowInput: LibraryTalentSheetWorkflowInput = {
-    userId: params.userId,
-    teamId: params.teamId,
-    talentId: talentRecord.id,
-    talentName: talentRecord.name,
-    talentDescription: talentRecord.description ?? undefined,
-    referenceImageUrls: imageMedia.map((m) => m.url).sort(),
-    sheetName: uploadedSheetUrl ? 'Uploaded Sheet' : 'Default Sheet',
-    uploadedSheetUrl,
-    uploadedSheetMetadata,
-  };
-  workflowInput.snapshotInputHash =
-    await computeLibraryTalentSheetHashFromDto(workflowInput);
-
-  await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
-    talentId: talentRecord.id,
-    status: 'generating',
-  });
-
-  await triggerWorkflow('/library-talent-sheet', workflowInput, {
-    label: buildWorkflowLabel(talentRecord.id),
-  });
-}

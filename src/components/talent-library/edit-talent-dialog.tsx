@@ -248,7 +248,8 @@ export const EditTalentDialog: React.FC<EditTalentDialogProps> = ({
                   onClick={() => {
                     const urls = talent.media
                       .filter((m) => m.type === 'image')
-                      .map((m) => m.url);
+                      .map((m) => m.url)
+                      .slice(0, 8);
                     analyzeMedia.mutate(urls, {
                       onSuccess: (result) => {
                         setDescription(result.description);

@@ -190,7 +190,7 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
                   size="sm"
                   disabled={uploadedUrls.length === 0 || analyzeMedia.isPending}
                   onClick={() => {
-                    analyzeMedia.mutate(uploadedUrls, {
+                    analyzeMedia.mutate(uploadedUrls.slice(0, 8), {
                       onSuccess: (result) => {
                         setDescription(result.description);
                         if (!name.trim() && result.suggestedName.trim()) {

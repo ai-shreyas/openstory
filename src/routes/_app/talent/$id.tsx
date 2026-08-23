@@ -290,15 +290,6 @@ function TalentDetailPage() {
               {sheetError && (
                 <p className="text-destructive text-sm mb-3">{sheetError}</p>
               )}
-              {canManageTalent && (
-                <Button
-                  onClick={handleGenerateSheet}
-                  disabled={isGeneratingSheet}
-                >
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Generate Sheet
-                </Button>
-              )}
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -404,7 +395,13 @@ function TalentDetailPage() {
             ) : null}
             <TalentMediaUpload
               files={dropFiles}
-              onFilesChange={setDropFiles}
+              onFilesChange={(next) => {
+                setDropFiles(next);
+                if (next.length === 0) {
+                  setAttested(false);
+                  setAuthorizationBasis('');
+                }
+              }}
               talentId={talent.id}
               portraitAttestation={
                 canUpload

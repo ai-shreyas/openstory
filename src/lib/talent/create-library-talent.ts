@@ -34,6 +34,7 @@ import {
   analyzeTalentMediaForTeam,
   sheetMetadataFromAnalysis,
 } from './analyze-talent-media';
+import { libraryTalentGenerateDedupId } from './library-talent-sheet-dedup';
 
 const logger = getLogger(['openstory', 'talent', 'create-library-talent']);
 
@@ -194,6 +195,9 @@ export async function createLibraryTalent(
 
   void triggerWorkflow('/library-talent-sheet', workflowInput, {
     label: buildWorkflowLabel(newTalent.id),
+    // Shared with generate-if-missing on later photo drops so parallel
+    // finalizes reuse this run instead of billing another 4-panel.
+    deduplicationId: libraryTalentGenerateDedupId(newTalent.id),
   }).catch((error) => {
     logger.error('Failed to trigger talent sheet workflow:', { err: error });
     void getTalentChannel(newTalent.id)

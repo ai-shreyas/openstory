@@ -2,15 +2,15 @@
  * Decide whether a cast character can keep the talent's existing sheet
  * instead of generating a new costumed one.
  *
- * Default is reuse. Regenerate when role clothing/feature tokens do not
- * overlap the talent look (Jaccard < 0.25 / 0.2). Comparison is metadata
- * text, not the sheet image.
+ * Default is reuse. Regenerate when role clothing Jaccard against talent
+ * clothing (description only if clothing is empty) is below 0.25, or
+ * features Jaccard against talent features (physical+description fallback)
+ * is below 0.2. Comparison is metadata text, not the sheet image.
  */
 
 export type ReuseTalentSheetInput = {
   characterClothing?: string | null;
   characterFeatures?: string | null;
-  characterPhysical?: string | null;
   talentClothing?: string | null;
   talentFeatures?: string | null;
   talentPhysical?: string | null;
@@ -102,12 +102,9 @@ function tokensOrFallback(
 }
 
 /**
- * True unless the role specifies distinctive clothing or features that do
- * not overlap the talent look. Empty/generic role wardrobe defaults to
- * reuse. Comparison is metadata text (Jaccard 0.25 clothing / 0.2
- * features), not the sheet image. Clothing is compared to talent clothing
- * (description only if clothing metadata is empty) so a long bio cannot
- * dilute a matching costume.
+ * True unless distinctive role clothing/features fail the Jaccard
+ * thresholds against the matching talent field. Empty/generic role
+ * wardrobe defaults to reuse.
  */
 export function shouldReuseTalentSheet(input: ReuseTalentSheetInput): boolean {
   const characterClothes = tokenizeAppearance(input.characterClothing);

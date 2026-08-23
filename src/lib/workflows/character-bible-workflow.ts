@@ -138,7 +138,6 @@ export class CharacterBibleWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         shouldReuseTalentSheet({
           characterClothing: character.standardClothing,
           characterFeatures: character.distinguishingFeatures,
-          characterPhysical: character.physicalDescription,
           talentClothing: talentMatch.sheetMetadata?.standardClothing,
           talentFeatures: talentMatch.sheetMetadata?.distinguishingFeatures,
           talentPhysical: talentMatch.sheetMetadata?.physicalDescription,

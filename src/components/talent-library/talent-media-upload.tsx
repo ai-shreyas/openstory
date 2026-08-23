@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { Button } from '@/components/ui/button';
 import {
@@ -53,6 +54,14 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
     new Map()
   );
   const uploadedKeysRef = useRef(new Set<string>());
+  const pendingBatchesRef = useRef<
+    Array<{
+      files: File[];
+      onProgress: (file: File, percent: number) => void;
+      onSuccess: (file: File) => void;
+      onError: (file: File, error: Error) => void;
+    }>
+  >([]);
   const flushingPendingRef = useRef(false);
   const { requireAuth } = useAuthGate();
   const uploadTempMedia = useUploadTempMedia();
@@ -94,6 +103,12 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
         return;
       }
       if (waitingForAttestation) {
+        pendingBatchesRef.current.push({
+          files: newFiles,
+          onProgress,
+          onSuccess,
+          onError,
+        });
         return;
       }
       const uploadPromises = newFiles.map(async (file) => {
@@ -128,14 +143,23 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
           onProgress(file, 100);
           onSuccess(file);
         } catch (error) {
-          onError(
-            file,
-            error instanceof Error ? error : new Error('Upload failed')
-          );
+          const err =
+            error instanceof Error ? error : new Error('Upload failed');
+          onError(file, err);
+          throw err;
         }
       });
 
-      await Promise.all(uploadPromises);
+      const results = await Promise.allSettled(uploadPromises);
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length > 0) {
+        toast.error(
+          failed.length === newFiles.length
+            ? 'Upload failed'
+            : `${failed.length} of ${newFiles.length} files failed to upload`
+        );
+        return;
+      }
       if (talentId) {
         onComplete?.();
       }
@@ -153,22 +177,37 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
   );
 
   useEffect(() => {
+    if (files.length === 0) {
+      uploadedKeysRef.current.clear();
+      pendingBatchesRef.current = [];
+    }
+  }, [files.length]);
+
+  useEffect(() => {
     if (waitingForAttestation || !talentId || !portraitAttestation) return;
     if (flushingPendingRef.current) return;
-    const pending = files.filter(
-      (file) => !uploadedKeysRef.current.has(getFileKey(file))
-    );
-    if (pending.length === 0) return;
+    const batches = pendingBatchesRef.current;
+    if (batches.length === 0) return;
+    pendingBatchesRef.current = [];
     flushingPendingRef.current = true;
-    void Promise.resolve(
-      onUpload(pending, {
-        onProgress: () => undefined,
-        onSuccess: () => undefined,
-        onError: () => undefined,
-      })
-    ).finally(() => {
-      flushingPendingRef.current = false;
-    });
+    const currentKeys = new Set(files.map(getFileKey));
+    void (async () => {
+      try {
+        for (const batch of batches) {
+          const stillPresent = batch.files.filter((file) =>
+            currentKeys.has(getFileKey(file))
+          );
+          if (stillPresent.length === 0) continue;
+          await onUpload(stillPresent, {
+            onProgress: batch.onProgress,
+            onSuccess: batch.onSuccess,
+            onError: batch.onError,
+          });
+        }
+      } finally {
+        flushingPendingRef.current = false;
+      }
+    })();
   }, [waitingForAttestation, talentId, portraitAttestation, files, onUpload]);
 
   return (

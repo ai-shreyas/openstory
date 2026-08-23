@@ -194,7 +194,6 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
         shouldReuseTalentSheet({
           characterClothing: character.standardClothing,
           characterFeatures: character.distinguishingFeatures,
-          characterPhysical: character.physicalDescription,
           talentClothing: defaultSheet.metadata?.standardClothing,
           talentFeatures: defaultSheet.metadata?.distinguishingFeatures,
           talentPhysical: defaultSheet.metadata?.physicalDescription,
