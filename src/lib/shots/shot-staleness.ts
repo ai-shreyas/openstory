@@ -22,7 +22,17 @@ import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
 import type { SequenceStatus } from '@/lib/db/schema/sequences';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
+import { matchElementsToShotImage } from '@/lib/workflows/scene-matching';
 import { getLogger } from '@/lib/observability/logger';
+
+function ms(value: Date | number | null | undefined): number | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const t = value.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  return Number.isFinite(value) ? value : null;
+}
 
 const logger = getLogger(['openstory', 'shots', 'staleness']);
 
@@ -178,8 +188,61 @@ export async function computeShotStaleness(args: {
     // sceneSnapshot), means we genuinely have no opinion — so 'untracked'
     // rather than lying with 'fresh'. Once the user regenerates once under the
     // new path the version carries a hash and the comparison takes over.
+    //
+    // Exception: an untracked still that names an element whose row is newer
+    // than the still *is* stale. Element replace does not rewrite stills, and
+    // a null `inputHash` would otherwise hide every affected image (#1192).
     if (selectedImage?.inputHash == null) {
       thumbnail = 'untracked';
+      if (selectedImage?.url) {
+        try {
+          const elements = refs
+            ? refs.elements
+            : await scopedDb.sequenceElements.list(sequence.id);
+          const matched = matchElementsToShotImage(elements, {
+            visualPrompt: effectivePrompt,
+            elementTags: scene?.continuity?.elementTags,
+            sceneExtract: scene?.originalScript.extract,
+          });
+          const stillAt =
+            ms(selectedImage.generatedAt) ?? ms(selectedImage.createdAt);
+          if (
+            stillAt != null &&
+            matched.some((el) => {
+              const movedAt = ms(el.updatedAt);
+              return movedAt != null && movedAt > stillAt;
+            })
+          ) {
+            thumbnail = 'stale';
+          }
+          const [characters, locations] = refs
+            ? [refs.characters, refs.locations]
+            : await Promise.all([
+                scopedDb.characters.listWithSheets(sequence.id),
+                scopedDb.sequenceLocations.listWithReferences(sequence.id),
+              ]);
+          const snapshot = await buildRegenerateShotSnapshot({
+            shot,
+            scene,
+            frameId: frame.id,
+            imagePrompt: effectivePrompt,
+            characters,
+            locations,
+            elements,
+            imageModel: safeTextToImageModel(
+              selectedImage.model,
+              DEFAULT_IMAGE_MODEL
+            ),
+            aspectRatio: sequence.aspectRatio,
+          });
+          liveHashes.thumbnail = snapshot.snapshotInputHash;
+        } catch (error) {
+          if (thumbnail !== 'stale') thumbnail = 'unknown';
+          logger.warn(`thumbnail staleness uncomputable for shot ${shot.id}:`, {
+            err: error,
+          });
+        }
+      }
     } else {
       try {
         const [characters, locations, elements] = refs

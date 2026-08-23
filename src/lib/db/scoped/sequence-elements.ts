@@ -31,8 +31,24 @@ import {
   loadSceneContextBySequenceFromDb,
   resolveSceneForShot,
 } from '@/lib/scenes/scene-script';
-import { matchElementsToScene } from '@/lib/workflows/scene-matching';
+import { matchElementsToShotImage } from '@/lib/workflows/scene-matching';
 import { and, eq, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
+
+/** Selected visual prompt text for each shot's anchor frame, keyed by shot id. */
+async function loadVisualPromptsByShotId(
+  db: Database,
+  sequenceId: string
+): Promise<Map<string, string>> {
+  const rows = await db
+    .select({ shotId: frames.shotId, text: framePromptVersions.text })
+    .from(frames)
+    .innerJoin(
+      framePromptVersions,
+      eq(frames.selectedImagePromptVersionId, framePromptVersions.id)
+    )
+    .where(and(eq(frames.sequenceId, sequenceId), eq(frames.orderIndex, 0)));
+  return new Map(rows.map((r) => [r.shotId, r.text]));
+}
 
 export function createSequenceElementsMethods(db: Database) {
   const update = async (
@@ -509,21 +525,24 @@ export function createSequenceElementsMethods(db: Database) {
         return [];
       }
 
-      const [allShots, sceneContext] = await Promise.all([
+      const [allShots, sceneContext, promptByShotId] = await Promise.all([
         db
           .select()
           .from(shots)
           .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
         loadSceneContextBySequenceFromDb(db, sequenceId),
+        loadVisualPromptsByShotId(db, sequenceId),
       ]);
 
       return allShots
         .filter((shot) => {
           const scene = resolveSceneForShot(shot, sceneContext).scene;
-          const elementTags = scene?.continuity?.elementTags ?? [];
-          const sceneScript = scene?.originalScript.extract ?? '';
           return (
-            matchElementsToScene([element], elementTags, sceneScript).length > 0
+            matchElementsToShotImage([element], {
+              visualPrompt: promptByShotId.get(shot.id),
+              elementTags: scene?.continuity?.elementTags,
+              sceneExtract: scene?.originalScript?.extract,
+            }).length > 0
           );
         })
         .map((f) => f.id);
@@ -551,41 +570,41 @@ export function createSequenceElementsMethods(db: Database) {
       }
       if (allElements.length === 0) return counts;
 
-      const [allShots, sceneContext, shotIdsWithVideo] = await Promise.all([
-        db
-          .select()
-          .from(shots)
-          .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
-        loadSceneContextBySequenceFromDb(db, sequenceId),
-        // A shot "has video" when its render segment points at a live version
-        // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
-        db
-          .select({ shotId: shots.id })
-          .from(shots)
-          .innerJoin(
-            renderSegments,
-            eq(renderSegments.id, shots.renderSegmentId)
-          )
-          .innerJoin(
-            videoVariants,
-            and(
-              eq(videoVariants.id, renderSegments.selectedVideoVersionId),
-              isNull(videoVariants.discardedAt)
+      const [allShots, sceneContext, shotIdsWithVideo, promptByShotId] =
+        await Promise.all([
+          db
+            .select()
+            .from(shots)
+            .where(eq(shots.sequenceId, sequenceId)) as Promise<Shot[]>,
+          loadSceneContextBySequenceFromDb(db, sequenceId),
+          // A shot "has video" when its render segment points at a live version
+          // (#1067 phase 2d) — the `shots.videoUrl` mirror is gone.
+          db
+            .select({ shotId: shots.id })
+            .from(shots)
+            .innerJoin(
+              renderSegments,
+              eq(renderSegments.id, shots.renderSegmentId)
             )
-          )
-          .where(eq(shots.sequenceId, sequenceId))
-          .then((rows) => new Set(rows.map((r) => r.shotId))),
-      ]);
+            .innerJoin(
+              videoVariants,
+              and(
+                eq(videoVariants.id, renderSegments.selectedVideoVersionId),
+                isNull(videoVariants.discardedAt)
+              )
+            )
+            .where(eq(shots.sequenceId, sequenceId))
+            .then((rows) => new Set(rows.map((r) => r.shotId))),
+          loadVisualPromptsByShotId(db, sequenceId),
+        ]);
 
       for (const shot of allShots) {
         const scene = resolveSceneForShot(shot, sceneContext).scene;
-        const elementTags = scene?.continuity?.elementTags ?? [];
-        const sceneScript = scene?.originalScript.extract ?? '';
-        const matched = matchElementsToScene(
-          allElements,
-          elementTags,
-          sceneScript
-        );
+        const matched = matchElementsToShotImage(allElements, {
+          visualPrompt: promptByShotId.get(shot.id),
+          elementTags: scene?.continuity?.elementTags,
+          sceneExtract: scene?.originalScript?.extract,
+        });
         const hasVideo = shotIdsWithVideo.has(shot.id);
         for (const el of matched) {
           const entry = counts[el.id];

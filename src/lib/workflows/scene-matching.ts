@@ -178,6 +178,38 @@ export function matchElementsToScene<T extends ElementMatchInput>(
   });
 }
 
+/**
+ * Elements whose reference image should attach to a still — and therefore
+ * participate in that still's input hash / "out of date" badge.
+ *
+ * When a visual prompt exists, match the UPPERCASE token in that prompt.
+ * That's the visibility signal the image model actually saw (`holding the
+ * (LOGO)`, an @-mention insert, etc.). Scene-level `elementTags` and the
+ * scene extract over-match every shot in the scene, including ones that only
+ * mention the product in dialogue.
+ *
+ * Fall back to tags + extract when there is no prompt yet (pre-prompt
+ * pipeline, or a shot that never got a visual prompt).
+ */
+export function matchElementsToShotImage<T extends ElementMatchInput>(
+  allElements: T[],
+  args: {
+    visualPrompt?: string | null;
+    elementTags?: string[] | null;
+    sceneExtract?: string | null;
+  }
+): T[] {
+  const prompt = (args.visualPrompt ?? '').trim();
+  if (prompt.length > 0) {
+    return matchElementsToScene(allElements, [], prompt);
+  }
+  return matchElementsToScene(
+    allElements,
+    args.elementTags ?? [],
+    args.sceneExtract ?? ''
+  );
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

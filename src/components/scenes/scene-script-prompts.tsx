@@ -1197,6 +1197,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     const config = IMAGE_MODELS[modelKey];
     const referenceImages = buildShotImageReferenceImages({
       scene: sceneReference,
+      visualPrompt: basePrompt,
       characters: mentionCharacters ?? [],
       locations: mentionLocations ?? [],
       elements: mentionElements ?? [],
