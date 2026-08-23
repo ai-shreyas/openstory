@@ -105,6 +105,35 @@ type LocalEntry = {
   errorMessage?: string;
 };
 
+/**
+ * Pick which incoming files to accept: image-cap and duplicate-key filtering,
+ * pure so `processFiles` can run it before touching state. It must NOT run
+ * inside the setEntries updater — updaters aren't guaranteed to run before the
+ * code that follows the setState call, and an `accepted` list built inside one
+ * can still be empty when the uploads are started from it, stranding entries
+ * in `uploading` forever and locking the Generate button on
+ * "Analyzing elements…" (#1231).
+ */
+export function selectFilesToAccept(
+  files: File[],
+  existingKeys: ReadonlySet<string>,
+  existingCount: number,
+  getKey: (file: File) => string = getFileKey
+): { key: string; file: File }[] {
+  const accepted: { key: string; file: File }[] = [];
+  const seen = new Set(existingKeys);
+  let remaining = MAX_SEQUENCE_ELEMENTS - existingCount;
+  for (const file of files) {
+    if (remaining <= 0) break;
+    const key = getKey(file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    accepted.push({ key, file });
+    remaining--;
+  }
+  return accepted;
+}
+
 type DisplayItem = {
   key: string;
   imageUrl: string;
@@ -236,24 +265,36 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
       // prompt instead (covers browse, drop, paste, and external drops).
       if (!requireAuth()) return;
 
-      const accepted: { key: string; file: File }[] = [];
+      // Accept files BEFORE touching state (see selectFilesToAccept). The ref
+      // mirror is the synchronous source of truth for keys/counts; the state
+      // updater below stays pure and merges the same entries.
+      const currentEntries = entriesRef.current;
+      const existingCount = isPersisted
+        ? persistedElements.length + currentEntries.size
+        : draftElementsRef.current.length + currentEntries.size;
+      const accepted = selectFilesToAccept(
+        images,
+        new Set(currentEntries.keys()),
+        existingCount
+      );
+      if (accepted.length === 0) return;
+
+      const seeded = new Map(currentEntries);
+      for (const { key, file } of accepted) {
+        seeded.set(key, {
+          file,
+          previewUrl: URL.createObjectURL(file),
+          status: 'uploading',
+        });
+      }
+      // Sync the mirror now so a second processFiles call in the same tick
+      // sees these keys (state only catches up on the next render).
+      entriesRef.current = seeded;
       setEntries((prev) => {
         const next = new Map(prev);
-        const existingCount = isPersisted
-          ? persistedElements.length + next.size
-          : draftElementsRef.current.length + next.size;
-        let remaining = MAX_SEQUENCE_ELEMENTS - existingCount;
-        for (const file of images) {
-          if (remaining <= 0) break;
-          const key = getFileKey(file);
-          if (next.has(key)) continue;
-          next.set(key, {
-            file,
-            previewUrl: URL.createObjectURL(file),
-            status: 'uploading',
-          });
-          accepted.push({ key, file });
-          remaining--;
+        for (const { key } of accepted) {
+          const entry = seeded.get(key);
+          if (entry && !next.has(key)) next.set(key, entry);
         }
         return next;
       });
