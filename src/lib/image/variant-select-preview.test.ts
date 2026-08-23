@@ -76,6 +76,7 @@ describe('shotAfterVariantSelect', () => {
   it('swaps the still, marks generating, and drops the old video', () => {
     const next = shotAfterVariantSelect(shot, '/r2/thumbnails/tile.png');
     expect(next.image?.url).toBe('/r2/thumbnails/tile.png');
+    expect(next.pendingUpscaleUrl).toBe('/r2/thumbnails/tile.png');
     expect(next.frame.imageStatus).toBe('generating');
     expect(next.video).toBeNull();
     expect(next.videoStatus).toBe('pending');

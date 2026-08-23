@@ -20,6 +20,8 @@ type SceneThumbnailProps = {
   className?: string;
   /** In-flight variant upscale — CSS-crop this cell over the still. */
   upscalePreview?: { gridUrl: string; variantIndex: number } | null;
+  /** Cropped tile URL persisted on the generating framing version (survives refresh). */
+  pendingUpscaleUrl?: string | null;
 };
 
 const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
@@ -30,17 +32,24 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
   aspectRatio,
   className,
   upscalePreview,
+  pendingUpscaleUrl,
 }) => {
   // Display the final image if available, otherwise the preview
   const displayUrl = thumbnailUrl ?? previewThumbnailUrl;
   const isPreview = !thumbnailUrl && !!previewThumbnailUrl;
+  const cropUrl = pendingUpscaleUrl ?? null;
+  const showUpscaleOverlay = Boolean(upscalePreview || cropUrl);
 
   // Only show loader when there's no image at all
   const showLoader =
-    !displayUrl && !!thumbnailStatus && thumbnailStatus !== 'failed';
+    !displayUrl &&
+    !showUpscaleOverlay &&
+    !!thumbnailStatus &&
+    thumbnailStatus !== 'failed';
 
-  const showSkeleton = !displayUrl && !thumbnailStatus;
-  const isFailed = thumbnailStatus === 'failed' && !displayUrl;
+  const showSkeleton = !displayUrl && !showUpscaleOverlay && !thumbnailStatus;
+  const isFailed =
+    thumbnailStatus === 'failed' && !displayUrl && !showUpscaleOverlay;
   const grid = getVariantGridConfig(aspectRatio);
   const upscaleCss = upscalePreview
     ? tileBackgroundCss({
@@ -65,7 +74,7 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
         <BlobLoaderContainer size="sm" className="absolute inset-0" />
       )}
 
-      {displayUrl && !upscalePreview && (
+      {displayUrl && !showUpscaleOverlay && (
         <AppImage
           src={displayUrl}
           alt={alt}
@@ -86,13 +95,23 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
         />
       )}
 
+      {!upscalePreview && cropUrl && (
+        <AppImage
+          src={cropUrl}
+          alt={alt}
+          className="h-full w-full object-cover"
+          width={320}
+          height={180}
+        />
+      )}
+
       {isPreview && (
         <span className="absolute top-1 right-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground backdrop-blur-sm">
           Preview
         </span>
       )}
 
-      {(upscalePreview || (displayUrl && thumbnailStatus === 'generating')) && (
+      {showUpscaleOverlay && (
         <span className="absolute inset-x-0 bottom-1 z-10 flex justify-center">
           <span className="flex items-center gap-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground backdrop-blur-sm">
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -126,7 +145,8 @@ const areEqual = (
     prevProps.className === nextProps.className &&
     prevProps.upscalePreview?.gridUrl === nextProps.upscalePreview?.gridUrl &&
     prevProps.upscalePreview?.variantIndex ===
-      nextProps.upscalePreview?.variantIndex
+      nextProps.upscalePreview?.variantIndex &&
+    prevProps.pendingUpscaleUrl === nextProps.pendingUpscaleUrl
   );
 };
 

@@ -99,6 +99,13 @@ export type ShotViewSources = {
   primaryVideo: VideoVariant | null;
   gridSheet?: ShotGridSheet | null;
   motionPrompt?: AssemblableMotionPrompt | null;
+  /**
+   * In-flight variant upscale: the generating framing version the promote
+   * claim points at, when it already has a cropped-tile url (minted at
+   * click). Regular still gens are also `generating` with a null url, so
+   * the url is the discriminator.
+   */
+  pendingUpscaleUrl?: string | null;
 };
 
 export type ShotView = Shot & {
@@ -126,6 +133,8 @@ export type ShotView = Shot & {
   videoStatus: VideoVariant['status'];
   gridSheet: ShotGridSheet | null;
   motionPrompt: AssemblableMotionPrompt | null;
+  /** Cropped tile for an in-flight variant upscale, or null. */
+  pendingUpscaleUrl: string | null;
 };
 
 /**
@@ -188,5 +197,16 @@ export function toShotView(
     }),
     gridSheet: sources.gridSheet ?? null,
     motionPrompt: sources.motionPrompt ?? null,
+    pendingUpscaleUrl: sources.pendingUpscaleUrl ?? null,
   };
+}
+
+/** Crop url on a generating pending-promote version; otherwise null. */
+export function pendingUpscaleUrlFromVersion(
+  version: FrameVariant | null | undefined
+): string | null {
+  if (!version || version.status !== 'generating' || !version.url) {
+    return null;
+  }
+  return version.url;
 }

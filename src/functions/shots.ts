@@ -19,6 +19,7 @@ import { computePlan } from '@/lib/shots/update-stale-plan';
 import {
   toShotView,
   shotViewMissingFrame,
+  pendingUpscaleUrlFromVersion,
   type ShotGridSheet,
 } from '@/lib/shots/shot-view';
 import { getVideoDownloadUrl } from '@/lib/motion/video-storage';
@@ -77,12 +78,20 @@ export const getShotsFn = createServerFn({ method: 'GET' })
     // segment's selected `video_variants` row (#1067) — one batch read each, so
     // assembling the sequence stays O(1) queries.
     const shotIds = shotRows.map((s) => s.id);
+    const pendingPromoteIds = [
+      ...new Set(
+        anchorRows
+          .map((f) => f.pendingPromoteVersionId)
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
     const [
       selectedByFrame,
       previewByFrame,
       selectedPromptByFrame,
       selectedVideoByShot,
       primaryVideoByShot,
+      pendingById,
     ] = await Promise.all([
       scopedDb.frameVariants.getSelectedByFrameIds(anchorRows.map((f) => f.id)),
       // The pre-prompt stand-in is a `kind: 'preview'` row too (#1101) —
@@ -95,6 +104,7 @@ export const getShotsFn = createServerFn({ method: 'GET' })
       ),
       scopedDb.videoVariants.getSelectedByShotIds(shotIds),
       scopedDb.videoVariants.getPrimaryByShotIds(shotIds),
+      scopedDb.frameVariants.getByIds(pendingPromoteIds),
     ]);
     const anchorsByShot = new Map(anchorRows.map((f) => [f.shotId, f]));
     return shotRows.map((shot) => {
@@ -132,6 +142,11 @@ export const getShotsFn = createServerFn({ method: 'GET' })
         primaryVideo: primaryVideoByShot.get(shot.id) ?? null,
         gridSheet,
         motionPrompt,
+        pendingUpscaleUrl: pendingUpscaleUrlFromVersion(
+          frame.pendingPromoteVersionId
+            ? (pendingById.get(frame.pendingPromoteVersionId) ?? null)
+            : null
+        ),
       });
     });
   });
@@ -174,6 +189,7 @@ export const getShotFn = createServerFn({ method: 'GET' })
       imagePromptVersion,
       video,
       primaryVideo,
+      pendingPromote,
     ] = await Promise.all([
       context.scopedDb.frameVariants.getLatestGridSheet(context.frame.id),
       context.scopedDb.shotPromptVersions.getSelectedMotion(context.shot.id),
@@ -182,6 +198,11 @@ export const getShotFn = createServerFn({ method: 'GET' })
       context.scopedDb.framePromptVersions.getSelected(context.frame.id),
       context.scopedDb.videoVariants.getSelectedByShot(context.shot.id),
       context.scopedDb.videoVariants.getPrimaryByShot(context.shot.id),
+      context.frame.pendingPromoteVersionId
+        ? context.scopedDb.frameVariants.getById(
+            context.frame.pendingPromoteVersionId
+          )
+        : Promise.resolve(null),
     ]);
     return toShotView(context.shot, context.frame, {
       image,
@@ -193,6 +214,7 @@ export const getShotFn = createServerFn({ method: 'GET' })
       motionPrompt: selectedMotion
         ? motionPromptFromVersion(selectedMotion)
         : null,
+      pendingUpscaleUrl: pendingUpscaleUrlFromVersion(pendingPromote),
     });
   });
 

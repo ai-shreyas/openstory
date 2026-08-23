@@ -190,6 +190,30 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(shot?.frame.imageError).toBe('Blocked by content filter');
     });
 
+    it('primary completion clears the persisted upscale overlay so it does not stick after SSE', () => {
+      qc.setQueryData(shotKeys.list(SEQ), [
+        makeShot({
+          frame: { imageStatus: 'generating' },
+          sources: { pendingUpscaleUrl: '/r2/thumbnails/crop.png' },
+        }),
+      ]);
+      setVariantUpscalePreview(qc, 'shot-1', {
+        variantIndex: 4,
+        gridUrl: '/r2/grid.png',
+        aspectRatio: '16:9',
+      });
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        thumbnailUrl: NEW_URL,
+      });
+
+      const shot = getCachedShot(qc);
+      expect(shot?.pendingUpscaleUrl).toBeNull();
+      expect(getVariantUpscalePreview(qc, 'shot-1')).toBeNull();
+    });
+
     it('a fresh generating attempt clears a stale frame.imageError', () => {
       qc.setQueryData(shotKeys.list(SEQ), [
         makeShot({ frame: { imageStatus: 'failed', imageError: 'old error' } }),

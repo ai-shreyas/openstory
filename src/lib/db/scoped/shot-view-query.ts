@@ -32,11 +32,15 @@ import { motionPromptFromVersion } from '@/lib/motion/resolve-motion-prompt';
 import {
   type ShotGridSheet,
   type ShotView,
+  pendingUpscaleUrlFromVersion,
   shotViewMissingFrame,
   toShotView,
 } from '@/lib/shots/shot-view';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { getLatestPreviewByFrameIds } from './frame-variants';
+import {
+  getFrameVariantsByIds,
+  getLatestPreviewByFrameIds,
+} from './frame-variants';
 import { getPrimaryVideoByShotIds } from './video-variants';
 
 /**
@@ -152,7 +156,16 @@ export async function assembleShotViews(
   rows: ShotViewRow[],
   gridSheetByFrameId?: Map<string, ShotGridSheet>
 ): Promise<ShotView[]> {
-  const [primaryByShot, previewByFrame] = await Promise.all([
+  const pendingPromoteIds = [
+    ...new Set(
+      rows.flatMap((r) =>
+        r.frames?.pendingPromoteVersionId
+          ? [r.frames.pendingPromoteVersionId]
+          : []
+      )
+    ),
+  ];
+  const [primaryByShot, previewByFrame, pendingById] = await Promise.all([
     getPrimaryVideoByShotIds(
       db,
       rows.map((r) => r.shots.id)
@@ -161,6 +174,7 @@ export async function assembleShotViews(
       db,
       rows.flatMap((r) => (r.frames ? [r.frames.id] : []))
     ),
+    getFrameVariantsByIds(db, pendingPromoteIds),
   ]);
   return rows.map((row) => {
     const video = {
@@ -176,6 +190,11 @@ export async function assembleShotViews(
       preview: previewByFrame.get(row.frames.id) ?? null,
       imagePromptVersion: row.frame_prompt_versions,
       gridSheet: gridSheetByFrameId?.get(row.frames.id) ?? null,
+      pendingUpscaleUrl: pendingUpscaleUrlFromVersion(
+        row.frames.pendingPromoteVersionId
+          ? (pendingById.get(row.frames.pendingPromoteVersionId) ?? null)
+          : null
+      ),
       ...video,
     });
   });

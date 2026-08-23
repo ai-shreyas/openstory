@@ -23,6 +23,7 @@ export function shotAfterVariantSelect(
     image:
       imageUrl && shot.image ? { ...shot.image, url: imageUrl } : shot.image,
     frame: { ...shot.frame, imageStatus: 'generating' },
+    pendingUpscaleUrl: imageUrl ?? shot.pendingUpscaleUrl ?? null,
     video: null,
     videoStatus: 'pending',
   };

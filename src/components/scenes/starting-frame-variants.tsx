@@ -65,7 +65,9 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
     shot.gridSheet?.status === 'generating' ||
     generateVariants.isPending;
   const upscalingIndex = upscale?.variantIndex ?? null;
-  const isUpscaling = upscale !== null || selectVariant.isPending;
+  const cropUrl = shot.pendingUpscaleUrl;
+  const isUpscaling =
+    upscale !== null || selectVariant.isPending || Boolean(cropUrl);
 
   const handleGenerate = useCallback(async () => {
     onGenerateStart();
@@ -137,20 +139,27 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
 
   return (
     <>
-      {upscalingIndex !== null && upscale?.gridUrl && upscalingTileCss && (
+      {isUpscaling && (upscalingTileCss || cropUrl) && (
         <div
           className="absolute inset-0 z-[6] overflow-hidden"
           aria-live="polite"
           aria-label="Upscaling selected variant"
         >
-          <div
-            className="absolute inset-0"
-            style={{
-              backgroundImage: `url(${upscale.gridUrl})`,
-              backgroundRepeat: 'no-repeat',
-              ...upscalingTileCss,
-            }}
-          />
+          {upscalingIndex !== null && upscale?.gridUrl && upscalingTileCss ? (
+            <div
+              className="absolute inset-0"
+              style={{
+                backgroundImage: `url(${upscale.gridUrl})`,
+                backgroundRepeat: 'no-repeat',
+                ...upscalingTileCss,
+              }}
+            />
+          ) : cropUrl ? (
+            <div
+              className="absolute inset-0 bg-cover bg-center"
+              style={{ backgroundImage: `url(${cropUrl})` }}
+            />
+          ) : null}
           <div className="pointer-events-none absolute inset-x-0 bottom-2 z-[7] flex justify-center">
             <span className="flex items-center gap-1.5 rounded-full bg-background/80 px-3 py-1 text-xs font-medium text-foreground backdrop-blur-sm">
               <Loader2 className="h-3 w-3 animate-spin" />

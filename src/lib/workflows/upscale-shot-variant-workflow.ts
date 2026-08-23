@@ -1,13 +1,13 @@
 /**
  * Upscale a chosen 3×3 grid tile into the frame's primary still (#989).
  *
- * The picked tile is cropped (a Cloudflare Image Resizing URL) by
- * `selectShotVariantFn`, then this workflow upscales it and records the result
- * as a `kind:'framing'` `frame_variants` version (`sourceVariantId` = the grid
- * sheet it came from) and promotes it to the frame's still — a pointer repoint
- * that mirrors the new still onto the frame, never an overwrite. The promote
- * rides the auto-promote claim (#1070/#1129), so a still the user picked from
- * history mid-upscale wins and the upscale lands in history instead.
+ * The picked tile is cropped by `selectShotVariantFn`, which mints a
+ * `kind:'framing'` generating version (crop url already on the row) and
+ * claims auto-promote. This workflow completes THAT version — it does not
+ * append a second generating row — then promotes it to the frame's still.
+ * The promote rides the auto-promote claim (#1070/#1129), so a still the
+ * user picked from history mid-upscale wins and the upscale lands in history
+ * instead.
  */
 
 import { IMAGE_MODELS } from '@/lib/ai/models';
@@ -232,32 +232,44 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         return null;
       }
 
-      // Record the in-flight framing version (the upscaled tile), pointing back
-      // at the grid sheet it was cropped from. `model` is the model that
-      // actually renders the upscale — this version becomes the frame's
-      // selection, so it is also what the shot resolves its model from (#1066).
-      // `promptVersionId` is the trigger's snapshot: this version becomes the
-      // selection, so without it a prompt-restore from this still no-ops.
-      const version = await scopedDb.frameVariants.appendVersion({
-        frameId: frame.id,
-        sequenceId,
-        kind: 'framing',
-        model: upscaleModel,
-        sourceVariantId: input.sourceVariantId ?? null,
-        promptVersionId: input.promptVersionId,
-        status: 'generating',
-        workflowRunId,
-      });
+      // Prefer the version minted at click (`input.versionId`) — it already
+      // holds the crop url so a refresh can overlay it. Do NOT append a
+      // second generating row and do NOT re-claim promote: last click already
+      // won at trigger time, and a slower older run re-claiming here would
+      // steal it back. Legacy payloads (no versionId) still mint in-step.
+      let versionId: string;
+      if (input.versionId) {
+        const existing = await scopedDb.claims.frameVariants.getById(
+          input.versionId
+        );
+        if (!existing) {
+          logger.info(
+            `[UpscaleShotVariantWorkflow] Version ${input.versionId} is gone, skipping`
+          );
+          return null;
+        }
+        await scopedDb.frameVariants.update(existing.id, { workflowRunId });
+        versionId = existing.id;
+      } else {
+        const version = await scopedDb.frameVariants.appendVersion({
+          frameId: frame.id,
+          sequenceId,
+          kind: 'framing',
+          model: upscaleModel,
+          sourceVariantId: input.sourceVariantId ?? null,
+          promptVersionId: input.promptVersionId,
+          status: 'generating',
+          workflowRunId,
+        });
+        await scopedDb.frames.setPendingPromoteVersionId(frame.id, version.id);
+        versionId = version.id;
+      }
 
-      // Claim auto-promote for this upscale (#1129); last kickoff wins (#1070).
-      // Without the claim the completion below is an unconditional repoint that
-      // overwrites a still the user picked from history while the upscale ran.
-      await scopedDb.frames.setPendingPromoteVersionId(frame.id, version.id);
-
-      // Same primary-busy flag image gen uses, AFTER the version + claim exist
-      // (#1095). List/canvas/motion all key off `frames.imageStatus`; SSE
-      // alone does not survive a refetch. Failure/claim-miss settle this
-      // back to `completed` (the old still stays selected — never `failed`).
+      // Same primary-busy flag image gen uses. Trigger already flipped this
+      // when it minted the version; stamp the run id here so legacy payloads
+      // and a race before the trigger's post-create write still show busy.
+      // Failure/claim-miss settle back to `completed` (the old still stays
+      // selected — never `failed`).
       await scopedDb.frames.setImageGenerationStatus(
         frame.id,
         {
@@ -319,7 +331,7 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
         usedOwnKey: result.metadata.usedOwnKey,
         endpointId: result.metadata.endpointId,
         unitsBilled: result.metadata.unitsBilled,
-        versionId: version.id,
+        versionId,
       };
     });
 
@@ -435,11 +447,24 @@ export class UpscaleShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<Upsc
 
     // Mark the in-flight framing version failed; the frame's PRIOR selection is
     // untouched, so revert the UI to the real selected still rather than showing
-    // a false failure on a good image.
-    await scopedDb.frameVariants.markFailedByWorkflowRun(
-      event.instanceId,
-      error
-    );
+    // a false failure on a good image. Prefer the snapshotted version id so a
+    // run that dies before `workflowRunId` is stamped still settles.
+    if (input.versionId) {
+      const minted = await scopedDb.claims.frameVariants.getById(
+        input.versionId
+      );
+      if (minted?.status === 'generating' || minted?.status === 'pending') {
+        await scopedDb.frameVariants.update(input.versionId, {
+          status: 'failed',
+          error,
+        });
+      }
+    } else {
+      await scopedDb.frameVariants.markFailedByWorkflowRun(
+        event.instanceId,
+        error
+      );
+    }
 
     // Drop the auto-promote claim, but only if THIS run still owns it (#1129) —
     // a newer kickoff's claim must survive an older upscale's failure.

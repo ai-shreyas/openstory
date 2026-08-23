@@ -48,7 +48,16 @@ export const GeneratingWithStill: Story = {
   args: {
     thumbnailUrl: 'https://picsum.photos/seed/scene1/320/180',
     thumbnailStatus: 'generating',
-    alt: 'Scene 1 — still visible while upscaling',
+    alt: 'Scene 1 — still visible while regenerating',
+  },
+};
+
+export const UpscalingFromCrop: Story = {
+  args: {
+    thumbnailUrl: 'https://picsum.photos/seed/scene1/320/180',
+    thumbnailStatus: 'generating',
+    pendingUpscaleUrl: 'https://picsum.photos/seed/crop1/320/180',
+    alt: 'Scene 1 — cropped tile while upscaling',
   },
 };
 

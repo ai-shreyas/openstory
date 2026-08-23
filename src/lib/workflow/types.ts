@@ -871,6 +871,13 @@ export interface UpscaleShotVariantWorkflowInput extends SequenceWorkflowContext
   /** Location reference images for environment consistency during upscale */
   locationReferences?: ReferenceImageDescription[];
   /**
+   * Framing version minted at click (`selectShotVariantFn`) with the cropped
+   * tile as its url and `status: 'generating'`. The run completes THIS row
+   * rather than appending a second generating version — otherwise a refresh
+   * mid-upscale would load a url-less pending-promote and hide the overlay.
+   */
+  versionId?: string;
+  /**
    * The grid-sheet `frame_variants` version the tile was cropped from (#989).
    * Recorded as `frame_variants.sourceVariantId` on the upscaled framing version.
    */

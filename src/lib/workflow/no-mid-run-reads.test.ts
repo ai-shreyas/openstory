@@ -464,7 +464,7 @@ const ALLOWED_LIVE_READS: Record<string, SanctionedRead[]> = {
     {
       read: 'frameVariants.getById',
       bucket: 'CLAIM-BY-ID',
-      why: "On the failure path only: the frame's pending-promote claim row, read by the id the frame holds, to check this run owns it before clearing (#1129).",
+      why: "This run's framing version, by the id snapshotted at click (complete that row, do not append another) and, on failure, the pending-promote claim to check this run still owns it before clearing (#1129).",
     },
     {
       read: 'frames.getById',

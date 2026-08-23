@@ -178,6 +178,36 @@ it('resolves previewThumbnailUrl through the whole assembly path', async () => {
   expect((await assemble())[0]?.image).toBeNull();
 });
 
+it('projects pendingUpscaleUrl from a generating pending-promote version', async () => {
+  const sequenceId = required(
+    (await db.select().from(sequences))[0],
+    'sequence'
+  ).id;
+  await db.insert(frameVariants).values({
+    id: 'upscale-crop-1',
+    frameId,
+    sequenceId,
+    kind: 'framing',
+    model: 'nano_banana_2',
+    status: 'generating',
+    url: '/r2/thumbnails/crop.png',
+  });
+  await db
+    .update(frames)
+    .set({ pendingPromoteVersionId: 'upscale-crop-1' })
+    .where(eq(frames.id, frameId));
+
+  expect((await assemble())[0]?.pendingUpscaleUrl).toBe(
+    '/r2/thumbnails/crop.png'
+  );
+
+  await db
+    .update(frames)
+    .set({ pendingPromoteVersionId: null })
+    .where(eq(frames.id, frameId));
+  expect((await assemble())[0]?.pendingUpscaleUrl).toBeNull();
+});
+
 /**
  * The regression guard for #1135. libSQL (and every other SQLite this suite
  * runs on) happily returns a 104-column row, so nothing here would ever fail on

@@ -189,6 +189,10 @@ export function updateQueryCacheFromEvent(
                   // refetch; the row itself is not in this cache.
                   previewThumbnailUrl:
                     previewThumbnailUrl ?? f.previewThumbnailUrl,
+                  pendingUpscaleUrl:
+                    status === 'completed' || status === 'failed'
+                      ? null
+                      : f.pendingUpscaleUrl,
                   frame: {
                     ...f.frame,
                     imageStatus: isValidShotStatus(status)

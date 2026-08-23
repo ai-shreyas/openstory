@@ -411,12 +411,42 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       { errorMessage: 'Insufficient credits for variant upscale' }
     );
 
+    const upscaleModel = resolveUpscaleModel(sheet.model);
+
+    // Persist the in-flight job at click time so a refresh still shows
+    // generating + the cropped tile. The workflow reuses this version rather
+    // than appending a second row.
+    const version = await context.scopedDb.frameVariants.appendVersion({
+      frameId: frame.id,
+      sequenceId: sequence.id,
+      kind: 'framing',
+      model: upscaleModel,
+      sourceVariantId: sheet.id,
+      promptVersionId: frame.selectedImagePromptVersionId,
+      status: 'generating',
+      url: cropResult.url,
+      storagePath: cropResult.path || null,
+    });
+    await context.scopedDb.frames.setPendingPromoteVersionId(
+      frame.id,
+      version.id
+    );
+    await context.scopedDb.frames.setImageGenerationStatus(
+      frame.id,
+      {
+        imageStatus: 'generating',
+        imageError: null,
+      },
+      { throwOnMissing: false }
+    );
+
     const workflowInput: UpscaleShotVariantWorkflowInput = {
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
       frameId: frame.id,
+      versionId: version.id,
       // The prompt selected when the tile was picked: the upscale BECOMES the
       // frame's selection, so the version it writes must carry the prompt it
       // was rendered against (#1070).
@@ -435,21 +465,55 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       sourceModel: sheet.model,
     };
 
-    const workflowRunId = await triggerWorkflow(
-      '/upscale-variant',
-      workflowInput,
-      {
-        deduplicationId: `upscale-variant-${shot.id}-${Date.now()}`,
-        label: buildWorkflowLabel(sequence.id),
-      }
-    );
+    try {
+      const workflowRunId = await triggerWorkflow(
+        '/upscale-variant',
+        workflowInput,
+        {
+          deduplicationId: `upscale-variant-${shot.id}-${Date.now()}`,
+          label: buildWorkflowLabel(sequence.id),
+        }
+      );
+      await context.scopedDb.frameVariants.update(version.id, {
+        workflowRunId,
+      });
+      await context.scopedDb.frames.setImageGenerationStatus(
+        frame.id,
+        {
+          imageStatus: 'generating',
+          imageWorkflowRunId: workflowRunId,
+          imageError: null,
+        },
+        { throwOnMissing: false }
+      );
 
-    return {
-      shotId: shot.id,
-      thumbnailUrl: cropResult.url,
-      variantIndex: data.variantIndex,
-      upscaleWorkflowRunId: workflowRunId,
-    };
+      return {
+        shotId: shot.id,
+        thumbnailUrl: cropResult.url,
+        variantIndex: data.variantIndex,
+        upscaleWorkflowRunId: workflowRunId,
+      };
+    } catch (error) {
+      await context.scopedDb.frameVariants.update(version.id, {
+        status: 'failed',
+        error:
+          error instanceof Error ? error.message : 'Failed to start upscale',
+      });
+      await context.scopedDb.frames.clearPendingPromoteVersionIdIf(
+        frame.id,
+        version.id
+      );
+      await context.scopedDb.frames.setImageGenerationStatus(
+        frame.id,
+        {
+          imageStatus: frame.selectedImageVersionId ? 'completed' : 'pending',
+          imageWorkflowRunId: null,
+          imageError: null,
+        },
+        { throwOnMissing: false }
+      );
+      throw error;
+    }
   });
 
 // ---------------------------------------------------------------------------

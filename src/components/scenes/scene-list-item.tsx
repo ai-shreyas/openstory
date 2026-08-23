@@ -180,6 +180,7 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
                       }
                     : null
                 }
+                pendingUpscaleUrl={shot?.pendingUpscaleUrl}
               />
               {(hasVideo || isGeneratingVideo) && (
                 <span
@@ -283,7 +284,8 @@ const areEqual = (
   if (
     prevShot.image?.url !== nextShot.image?.url ||
     prevShot.previewThumbnailUrl !== nextShot.previewThumbnailUrl ||
-    prevShot.frame.imageStatus !== nextShot.frame.imageStatus
+    prevShot.frame.imageStatus !== nextShot.frame.imageStatus ||
+    prevShot.pendingUpscaleUrl !== nextShot.pendingUpscaleUrl
   ) {
     return false;
   }

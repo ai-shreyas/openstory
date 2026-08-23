@@ -13,7 +13,11 @@ import {
   videoVariantFixture,
 } from '@/lib/mocks/frame-fixtures';
 import { describe, expect, it } from 'vitest';
-import { shotViewMissingFrame, toShotView } from './shot-view';
+import {
+  pendingUpscaleUrlFromVersion,
+  shotViewMissingFrame,
+  toShotView,
+} from './shot-view';
 
 const SEQ = 'seq-1';
 
@@ -84,6 +88,35 @@ describe('toShotView', () => {
     });
   });
 
+  it('projects pendingUpscaleUrl from a generating framing version with a crop url', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+    const pending = frameVariantFixture({
+      frameId: frame.id,
+      sequenceId: SEQ,
+      kind: 'framing',
+      status: 'generating',
+      url: '/r2/thumbnails/crop.png',
+    });
+    const view = toShotView(shot, frame, {
+      image: null,
+      preview: null,
+      imagePromptVersion: null,
+      video: null,
+      primaryVideo: null,
+      pendingUpscaleUrl: pendingUpscaleUrlFromVersion(pending),
+    });
+    expect(view.pendingUpscaleUrl).toBe('/r2/thumbnails/crop.png');
+    expect(pendingUpscaleUrlFromVersion(pending)).toBe(
+      '/r2/thumbnails/crop.png'
+    );
+    expect(pendingUpscaleUrlFromVersion({ ...pending, url: null })).toBeNull();
+    expect(
+      pendingUpscaleUrlFromVersion({ ...pending, status: 'completed' })
+    ).toBeNull();
+    expect(pendingUpscaleUrlFromVersion(null)).toBeNull();
+  });
+
   it('projects previewThumbnailUrl from the preview version (#1101)', () => {
     const shot = makeShot();
     const frame = makeFrame(shot);
@@ -131,6 +164,7 @@ describe('toShotView', () => {
 
     expect(view.gridSheet).toBeNull();
     expect(view.motionPrompt).toBeNull();
+    expect(view.pendingUpscaleUrl).toBeNull();
   });
 
   it('reads pending when nothing has been rendered', () => {
