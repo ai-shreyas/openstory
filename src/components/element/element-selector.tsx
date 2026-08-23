@@ -106,26 +106,25 @@ type LocalEntry = {
 };
 
 /**
- * Pick which incoming files to accept: image-cap and duplicate-key filtering,
- * pure so `processFiles` can run it before touching state. It must NOT run
- * inside the setEntries updater — updaters aren't guaranteed to run before the
- * code that follows the setState call, and an `accepted` list built inside one
- * can still be empty when the uploads are started from it, stranding entries
- * in `uploading` forever and locking the Generate button on
+ * Pick which incoming files to accept: element-count cap and duplicate-key
+ * filtering, pure so `processFiles` can run it before touching state. It must
+ * NOT run inside the setEntries updater — updaters aren't guaranteed to run
+ * before the code that follows the setState call, and an `accepted` list built
+ * inside one can still be empty when the uploads are started from it,
+ * stranding entries in `uploading` forever and locking the Generate button on
  * "Analyzing elements…" (#1231).
  */
 export function selectFilesToAccept(
   files: File[],
   existingKeys: ReadonlySet<string>,
-  existingCount: number,
-  getKey: (file: File) => string = getFileKey
+  existingCount: number
 ): { key: string; file: File }[] {
   const accepted: { key: string; file: File }[] = [];
   const seen = new Set(existingKeys);
   let remaining = MAX_SEQUENCE_ELEMENTS - existingCount;
   for (const file of files) {
     if (remaining <= 0) break;
-    const key = getKey(file);
+    const key = getFileKey(file);
     if (seen.has(key)) continue;
     seen.add(key);
     accepted.push({ key, file });
@@ -205,8 +204,14 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
     onElementBusyChange?.(isBusy);
   }, [isBusy, onElementBusyChange]);
 
+  // Reconciled after commit (not during render): a discarded or lower-priority
+  // render pass can carry an `entries` value that predates keys `processFiles`
+  // just pushed into the mirror, and a render-phase write would clobber them —
+  // resurrecting the stuck-upload bug this mirror exists to prevent (#1231).
   const entriesRef = useRef(entries);
-  entriesRef.current = entries;
+  useEffect(() => {
+    entriesRef.current = entries;
+  });
 
   // Persisted mode: once an upload's element row lands in the query data,
   // drop the transient local entry (its tile is superseded by the real one).
@@ -266,8 +271,8 @@ export const ElementSelector: React.FC<ElementSelectorProps> = (props) => {
       if (!requireAuth()) return;
 
       // Accept files BEFORE touching state (see selectFilesToAccept). The ref
-      // mirror is the synchronous source of truth for keys/counts; the state
-      // updater below stays pure and merges the same entries.
+      // mirror is what this function reads synchronously for keys/counts; the
+      // state updater below stays pure and merges the same entries.
       const currentEntries = entriesRef.current;
       const existingCount = isPersisted
         ? persistedElements.length + currentEntries.size
