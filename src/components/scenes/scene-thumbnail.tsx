@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { AlertCircle } from 'lucide-react';
 import { AppImage } from '@/components/ui/app-image';
 import { memo } from 'react';
+import { hasUpscaleOverlay, UpscaleOverlay } from './upscale-overlay';
 
 type SceneThumbnailProps = {
   thumbnailUrl?: string | null;
@@ -16,6 +17,11 @@ type SceneThumbnailProps = {
   alt: string;
   aspectRatio: AspectRatio;
   className?: string;
+  /** Grid sheet URL used to CSS-crop `pendingUpscaleIndex`. */
+  gridSheetUrl?: string | null;
+  pendingUpscaleIndex?: number | null;
+  /** Cropped tile URL persisted on the generating framing version (survives refresh). */
+  pendingUpscaleUrl?: string | null;
 };
 
 const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
@@ -25,17 +31,28 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
   alt,
   aspectRatio,
   className,
+  gridSheetUrl,
+  pendingUpscaleIndex,
+  pendingUpscaleUrl,
 }) => {
   // Display the final image if available, otherwise the preview
   const displayUrl = thumbnailUrl ?? previewThumbnailUrl;
   const isPreview = !thumbnailUrl && !!previewThumbnailUrl;
+  const showOverlay = hasUpscaleOverlay({
+    gridUrl: gridSheetUrl,
+    variantIndex: pendingUpscaleIndex,
+    cropUrl: pendingUpscaleUrl,
+  });
 
   // Only show loader when there's no image at all
   const showLoader =
-    !displayUrl && !!thumbnailStatus && thumbnailStatus !== 'failed';
+    !displayUrl &&
+    !showOverlay &&
+    !!thumbnailStatus &&
+    thumbnailStatus !== 'failed';
 
-  const showSkeleton = !displayUrl && !thumbnailStatus;
-  const isFailed = thumbnailStatus === 'failed' && !displayUrl;
+  const showSkeleton = !displayUrl && !showOverlay && !thumbnailStatus;
+  const isFailed = thumbnailStatus === 'failed' && !displayUrl && !showOverlay;
 
   return (
     <div
@@ -52,7 +69,7 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
         <BlobLoaderContainer size="sm" className="absolute inset-0" />
       )}
 
-      {displayUrl && (
+      {displayUrl && !showOverlay && (
         <AppImage
           src={displayUrl}
           alt={alt}
@@ -61,6 +78,14 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
           height={180}
         />
       )}
+
+      <UpscaleOverlay
+        aspectRatio={aspectRatio}
+        gridUrl={gridSheetUrl}
+        variantIndex={pendingUpscaleIndex}
+        cropUrl={pendingUpscaleUrl}
+        showLabel
+      />
 
       {isPreview && (
         <span className="absolute top-1 right-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground backdrop-blur-sm">
@@ -90,7 +115,10 @@ const areEqual = (
     prevProps.thumbnailStatus === nextProps.thumbnailStatus &&
     prevProps.alt === nextProps.alt &&
     prevProps.aspectRatio === nextProps.aspectRatio &&
-    prevProps.className === nextProps.className
+    prevProps.className === nextProps.className &&
+    prevProps.gridSheetUrl === nextProps.gridSheetUrl &&
+    prevProps.pendingUpscaleIndex === nextProps.pendingUpscaleIndex &&
+    prevProps.pendingUpscaleUrl === nextProps.pendingUpscaleUrl
   );
 };
 

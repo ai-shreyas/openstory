@@ -170,6 +170,9 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
                 alt={title ?? 'Scene thumbnail'}
                 aspectRatio={aspectRatio}
                 className="w-full rounded-md"
+                gridSheetUrl={shot?.gridSheet?.url}
+                pendingUpscaleIndex={shot?.pendingUpscaleIndex}
+                pendingUpscaleUrl={shot?.pendingUpscaleUrl}
               />
               {(hasVideo || isGeneratingVideo) && (
                 <span
@@ -273,7 +276,10 @@ const areEqual = (
   if (
     prevShot.image?.url !== nextShot.image?.url ||
     prevShot.previewThumbnailUrl !== nextShot.previewThumbnailUrl ||
-    prevShot.frame.imageStatus !== nextShot.frame.imageStatus
+    prevShot.frame.imageStatus !== nextShot.frame.imageStatus ||
+    prevShot.gridSheet?.url !== nextShot.gridSheet?.url ||
+    prevShot.pendingUpscaleIndex !== nextShot.pendingUpscaleIndex ||
+    prevShot.pendingUpscaleUrl !== nextShot.pendingUpscaleUrl
   ) {
     return false;
   }

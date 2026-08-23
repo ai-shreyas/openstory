@@ -369,6 +369,9 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       col,
       gridCols: gridConfig.cols,
       gridRows: gridConfig.rows,
+      teamId: sequence.teamId,
+      sequenceId: sequence.id,
+      shotId: shot.id,
     });
 
     // Fetch character and location references for upscale consistency
@@ -408,18 +411,48 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       { errorMessage: 'Insufficient credits for variant upscale' }
     );
 
+    const upscaleModel = resolveUpscaleModel(sheet.model);
+
+    // Persist the in-flight job at click time so a refresh still shows
+    // generating + the cropped tile. The workflow reuses this version rather
+    // than appending a second row.
+    const version = await context.scopedDb.frameVariants.appendVersion({
+      frameId: frame.id,
+      sequenceId: sequence.id,
+      kind: 'framing',
+      model: upscaleModel,
+      sourceVariantId: sheet.id,
+      promptVersionId: frame.selectedImagePromptVersionId,
+      status: 'generating',
+      url: cropResult.url,
+      storagePath: cropResult.path || null,
+    });
+    await context.scopedDb.frames.setPendingPromoteVersionId(
+      frame.id,
+      version.id
+    );
+    await context.scopedDb.frames.setImageGenerationStatus(
+      frame.id,
+      {
+        imageStatus: 'generating',
+        imageError: null,
+      },
+      { throwOnMissing: false }
+    );
+
     const workflowInput: UpscaleShotVariantWorkflowInput = {
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
       shotId: shot.id,
       frameId: frame.id,
+      versionId: version.id,
       // The prompt selected when the tile was picked: the upscale BECOMES the
       // frame's selection, so the version it writes must carry the prompt it
       // was rendered against (#1070).
       promptVersionId: frame.selectedImagePromptVersionId,
       croppedTileUrl: cropResult.url,
-      croppedTilePath: '',
+      croppedTilePath: cropResult.path,
       aspectRatio: sequence.aspectRatio,
       characterReferences,
       locationReferences,
@@ -432,13 +465,44 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       sourceModel: sheet.model,
     };
 
-    const workflowRunId = await triggerWorkflow(
-      '/upscale-variant',
-      workflowInput,
-      {
+    let workflowRunId: string;
+    try {
+      workflowRunId = await triggerWorkflow('/upscale-variant', workflowInput, {
         deduplicationId: `upscale-variant-${shot.id}-${Date.now()}`,
         label: buildWorkflowLabel(sequence.id),
-      }
+      });
+    } catch (error) {
+      await context.scopedDb.frameVariants.update(version.id, {
+        status: 'failed',
+        error:
+          error instanceof Error ? error.message : 'Failed to start upscale',
+      });
+      await context.scopedDb.frames.clearPendingPromoteVersionIdIf(
+        frame.id,
+        version.id
+      );
+      await context.scopedDb.frames.setImageGenerationStatus(
+        frame.id,
+        {
+          imageStatus: frame.selectedImageVersionId ? 'completed' : 'pending',
+          imageWorkflowRunId: null,
+          imageError: null,
+        },
+        { throwOnMissing: false }
+      );
+      throw error;
+    }
+    await context.scopedDb.frameVariants.update(version.id, {
+      workflowRunId,
+    });
+    await context.scopedDb.frames.setImageGenerationStatus(
+      frame.id,
+      {
+        imageStatus: 'generating',
+        imageWorkflowRunId: workflowRunId,
+        imageError: null,
+      },
+      { throwOnMissing: false }
     );
 
     return {
@@ -564,6 +628,19 @@ export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
 // ---------------------------------------------------------------------------
 
 /**
+ * Stills the Images tab lists: model gens and picked/upscaled tiles.
+ * Grid sheets (`framing` with no source) and preview stand-ins stay out.
+ */
+export function isImageHistoryVersion(v: {
+  kind: string;
+  sourceVariantId?: string | null;
+}): boolean {
+  return (
+    v.kind === 'model' || (v.kind === 'framing' && Boolean(v.sourceVariantId))
+  );
+}
+
+/**
  * Client-facing image version row for the history sheet. `selected` is derived
  * from the frame's `selectedImageVersionId` pointer so the UI can mark Current
  * without a second round-trip.
@@ -571,7 +648,7 @@ export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
 export type ShotImageVersionRow = {
   id: string;
   model: string;
-  kind: 'model';
+  kind: 'model' | 'framing';
   status: string;
   url: string | null;
   createdAt: Date;
@@ -598,11 +675,10 @@ const shotHistoryListInputSchema = z.object({
 
 /**
  * Append-only image generation history for a shot's anchor frame (#1070).
- * Newest first. Only `kind: 'model'` rows — framing rows are the 3x3 grid
- * sheet / tile picks used by the Frame variants picker, and preview rows are
- * the pre-prompt stand-in (#1101); neither is still history. Includes
- * in-flight / failed rows so the sheet can show progress and errors;
- * discarded rows stay hidden (soft-hide is undoable elsewhere).
+ * Newest first. Model stills and framing tiles cropped from a grid sheet
+ * (sourceVariantId set). Grid sheets themselves and preview rows (#1101)
+ * stay out. Includes in-flight / failed rows so the sheet can show progress
+ * and errors; discarded rows stay hidden (soft-hide is undoable elsewhere).
  */
 export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
@@ -613,11 +689,11 @@ export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
     // listByFrame is oldest-first (ULID asc); reverse for newest-first history.
     return [...versions]
       .reverse()
-      .filter((v) => v.kind === 'model')
+      .filter(isImageHistoryVersion)
       .map((v) => ({
         id: v.id,
         model: v.model,
-        kind: 'model' as const,
+        kind: v.kind === 'framing' ? ('framing' as const) : ('model' as const),
         status: v.status,
         url: v.url,
         createdAt: v.createdAt,

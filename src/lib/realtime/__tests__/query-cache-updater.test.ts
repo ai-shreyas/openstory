@@ -139,6 +139,26 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(shot?.frame.imageStatus).toBe('completed');
     });
 
+    it('variant-only completion does not clear the upscale overlay', () => {
+      qc.setQueryData(
+        shotKeys.list(SEQ),
+        [makeShot()].map((s) => ({
+          ...s,
+          pendingUpscaleIndex: 4,
+          pendingUpscaleUrl: '/r2/thumbnails/crop.png',
+        }))
+      );
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        thumbnailUrl: NEW_URL,
+        variantOnly: true,
+      });
+      const shot = getCachedShot(qc);
+      expect(shot?.pendingUpscaleIndex).toBe(4);
+      expect(shot?.pendingUpscaleUrl).toBe('/r2/thumbnails/crop.png');
+    });
+
     it('primary failure writes the reason onto frame.imageError so the banner shows it live (#881)', () => {
       qc.setQueryData(shotKeys.list(SEQ), [
         makeShot({ frame: { imageStatus: 'generating', imageError: null } }),
@@ -154,6 +174,28 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       const shot = getCachedShot(qc);
       expect(shot?.frame.imageStatus).toBe('failed');
       expect(shot?.frame.imageError).toBe('Blocked by content filter');
+    });
+
+    it('primary completion clears the persisted upscale overlay so it does not stick after SSE', () => {
+      qc.setQueryData(
+        shotKeys.list(SEQ),
+        [
+          makeShot({
+            frame: { imageStatus: 'generating' },
+            sources: { pendingUpscaleUrl: '/r2/thumbnails/crop.png' },
+          }),
+        ].map((s) => ({ ...s, pendingUpscaleIndex: 4 }))
+      );
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
+        shotId: 'shot-1',
+        status: 'completed',
+        thumbnailUrl: NEW_URL,
+      });
+
+      const shot = getCachedShot(qc);
+      expect(shot?.pendingUpscaleUrl).toBeNull();
+      expect(shot?.pendingUpscaleIndex).toBeNull();
     });
 
     it('a fresh generating attempt clears a stale frame.imageError', () => {
