@@ -29,7 +29,9 @@ const StyleBrowserContent: FC<{
         Choose the visual style of your sequence
       </DialogDescription>
     </DialogHeader>
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    {/* overscroll-contain: reaching the list's end must not chain the touch
+        gesture into scrolling the page behind the dialog. */}
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <StyleLibraryView
         styles={styles}
         onUseStyle={onUseStyle}

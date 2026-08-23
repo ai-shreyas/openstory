@@ -346,7 +346,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         containerBaseClasses,
         'relative',
         disabled && disabledClasses,
-        'overflow-y-auto',
+        // overscroll-contain: hitting the editor's scroll bounds must not
+        // chain the touch gesture into scrolling the page underneath.
+        'overflow-y-auto overscroll-contain',
         className
       )}
       aria-invalid={ariaInvalid}
