@@ -61,6 +61,16 @@ export const UpscalingFromCrop: Story = {
   },
 };
 
+export const UpscalingFromGridCell: Story = {
+  args: {
+    thumbnailUrl: 'https://picsum.photos/seed/scene1/320/180',
+    thumbnailStatus: 'generating',
+    gridSheetUrl: 'https://picsum.photos/seed/grid1/960/540',
+    pendingUpscaleIndex: 4,
+    alt: 'Scene 1 — CSS-cropped grid cell while upscaling',
+  },
+};
+
 export const Completed: Story = {
   args: {
     thumbnailUrl: 'https://picsum.photos/seed/scene1/320/180',

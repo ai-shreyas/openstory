@@ -14,7 +14,9 @@ import {
 } from '@/lib/mocks/frame-fixtures';
 import { describe, expect, it } from 'vitest';
 import {
+  isBrowserDisplayableStillUrl,
   pendingUpscaleUrlFromVersion,
+  shotAfterVariantSelect,
   shotViewMissingFrame,
   toShotView,
 } from './shot-view';
@@ -165,6 +167,7 @@ describe('toShotView', () => {
     expect(view.gridSheet).toBeNull();
     expect(view.motionPrompt).toBeNull();
     expect(view.pendingUpscaleUrl).toBeNull();
+    expect(view.pendingUpscaleIndex).toBeNull();
   });
 
   it('reads pending when nothing has been rendered', () => {
@@ -245,6 +248,78 @@ describe('toShotView', () => {
     expect(view.videoStatus).toBe('failed');
     expect(view.primaryVideo?.error).toBe('fal 500');
     expect(view.video).toBeNull();
+  });
+});
+
+describe('isBrowserDisplayableStillUrl', () => {
+  it('rejects Cloudflare trim URLs that 404 off the edge', () => {
+    expect(
+      isBrowserDisplayableStillUrl(
+        '/cdn-cgi/image/trim=0;1;2;3/r2/thumbnails/x.png'
+      )
+    ).toBe(false);
+    expect(
+      isBrowserDisplayableStillUrl(
+        'https://storage.example.com/cdn-cgi/image/trim=1;2;3;4/thumbnails/x.png'
+      )
+    ).toBe(false);
+  });
+
+  it('accepts origin-relative R2 and ordinary https URLs', () => {
+    expect(isBrowserDisplayableStillUrl('/r2/thumbnails/tile.png')).toBe(true);
+    expect(isBrowserDisplayableStillUrl('https://v3b.fal.media/x.png')).toBe(
+      true
+    );
+  });
+});
+
+describe('shotAfterVariantSelect', () => {
+  it('marks generating, remembers the cell, and drops the old video', () => {
+    const shot = makeShot();
+    const frame = makeFrame(shot);
+    const video = makeVideo();
+    const view = toShotView(shot, frame, {
+      image: frameVariantFixture({
+        frameId: frame.id,
+        sequenceId: SEQ,
+        url: 'https://cdn/old-still.png',
+      }),
+      preview: null,
+      imagePromptVersion: null,
+      video,
+      primaryVideo: video,
+      gridSheet: { url: '/r2/thumbnails/grid.png', status: 'completed' },
+    });
+
+    const next = shotAfterVariantSelect(view, undefined, 4);
+    expect(next.image?.url).toBe('https://cdn/old-still.png');
+    expect(next.pendingUpscaleIndex).toBe(4);
+    expect(next.frame.imageStatus).toBe('generating');
+    expect(next.video).toBeNull();
+    expect(next.videoStatus).toBe('pending');
+  });
+
+  it('swaps in a displayable crop url without dropping the cell index', () => {
+    const shot = makeShot();
+    const view = shotAfterVariantSelect(
+      toShotView(shot, makeFrame(shot), {
+        image: frameVariantFixture({
+          frameId: 'frame-1',
+          sequenceId: SEQ,
+          url: 'https://cdn/old-still.png',
+        }),
+        preview: null,
+        imagePromptVersion: null,
+        video: null,
+        primaryVideo: null,
+      }),
+      undefined,
+      2
+    );
+    const next = shotAfterVariantSelect(view, '/r2/thumbnails/tile.png');
+    expect(next.image?.url).toBe('/r2/thumbnails/tile.png');
+    expect(next.pendingUpscaleUrl).toBe('/r2/thumbnails/tile.png');
+    expect(next.pendingUpscaleIndex).toBe(2);
   });
 });
 

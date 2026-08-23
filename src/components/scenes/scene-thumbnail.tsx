@@ -2,14 +2,13 @@ import { BlobLoaderContainer } from '@/components/ui/blob-loader';
 import {
   type AspectRatio,
   getAspectRatioClassName,
-  getVariantGridConfig,
 } from '@/lib/constants/aspect-ratios';
-import { tileBackgroundCss } from '@/lib/image/tile-crop';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
-import { AlertCircle, Loader2 } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { AppImage } from '@/components/ui/app-image';
 import { memo } from 'react';
+import { hasUpscaleOverlay, UpscaleOverlay } from './upscale-overlay';
 
 type SceneThumbnailProps = {
   thumbnailUrl?: string | null;
@@ -18,8 +17,9 @@ type SceneThumbnailProps = {
   alt: string;
   aspectRatio: AspectRatio;
   className?: string;
-  /** In-flight variant upscale — CSS-crop this cell over the still. */
-  upscalePreview?: { gridUrl: string; variantIndex: number } | null;
+  /** Grid sheet URL used to CSS-crop `pendingUpscaleIndex`. */
+  gridSheetUrl?: string | null;
+  pendingUpscaleIndex?: number | null;
   /** Cropped tile URL persisted on the generating framing version (survives refresh). */
   pendingUpscaleUrl?: string | null;
 };
@@ -31,33 +31,28 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
   alt,
   aspectRatio,
   className,
-  upscalePreview,
+  gridSheetUrl,
+  pendingUpscaleIndex,
   pendingUpscaleUrl,
 }) => {
   // Display the final image if available, otherwise the preview
   const displayUrl = thumbnailUrl ?? previewThumbnailUrl;
   const isPreview = !thumbnailUrl && !!previewThumbnailUrl;
-  const cropUrl = pendingUpscaleUrl ?? null;
-  const showUpscaleOverlay = Boolean(upscalePreview || cropUrl);
+  const showOverlay = hasUpscaleOverlay({
+    gridUrl: gridSheetUrl,
+    variantIndex: pendingUpscaleIndex,
+    cropUrl: pendingUpscaleUrl,
+  });
 
   // Only show loader when there's no image at all
   const showLoader =
     !displayUrl &&
-    !showUpscaleOverlay &&
+    !showOverlay &&
     !!thumbnailStatus &&
     thumbnailStatus !== 'failed';
 
-  const showSkeleton = !displayUrl && !showUpscaleOverlay && !thumbnailStatus;
-  const isFailed =
-    thumbnailStatus === 'failed' && !displayUrl && !showUpscaleOverlay;
-  const grid = getVariantGridConfig(aspectRatio);
-  const upscaleCss = upscalePreview
-    ? tileBackgroundCss({
-        index: upscalePreview.variantIndex,
-        gridCols: grid.cols,
-        gridRows: grid.rows,
-      })
-    : null;
+  const showSkeleton = !displayUrl && !showOverlay && !thumbnailStatus;
+  const isFailed = thumbnailStatus === 'failed' && !displayUrl && !showOverlay;
 
   return (
     <div
@@ -74,7 +69,7 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
         <BlobLoaderContainer size="sm" className="absolute inset-0" />
       )}
 
-      {displayUrl && !showUpscaleOverlay && (
+      {displayUrl && !showOverlay && (
         <AppImage
           src={displayUrl}
           alt={alt}
@@ -84,39 +79,17 @@ const SceneThumbnailComponent: React.FC<SceneThumbnailProps> = ({
         />
       )}
 
-      {upscalePreview && upscaleCss && (
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage: `url(${upscalePreview.gridUrl})`,
-            backgroundRepeat: 'no-repeat',
-            ...upscaleCss,
-          }}
-        />
-      )}
-
-      {!upscalePreview && cropUrl && (
-        <AppImage
-          src={cropUrl}
-          alt={alt}
-          className="h-full w-full object-cover"
-          width={320}
-          height={180}
-        />
-      )}
+      <UpscaleOverlay
+        aspectRatio={aspectRatio}
+        gridUrl={gridSheetUrl}
+        variantIndex={pendingUpscaleIndex}
+        cropUrl={pendingUpscaleUrl}
+        showLabel
+      />
 
       {isPreview && (
         <span className="absolute top-1 right-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground backdrop-blur-sm">
           Preview
-        </span>
-      )}
-
-      {showUpscaleOverlay && (
-        <span className="absolute inset-x-0 bottom-1 z-10 flex justify-center">
-          <span className="flex items-center gap-1 rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground backdrop-blur-sm">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Upscaling…
-          </span>
         </span>
       )}
 
@@ -143,9 +116,8 @@ const areEqual = (
     prevProps.alt === nextProps.alt &&
     prevProps.aspectRatio === nextProps.aspectRatio &&
     prevProps.className === nextProps.className &&
-    prevProps.upscalePreview?.gridUrl === nextProps.upscalePreview?.gridUrl &&
-    prevProps.upscalePreview?.variantIndex ===
-      nextProps.upscalePreview?.variantIndex &&
+    prevProps.gridSheetUrl === nextProps.gridSheetUrl &&
+    prevProps.pendingUpscaleIndex === nextProps.pendingUpscaleIndex &&
     prevProps.pendingUpscaleUrl === nextProps.pendingUpscaleUrl
   );
 };

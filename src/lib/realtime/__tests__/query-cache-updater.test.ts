@@ -25,10 +25,6 @@ import {
   toShotView,
 } from '@/lib/shots/shot-view';
 import { updateQueryCacheFromEvent } from '@/lib/realtime/query-cache-updater';
-import {
-  getVariantUpscalePreview,
-  setVariantUpscalePreview,
-} from '@/lib/shots/variant-upscale-preview';
 
 const SEQ = 'seq-1';
 const OLD_THUMB = 'https://cdn/old-thumb.jpg';
@@ -143,34 +139,24 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(shot?.frame.imageStatus).toBe('completed');
     });
 
-    it('primary completion clears the in-flight variant-upscale preview', () => {
-      setVariantUpscalePreview(qc, 'shot-1', {
-        variantIndex: 4,
-        gridUrl: '/r2/grid.png',
-        aspectRatio: '16:9',
-      });
-      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
-        shotId: 'shot-1',
-        status: 'completed',
-        thumbnailUrl: NEW_URL,
-        model: 'nano_banana_2',
-      });
-      expect(getVariantUpscalePreview(qc, 'shot-1')).toBeNull();
-    });
-
-    it('variant-only completion does not clear the variant-upscale preview', () => {
-      setVariantUpscalePreview(qc, 'shot-1', {
-        variantIndex: 4,
-        gridUrl: '/r2/grid.png',
-        aspectRatio: '16:9',
-      });
+    it('variant-only completion does not clear the upscale overlay', () => {
+      qc.setQueryData(
+        shotKeys.list(SEQ),
+        [makeShot()].map((s) => ({
+          ...s,
+          pendingUpscaleIndex: 4,
+          pendingUpscaleUrl: '/r2/thumbnails/crop.png',
+        }))
+      );
       updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
         shotId: 'shot-1',
         status: 'completed',
         thumbnailUrl: NEW_URL,
         variantOnly: true,
       });
-      expect(getVariantUpscalePreview(qc, 'shot-1')?.variantIndex).toBe(4);
+      const shot = getCachedShot(qc);
+      expect(shot?.pendingUpscaleIndex).toBe(4);
+      expect(shot?.pendingUpscaleUrl).toBe('/r2/thumbnails/crop.png');
     });
 
     it('primary failure writes the reason onto frame.imageError so the banner shows it live (#881)', () => {
@@ -191,17 +177,15 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
     });
 
     it('primary completion clears the persisted upscale overlay so it does not stick after SSE', () => {
-      qc.setQueryData(shotKeys.list(SEQ), [
-        makeShot({
-          frame: { imageStatus: 'generating' },
-          sources: { pendingUpscaleUrl: '/r2/thumbnails/crop.png' },
-        }),
-      ]);
-      setVariantUpscalePreview(qc, 'shot-1', {
-        variantIndex: 4,
-        gridUrl: '/r2/grid.png',
-        aspectRatio: '16:9',
-      });
+      qc.setQueryData(
+        shotKeys.list(SEQ),
+        [
+          makeShot({
+            frame: { imageStatus: 'generating' },
+            sources: { pendingUpscaleUrl: '/r2/thumbnails/crop.png' },
+          }),
+        ].map((s) => ({ ...s, pendingUpscaleIndex: 4 }))
+      );
 
       updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
         shotId: 'shot-1',
@@ -211,7 +195,7 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
 
       const shot = getCachedShot(qc);
       expect(shot?.pendingUpscaleUrl).toBeNull();
-      expect(getVariantUpscalePreview(qc, 'shot-1')).toBeNull();
+      expect(shot?.pendingUpscaleIndex).toBeNull();
     });
 
     it('a fresh generating attempt clears a stale frame.imageError', () => {

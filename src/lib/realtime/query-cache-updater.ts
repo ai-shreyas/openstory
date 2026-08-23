@@ -4,7 +4,6 @@ import { sceneKeys } from '@/hooks/use-scenes';
 import { shotStalenessNamespace } from '@/hooks/use-shot-staleness';
 import { segmentKeys } from '@/hooks/use-segments';
 import { shotKeys } from '@/hooks/use-shots';
-import { clearVariantUpscalePreview } from '@/lib/shots/variant-upscale-preview';
 import { locationSheetVariantKeys } from '@/hooks/use-location-sheet-variants';
 import { sequenceCharacterKeys } from '@/hooks/use-sequence-characters';
 import { sequenceLocationKeys } from '@/hooks/use-sequence-locations';
@@ -163,13 +162,6 @@ export function updateQueryCacheFromEvent(
       // the alternate) and only refresh the per-model variant/model-list
       // queries below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
-      if (
-        !variantOnly &&
-        shotId &&
-        (status === 'completed' || status === 'failed')
-      ) {
-        clearVariantUpscalePreview(queryClient, shotId);
-      }
       if (!variantOnly) {
         queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
           old?.map((f) =>
@@ -193,6 +185,10 @@ export function updateQueryCacheFromEvent(
                     status === 'completed' || status === 'failed'
                       ? null
                       : f.pendingUpscaleUrl,
+                  pendingUpscaleIndex:
+                    status === 'completed' || status === 'failed'
+                      ? null
+                      : f.pendingUpscaleIndex,
                   frame: {
                     ...f.frame,
                     imageStatus: isValidShotStatus(status)

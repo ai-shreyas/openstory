@@ -9,22 +9,13 @@ import {
 } from '@/components/ui/dialog';
 import { useFalBillingGate } from '@/hooks/use-billing-gate';
 import { useGenerateVariants, useSelectVariant } from '@/hooks/use-shots';
-import { useVariantUpscalePreview } from '@/hooks/use-variant-upscale-preview';
 import type { TextToImageModel } from '@/lib/ai/models';
-import {
-  type AspectRatio,
-  getVariantGridConfig,
-} from '@/lib/constants/aspect-ratios';
-import { tileBackgroundCss } from '@/lib/image/tile-crop';
-import {
-  clearVariantUpscalePreview,
-  setVariantUpscalePreview,
-} from '@/lib/shots/variant-upscale-preview';
+import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { ShotView } from '@/lib/shots/shot-view';
-import { useQueryClient } from '@tanstack/react-query';
 import { Grid2x2, Loader2 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
+import { hasUpscaleOverlay, UpscaleOverlay } from './upscale-overlay';
 import { VariantSelector } from './variant-selector';
 
 type StartingFrameVariantsProps = {
@@ -53,8 +44,6 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
   onGenerateStart,
 }) => {
   const [open, setOpen] = useState(false);
-  const queryClient = useQueryClient();
-  const upscale = useVariantUpscalePreview(shot.id);
   const generateVariants = useGenerateVariants();
   const selectVariant = useSelectVariant();
   const { needsBillingSetup: falNeedsBillingSetup, showGate: showFalGate } =
@@ -64,14 +53,16 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
     generating ||
     shot.gridSheet?.status === 'generating' ||
     generateVariants.isPending;
-  const upscalingIndex = upscale?.variantIndex ?? null;
-  const cropUrl = shot.pendingUpscaleUrl;
+  const upscalingIndex = shot.pendingUpscaleIndex;
   const isUpscaling =
-    upscale !== null || selectVariant.isPending || Boolean(cropUrl);
+    hasUpscaleOverlay({
+      gridUrl: shot.gridSheet?.url,
+      variantIndex: upscalingIndex,
+      cropUrl: shot.pendingUpscaleUrl,
+    }) || selectVariant.isPending;
 
   const handleGenerate = useCallback(async () => {
     onGenerateStart();
-    clearVariantUpscalePreview(queryClient, shot.id);
     try {
       await generateVariants.mutateAsync({
         sequenceId,
@@ -83,91 +74,38 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
         description: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-  }, [
-    onGenerateStart,
-    generateVariants,
-    sequenceId,
-    shot.id,
-    imageModel,
-    queryClient,
-  ]);
+  }, [onGenerateStart, generateVariants, sequenceId, shot.id, imageModel]);
 
   const handleSelect = useCallback(
     async (index: number) => {
-      // Close immediately (#1193). Persist the picked cell on the QueryClient
-      // so navigating away and back still shows the lo-res tile + Upscaling.
-      if (shot.gridSheet?.url) {
-        setVariantUpscalePreview(queryClient, shot.id, {
-          variantIndex: index,
-          gridUrl: shot.gridSheet.url,
-          aspectRatio,
-        });
-      }
+      // Start the mutation first: onMutate writes the overlay synchronously.
+      // Then close. Closing before that await lets React paint the old still.
+      const run = selectVariant.mutateAsync({
+        sequenceId,
+        shotId: shot.id,
+        variantIndex: index,
+      });
       setOpen(false);
       try {
-        await selectVariant.mutateAsync({
-          sequenceId,
-          shotId: shot.id,
-          variantIndex: index,
-          aspectRatio,
-        });
+        await run;
       } catch (error) {
         toast.error('Failed to select variant', {
           description: error instanceof Error ? error.message : 'Unknown error',
         });
       }
     },
-    [
-      selectVariant,
-      sequenceId,
-      shot.id,
-      shot.gridSheet?.url,
-      aspectRatio,
-      queryClient,
-    ]
+    [selectVariant, sequenceId, shot.id]
   );
-
-  const gridConfig = getVariantGridConfig(upscale?.aspectRatio ?? aspectRatio);
-  const upscalingTileCss =
-    upscalingIndex !== null
-      ? tileBackgroundCss({
-          index: upscalingIndex,
-          gridCols: gridConfig.cols,
-          gridRows: gridConfig.rows,
-        })
-      : null;
 
   return (
     <>
-      {isUpscaling && (upscalingTileCss || cropUrl) && (
-        <div
-          className="absolute inset-0 z-[6] overflow-hidden"
-          aria-live="polite"
-          aria-label="Upscaling selected variant"
-        >
-          {upscalingIndex !== null && upscale?.gridUrl && upscalingTileCss ? (
-            <div
-              className="absolute inset-0"
-              style={{
-                backgroundImage: `url(${upscale.gridUrl})`,
-                backgroundRepeat: 'no-repeat',
-                ...upscalingTileCss,
-              }}
-            />
-          ) : cropUrl ? (
-            <div
-              className="absolute inset-0 bg-cover bg-center"
-              style={{ backgroundImage: `url(${cropUrl})` }}
-            />
-          ) : null}
-          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-[7] flex justify-center">
-            <span className="flex items-center gap-1.5 rounded-full bg-background/80 px-3 py-1 text-xs font-medium text-foreground backdrop-blur-sm">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Upscaling…
-            </span>
-          </div>
-        </div>
-      )}
+      <UpscaleOverlay
+        aspectRatio={aspectRatio}
+        gridUrl={shot.gridSheet?.url}
+        variantIndex={upscalingIndex}
+        cropUrl={shot.pendingUpscaleUrl}
+        className="z-[6]"
+      />
       <Button
         type="button"
         variant="ghost"

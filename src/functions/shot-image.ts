@@ -631,6 +631,19 @@ export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
 // ---------------------------------------------------------------------------
 
 /**
+ * Stills the Images tab lists: model gens and picked/upscaled tiles.
+ * Grid sheets (`framing` with no source) and preview stand-ins stay out.
+ */
+export function isImageHistoryVersion(v: {
+  kind: string;
+  sourceVariantId?: string | null;
+}): boolean {
+  return (
+    v.kind === 'model' || (v.kind === 'framing' && Boolean(v.sourceVariantId))
+  );
+}
+
+/**
  * Client-facing image version row for the history sheet. `selected` is derived
  * from the frame's `selectedImageVersionId` pointer so the UI can mark Current
  * without a second round-trip.
@@ -638,7 +651,7 @@ export const selectSegmentVideoVersionFn = createServerFn({ method: 'POST' })
 export type ShotImageVersionRow = {
   id: string;
   model: string;
-  kind: 'model';
+  kind: 'model' | 'framing';
   status: string;
   url: string | null;
   createdAt: Date;
@@ -665,11 +678,10 @@ const shotHistoryListInputSchema = z.object({
 
 /**
  * Append-only image generation history for a shot's anchor frame (#1070).
- * Newest first. Only `kind: 'model'` rows — framing rows are the 3x3 grid
- * sheet / tile picks used by the Frame variants picker, and preview rows are
- * the pre-prompt stand-in (#1101); neither is still history. Includes
- * in-flight / failed rows so the sheet can show progress and errors;
- * discarded rows stay hidden (soft-hide is undoable elsewhere).
+ * Newest first. Model stills and framing tiles cropped from a grid sheet
+ * (sourceVariantId set). Grid sheets themselves and preview rows (#1101)
+ * stay out. Includes in-flight / failed rows so the sheet can show progress
+ * and errors; discarded rows stay hidden (soft-hide is undoable elsewhere).
  */
 export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
   .middleware([shotAccessMiddleware])
@@ -680,11 +692,11 @@ export const listShotImageVersionsFn = createServerFn({ method: 'GET' })
     // listByFrame is oldest-first (ULID asc); reverse for newest-first history.
     return [...versions]
       .reverse()
-      .filter((v) => v.kind === 'model')
+      .filter(isImageHistoryVersion)
       .map((v) => ({
         id: v.id,
         model: v.model,
-        kind: 'model' as const,
+        kind: v.kind === 'framing' ? ('framing' as const) : ('model' as const),
         status: v.status,
         url: v.url,
         createdAt: v.createdAt,

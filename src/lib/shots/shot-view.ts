@@ -135,6 +135,11 @@ export type ShotView = Shot & {
   motionPrompt: AssemblableMotionPrompt | null;
   /** Cropped tile for an in-flight variant upscale, or null. */
   pendingUpscaleUrl: string | null;
+  /**
+   * Client-only: grid-cell index for the CSS overlay while an upscale runs.
+   * Server assembly always sends null; optimistic select and SSE clear it.
+   */
+  pendingUpscaleIndex: number | null;
 };
 
 /**
@@ -198,6 +203,7 @@ export function toShotView(
     gridSheet: sources.gridSheet ?? null,
     motionPrompt: sources.motionPrompt ?? null,
     pendingUpscaleUrl: sources.pendingUpscaleUrl ?? null,
+    pendingUpscaleIndex: null,
   };
 }
 
@@ -209,4 +215,36 @@ export function pendingUpscaleUrlFromVersion(
     return null;
   }
   return version.url;
+}
+
+/**
+ * Trim URLs (`/cdn-cgi/image/trim=`) only resolve through a Cloudflare
+ * Image Resizing edge. Patching one into `image.url` is what #1193's broken
+ * preview was. `/r2/` and ordinary https URLs are safe to show.
+ */
+export function isBrowserDisplayableStillUrl(url: string): boolean {
+  return !url.includes('/cdn-cgi/image/');
+}
+
+/**
+ * Optimistic shot after the user picks a grid tile: keep the current still
+ * (or swap in a displayable crop), spin the frame, remember the cell index
+ * for the CSS overlay, and drop the old motion so the player doesn't keep
+ * playing the previous video over the new start frame.
+ */
+export function shotAfterVariantSelect(
+  shot: ShotView,
+  imageUrl?: string,
+  variantIndex?: number
+): ShotView {
+  return {
+    ...shot,
+    image:
+      imageUrl && shot.image ? { ...shot.image, url: imageUrl } : shot.image,
+    frame: { ...shot.frame, imageStatus: 'generating' },
+    pendingUpscaleUrl: imageUrl ?? shot.pendingUpscaleUrl ?? null,
+    pendingUpscaleIndex: variantIndex ?? shot.pendingUpscaleIndex ?? null,
+    video: null,
+    videoStatus: 'pending',
+  };
 }

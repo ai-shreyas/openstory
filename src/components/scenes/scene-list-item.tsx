@@ -10,7 +10,6 @@ import type { SceneWithScript } from '@/hooks/use-scenes';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { cn } from '@/lib/utils';
 import { stripMarkdown } from '@/lib/utils/markdown-plain';
-import { useVariantUpscalePreview } from '@/hooks/use-variant-upscale-preview';
 import type { ShotView } from '@/lib/shots/shot-view';
 import { Loader2, Play } from 'lucide-react';
 import { memo } from 'react';
@@ -73,7 +72,6 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
   const title = !shot
     ? undefined
     : scene?.title?.trim() || `Scene ${sceneNumber}`;
-  const upscale = useVariantUpscalePreview(shot?.id);
   const scriptPreview = !shot
     ? undefined
     : stripMarkdown(scene?.script?.extract ?? '');
@@ -172,14 +170,8 @@ const SceneListItemComponent: React.FC<SceneListItemProps> = ({
                 alt={title ?? 'Scene thumbnail'}
                 aspectRatio={aspectRatio}
                 className="w-full rounded-md"
-                upscalePreview={
-                  upscale
-                    ? {
-                        gridUrl: upscale.gridUrl,
-                        variantIndex: upscale.variantIndex,
-                      }
-                    : null
-                }
+                gridSheetUrl={shot?.gridSheet?.url}
+                pendingUpscaleIndex={shot?.pendingUpscaleIndex}
                 pendingUpscaleUrl={shot?.pendingUpscaleUrl}
               />
               {(hasVideo || isGeneratingVideo) && (
@@ -285,6 +277,8 @@ const areEqual = (
     prevShot.image?.url !== nextShot.image?.url ||
     prevShot.previewThumbnailUrl !== nextShot.previewThumbnailUrl ||
     prevShot.frame.imageStatus !== nextShot.frame.imageStatus ||
+    prevShot.gridSheet?.url !== nextShot.gridSheet?.url ||
+    prevShot.pendingUpscaleIndex !== nextShot.pendingUpscaleIndex ||
     prevShot.pendingUpscaleUrl !== nextShot.pendingUpscaleUrl
   ) {
     return false;
