@@ -8,7 +8,6 @@
 import { getEnv } from '#env';
 import type { TextModel } from '@/lib/ai/models';
 import { HTTPClient } from '@openrouter/sdk/lib/http';
-import { createModel, extendAdapter } from '@tanstack/ai';
 import { createOpenRouterText, openRouterText } from '@tanstack/ai-openrouter';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -68,26 +67,18 @@ let loggedRetryMode = false;
  * catalog is a codegen snapshot of OpenRouter's live list and lags new
  * releases. `extendAdapter` widens the factories' typed model union so a
  * registry id that is in NEITHER list is a compile error instead of an
- * unsafe cast. `catalog-lag.test.ts` fails once a package bump ships an id
- * below, telling the bumper (usually the model-freshness routine, #792) to
- * prune it here. Add entries with `createModel` from '@tanstack/ai':
+ * unsafe cast. `catalog-lag.test.ts` fails once an `@tanstack/ai-openrouter`
+ * bump ships an id below, telling whoever lands that dependency bump (Dependabot)
+ * to prune it here. Entries are ADDED by the model-freshness routine (#792) when
+ * a text-model bump adopts an id the installed catalog doesn't know yet. Add
+ * entries with `createModel` from '@tanstack/ai':
  * `createModel('vendor/model-id', { input: [...], features: [...] })`.
+ *
+ * Empty after @tanstack/ai-openrouter@0.18.1 shipped Grok 4.6 and
+ * Claude Opus 5 / Opus 5 Fast. Restore `extendAdapter` around the
+ * factories when the next lag id lands.
  */
-export const CATALOG_LAG_MODELS = [
-  createModel('x-ai/grok-4.6', {
-    input: ['text', 'image'],
-    features: ['reasoning', 'structured_outputs'],
-  }),
-] as const;
-
-const openRouterTextExtended = extendAdapter(
-  openRouterText,
-  CATALOG_LAG_MODELS
-);
-const createOpenRouterTextExtended = extendAdapter(
-  createOpenRouterText,
-  CATALOG_LAG_MODELS
-);
+export const CATALOG_LAG_MODELS = [] as const;
 
 // Callers must say which API a key belongs to (`via`) — a bare string can't:
 // a fal key mistaken for an OpenRouter key gets Bearer auth against
@@ -134,6 +125,6 @@ export function createAdapter(model: TextModel, keyInfo?: LlmKeyInfo) {
   };
 
   return key
-    ? createOpenRouterTextExtended(model, key, config)
-    : openRouterTextExtended(model, config);
+    ? createOpenRouterText(model, key, config)
+    : openRouterText(model, config);
 }

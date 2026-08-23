@@ -684,19 +684,18 @@ Generate tags and prompt for a single cohesive music track that spans the entire
       role: 'system',
       content: `You are a Script Scene Analyzer. You will be called via a structured output tool. Follow the provided schema exactly.
 
-You NEVER re-emit or rewrite the script. Instead you annotate WHERE each scene begins, and the system slices the original script text itself.
+You NEVER re-emit or rewrite the script. You NEVER emit per-scene metadata, dialogue, continuity tags, or bibles. You only annotate WHERE each scene begins. The system slices the original script and derives everything else locally.
 
 ## Output Contract
 
 The script is provided with a numbered line gutter ("12: some text"). The gutter is for reference only — it is NOT part of the script text.
 
-1. **boundaries** — one entry per scene, in script order:
+Return:
+1. **projectMetadata.title** — the project title as written in the script (or a short inferred title).
+2. **boundaries** — one entry per scene, in script order:
    - \`quote\`: the VERBATIM first 40-80 characters of the scene, copied character-for-character from the script (never include the "N: " gutter). This is the ground truth used to locate the boundary, so exact copying matters: same punctuation, same quotes, same casing. A scene may start mid-paragraph — quote from that exact point.
    - \`hintLine\`: the gutter line number the scene starts on.
    - Scene 1 always starts at the very top of the script. Every scene runs until the next boundary, so all of the script belongs to exactly one scene.
-2. **sceneMeta** — index-aligned with boundaries: sceneMeta[i] describes the scene starting at boundaries[i]. Same array length as boundaries.
-
-Emit boundaries FIRST (complete the boundaries array before sceneMeta).
 
 ## Core Rules
 
@@ -736,48 +735,11 @@ Detect boundaries using:
 - Screenplay headings: "INT. LOCATION - TIME"
 - Structural breaks: double line breaks, location/time changes
 - Action shifts: establishing → character enters
-- **Camera cuts or framing changes** (see ONE SHOT RULE above)
-
-## Dialogue Extraction (sceneMeta[i].dialogue)
-
-Recognize formats:
-- Screenplay: CHARACTER NAME (newline) Dialogue
-- Prose: Jack said, "line" or JACK: line
-- Simple quotes: "line"
-
-Extract each line spoken within the scene with the character name (empty string if unknown), the EXACT spoken text copied verbatim from the script, and a tone describing vocal delivery (e.g., "calm serious", "trembling frustrated").
-
-## Timing (sceneMeta[i].durationSeconds)
-
-- Dialogue: ~150 words/minute
-- Simple action: 2-3s | Moderate: 3-5s | Complex: 5-8s
-- Quick cuts: 1-2s | Contemplative: 3-6s
-
-## Continuity (sceneMeta[i].continuity)
-
-Tag every scene for downstream visual consistency. TAG FORMAT IS A HARD CONTRACT — an independent system joins these tags against character/location bibles:
-
-- characterTags: one entry per character appearing in the scene. Each tag is the snake_case slug of the character's name AS WRITTEN IN THE SCRIPT ("GIRL ONE" → "girl_one"). Optional descriptive context may follow the name slug ("girl_one_bathroom_morning"), but the tag MUST start with the name slug.
-- environmentTag: snake_case slug for the scene's location, starting with the core location name ("office_modern_steel_glass").
-- elementTags: UPPERCASE tokens of elements visible in the scene (see below); null when none.
-- colorPalette, lightingSetup, styleTag: short visual-consistency notes.
-
-## Elements
-
-The <ELEMENTS> block lists user-uploaded recurring visual assets, each with an UPPERCASE token. Scripts may reference them by token. For EACH scene that shows an element, set continuity.elementTags[] to the UPPERCASE tokens visible in that scene. A script may also centre on a recurring hero product/object with no upload — if a specific product/object is a visual centerpiece in 2+ scenes, tag those scenes with a short UPPERCASE_SNAKE_CASE token you invent for it (e.g. "CORAL_LIPSTICK"); never collide with a token from <ELEMENTS>. Ignore incidental props.`,
+- **Camera cuts or framing changes** (see ONE SHOT RULE above)`,
     },
     {
       role: 'user',
-      content: `Split the script within the USER_SCRIPT tags into logical scenes by emitting boundary annotations plus per-scene metadata, using the aspect ratio specified in the ASPECT_RATIO tags. The script has a numbered line gutter ("N: ") — quotes must copy the script text WITHOUT the gutter.
-
-<ASPECT_RATIO>
-{{aspectRatio}}
-</ASPECT_RATIO>
-
-<ELEMENTS>
-The following user-uploaded elements are available. Track each one's UPPERCASE token in the script and populate continuity.elementTags accordingly:
-{{elements}}
-</ELEMENTS>
+      content: `Split the script within the USER_SCRIPT tags into logical scenes by emitting boundary annotations. The script has a numbered line gutter ("N: ") — quotes must copy the script text WITHOUT the gutter.
 
 <USER_SCRIPT>
 {{script}}

@@ -671,23 +671,24 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
         // The structured motion prompt is threaded in from the motion-prompt
         // phase's return (#713/#991) — NOT re-read from the DB, which would be
         // racy against concurrent append-only version writes.
-        const motionPromptData = motionPromptsBySceneId[scene.sceneId];
-        if (!motionPromptData?.fullPrompt) {
-          throw new WorkflowValidationError(
-            `Scene ${scene.sceneId} has no motion prompt`
-          );
-        }
-
         // `imageUrls` is aligned to scene order; a null slot means that
         // scene's image generation failed (the shot is already marked
-        // failed by the image workflow). Skip its motion rather than failing
-        // the whole sequence — the remaining shots' clips still render.
+        // failed by the image workflow). Motion-prompt batch also skips
+        // those scenes (no starting frame). Skip rather than throwing —
+        // a missing still used to fail the whole storyboard.
         const imageUrl = imageUrls[index];
         if (!imageUrl) {
           logger.warn(
             `[AnalyzeScriptWorkflow:cf] Scene ${scene.sceneId} has no generated image (index ${index}); skipping its motion`
           );
           return [];
+        }
+
+        const motionPromptData = motionPromptsBySceneId[scene.sceneId];
+        if (!motionPromptData?.fullPrompt) {
+          throw new WorkflowValidationError(
+            `Scene ${scene.sceneId} has no motion prompt`
+          );
         }
 
         const characterTags = scene.continuity?.characterTags;

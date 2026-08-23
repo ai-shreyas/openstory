@@ -11,8 +11,14 @@ export type OpenRouterPricing = {
 };
 
 export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
+  'anthropic/claude-opus-5': {
+    name: 'Claude Opus 5',
+    promptPerMillionTokens: 5,
+    completionPerMillionTokens: 25,
+    webSearchPerQuery: 0.01,
+  },
   'x-ai/grok-4.6': {
-    name: 'xAI: Grok 4.6',
+    name: 'SpaceXAI: Grok 4.6',
     promptPerMillionTokens: 2,
     completionPerMillionTokens: 6,
     webSearchPerQuery: 0.005,
@@ -30,10 +36,16 @@ export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
     webSearchPerQuery: 0.01,
   },
   'x-ai/grok-4.20': {
-    name: 'xAI: Grok 4.20',
+    name: 'SpaceXAI: Grok 4.20',
     promptPerMillionTokens: 1.25,
     completionPerMillionTokens: 2.5,
     webSearchPerQuery: 0.005,
+  },
+  'anthropic/claude-opus-5-fast': {
+    name: 'Claude Opus 5 (Fast)',
+    promptPerMillionTokens: 10,
+    completionPerMillionTokens: 50,
+    webSearchPerQuery: 0.01,
   },
   'anthropic/claude-opus-4.8': {
     name: 'Anthropic: Claude Opus 4.8',
@@ -53,8 +65,8 @@ export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
   },
   'z-ai/glm-5.2': {
     name: 'Z.ai: GLM 5.2',
-    promptPerMillionTokens: 0.9057999999999999,
-    completionPerMillionTokens: 2.8468,
+    promptPerMillionTokens: 0.966,
+    completionPerMillionTokens: 3.036,
   },
   'google/gemini-3.1-pro-preview': {
     name: 'Google: Gemini 3.1 Pro Preview',
@@ -93,4 +105,4 @@ export const OPENROUTER_PRICING: Record<string, OpenRouterPricing> = {
   },
 };
 
-export const OPENROUTER_PRICING_LAST_UPDATED = '2026-07-16T22:53:10.447Z';
+export const OPENROUTER_PRICING_LAST_UPDATED = '2026-08-21T04:57:10.073Z';

@@ -299,3 +299,12 @@ jobs:
           OPENROUTER_KEY: test-mock-key
           OPENROUTER_BASE_URL: http://localhost:4010
           EMAIL_FROM: ${{ env.E2E_EMAIL_FROM }}
+
+      - name: Upload full-pipeline e2e results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-full-pipeline-results
+          path: e2e/results/
+          retention-days: 7
+          if-no-files-found: ignore

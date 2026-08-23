@@ -16,7 +16,10 @@
  *     so the failure write itself benefits from retries + step durability.
  */
 
+import { getEnv } from '#env';
+import { getDb } from '#db-client';
 import { configureFalProxyFromEnv } from '@/lib/ai/fal-config';
+import { ensureLocalModelPricingSeeded } from '@/lib/db/seed-model-pricing';
 import { createScopedDb } from '@/lib/db/scoped';
 import {
   toWorkflowScopedDb,
@@ -45,6 +48,14 @@ import { flushAnalytics } from '@/lib/observability/flush-analytics';
 import { getLogger, serializeError } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'cf', 'base']);
+
+let e2ePricingSeed: Promise<unknown> | null = null;
+
+async function ensureE2eModelPricing(): Promise<void> {
+  if (getEnv().E2E_TEST !== 'true') return;
+  e2ePricingSeed ??= ensureLocalModelPricingSeeded(getDb());
+  await e2ePricingSeed;
+}
 
 /**
  * Read the `_parent` notify hint a parent workflow injects via
@@ -121,6 +132,10 @@ export abstract class OpenStoryWorkflowEntrypoint<
     // hit real endpoints even in replay. Idempotent (module-flag guarded), so
     // running it per workflow invocation / retry is safe. See lib/ai/fal-config.
     configureFalProxyFromEnv();
+    // Workflow isolates never run the fetch handler's self-seed. Replay
+    // stills bill $0 (and spam `reportMissingBillingCost`) when this
+    // isolate's D1 has no `model_pricing` rows.
+    await ensureE2eModelPricing();
 
     // Pull the parent notify hint once — used on both success and failure
     // paths so a parent's `spawnAndAwaitChild` always sees a terminal event.

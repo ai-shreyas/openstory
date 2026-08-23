@@ -148,6 +148,41 @@ describe('durableLLMCallCf usage cost capture', () => {
       durableLLMCallCf(step, callConfig, nonStreamContext)
     ).rejects.toThrow(/structured-output\.complete/);
   });
+
+  it('drains chat() after RUN_ERROR so otel onError can end the span', async () => {
+    let cancelled = false;
+    mockChat.mockReturnValue({
+      [Symbol.asyncIterator]() {
+        let i = 0;
+        const events = [
+          {
+            type: 'RUN_ERROR',
+            message:
+              'openrouter.structuredOutputStream: response contained no content',
+            code: 'empty-response',
+            model: 'anthropic/claude-opus-5',
+          },
+        ];
+        return {
+          async next() {
+            if (i < events.length) {
+              return { value: events[i++], done: false as const };
+            }
+            return { done: true as const, value: undefined };
+          },
+          async return() {
+            cancelled = true;
+            return { done: true as const, value: undefined };
+          },
+        };
+      },
+    });
+
+    await expect(
+      durableLLMCallCf(step, callConfig, nonStreamContext)
+    ).rejects.toThrow(/empty-response/);
+    expect(cancelled).toBe(false);
+  });
 });
 
 describe('durableStreamingLLMCallCf structured-output.complete', () => {

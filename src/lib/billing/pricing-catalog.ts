@@ -177,7 +177,9 @@ export function buildPricingCatalog(opts: {
     .sort((a, b) => a.qualityRank - b.qualityRank)
     .map(toFalRow);
 
-  const llmRows: PricingRow[] = SCRIPT_ANALYSIS_MODELS.map((model) => {
+  const llmRows: PricingRow[] = SCRIPT_ANALYSIS_MODELS.filter(
+    (model) => !('hidden' in model && model.hidden)
+  ).map((model) => {
     const { price, detail } = formatLlmPrice(model.id);
     return {
       name: model.name,

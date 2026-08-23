@@ -12,9 +12,9 @@ import { createAdapter, getPlatformLlmKey } from '@/lib/ai/create-adapter';
 import {
   createUsageCapture,
   extractRunError,
-  formatRunErrorMessage,
   llmCostFromUsage,
   PROMPT_REASONING,
+  throwNotedRunError,
 } from '@/lib/ai/llm-client';
 import type { TextModel } from '@/lib/ai/models';
 import {
@@ -57,10 +57,10 @@ export type DurableLLMCallConfig<TSchema extends z.ZodType> = {
   reasoning?: boolean;
   /**
    * Stored-media URLs to attach to the final user turn as vision input (#929).
-   * Resolved to URL-or-inlined-bytes via {@link toVisionImageSource} INSIDE the
-   * LLM step, so any base64 data part stays ephemeral within that step instead
-   * of being persisted (and size-capped) as a CF step return. The model must
-   * be vision-capable, and the prompt template should reference the image.
+   * Resolved via {@link toVisionImageSource} INSIDE the LLM step (CDN / fal
+   * storage URL, or a last-resort data part) so image bytes never cross a
+   * Cloudflare step boundary. The model must be vision-capable, and the
+   * prompt template should reference the image.
    */
   visionImageUrls?: string[];
 };
@@ -317,8 +317,14 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
         });
 
         let structuredObject: unknown;
+        let runError = null;
         for await (const event of eventStream) {
           usageCapture.noteFromStreamEvent(event);
+          const noted = extractRunError(event);
+          if (noted) {
+            runError ??= noted;
+            continue;
+          }
           if (
             event.type === 'CUSTOM' &&
             event.name === 'structured-output.complete'
@@ -326,14 +332,8 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
             structuredObject = event.value.object;
             continue;
           }
-          const runError = extractRunError(event);
-          if (runError) {
-            logger.error(`[LLM:${logName}:cf] Call RUN_ERROR`, {
-              runError: runError.event,
-            });
-            throw new Error(formatRunErrorMessage(runError));
-          }
         }
+        throwNotedRunError(runError);
 
         if (structuredObject === undefined) {
           throw new NonRetryableError(
@@ -506,9 +506,15 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
       // hand-accumulated text: it's what the library validated, and it
       // survives any delta-assembly drift.
       let structuredJson: string | null = null;
+      let runError = null;
       try {
         for await (const event of eventStream) {
           usageCapture.noteFromStreamEvent(event);
+          const noted = extractRunError(event);
+          if (noted) {
+            runError ??= noted;
+            continue;
+          }
           if (
             event.type === 'TEXT_MESSAGE_CONTENT' &&
             typeof event.delta === 'string'
@@ -531,14 +537,8 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
             structuredJson = JSON.stringify(event.value.object);
             continue;
           }
-          const runError = extractRunError(event);
-          if (runError) {
-            logger.error(`[LLM:${logName}:cf] Streaming call RUN_ERROR`, {
-              runError: runError.event,
-            });
-            throw new Error(formatRunErrorMessage(runError));
-          }
         }
+        throwNotedRunError(runError);
         await flushDelta();
         if (structuredJson === null) {
           throw new NonRetryableError(
