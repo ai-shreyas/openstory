@@ -69,7 +69,9 @@ function DialogContent({
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             <Button
               variant="ghost"
-              className="absolute top-2 right-2"
+              // Touch needs a ≥44px hit target — the ghost visual stays
+              // icon-sized, but a 28px close is too easy to miss on a phone.
+              className="absolute top-2 right-2 pointer-coarse:size-11"
               size="icon-sm"
             >
               <XIcon />
