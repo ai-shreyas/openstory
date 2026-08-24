@@ -27,10 +27,8 @@ import {
   generateImageWithProvider,
   type ImageGenerationParams,
 } from '@/lib/image/image-generation';
-import {
-  buildLibraryTalentSheetPrompt,
-  buildTalentHeadshotPrompt,
-} from '@/lib/prompts/character-prompt';
+import { buildLibraryTalentSheetPrompt } from '@/lib/prompts/character-prompt';
+import { cropTalentSheetPortrait } from '@/lib/talent/crop-sheet-portrait';
 import { recordProvenance } from '@/lib/compliance/provenance';
 import { getTalentChannel } from '@/lib/realtime';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
@@ -364,7 +362,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       };
     }
 
-    // Emit sheet_ready so the UI can show the sheet and switch to "Generating portrait…"
+    // Emit sheet_ready so the UI can show the sheet while the portrait crop runs.
     await step.do('emit-sheet-ready', async () => {
       await getTalentChannel(input.talentId).emit('talent.sheet:progress', {
         talentId: input.talentId,
@@ -375,129 +373,35 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       });
     });
 
-    // Step 5: Generate talent headshot for avatar
-    const headshotResult = await step.do(
-      'generate-headshot-image',
-      async () => {
-        const model = input.imageModel ?? DEFAULT_IMAGE_MODEL;
-        const referenceImageUrls = [
-          ...new Set(
-            [
-              input.uploadedSheetUrl,
-              ...(input.referenceImageUrls ?? []),
-            ].filter((url): url is string => Boolean(url))
-          ),
-        ];
-        const hasReferenceImages = referenceImageUrls.length > 0;
-        const prompt = buildTalentHeadshotPrompt(
-          input.talentName,
-          input.talentDescription,
-          hasReferenceImages
-        );
-
-        logger.info(
-          `[LibraryTalentSheetWorkflow:cf] Generating headshot with model ${model}${hasReferenceImages ? ' (with reference images)' : ' (text-to-image only)'}`
-        );
-
-        const generationParams: ImageGenerationParams = {
-          model,
-          prompt,
-          imageSize: 'square_hd',
-          numImages: 1,
-        } satisfies ImageGenerationParams;
-
-        if (hasReferenceImages) {
-          generationParams.referenceImageUrls = referenceImageUrls;
-        }
-
-        return await generateImageWithProvider(generationParams, {
-          scopedDb: scopedDb.credentials,
-        });
-      }
-    );
-
-    // Before the deduction guard — see recordFalUsageStep (#1069).
-    const headshotUsage = await recordFalUsageStep(
-      step,
-      scopedDb,
-      headshotResult.metadata,
-      'record-fal-usage-headshot'
-    );
-
-    // Deduct credits for headshot generation (skip if team used own fal key)
-    await step.do('deduct-credits-headshot', async () => {
-      await deductWorkflowCredits({
-        scopedDb,
-        costMicros: extractImageCost(headshotResult.metadata),
-        usedOwnKey: headshotResult.metadata.usedOwnKey,
-        description: `Talent headshot (${input.imageModel ?? DEFAULT_IMAGE_MODEL})`,
-        idempotencyKey: `${event.instanceId}:headshot`,
-        metadata: {
-          ...headshotUsage,
-          talentId: input.talentId,
-          type: 'headshot',
-        },
-        workflowName: 'LibraryTalentSheetWorkflow',
+    // Portrait is panel 2 of the 4-panel — crop it instead of a second
+    // gpt_image_2 call (measured ~2 min and not even conditioned on the sheet).
+    const headshotStorageResult = await step.do('crop-headshot', async () => {
+      logger.info(
+        `[LibraryTalentSheetWorkflow:cf] Cropping portrait panel for ${input.talentName}`
+      );
+      const result = await cropTalentSheetPortrait({
+        sheetUrl: storageResult.url,
+        destPath: `${input.teamId}/${input.talentId}/headshot.png`,
       });
+      return {
+        url: result.publicUrl,
+        path: result.path,
+      };
     });
 
-    const headshotUrl = headshotResult.imageUrls[0];
-    if (!headshotUrl) {
-      throw new Error('No headshot URL returned from generation');
-    }
-
-    // Step 6: Upload headshot to R2 storage
-    const headshotStorageResult = await step.do(
-      'upload-headshot-to-storage',
-      async () => {
-        logger.info(
-          `[LibraryTalentSheetWorkflow:cf] Uploading headshot to storage`
-        );
-
-        // Fetch and stream directly to R2
-        const response = await fetch(headshotUrl);
-        if (!response.ok) {
-          throw new Error(
-            `Failed to fetch generated headshot: ${response.status}`
-          );
-        }
-
-        // Build storage path for headshot
-        const headshotPath = `${input.teamId}/${input.talentId}/headshot.png`;
-
-        const result = await uploadResponse(
-          response,
-          STORAGE_BUCKETS.TALENT,
-          headshotPath,
-          { contentType: 'image/png' }
-        );
-
-        return {
-          url: result.publicUrl,
-          path: result.path,
-        };
-      }
-    );
-
     await step.do('record-headshot-provenance', async () => {
-      const hasReferenceImages =
-        input.referenceImageUrls && input.referenceImageUrls.length > 0;
       await recordProvenance(scopedDb.provenance, {
         teamId: input.teamId,
         userId: input.userId,
         assetKind: 'talent_sheet',
         assetId: `${sheet.id}#headshot`,
         storageKey: headshotStorageResult.path,
-        provider: 'fal',
-        model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
-        providerRequestId: headshotUsage.requestId ?? null,
+        provider: 'internal',
+        model: 'crop-sheet-portrait',
+        providerRequestId: null,
         workflowRunId,
-        prompt: buildTalentHeadshotPrompt(
-          input.talentName,
-          input.talentDescription,
-          Boolean(hasReferenceImages)
-        ),
-        referenceImageCount: input.referenceImageUrls?.length ?? 0,
+        prompt: 'Crop close-up panel from talent sheet',
+        referenceImageCount: 1,
       });
     });
 

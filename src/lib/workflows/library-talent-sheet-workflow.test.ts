@@ -2,8 +2,8 @@
  * Money-path tests for LibraryTalentSheetWorkflow (#1248).
  *
  * Uploading an existing 4-panel must copy the stored object and skip the
- * sheet fal generate + sheet credit deduction. Headshot still generates.
- * Generate-if-missing still bills the 4-panel.
+ * sheet fal generate + sheet credit deduction. Portrait is cropped from
+ * panel 2. Generate-if-missing still bills the 4-panel, then crops.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,7 @@ const mockGenerateImageWithProvider = vi.fn();
 const mockDeductWorkflowCredits = vi.fn();
 const mockRecordFalUsageStep = vi.fn();
 const mockUploadResponse = vi.fn();
+const mockCropPortrait = vi.fn();
 const mockRecordProvenance = vi.fn();
 const mockEmit = vi.fn();
 
@@ -33,6 +34,9 @@ vi.doMock('@/lib/billing/workflow-deduction', () => ({
 }));
 vi.doMock('@/lib/storage/upload-response', () => ({
   uploadResponse: mockUploadResponse,
+}));
+vi.doMock('@/lib/talent/crop-sheet-portrait', () => ({
+  cropTalentSheetPortrait: mockCropPortrait,
 }));
 vi.doMock('@/lib/compliance/provenance', () => ({
   recordProvenance: mockRecordProvenance,
@@ -128,6 +132,11 @@ beforeEach(() => {
   mockDeductWorkflowCredits.mockResolvedValue(undefined);
   mockRecordFalUsageStep.mockResolvedValue({});
   mockUploadResponse.mockResolvedValue({
+    publicUrl: '/r2/talent/team-1/tal-1/generated.png',
+    path: 'team-1/tal-1/generated.png',
+    fullPath: 'talent/team-1/tal-1/generated.png',
+  });
+  mockCropPortrait.mockResolvedValue({
     publicUrl: '/r2/talent/team-1/tal-1/headshot.png',
     path: 'team-1/tal-1/headshot.png',
     fullPath: 'talent/team-1/tal-1/headshot.png',
@@ -156,11 +165,12 @@ describe('LibraryTalentSheetWorkflow uploaded sheet', () => {
         destBucket: STORAGE_BUCKETS.TALENT,
       })
     );
-    expect(mockGenerateImageWithProvider).toHaveBeenCalledTimes(1);
-    expect(mockDeductWorkflowCredits).toHaveBeenCalledTimes(1);
-    expect(mockDeductWorkflowCredits.mock.calls[0]?.[0]).toEqual(
+    expect(mockGenerateImageWithProvider).not.toHaveBeenCalled();
+    expect(mockDeductWorkflowCredits).not.toHaveBeenCalled();
+    expect(mockCropPortrait).toHaveBeenCalledWith(
       expect.objectContaining({
-        description: expect.stringContaining('headshot'),
+        sheetUrl: '/r2/talent/team-1/tal-1/copied.png',
+        destPath: 'team-1/tal-1/headshot.png',
       })
     );
   });
@@ -175,7 +185,12 @@ describe('LibraryTalentSheetWorkflow generate-if-missing', () => {
     );
 
     expect(mockCopyStoredImage).not.toHaveBeenCalled();
-    expect(mockGenerateImageWithProvider).toHaveBeenCalledTimes(2);
-    expect(mockDeductWorkflowCredits).toHaveBeenCalledTimes(2);
+    expect(mockGenerateImageWithProvider).toHaveBeenCalledTimes(1);
+    expect(mockDeductWorkflowCredits).toHaveBeenCalledTimes(1);
+    expect(mockCropPortrait).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destPath: 'team-1/tal-1/headshot.png',
+      })
+    );
   });
 });

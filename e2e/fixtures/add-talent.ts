@@ -33,15 +33,19 @@ export async function openAddTalentFromSequence(page: Page): Promise<{
   dialog: Locator;
 }> {
   await page.goto('/sequences/new');
-  // Style grid can SSR before React hydrates. Generate-enabled is the same
-  // gate sequence-flow.spec uses: handlers are attached and composer state
-  // is live. Clicking Talent before that is a no-op.
-  await expect(page.getByRole('grid', { name: 'Style selection' })).toBeVisible(
-    {
-      timeout: 15_000,
-    }
-  );
-  await expect(page.getByRole('button', { name: /Generate/i })).toBeEnabled({
+  // Style grid can SSR before React hydrates. Clicking a style (same gate as
+  // sequence-flow.spec) attaches handlers and seeds script + styleId so
+  // Generate enables. Waiting on Generate alone flakes when the sample
+  // has not yet landed in composer state.
+  const styleGrid = page.getByRole('grid', { name: 'Style selection' });
+  await expect(styleGrid).toBeVisible({ timeout: 15_000 });
+  await styleGrid
+    .getByRole('button', { name: /^Select .+ style$/ })
+    .first()
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Generate', exact: true })
+  ).toBeEnabled({
     timeout: 15_000,
   });
   await page.locator('main').getByRole('button', { name: 'Talent' }).click();

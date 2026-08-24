@@ -929,7 +929,7 @@ export interface LibraryTalentSheetWorkflowInput extends UserWorkflowContext {
   /**
    * Existing character/talent sheet the user uploaded. When set, the
    * workflow stores this image as the sheet instead of generating a new
-   * 4-panel, then still generates a headshot from it.
+   * 4-panel, then crops the close-up panel as the portrait.
    */
   uploadedSheetUrl?: string;
   /** Appearance metadata extracted from the uploaded sheet, when available. */

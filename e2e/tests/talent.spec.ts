@@ -167,7 +167,7 @@ testWithUser.describe('Add Talent with Reference Media', () => {
       ).toBeVisible({ timeout: 10_000 });
       const card = page.getByRole('link', { name: uniqueName });
       await expect(card).toBeVisible({ timeout: 10_000 });
-      await expect(card.getByText('AI')).toBeVisible();
+      await expect(card.getByText('AI', { exact: true })).toBeVisible();
       await expect(card.getByText('Creating portrait…')).toBeVisible();
 
       await cleanupTalentByName(testUser.teamId, uniqueName);
@@ -188,7 +188,7 @@ testWithUser.describe('Add Talent with Reference Media', () => {
 
       const card = page.getByRole('link', { name: uniqueName });
       await expect(card).toBeVisible({ timeout: 10_000 });
-      await expect(card.getByText('AI')).toBeVisible();
+      await expect(card.getByText('AI', { exact: true })).toBeVisible();
       await expect(card.getByText('Human')).toHaveCount(0);
 
       await cleanupTalentByName(testUser.teamId, uniqueName);
@@ -222,7 +222,7 @@ testWithUser.describe('Add Talent with Reference Media', () => {
 
       const card = page.getByRole('link', { name: uniqueName });
       await expect(card).toBeVisible({ timeout: 10_000 });
-      await expect(card.getByText('AI')).toBeVisible();
+      await expect(card.getByText('AI', { exact: true })).toBeVisible();
 
       await cleanupTalentByName(testUser.teamId, uniqueName);
     }
