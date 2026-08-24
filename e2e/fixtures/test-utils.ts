@@ -75,9 +75,9 @@ export async function selectComposerStyle(
     await page.getByRole('menuitemradio', { name: family }).click();
   }
   // A selected tile relabels to "View <name> details" and clicking it opens
-  // the style dialog (#1187) — and the composer auto-selects a default style
-  // (category switches pick the family's first). So the target may already be
-  // selected: only click while it still offers Select.
+  // the style dialog (#1187). The bare composer defaults to Automatic (#1255);
+  // category switches still pick the family's first style. So the target may
+  // already be selected: only click while it still offers Select.
   const grid = page.getByRole('grid', { name: 'Style selection' });
   const tile = grid.getByRole('button', { name: `Select ${styleName} style` });
   const selectedTile = grid.getByRole('button', {

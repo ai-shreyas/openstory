@@ -64,6 +64,28 @@ test.describe('Sequences', () => {
     expect(metrics.scrollTopAfter).toBeGreaterThan(100);
   });
 
+  test('composer starts empty with Automatic selected, not Action', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(
+      page.getByRole('button', { name: 'Style category: Film & Cinematic' })
+    ).toBeVisible({ timeout: 15_000 });
+    // #1255: empty editor + Automatic, so the placeholder is visible and
+    // Action is on the strip but not pre-selected.
+    await expect(
+      page.getByText('Paste a screenplay, or a one-liner we can expand.')
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', {
+        name: 'Automatic style: derive a style from the script',
+      })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      page.getByRole('button', { name: 'Select Action style' })
+    ).toBeVisible();
+  });
+
   test('composer style row defaults to cinematic and can switch family', async ({
     page,
   }) => {
@@ -71,12 +93,8 @@ test.describe('Sequences', () => {
     await expect(
       page.getByRole('button', { name: 'Style category: Film & Cinematic' })
     ).toBeVisible({ timeout: 15_000 });
-    // The composer auto-selects the row's first style (#1187), and a selected
-    // tile relabels from "Select … style" to "View … details".
-    await expect(
-      page.getByRole('button', { name: 'View Action details' })
-    ).toBeVisible();
-
+    // Switching family still auto-selects that family's first style; a
+    // selected tile relabels from "Select … style" to "View … details".
     await page.getByRole('button', { name: /^Style category:/ }).click();
     await page.getByRole('menuitemradio', { name: 'E-commerce' }).click();
     await expect(

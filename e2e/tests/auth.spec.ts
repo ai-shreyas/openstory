@@ -20,6 +20,11 @@ baseTest.describe('Route Protection', () => {
       await expect(
         page.getByRole('heading', { name: 'Tell your whole story' })
       ).toBeVisible();
+      await expect(
+        page.getByText(
+          'Create 5-minute AI films with consistent characters. Iterate until you nail it.'
+        )
+      ).toBeVisible();
     }
   );
 

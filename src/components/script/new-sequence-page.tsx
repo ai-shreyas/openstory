@@ -7,6 +7,7 @@ import { useBillingGate } from '@/hooks/use-billing-gate';
 import { useSequence } from '@/hooks/use-sequences';
 import { useStyles } from '@/hooks/use-styles';
 import { useUser } from '@/hooks/use-user';
+import { SITE_CONFIG } from '@/lib/marketing/constants';
 import { AUTO_STYLE_ID } from '@/lib/style/auto-style';
 import { briefForStyle } from '@/lib/style/brief-for-style';
 import { styleSlug } from '@/lib/style/style-slug';
@@ -269,10 +270,10 @@ export function NewSequencePage({
           <OpenStoryLogo className="h-8 sm:h-12" />
           <div className="flex flex-col items-center gap-1">
             <h1 className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
-              Tell your whole story
+              {SITE_CONFIG.tagline}
             </h1>
-            <p className="hidden text-center text-sm text-muted-foreground sm:block">
-              Pay the models. See the code. Keep the film.
+            <p className="text-center text-sm text-muted-foreground text-pretty max-w-md">
+              {SITE_CONFIG.taglineSub}
             </p>
           </div>
         </div>

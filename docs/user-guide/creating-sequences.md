@@ -20,7 +20,7 @@ The script editor accepts anything from a one-line idea to a full screenplay:
 - **One-liner or URL** — Type a brief concept like "A cat exploring a cyberpunk city at night" or paste a website URL. Use **Enhance Script** to expand it into a full screenplay.
 - **Full screenplay** — Paste a complete screenplay and click **Generate Sequence** directly.
 
-The editor shows a placeholder guiding you: _"A one-liner or website URL is all you need — click Enhance Script to do the rest. Or paste a full screenplay and generate directly."_
+The editor starts empty. Its placeholder reads: _"Paste a screenplay, or a one-liner we can expand."_
 
 ### Enhance Script
 
