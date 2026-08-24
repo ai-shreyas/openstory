@@ -14,10 +14,12 @@
  * conservatively / display nothing for null.
  */
 
-import {
-  type EffectiveFalPricing,
-  getEffectiveFalPricing,
-} from '@/lib/ai/fal-pricing-live';
+// Type-only static import + dynamic import at the call site: a static value
+// import would put `fal-pricing-live` (and through it `#db-client` /
+// drizzle) in the client module graph — this module is reached from client
+// components via `cost-estimation.ts` (#1253). Client callers always pass
+// `pricingMap`, so the dynamic import only ever executes on the server.
+import type { EffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
 import {
   type Microdollars,
@@ -68,6 +70,11 @@ const DEFAULT_TOKEN_RESOLUTION = '720p';
  * and a rejection there discards a finished asset and pays fal again on the
  * retry. Tests pass `pricingMap` to skip D1.
  */
+async function loadLivePricing(): Promise<Record<string, EffectiveFalPricing>> {
+  const { getEffectiveFalPricing } = await import('@/lib/ai/fal-pricing-live');
+  return getEffectiveFalPricing();
+}
+
 export async function falCostFromUnits(
   endpointId: string,
   unitsBilled: number | undefined,
@@ -75,7 +82,7 @@ export async function falCostFromUnits(
 ): Promise<Microdollars> {
   let pricing: EffectiveFalPricing | undefined;
   try {
-    pricing = (pricingMap ?? (await getEffectiveFalPricing()))[endpointId];
+    pricing = (pricingMap ?? (await loadLivePricing()))[endpointId];
   } catch (err) {
     logger.error(`Failed to read live pricing for ${endpointId}`, {
       err,

@@ -16,7 +16,7 @@ import { resolveVideoModel } from '@/lib/ai/resolve-asset-models';
 import type { EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
-import { snapDuration } from '@/lib/motion/motion-generation';
+import { snapDuration } from '@/lib/motion/snap-duration';
 
 type BatchShot = { id: string };
 type SequenceModelFields = { videoModel: string | null | undefined };

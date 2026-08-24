@@ -17,7 +17,6 @@ import {
   microsToUsd,
   usdToMicros,
 } from '@/lib/billing/money';
-import { getStripeOrThrow } from '@/lib/billing/stripe';
 import type { TransactionType } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
 import { FOUNDER_EMAIL } from '@/lib/marketing/constants';
@@ -93,6 +92,8 @@ export const listPaymentMethodsFn = createServerFn({ method: 'GET' })
       const settings = await context.scopedDb.billing.getBillingSettings();
       if (!settings.stripeCustomerId) return { paymentMethods: [] };
 
+      // Dynamic import — keeps the Stripe Node SDK out of the client bundle (#1253).
+      const { getStripeOrThrow } = await import('@/lib/billing/stripe');
       const stripe = getStripeOrThrow();
       const [customer, methods] = await Promise.all([
         stripe.customers.retrieve(settings.stripeCustomerId),
@@ -163,6 +164,8 @@ export const purchaseCreditsFn = createServerFn({ method: 'POST' })
       );
     }
 
+    // Dynamic import — keeps the Stripe Node SDK out of the client bundle (#1253).
+    const { getStripeOrThrow } = await import('@/lib/billing/stripe');
     const stripe = getStripeOrThrow();
     const paymentMethod = await stripe.paymentMethods.retrieve(
       data.paymentMethodId

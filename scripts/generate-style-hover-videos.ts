@@ -72,11 +72,8 @@ import {
   type MotionPrompt,
 } from '@/lib/ai/scene-analysis.schema';
 import { assembleMotionPrompt } from '@/lib/motion/assemble-motion-prompt';
-import {
-  pollMotionJob,
-  snapDuration,
-  submitMotionJob,
-} from '@/lib/motion/motion-generation';
+import { pollMotionJob, submitMotionJob } from '@/lib/motion/motion-generation';
+import { snapDuration } from '@/lib/motion/snap-duration';
 import {
   getChatPrompt,
   type ChatMessage,

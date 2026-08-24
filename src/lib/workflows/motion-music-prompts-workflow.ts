@@ -20,7 +20,7 @@
 import { DEFAULT_VIDEO_MODEL } from '@/lib/ai/models';
 import type { MotionPrompt, Scene } from '@/lib/ai/scene-analysis.schema';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
-import { snapDuration } from '@/lib/motion/motion-generation';
+import { snapDuration } from '@/lib/motion/snap-duration';
 import { reinforceInstrumentalTags } from '@/lib/prompts/music-prompt';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
