@@ -1,13 +1,11 @@
 /**
- * Composer sample-script helpers (issue #1187).
+ * Composer sample-script helpers (issue #1187, revised in #1255).
  *
- * First-time users arrive at an empty composer with no idea what a script
- * looks like. When there is nothing else to show — no saved draft, no
- * `?style=` seed — the composer pre-fills the selected style's sample brief
- * so Generate works immediately, and a Shuffle button tours other styles'
- * samples. The content is the same style-keyed brief corpus that seeds the
- * showcase "Try" links, so a pre-filled composer and a "Try this style"
- * click read identically.
+ * The bare composer starts empty (placeholder visible, Automatic selected).
+ * Shuffle and the style-detail "Try" still swap in a style's sample brief so
+ * visitors who want a starting point can tour looks. The content is the same
+ * style-keyed brief corpus that seeds the showcase "Try" links, so a shuffled
+ * sample and a "Try this style" click read identically.
  */
 import { briefForStyle } from '@/lib/style/brief-for-style';
 

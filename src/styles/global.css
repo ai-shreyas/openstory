@@ -10,6 +10,13 @@
   @slot;
 }
 
+/* Laptop / 720p: width is "desktop" (md+) but height is phone-like. */
+@custom-variant short-h {
+  @media (max-height: 50rem) {
+    @slot;
+  }
+}
+
 :root {
   color-scheme: dark;
   --background: oklch(0.145 0 0);

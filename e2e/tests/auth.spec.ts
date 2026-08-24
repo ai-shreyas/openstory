@@ -5,7 +5,7 @@
 
 import { test as baseTest } from 'playwright/test';
 import { expect, test } from '../fixtures/auth.fixture';
-import { fillScriptEditor } from '../fixtures/test-utils';
+import { fillScriptEditor, waitForScriptEditor } from '../fixtures/test-utils';
 
 // Route Protection Tests (no auth fixture needed)
 baseTest.describe('Route Protection', () => {
@@ -20,6 +20,28 @@ baseTest.describe('Route Protection', () => {
       await expect(
         page.getByRole('heading', { name: 'Tell your whole story' })
       ).toBeVisible();
+      await expect(
+        page.getByText(
+          'Create 5-minute AI films with consistent characters. Iterate until you nail it.'
+        )
+      ).toBeVisible();
+    }
+  );
+
+  baseTest(
+    'logged-out composer keeps a script box at 1280×720',
+    async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 720 });
+      await page.goto('/');
+      await waitForScriptEditor(page);
+      const editor = page.locator('[data-slot="markdown-editor"]');
+      await expect(
+        page.getByText('Paste a screenplay, or a one-liner we can expand.')
+      ).toBeVisible();
+      const height = await editor.evaluate(
+        (el) => el.getBoundingClientRect().height
+      );
+      expect(height).toBeGreaterThan(48);
     }
   );
 

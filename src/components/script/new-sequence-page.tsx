@@ -7,6 +7,7 @@ import { useBillingGate } from '@/hooks/use-billing-gate';
 import { useSequence } from '@/hooks/use-sequences';
 import { useStyles } from '@/hooks/use-styles';
 import { useUser } from '@/hooks/use-user';
+import { SITE_CONFIG } from '@/lib/marketing/constants';
 import { AUTO_STYLE_ID } from '@/lib/style/auto-style';
 import { briefForStyle } from '@/lib/style/brief-for-style';
 import { styleSlug } from '@/lib/style/style-slug';
@@ -211,10 +212,10 @@ export function NewSequencePage({
   // Copy mode MUST wait for the source sequence before mounting the composer:
   // ScriptView seeds script, style, aspect ratio and models in `useState`
   // initialisers, and nothing re-syncs them afterwards. Mounted early it would
-  // latch onto the defaults — blank script, first style in the list — and still
-  // offer "Generate Copy", producing a copy of nothing. Navigating from the
-  // sequence hides this (its detail query is already cached); a direct link or
-  // a reload does not.
+  // latch onto create defaults — empty script, Automatic — and still offer
+  // "Generate Copy", producing a copy of nothing. Navigating from the sequence
+  // hides this (its detail query is already cached); a direct link or a reload
+  // does not.
   if (from && !sourceSequence) {
     return (
       <div className="h-full">
@@ -262,17 +263,18 @@ export function NewSequencePage({
         padding="spacious"
         fullHeight
         // Phones: every row saved here goes to the script editor inside the
-        // height-bounded composer below.
-        className="space-y-4 sm:space-y-8"
+        // height-bounded composer below. short-h (≤800px tall): same idea on
+        // 1280×720 laptops — the editor was collapsing to 0.
+        className="space-y-4 sm:space-y-8 short-h:space-y-3 short-h:py-4 sm:short-h:py-4"
       >
-        <div className="flex shrink-0 flex-col items-center gap-2 sm:gap-4">
-          <OpenStoryLogo className="h-8 sm:h-12" />
+        <div className="flex shrink-0 flex-col items-center gap-2 sm:gap-4 short-h:gap-1">
+          <OpenStoryLogo className="h-8 sm:h-12 short-h:h-8" />
           <div className="flex flex-col items-center gap-1">
             <h1 className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
-              Tell your whole story
+              {SITE_CONFIG.tagline}
             </h1>
-            <p className="hidden text-center text-sm text-muted-foreground sm:block">
-              Pay the models. See the code. Keep the film.
+            <p className="text-center text-sm text-muted-foreground text-pretty max-w-md">
+              {SITE_CONFIG.taglineSub}
             </p>
           </div>
         </div>
@@ -293,7 +295,7 @@ export function NewSequencePage({
               card is a sibling flex item that shrinks to fit above this. */}
           <Link
             to="/gallery"
-            className="mt-4 inline-flex shrink-0 items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground"
+            className="mt-4 inline-flex shrink-0 items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground short-h:hidden"
           >
             Browse the gallery to see what you can create
             <ArrowRight className="size-4" />

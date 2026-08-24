@@ -103,7 +103,6 @@ import {
 import {
   ALL_COMPOSER_STYLE_CATEGORIES,
   DEFAULT_COMPOSER_STYLE_CATEGORY,
-  defaultComposerStyle,
   styleAfterComposerCategoryChange,
   styleCategoryGroupKey,
 } from '@/lib/style/composer-style-row';
@@ -143,6 +142,11 @@ const DURATION_PRESETS = [
   { value: '120', label: '2m', seconds: 120 },
   { value: '180', label: '3m', seconds: 180 },
 ] as const;
+
+/** Empty-composer copy (#1255): visible until the user types or shuffles.
+ *  Keep this to ~1–2 lines so it fits the phone editor floor. */
+const COMPOSER_SCRIPT_PLACEHOLDER =
+  'Paste a screenplay, or a one-liner we can expand.';
 
 export const ScriptView: FC<{
   teamId?: string;
@@ -206,41 +210,20 @@ export const ScriptView: FC<{
   // beforeLoad (#1182), so anonymous SSR renders tiles instead of skeletons.
   const { data: styles = [], isPending: isLoadingStyles } = useStyles();
 
-  // Fallback sample seed (#1187), computed at FIRST render — during SSR on
-  // the anonymous front page (styles are loader-prefetched there) — so the
-  // sample is in the first paint instead of popping in after hydration and
-  // shifting the page. Only for a fully bare create composer; an explicit
-  // seed or an editing/copy sequence wins, and a saved draft replaces it via
-  // the draft-sync effect below. When styles aren't cached at mount (some
-  // signed-in paths), this stays null and the seed effect below fills in
-  // client-side.
-  const [fallbackSample] = useState<{ styleId: string; script: string } | null>(
-    () => {
-      if (isEditing || sequence || initialScript || initialStyleId) return null;
-      const style = defaultComposerStyle(
-        styles,
-        DEFAULT_COMPOSER_STYLE_CATEGORY
-      );
-      const sample = style ? sampleScriptForStyle(style) : null;
-      return style && sample ? { styleId: style.id, script: sample } : null;
-    }
-  );
-
   // Local script override — undefined means "show the canonical baseScript".
   // For existing sequences that is the composed scene-script document once the
   // query resolves (#1030); until then baseScript falls back to sequence.script.
   // New-sequence creation leaves this undefined and the draft-sync effect fills
   // it from localStorage. initialScript (sample-style prefill) wins outright.
+  // Bare create starts empty (#1255) so the placeholder is visible; Automatic
+  // is the default style so Generate has a pick without pre-selecting Action.
   const [contentState, setContentState] = useState<{
     script: string | null | undefined;
     styleId: string | null;
   }>({
-    script:
-      initialScript ??
-      (isEditing ? undefined : sequence?.script) ??
-      fallbackSample?.script,
+    script: initialScript ?? (isEditing ? undefined : sequence?.script),
     styleId:
-      initialStyleId ?? sequence?.styleId ?? fallbackSample?.styleId ?? null,
+      initialStyleId ?? sequence?.styleId ?? (isEditing ? null : AUTO_STYLE_ID),
   });
   const { script, styleId } = contentState;
 
@@ -248,11 +231,13 @@ export const ScriptView: FC<{
   // script for that style. While set, the script follows style picks (swapping
   // to the new style's sample), Shuffle shows under the editor, Generate skips
   // the enhance nudge, and the draft persists as empty (a pristine sample is
-  // not the user's work). Any user edit or enhance clears it.
+  // not the user's work). Any user edit or enhance clears it. Only an explicit
+  // seed (`?style=` Try, Shuffle, style-detail Try) enters this state now —
+  // the bare composer does not auto-seed (#1255).
   const [sampleStyleId, setSampleStyleId] = useState<string | null>(
     initialScriptIsSample && initialScript && initialStyleId
       ? initialStyleId
-      : (fallbackSample?.styleId ?? null)
+      : null
   );
 
   const setScript = (v: string | null | undefined) =>
@@ -485,19 +470,12 @@ export const ScriptView: FC<{
     handleTrySample(tryStyleId);
   };
 
-  // Auto-select the first style in the current row when the composer has
-  // no pick yet (the row starts as Film & Cinematic).
+  // Backstop: if create mode ever has no pick, land on Automatic rather than
+  // the first catalogue tile (Action). Initial state already sets this.
   useEffect(() => {
-    if (isLoadingStyles || styleId || sequence?.styleId) return;
-    const firstStyle = defaultComposerStyle(styles, styleCategoryFilter);
-    if (firstStyle) setStyleId(firstStyle.id);
-  }, [
-    styles,
-    isLoadingStyles,
-    styleId,
-    sequence?.styleId,
-    styleCategoryFilter,
-  ]);
+    if (isEditing || styleId || sequence?.styleId) return;
+    setStyleId(AUTO_STYLE_ID);
+  }, [isEditing, styleId, sequence?.styleId]);
 
   // Sequence cast/elements/locations drive @-mention pills in the script
   // editor — same canonical tags the scene prompt editors use. An existing
@@ -574,8 +552,7 @@ export const ScriptView: FC<{
         script: draft.script,
         styleId: draft.styleId || s.styleId,
       }));
-      // The restored draft is the user's own text — it replaces the
-      // render-time fallback sample, so drop the sample state with it.
+      // Restored text is the user's own work, not a sample.
       setSampleStyleId(null);
       setSelections((s) => ({
         talentIds:
@@ -593,41 +570,6 @@ export const ScriptView: FC<{
       hasSyncedDraftRef.current = true;
     }
   }, [isEditing, loading, draftLoaded, draft, initialScript, initialStyleId]);
-
-  // Seed a sample script into an otherwise-empty composer (#1187) — the
-  // first-time-user path: no draft to restore, no `?style=` seed, nothing
-  // typed. Runs at most once per mount so deleting the sample doesn't make it
-  // pop back.
-  const sampleSeedTriedRef = useRef(false);
-  useEffect(() => {
-    if (isEditing || loading || initialScript || sampleSeedTriedRef.current) {
-      return;
-    }
-    if (!draftLoaded || isLoadingStyles) return;
-    // A restorable draft wins — the draft-sync effect above fills it in.
-    // (With an `initialStyleId` seed that effect is skipped, so the draft
-    // doesn't block seeding there.)
-    if (!initialStyleId && draft.script) return;
-    if (script) return;
-    const style = styles.find((s) => s.id === styleId);
-    if (!style) return;
-    sampleSeedTriedRef.current = true;
-    const sample = sampleScriptForStyle(style);
-    if (!sample) return;
-    setContentState((s) => ({ ...s, script: sample }));
-    setSampleStyleId(style.id);
-  }, [
-    isEditing,
-    loading,
-    initialScript,
-    initialStyleId,
-    draftLoaded,
-    draft,
-    isLoadingStyles,
-    styles,
-    styleId,
-    script,
-  ]);
 
   // While the sample is untouched, the script follows the style: picking a
   // different style (tile, category row, or Shuffle) swaps in that style's
@@ -678,9 +620,9 @@ export const ScriptView: FC<{
   }, [isEditing, settingsLoaded, genSettings, saveSettings]);
 
   // Persist draft to localStorage when creating new sequences. An untouched
-  // sample script is not the user's work — persist it as empty so a reload
-  // (or the sign-in round-trip) re-seeds a fresh sample instead of restoring
-  // the sample as a "draft".
+  // sample (Shuffle / Try) is not the user's work — persist it as empty so a
+  // reload or sign-in restores the empty composer (placeholder + Automatic)
+  // instead of treating the sample as a draft.
   useEffect(() => {
     if (!isEditing && draftLoaded) {
       saveDraft({
@@ -731,7 +673,7 @@ export const ScriptView: FC<{
   //
   // The seed value of `lastAppliedStyleIdRef` is the sequence's stored styleId
   // when editing (so we don't clobber existing values on mount) or null when
-  // creating (so the first auto-selected style triggers the apply).
+  // creating (so the first catalogue pick — not Automatic — triggers the apply).
   const lastAppliedStyleIdRef = useRef<string | null>(
     sequence?.styleId ?? null
   );
@@ -960,6 +902,18 @@ export const ScriptView: FC<{
       event.preventDefault();
     }
 
+    // ⌘+Enter requestSubmit()s even while Generate is disabled. Empty is
+    // now the first-run default (#1255) — don't open login / the enhance
+    // nudge / a generate with no script.
+    const scriptText = (script ?? baseScript ?? '').trim();
+    if (
+      !scriptText ||
+      !(styleId || sequence?.styleId) ||
+      analysisModels.length === 0
+    ) {
+      return;
+    }
+
     // Anonymous visitors can compose a draft, but generating prompts a login.
     // The draft is persisted to localStorage, so it's restored after sign-in.
     // Remember the click too, so the resume effect below continues this exact
@@ -985,7 +939,6 @@ export const ScriptView: FC<{
       posthog.capture('sample_script_generated', { style_id: sampleStyleId });
     }
 
-    const scriptText = script ?? baseScript ?? '';
     if (!canUndoEnhance && scriptText.length < SCRIPT_SHORT_THRESHOLD) {
       setEnhance('showEnhanceNudge', true);
       return;
@@ -1110,8 +1063,8 @@ export const ScriptView: FC<{
   }, [isEnhancing]);
 
   const isFormValid =
-    (script || baseScript) &&
-    (styleId || sequence?.styleId) &&
+    Boolean((script ?? baseScript ?? '').trim()) &&
+    Boolean(styleId || sequence?.styleId) &&
     analysisModels.length > 0;
 
   const isSubmitting = createSequenceMutation.isPending;
@@ -1360,7 +1313,7 @@ export const ScriptView: FC<{
         {/* Control bar. Below md the three reference selectors fold into one "References"
             button that opens a sheet, so the bar is a single row next to the
             settings trigger. */}
-        <CardHeader className="shrink-0 flex flex-row items-center md:flex-col md:items-start lg:flex-row justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40">
+        <CardHeader className="shrink-0 flex flex-row items-center md:flex-col md:items-start lg:flex-row justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40 short-h:py-2">
           <GenerationSettings
             aspectRatio={aspectRatio}
             analysisModels={analysisModels}
@@ -1434,7 +1387,7 @@ export const ScriptView: FC<{
             (editor floor, see the wrapper below) with the chrome fixed.
             overflow-y-auto is a fallback for viewports too short for even the
             editor floor + Sample-script row — it only engages then. */}
-        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overscroll-contain overflow-x-hidden">
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overscroll-contain overflow-x-hidden short-h:gap-2 short-h:pt-3 short-h:pb-2">
           {/* Shows during the reasoning pass — i.e. while enhancing but before
               any enhanced text has streamed back. Carries the model's own
               reasoning when it sent any (collapsed; see ThinkingBar), and is a
@@ -1444,50 +1397,19 @@ export const ScriptView: FC<{
             text={thinkingText || undefined}
             className="shrink-0"
           />
-          {/* Above the editor so the Shuffle button holds its position while
-              samples of different lengths grow/shrink the editor below it.
-              Always visible while composing — over the user's own text,
-              Shuffle confirms before replacing. Phones drop the caption and
-              put Shuffle in the Enhance strip below. */}
-          {!isEditing && (
-            <div className="hidden shrink-0 flex-wrap items-center justify-between gap-2 md:flex">
-              <p className="text-xs text-muted-foreground">
-                {sampleStyleId ? (
-                  <>
-                    Sample script
-                    <span className="hidden @min-[480px]:inline">
-                      {' '}
-                      — make it yours, or hit Generate to see it come to life.
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Need a starting point?
-                    <span className="hidden @min-[480px]:inline">
-                      {' '}
-                      Shuffle a sample script.
-                    </span>
-                  </>
-                )}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={loading || isEnhancing || isSubmitting}
-                onClick={requestShuffle}
-              >
-                <Shuffle className="size-3.5" />
-                Shuffle
-              </Button>
-            </div>
-          )}
-          {/* Grows with content above the editor floor (2 rows on phones, 4 on
-              md+ — see ScriptEditor) until the card hits max-h-full, then the
-              editor scrolls. min-h-0 lets this flex child shrink so overflow
-              stays on the editor, not CardContent (#1220). */}
-          <div className="flex min-h-0 flex-1 flex-col">
+          {/* Label only while a sample is in the box — empty composers keep
+              this row off so the placeholder is the instruction (#1255). */}
+          {!isEditing && sampleStyleId ? (
+            <p className="hidden shrink-0 text-xs text-muted-foreground md:block short-h:hidden">
+              Sample script — make it yours, or hit Generate to see it come to
+              life.
+            </p>
+          ) : null}
+          {/* Grows with content above the editor floor until the card hits
+              max-h-full, then the editor scrolls. min-h-20/28 is the floor so
+              an empty composer cannot shrink to 0, and SSR matches the
+              hydrated empty height (#1255). */}
+          <div className="flex min-h-20 flex-1 flex-col md:min-h-28">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}
@@ -1499,7 +1421,7 @@ export const ScriptView: FC<{
                 if (canUndoEnhance) setEnhance('canUndoEnhance', false);
               }}
               maxLength={50000}
-              placeholder="A one-liner or website URL is all you need — click Enhance Script to do the rest. Or paste a full screenplay and generate directly."
+              placeholder={COMPOSER_SCRIPT_PLACEHOLDER}
               disabled={loading || isDerivedScript}
               showCharacterCount={false}
               mentionItems={mentionItems}
@@ -1513,25 +1435,7 @@ export const ScriptView: FC<{
         {/* Pinned between the scrolling script and the Generate footer (#1187):
             the style row and tiles must never scroll away — or half-clip —
             behind a long script. */}
-        <div className="shrink-0 flex flex-col gap-2 px-6 pb-3 sm:gap-3 sm:pb-6">
-          {/* Phones: Shuffle and Enhance share one pinned row right under the
-              script (the caption row and the style row's Enhance slot are md+). */}
-          <div className="flex items-center justify-end gap-2 md:hidden">
-            {!isEditing && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={loading || isEnhancing || isSubmitting}
-                onClick={requestShuffle}
-              >
-                <Shuffle className="size-3.5" />
-                Shuffle
-              </Button>
-            )}
-            {isMobile && enhanceControls}
-          </div>
+        <div className="shrink-0 flex flex-col gap-2 px-6 pb-3 sm:gap-3 sm:pb-6 short-h:gap-2 short-h:pb-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
@@ -1556,8 +1460,23 @@ export const ScriptView: FC<{
               onChange={handleStyleCategoryChange}
               disabled={loading || isLoadingStyles}
             />
-            <div className="ml-auto hidden md:flex items-center gap-1">
-              {!isMobile && enhanceControls}
+            {/* CSS-only placement so SSR and hydration match — no useIsMobile
+                gate (that hid Enhance until the client effect ran). */}
+            <div className="ml-auto flex items-center gap-1">
+              {!isEditing && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={loading || isEnhancing || isSubmitting}
+                  onClick={requestShuffle}
+                >
+                  <Shuffle className="size-3.5" />
+                  Shuffle
+                </Button>
+              )}
+              {enhanceControls}
             </div>
           </div>
           <StyleSelector
