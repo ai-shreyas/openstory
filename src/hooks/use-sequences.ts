@@ -213,6 +213,11 @@ export function useCreateSequence() {
           });
         });
     },
+    // A silent failure here is what produced 9 identical resubmissions in
+    // #1259 — always tell the user why nothing happened.
+    onError: (error) => {
+      toast.error(error.message || 'Generation failed to start.');
+    },
   });
 }
 
