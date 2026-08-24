@@ -1,6 +1,6 @@
 import type { ShotStaleness } from '@/hooks/use-shot-staleness';
 import { describe, expect, it } from 'vitest';
-import { describeCauses, describeLevel, shotsLabel } from './update-all-dialog';
+import { describeCauses, previewLevels, shotsLabel } from './update-all-dialog';
 
 const shot = (causes: string[]): ShotStaleness => ({
   thumbnail: 'stale',
@@ -38,7 +38,7 @@ describe('shotsLabel', () => {
   });
 });
 
-describe('describeLevel', () => {
+describe('previewLevels', () => {
   const numbers = new Map([
     ['a', 2],
     ['b', 3],
@@ -50,20 +50,16 @@ describe('describeLevel', () => {
     videoShotIds: [],
     musicPrompt: true,
     musicTrack: false,
-    costByDepth: { prompts: null, images: null, video: null, music: null },
+    costByLevel: { prompts: null, images: null, video: null, music: null },
   };
-  it('names each level concretely', () => {
-    expect(describeLevel('prompts', preview, numbers, false)).toBe(
-      'Image prompts for shots 2 & 3 · Motion prompts for shot 3'
-    );
-    expect(describeLevel('images', preview, numbers, false)).toBe(
-      '+ Images for shots 2 & 3'
-    );
-    expect(describeLevel('video', preview, numbers, false)).toBe(
-      '+ No videos affected'
-    );
-    expect(describeLevel('music', preview, numbers, false)).toBe(
-      '+ Music prompt'
-    );
+  it('lists only levels with work, concretely, in cascade order', () => {
+    expect(previewLevels(preview, numbers, false)).toEqual([
+      {
+        depth: 'prompts',
+        label: 'Image prompts for shots 2 & 3 · Motion prompts for shot 3',
+      },
+      { depth: 'images', label: 'Images for shots 2 & 3' },
+      { depth: 'music', label: 'Music prompt' },
+    ]);
   });
 });

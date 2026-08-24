@@ -27,10 +27,10 @@ export type UpdateStalePreview = {
   musicPrompt: boolean;
   musicTrack: boolean;
   /**
-   * Cumulative estimated cost at each depth (micros). Null = a component in
-   * that cascade has no pricing signal — never invent a number.
+   * Estimated cost of each level's OWN additions (micros). Null = no pricing
+   * signal for a component — never invent a number.
    */
-  costByDepth: Record<UpdateStaleDepth, Microdollars | null>;
+  costByLevel: Record<UpdateStaleDepth, Microdollars | null>;
 };
 
 /** Fallback clip length for video pricing when the plan carries none. */
@@ -90,10 +90,6 @@ export function buildUpdateStalePreview(
       )
     : ZERO_MICROS;
 
-  const atImages = addMaybe(promptsCost, imagesCost);
-  const atVideo = addMaybe(atImages, videosCost);
-  const atMusic = addMaybe(atVideo, musicCost);
-
   return {
     visualPromptShotIds: visual.map((t) => t.shotId),
     motionPromptShotIds: motion.map((t) => t.shotId),
@@ -101,11 +97,11 @@ export function buildUpdateStalePreview(
     videoShotIds: videos.map((t) => t.shotId),
     musicPrompt: music?.regenPrompt ?? false,
     musicTrack: music?.regenTrack ?? false,
-    costByDepth: {
+    costByLevel: {
       prompts: promptsCost,
-      images: atImages,
-      video: atVideo,
-      music: atMusic,
+      images: imagesCost,
+      video: videosCost,
+      music: musicCost,
     },
   };
 }

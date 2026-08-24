@@ -11,11 +11,15 @@ import {
 import { getUpdateStalePreviewFn } from '@/functions/shots';
 import type { ShotStaleness } from '@/hooks/use-shot-staleness';
 import { useShowCosts } from '@/hooks/use-show-costs';
-import { microsToDisplayUsd, type Microdollars } from '@/lib/billing/money';
+import {
+  addMicros,
+  microsToDisplayUsd,
+  ZERO_MICROS,
+  type Microdollars,
+} from '@/lib/billing/money';
 import type { UpdateStalePreview } from '@/lib/shots/update-stale-preview';
 import {
   UPDATE_STALE_DEPTH_LABELS,
-  UPDATE_STALE_DEPTHS,
   type UpdateStaleDepth,
 } from '@/lib/shots/update-stale-depth';
 import { cn } from '@/lib/utils';
@@ -63,51 +67,56 @@ export const shotsLabel = (
   return `shots ${numbers.slice(0, -1).join(', ')} & ${numbers[numbers.length - 1]}`;
 };
 
-/**
- * What each depth level actually does, from the dry-run preview — only the
- * level's own additions (levels are cumulative and read top-down).
- */
-export const describeLevel = (
-  depth: UpdateStaleDepth,
+/** Levels with something to do, in cascade order, with their own additions. */
+export const previewLevels = (
   preview: UpdateStalePreview,
   numberById: ReadonlyMap<string, number> | undefined,
   singleShotScope: boolean
-): string => {
+): Array<{ depth: UpdateStaleDepth; label: string }> => {
   const label = (ids: string[]) => shotsLabel(ids, numberById, singleShotScope);
-  switch (depth) {
-    case 'prompts': {
-      const parts: string[] = [];
-      if (preview.visualPromptShotIds.length > 0)
-        parts.push(`Image prompts for ${label(preview.visualPromptShotIds)}`);
-      if (preview.motionPromptShotIds.length > 0)
-        parts.push(`Motion prompts for ${label(preview.motionPromptShotIds)}`);
-      return parts.length > 0 ? parts.join(' · ') : 'No prompts out of date';
-    }
-    case 'images':
-      return preview.imageShotIds.length > 0
-        ? `+ Images for ${label(preview.imageShotIds)}`
-        : '+ No images affected';
-    case 'video':
-      return preview.videoShotIds.length > 0
-        ? `+ Videos for ${label(preview.videoShotIds)}`
-        : '+ No videos affected';
-    case 'music':
-      return preview.musicTrack
-        ? '+ Music prompt and track'
-        : preview.musicPrompt
-          ? '+ Music prompt'
-          : '+ No music changes';
-  }
+  const levels: Array<{ depth: UpdateStaleDepth; label: string }> = [];
+  const prompts: string[] = [];
+  if (preview.visualPromptShotIds.length > 0)
+    prompts.push(`Image prompts for ${label(preview.visualPromptShotIds)}`);
+  if (preview.motionPromptShotIds.length > 0)
+    prompts.push(`Motion prompts for ${label(preview.motionPromptShotIds)}`);
+  if (prompts.length > 0)
+    levels.push({ depth: 'prompts', label: prompts.join(' · ') });
+  if (preview.imageShotIds.length > 0)
+    levels.push({
+      depth: 'images',
+      label: `Images for ${label(preview.imageShotIds)}`,
+    });
+  if (preview.videoShotIds.length > 0)
+    levels.push({
+      depth: 'video',
+      label: `Videos for ${label(preview.videoShotIds)}`,
+    });
+  if (preview.musicTrack || preview.musicPrompt)
+    levels.push({
+      depth: 'music',
+      label: preview.musicTrack ? 'Music prompt and track' : 'Music prompt',
+    });
+  return levels;
 };
 
 const costLabel = (cost: Microdollars | null | undefined): string | null =>
   cost == null ? null : `~${microsToDisplayUsd(cost)}`;
 
+const RANK: Record<UpdateStaleDepth, number> = {
+  prompts: 0,
+  images: 1,
+  video: 2,
+  music: 3,
+};
+
 /**
- * "Update all" depth confirmation (#1085). Leads with WHAT changed, then the
- * computed cascade — which artifacts on which shots regenerate at each depth,
- * with the cumulative cost estimate — from a server dry-run of the same plan
- * the workflow freezes (#1194). Native radios for keyboard/AT semantics.
+ * "Update all" confirmation (#1085/#1194). Leads with WHAT changed, then the
+ * computed cascade from a server dry-run of the same plan the workflow
+ * freezes: one checkbox per level that has work, with its shots and cost.
+ * Levels cascade (images need prompts, videos need images), so ticking a
+ * level locks every shallower one on. Only the deepest tick is sent — the
+ * run's `depth`. Native inputs for keyboard/AT semantics.
  */
 export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
   open,
@@ -119,7 +128,7 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
 }) => {
   // 'images' is the middle-ground default — the closest match to what
   // "Update all" did before depths existed.
-  const [depth, setDepth] = useState<UpdateStaleDepth>('images');
+  const [depth, setDepth] = useState<UpdateStaleDepth | null>('images');
   const { showCosts } = useShowCosts();
   const singleShotScope = scope.shotId != null;
 
@@ -135,6 +144,36 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
     staleTime: 30_000,
   });
 
+  const levels = preview
+    ? previewLevels(preview, shotNumberById, singleShotScope)
+    : null;
+  // Snap the default to a level that exists: the deepest at or above it.
+  const available =
+    depth == null
+      ? []
+      : (levels?.filter((l) => RANK[l.depth] <= RANK[depth]) ?? []);
+  const selectedDepth = available[available.length - 1]?.depth ?? null;
+  const checked = (d: UpdateStaleDepth) =>
+    selectedDepth != null && RANK[d] <= RANK[selectedDepth];
+  const total = levels
+    ? levels
+        .filter((l) => checked(l.depth))
+        .reduce<Microdollars | null>((acc, l) => {
+          const c = preview?.costByLevel[l.depth] ?? null;
+          return acc == null || c == null ? null : addMicros(acc, c);
+        }, ZERO_MICROS)
+    : null;
+
+  const toggle = (d: UpdateStaleDepth, on: boolean) => {
+    if (on) {
+      setDepth(d);
+      return;
+    }
+    // Unticking a level drops it and everything deeper.
+    const shallower = levels?.filter((l) => RANK[l.depth] < RANK[d]) ?? [];
+    setDepth(shallower[shallower.length - 1]?.depth ?? null);
+  };
+
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -149,64 +188,73 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <fieldset className="flex flex-col gap-2">
-          <legend className="sr-only">Update depth</legend>
-          {UPDATE_STALE_DEPTHS.map((option) => {
-            const cost = showCosts
-              ? costLabel(preview?.costByDepth[option])
-              : null;
-            return (
-              <label
-                key={option}
-                htmlFor={`update-all-depth-${option}`}
-                className={cn(
-                  'flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors',
-                  'has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50',
-                  depth === option
-                    ? 'border-primary/40 bg-primary/5'
-                    : 'hover:bg-muted/50'
-                )}
-              >
-                <input
-                  id={`update-all-depth-${option}`}
-                  type="radio"
-                  name="update-all-depth"
-                  value={option}
-                  checked={depth === option}
-                  onChange={() => setDepth(option)}
-                  aria-label={UPDATE_STALE_DEPTH_LABELS[option]}
-                  className="mt-1 accent-primary"
-                />
-                <span className="flex min-w-0 grow flex-col gap-0.5">
-                  <span className="flex items-baseline justify-between gap-2">
-                    <span className="text-sm font-medium">
-                      {UPDATE_STALE_DEPTH_LABELS[option]}
+          <legend className="sr-only">What to regenerate</legend>
+          {levels == null ? (
+            <span className="text-xs text-muted-foreground">…</span>
+          ) : levels.length === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              Nothing to regenerate.
+            </span>
+          ) : (
+            levels.map((level, index) => {
+              const isChecked = checked(level.depth);
+              // Shallower levels are prerequisites of a deeper tick.
+              const locked =
+                selectedDepth != null &&
+                RANK[level.depth] < RANK[selectedDepth];
+              const cost = showCosts
+                ? costLabel(preview?.costByLevel[level.depth])
+                : null;
+              return (
+                <label
+                  key={level.depth}
+                  htmlFor={`update-all-level-${level.depth}`}
+                  className={cn(
+                    'flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors',
+                    'has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50',
+                    isChecked
+                      ? 'border-primary/40 bg-primary/5'
+                      : 'hover:bg-muted/50',
+                    locked && 'cursor-default'
+                  )}
+                >
+                  <input
+                    id={`update-all-level-${level.depth}`}
+                    type="checkbox"
+                    checked={isChecked}
+                    disabled={locked}
+                    onChange={(e) =>
+                      toggle(level.depth, e.currentTarget.checked)
+                    }
+                    aria-label={UPDATE_STALE_DEPTH_LABELS[level.depth]}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span className="flex min-w-0 grow items-baseline justify-between gap-2">
+                    <span className="text-sm">
+                      {index > 0 && (
+                        <span className="text-muted-foreground">+ </span>
+                      )}
+                      {level.label}
                     </span>
                     {cost && (
-                      <span className="text-xs tabular-nums text-muted-foreground">
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                         {cost}
                       </span>
                     )}
                   </span>
-                  <span className="text-xs text-muted-foreground">
-                    {preview
-                      ? describeLevel(
-                          option,
-                          preview,
-                          shotNumberById,
-                          singleShotScope
-                        )
-                      : '…'}
-                  </span>
-                </span>
-              </label>
-            );
-          })}
+                </label>
+              );
+            })
+          )}
         </fieldset>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={() => onConfirm(depth)}>
-            {showCosts && preview?.costByDepth[depth] != null
-              ? `Update · ~${microsToDisplayUsd(preview.costByDepth[depth])}`
+          <AlertDialogAction
+            disabled={selectedDepth == null}
+            onClick={() => selectedDepth && onConfirm(selectedDepth)}
+          >
+            {showCosts && selectedDepth != null && total != null
+              ? `Update · ~${microsToDisplayUsd(total)}`
               : 'Update'}
           </AlertDialogAction>
         </AlertDialogFooter>

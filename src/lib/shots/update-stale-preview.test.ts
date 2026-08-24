@@ -57,23 +57,24 @@ describe('buildUpdateStalePreview', () => {
     expect(preview.motionPromptShotIds).toEqual(['b']);
     expect(preview.imageShotIds).toEqual(['a']);
     expect(preview.videoShotIds).toEqual(['b']);
-    // 2 LLM calls at $0.02 → $0.04; + image $0.04; + video $0.50
-    expect(preview.costByDepth.prompts).toBe(40_000);
-    expect(preview.costByDepth.images).toBe(80_000);
-    expect(preview.costByDepth.video).toBe(580_000);
-    expect(preview.costByDepth.music).toBe(580_000);
+    // 2 LLM calls at $0.02; image $0.04; video $0.50; no music
+    expect(preview.costByLevel).toEqual({
+      prompts: 40_000,
+      images: 40_000,
+      video: 500_000,
+      music: 0,
+    });
   });
 
-  it('unknown pricing poisons that depth and deeper, never invents a number', () => {
+  it('unknown pricing yields null, never an invented number', () => {
     estimateImageCost.mockReturnValue(null);
     const preview = buildUpdateStalePreview(
       plan([target({ shotId: 'a', regenImage: true })]),
       {},
       null
     );
-    expect(preview.costByDepth.prompts).toBe(0);
-    expect(preview.costByDepth.images).toBeNull();
-    expect(preview.costByDepth.music).toBeNull();
+    expect(preview.costByLevel.prompts).toBe(0);
+    expect(preview.costByLevel.images).toBeNull();
   });
 
   it('prices music prompt and track', () => {
@@ -92,6 +93,6 @@ describe('buildUpdateStalePreview', () => {
     );
     expect(preview.musicPrompt).toBe(true);
     expect(preview.musicTrack).toBe(true);
-    expect(preview.costByDepth.music).toBe(120_000);
+    expect(preview.costByLevel.music).toBe(120_000);
   });
 });
