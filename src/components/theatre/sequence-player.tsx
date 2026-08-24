@@ -10,6 +10,7 @@
  */
 
 import { Button } from '@/components/ui/button';
+import { VideoPlayer } from '@/components/motion/video-player';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   getAspectRatioClassName,
@@ -191,15 +192,14 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
           getAspectRatioClassName(aspectRatio)
         )}
       >
-        {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- generated video, no captions exist */}
-        <video
+        {/* Same Video.js player + skin as the per-shot ScenePlayer, so the
+            theatre's cached mode is visually identical to every other player
+            in the app (#1253). */}
+        <VideoPlayer
           src={cachedVideoUrl}
-          poster={posterUrl ?? undefined}
-          controls
-          playsInline
-          preload="metadata"
-          className="absolute inset-0 h-full w-full object-contain"
-          aria-label="Sequence playback"
+          posterSrc={posterUrl}
+          aspectRatio={aspectRatio}
+          className="absolute inset-0 h-full max-h-none w-full"
         />
         <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
           {musicUrl && (

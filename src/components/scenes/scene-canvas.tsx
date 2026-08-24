@@ -7,12 +7,6 @@ import {
   type SequenceExportState,
 } from '@/components/theatre/use-sequence-export';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Tooltip,
@@ -31,11 +25,8 @@ import {
 } from '@/lib/scenes/scene-selection';
 import type { ShotView } from '@/lib/shots/shot-view';
 import type { Sequence } from '@/types/database';
-import { copyTextToClipboard } from '@/lib/utils/clipboard';
-import { Download, Film, Link, Loader2, Share2 } from 'lucide-react';
-import { usePostHog } from '@posthog/react';
-import { useCallback, useMemo } from 'react';
-import { toast } from 'sonner';
+import { Download, Film, Link, Loader2 } from 'lucide-react';
+import { useMemo } from 'react';
 import type { ExportProgress } from '@/lib/sequence-player/export';
 
 type SceneCanvasProps = {
@@ -89,33 +80,16 @@ function formatExportProgress(progress: ExportProgress | null): string {
   return `${label}…`;
 }
 
+/**
+ * Download + Share for the theatre. Both actions treat `sequence_exports` as
+ * a content-addressed cache of what the user is looking at: a cached MP4 of
+ * the current state is reused, otherwise a new export runs first (#1253).
+ */
 const TheatreShareOverlay: React.FC<{
-  sequence: Sequence;
   sequenceExport: SequenceExportState;
-}> = ({ sequence, sequenceExport }) => {
-  const posthog = usePostHog();
-  const shareUrl = sequenceExport.latestExportUrl;
-
-  const handleCopyShareUrl = useCallback(async () => {
-    if (!shareUrl) {
-      toast.error('Export an MP4 first to get a shareable URL.');
-      return;
-    }
-    try {
-      const absoluteUrl = new URL(shareUrl, window.location.origin).href;
-      if (!(await copyTextToClipboard(absoluteUrl))) {
-        toast.error('Failed to copy URL');
-        posthog.captureException(new Error('Clipboard write blocked'));
-        return;
-      }
-      toast.success('Video URL copied');
-      posthog.capture('video_url_copied', { sequence_id: sequence.id });
-    } catch (err) {
-      toast.error('Failed to copy URL');
-      posthog.captureException(err);
-    }
-  }, [shareUrl, sequence.id, posthog]);
-
+}> = ({ sequenceExport }) => {
+  const running = sequenceExport.isRunning;
+  const progressLabel = formatExportProgress(sequenceExport.progress);
   return (
     <>
       <Tooltip>
@@ -124,17 +98,13 @@ const TheatreShareOverlay: React.FC<{
             variant="ghost"
             size="icon"
             className="h-8 w-8 bg-black/50 text-white hover:bg-black/70"
-            aria-label={
-              sequenceExport.isRunning
-                ? formatExportProgress(sequenceExport.progress)
-                : 'Download MP4'
-            }
-            aria-busy={sequenceExport.isRunning}
-            // Stays enabled while running (download() no-ops) so the tooltip
+            aria-label={running ? progressLabel : 'Download MP4'}
+            aria-busy={running}
+            // Stays enabled while running (the actions no-op) so the tooltip
             // can show progress — disabled buttons emit no pointer events.
             onClick={sequenceExport.download}
           >
-            {sequenceExport.isRunning ? (
+            {running ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Download className="h-4 w-4" />
@@ -142,44 +112,38 @@ const TheatreShareOverlay: React.FC<{
           </Button>
         </TooltipTrigger>
         <TooltipContent>
-          {sequenceExport.isRunning
-            ? formatExportProgress(sequenceExport.progress)
+          {running
+            ? progressLabel
             : sequenceExport.freshExportUrl
               ? 'Download MP4'
               : 'Export and download MP4'}
         </TooltipContent>
       </Tooltip>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      <Tooltip>
+        <TooltipTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
             className="h-8 w-8 bg-black/50 text-white hover:bg-black/70"
-            aria-label="Share"
+            aria-label={running ? progressLabel : 'Copy video link'}
+            aria-busy={running}
+            onClick={sequenceExport.copyLink}
           >
-            <Share2 className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => void handleCopyShareUrl()}>
-            <Link className="h-4 w-4" />
-            Copy latest export URL
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={sequenceExport.start}
-            disabled={sequenceExport.isRunning}
-          >
-            {sequenceExport.isRunning ? (
+            {running ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Download className="h-4 w-4" />
+              <Link className="h-4 w-4" />
             )}
-            {sequenceExport.isRunning
-              ? formatExportProgress(sequenceExport.progress)
-              : 'Export as MP4'}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {running
+            ? progressLabel
+            : sequenceExport.freshExportUrl
+              ? 'Copy video link'
+              : 'Export and copy video link'}
+        </TooltipContent>
+      </Tooltip>
     </>
   );
 };
@@ -340,10 +304,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         }
         overlayActions={
           scope === 'sequence' ? (
-            <TheatreShareOverlay
-              sequence={sequence}
-              sequenceExport={sequenceExport}
-            />
+            <TheatreShareOverlay sequenceExport={sequenceExport} />
           ) : undefined
         }
       />
