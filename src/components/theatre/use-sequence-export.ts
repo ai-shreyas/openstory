@@ -6,8 +6,10 @@
  *   3. PUT the resulting Blob to the reserved URL.
  *   4. Commit via `commitSequenceExportFn` (writes a new `sequence_exports` row).
  *
- * Returns a `latestExport` URL so the consumer can immediately offer the
- * fresh download once it commits — no full re-fetch round-trip.
+ * Every commit records `sourceShotsHash` — a SHA-256 of the scene video URLs
+ * + the music choice — so the latest export doubles as a cache (#1253):
+ * `freshExportUrl` is set only when that hash matches the current inputs, and
+ * `download()` reuses it instead of re-stitching.
  */
 
 import {
@@ -16,6 +18,7 @@ import {
   requestSequenceExportUploadUrlFn,
 } from '@/functions/sequence-exports';
 import { useShotsBySequence } from '@/hooks/use-shots';
+import { sha256Hex } from '@/lib/compliance/hash';
 import { putToR2 } from '@/lib/utils/upload';
 import {
   exportSequence,
@@ -24,7 +27,7 @@ import {
 import type { Sequence } from '@/types/database';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePostHog } from '@posthog/react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 const sequenceExportKeys = {
@@ -39,19 +42,43 @@ export type SequenceExportState = {
   isRunning: boolean;
   progress: ExportProgress | null;
   latestExportUrl: string | null;
+  /** Latest export URL only when it was built from the current scenes + music choice. */
+  freshExportUrl: string | null;
   start: () => void;
+  /** Download the fresh export, or export first then download. */
+  download: () => void;
   abort: () => void;
 };
 
-export function useSequenceExport(sequence: Sequence): SequenceExportState {
+export function useSequenceExport(
+  sequence: Sequence | undefined
+): SequenceExportState {
   const posthog = usePostHog();
   const queryClient = useQueryClient();
-  const { data: shots } = useShotsBySequence(sequence.id);
+  const sequenceId = sequence?.id ?? '';
+  const { data: shots } = useShotsBySequence(sequence?.id);
 
   const { data: exports } = useQuery({
-    queryKey: sequenceExportKeys.list(sequence.id),
-    queryFn: () => listSequenceExportsFn({ data: { sequenceId: sequence.id } }),
+    queryKey: sequenceExportKeys.list(sequenceId),
+    queryFn: () => listSequenceExportsFn({ data: { sequenceId } }),
     staleTime: 5_000,
+    enabled: Boolean(sequence),
+  });
+
+  const inputsKey = useMemo(() => {
+    if (!sequence || !shots) return null;
+    const sceneUrls = shots.map((f) => f.video?.url ?? null);
+    if (sceneUrls.length === 0 || sceneUrls.some((u) => !u)) return null;
+    return JSON.stringify({
+      sceneUrls,
+      musicUrl: sequence.includeMusic ? (sequence.musicUrl ?? null) : null,
+    });
+  }, [sequence, shots]);
+  const { data: inputsHash } = useQuery({
+    queryKey: ['sequence-export-inputs-hash', inputsKey],
+    queryFn: () => sha256Hex(inputsKey ?? ''),
+    enabled: inputsKey !== null,
+    staleTime: Infinity,
   });
 
   const [isRunning, setIsRunning] = useState(false);
@@ -59,7 +86,14 @@ export function useSequenceExport(sequence: Sequence): SequenceExportState {
   const abortRef = useRef<AbortController | null>(null);
 
   const exportMutation = useMutation({
-    mutationFn: async (signal: AbortSignal) => {
+    mutationFn: async ({
+      signal,
+      downloadOnDone,
+    }: {
+      signal: AbortSignal;
+      downloadOnDone: boolean;
+    }) => {
+      if (!sequence) throw new Error('No sequence selected.');
       if (!shots || shots.length === 0) {
         throw new Error('This sequence has no shots yet.');
       }
@@ -118,29 +152,31 @@ export function useSequenceExport(sequence: Sequence): SequenceExportState {
       );
 
       setProgress({ phase: 'commit', completed: 0, total: 0 });
-      await commitSequenceExportFn({
+      const committed = await commitSequenceExportFn({
         data: {
           sequenceId: sequence.id,
           path: reservation.path,
           durationSeconds,
+          sourceShotsHash: inputsHash ?? null,
         },
       });
-      return { reEncoded };
+      return { reEncoded, url: committed.url, downloadOnDone };
     },
-    onSuccess: ({ reEncoded }) => {
+    onSuccess: ({ reEncoded, url, downloadOnDone }) => {
       toast.success('MP4 ready to download.');
       posthog.capture('sequence_export_completed', {
-        sequence_id: sequence.id,
+        sequence_id: sequenceId,
         re_encoded: reEncoded,
       });
       void queryClient.invalidateQueries({
-        queryKey: sequenceExportKeys.list(sequence.id),
+        queryKey: sequenceExportKeys.list(sequenceId),
       });
+      if (downloadOnDone) triggerDownload(url, sequence?.title);
     },
     onError: (error) => {
       if (abortRef.current?.signal.aborted) return;
       toast.error(toExportErrorMessage(error));
-      posthog.captureException(error, { sequence_id: sequence.id });
+      posthog.captureException(error, { sequence_id: sequenceId });
     },
     onSettled: () => {
       setIsRunning(false);
@@ -149,14 +185,33 @@ export function useSequenceExport(sequence: Sequence): SequenceExportState {
     },
   });
 
-  const start = useCallback(() => {
-    if (isRunning) return;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setIsRunning(true);
-    setProgress(null);
-    exportMutation.mutate(controller.signal);
-  }, [exportMutation, isRunning]);
+  const run = useCallback(
+    (downloadOnDone: boolean) => {
+      if (isRunning) return;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setIsRunning(true);
+      setProgress(null);
+      exportMutation.mutate({ signal: controller.signal, downloadOnDone });
+    },
+    [exportMutation, isRunning]
+  );
+  const start = useCallback(() => run(false), [run]);
+
+  const latest = exports?.[0] ?? null;
+  const freshExportUrl =
+    latest && inputsHash && latest.sourceShotsHash === inputsHash
+      ? latest.url
+      : null;
+
+  const download = useCallback(() => {
+    if (freshExportUrl) {
+      triggerDownload(freshExportUrl, sequence?.title);
+      posthog.capture('video_downloaded', { sequence_id: sequenceId });
+      return;
+    }
+    run(true);
+  }, [freshExportUrl, run, sequence?.title, sequenceId, posthog]);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
@@ -165,10 +220,21 @@ export function useSequenceExport(sequence: Sequence): SequenceExportState {
   return {
     isRunning,
     progress,
-    latestExportUrl: exports?.[0]?.url ?? null,
+    latestExportUrl: latest?.url ?? null,
+    freshExportUrl,
     start,
+    download,
     abort,
   };
+}
+
+function triggerDownload(url: string, title: string | null | undefined): void {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title || 'sequence'}_openstory.mp4`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 const MAX_EXPORT_ERROR_LENGTH = 500;

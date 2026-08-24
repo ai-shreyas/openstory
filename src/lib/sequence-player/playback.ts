@@ -56,6 +56,8 @@ export type SequencePlayerOptions = {
    * `setMusicEnabled` without re-preparing the engine (#834). Defaults to true.
    */
   musicEnabled?: boolean;
+  /** Scene-open progress during `prepare()` — drives the loading label (#1253). */
+  onLoadProgress?: (loadedScenes: number, totalScenes: number) => void;
   onTimeUpdate?: (time: number) => void;
   onEnded?: () => void;
   onError?: (error: Error) => void;
@@ -101,6 +103,11 @@ export class SequencePlayerEngine {
   private musicTrack: InputAudioTrack | null = null;
   private audioSink: AudioBufferSink | null = null;
   private dialogueClips: DialogueClip[] = [];
+  /**
+   * Dialogue decoding runs off the critical path so the first frame + controls
+   * show as soon as the scene headers are open (#1253). `play()` awaits it.
+   */
+  private dialogueReady: Promise<void> = Promise.resolve();
 
   private meta: SequencePlayerMeta | null = null;
 
@@ -147,7 +154,7 @@ export class SequencePlayerEngine {
    * an "Export to download" fallback CTA.
    */
   async prepare(): Promise<SequencePlayerMeta> {
-    const videoMeta = await this.videoSource.prepare();
+    const videoMeta = await this.videoSource.prepare(this.opts.onLoadProgress);
 
     let musicSampleRate: number | undefined;
     let hasAudio = false;
@@ -181,29 +188,8 @@ export class SequencePlayerEngine {
       this.audioSink = new AudioBufferSink(this.musicTrack);
     }
 
-    // Per-scene dialogue/VO lives in each scene video's embedded audio track.
-    // Decode upfront so play()/seek() can schedule against the AudioContext
-    // clock without async IO in the hot path. A single failing track shouldn't
-    // kill the whole player — log and stay silent for that scene.
-    const dialogueClips: DialogueClip[] = [];
-    for (const {
-      sceneIndex,
-      sceneOffsetSeconds,
-      track,
-    } of this.videoSource.getSceneAudioTracks()) {
-      try {
-        const buffer = await decodeAudioTrack(track);
-        if (!buffer) continue;
-        dialogueClips.push({ buffer, sceneOffsetSeconds });
-      } catch (err) {
-        logger.warn(
-          `SequencePlayerEngine: failed to decode embedded audio for scene ${sceneIndex}`,
-          { err }
-        );
-      }
-    }
-    this.dialogueClips = dialogueClips;
-    if (dialogueClips.length > 0) hasAudio = true;
+    const sceneAudioTracks = this.videoSource.getSceneAudioTracks();
+    if (sceneAudioTracks.length > 0) hasAudio = true;
 
     this.opts.canvas.width = videoMeta.displayWidth;
     this.opts.canvas.height = videoMeta.displayHeight;
@@ -220,6 +206,33 @@ export class SequencePlayerEngine {
 
     await this.primeFirstFrame();
     this.startRenderLoop();
+
+    // Per-scene dialogue/VO lives in each scene video's embedded audio track.
+    // Decode in the background (after the first frame is up) so play()/seek()
+    // can schedule against the AudioContext clock without async IO in the hot
+    // path. A single failing track shouldn't kill the whole player — log and
+    // stay silent for that scene.
+    this.dialogueReady = (async () => {
+      const dialogueClips: DialogueClip[] = [];
+      for (const {
+        sceneIndex,
+        sceneOffsetSeconds,
+        track,
+      } of sceneAudioTracks) {
+        if (this.disposed) return;
+        try {
+          const buffer = await decodeAudioTrack(track);
+          if (!buffer) continue;
+          dialogueClips.push({ buffer, sceneOffsetSeconds });
+        } catch (err) {
+          logger.warn(
+            `SequencePlayerEngine: failed to decode embedded audio for scene ${sceneIndex}`,
+            { err }
+          );
+        }
+      }
+      this.dialogueClips = dialogueClips;
+    })();
 
     return this.meta;
   }
@@ -256,6 +269,9 @@ export class SequencePlayerEngine {
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
     }
+    await this.dialogueReady;
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- both can flip during the await
+    if (this.playing || this.disposed) return;
 
     if (this.playbackTimeAtStart >= this.meta.durationSeconds) {
       // Snap back to the start if we ran off the end
