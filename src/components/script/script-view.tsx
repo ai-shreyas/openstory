@@ -902,6 +902,18 @@ export const ScriptView: FC<{
       event.preventDefault();
     }
 
+    // ⌘+Enter requestSubmit()s even while Generate is disabled. Empty is
+    // now the first-run default (#1255) — don't open login / the enhance
+    // nudge / a generate with no script.
+    const scriptText = (script ?? baseScript ?? '').trim();
+    if (
+      !scriptText ||
+      !(styleId || sequence?.styleId) ||
+      analysisModels.length === 0
+    ) {
+      return;
+    }
+
     // Anonymous visitors can compose a draft, but generating prompts a login.
     // The draft is persisted to localStorage, so it's restored after sign-in.
     // Remember the click too, so the resume effect below continues this exact
@@ -927,7 +939,6 @@ export const ScriptView: FC<{
       posthog.capture('sample_script_generated', { style_id: sampleStyleId });
     }
 
-    const scriptText = script ?? baseScript ?? '';
     if (!canUndoEnhance && scriptText.length < SCRIPT_SHORT_THRESHOLD) {
       setEnhance('showEnhanceNudge', true);
       return;
@@ -1052,8 +1063,8 @@ export const ScriptView: FC<{
   }, [isEnhancing]);
 
   const isFormValid =
-    (script || baseScript) &&
-    (styleId || sequence?.styleId) &&
+    Boolean((script ?? baseScript ?? '').trim()) &&
+    Boolean(styleId || sequence?.styleId) &&
     analysisModels.length > 0;
 
   const isSubmitting = createSequenceMutation.isPending;

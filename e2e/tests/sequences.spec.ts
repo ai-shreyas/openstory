@@ -97,6 +97,10 @@ test.describe('Sequences', () => {
       exact: true,
     });
     await expect(generate).toBeDisabled();
+    // ⌘+Enter requestSubmit()s even while Generate is disabled.
+    await page.locator('[data-slot="markdown-editor"] .ProseMirror').click();
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
 
     await fillScriptEditor(page, 'A cat walks into a diner at dawn.');
     await expect(automatic).toHaveAttribute('aria-pressed', 'true');
