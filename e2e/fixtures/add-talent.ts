@@ -5,7 +5,11 @@
 import { expect, type Locator, type Page } from 'playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { waitForLibraryPageLoad, waitForUploadComplete } from './test-utils';
+import {
+  fillScriptEditor,
+  waitForLibraryPageLoad,
+  waitForUploadComplete,
+} from './test-utils';
 
 export const TEST_IMAGE_JPEG = readFileSync(
   path.join(import.meta.dirname, 'test-image.jpg')
@@ -33,21 +37,15 @@ export async function openAddTalentFromSequence(page: Page): Promise<{
   dialog: Locator;
 }> {
   await page.goto('/sequences/new');
-  // Style grid can SSR before React hydrates. Clicking a style (same gate as
-  // sequence-flow.spec) attaches handlers and seeds script + styleId so
-  // Generate enables. Waiting on Generate alone flakes when the sample
-  // has not yet landed in composer state.
-  const styleGrid = page.getByRole('grid', { name: 'Style selection' });
-  await expect(styleGrid).toBeVisible({ timeout: 15_000 });
-  await styleGrid
-    .getByRole('button', { name: /^Select .+ style$/ })
-    .first()
-    .click();
-  await expect(
-    page.getByRole('button', { name: 'Generate', exact: true })
-  ).toBeEnabled({
-    timeout: 15_000,
-  });
+  // TipTap only mounts after hydration. Filling a short script is the same
+  // live-state gate sequence-flow.spec uses — Generate-enabled is the wrong
+  // proxy here. Sample seeding on signed-in `/sequences/new` is racy (styles
+  // are not SSR-prefetched), and a tile click does not write a script unless
+  // the sample is already attached, so Generate can stay disabled forever.
+  await fillScriptEditor(
+    page,
+    'INT. STUDIO - DAY\n\nA person looks at the camera.'
+  );
   await page.locator('main').getByRole('button', { name: 'Talent' }).click();
   // DialogTitle is not always the accessible name; match on the heading copy.
   const picker = page
