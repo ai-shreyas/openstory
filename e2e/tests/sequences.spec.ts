@@ -7,7 +7,7 @@
  */
 
 import { test, expect } from 'playwright/test';
-import { waitForScriptEditor } from '../fixtures/test-utils';
+import { fillScriptEditor, waitForScriptEditor } from '../fixtures/test-utils';
 
 test.describe('Sequences', () => {
   test('can access sequences list page', async ({ page }) => {
@@ -68,22 +68,60 @@ test.describe('Sequences', () => {
     page,
   }) => {
     await page.goto('/');
+    await page.evaluate(() =>
+      localStorage.removeItem('openstory:sequence-draft:v1')
+    );
+    await page.reload();
+    await waitForScriptEditor(page);
     await expect(
       page.getByRole('button', { name: 'Style category: Film & Cinematic' })
     ).toBeVisible({ timeout: 15_000 });
-    // #1255: empty editor + Automatic, so the placeholder is visible and
-    // Action is on the strip but not pre-selected.
+    // Hydrated empty state — not just first-paint placeholder (the old
+    // sample seed ran after styles/draft settled).
+    await expect(page.locator('[data-slot="markdown-editor"]')).toHaveAttribute(
+      'data-markdown',
+      ''
+    );
     await expect(
       page.getByText('Paste a screenplay, or a one-liner we can expand.')
     ).toBeVisible();
+    const automatic = page.getByRole('button', {
+      name: 'Automatic style: derive a style from the script',
+    });
+    await expect(automatic).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      page.getByRole('button', { name: 'Select Action style' })
+    ).toBeVisible();
+    const generate = page.getByRole('button', {
+      name: 'Generate',
+      exact: true,
+    });
+    await expect(generate).toBeDisabled();
+
+    await fillScriptEditor(page, 'A cat walks into a diner at dawn.');
+    await expect(automatic).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      page.getByRole('button', { name: 'Select Action style' })
+    ).toBeVisible();
+    await expect(generate).toBeEnabled();
+  });
+
+  test('Try-this-style URL seeds the style sample, not Automatic', async ({
+    page,
+  }) => {
+    await page.goto('/?style=product-ad');
+    await waitForScriptEditor(page);
+    await expect(
+      page.getByRole('button', { name: 'View Product Ad details' })
+    ).toBeVisible({ timeout: 15_000 });
     await expect(
       page.getByRole('button', {
         name: 'Automatic style: derive a style from the script',
       })
-    ).toHaveAttribute('aria-pressed', 'true');
+    ).toHaveAttribute('aria-pressed', 'false');
     await expect(
-      page.getByRole('button', { name: 'Select Action style' })
-    ).toBeVisible();
+      page.locator('[data-slot="markdown-editor"]')
+    ).not.toHaveAttribute('data-markdown', '');
   });
 
   test('composer style row defaults to cinematic and can switch family', async ({
@@ -100,6 +138,11 @@ test.describe('Sequences', () => {
     await expect(
       page.getByRole('button', { name: 'View Product Ad details' })
     ).toBeVisible();
+    await expect(
+      page.getByRole('button', {
+        name: 'Automatic style: derive a style from the script',
+      })
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('signed-in user can access /sequences/new', async ({ page }) => {

@@ -23,6 +23,6 @@ describe('SITE_CONFIG messaging (#1255)', () => {
   it('puts the same pitch in llms.txt', () => {
     const text = buildLlmsTxt();
     expect(text).toContain(SITE_CONFIG.description);
-    expect(text).toMatch(/iterate until you nail it/i);
+    expect(text).toMatch(/multi-scene film with consistent characters/i);
   });
 });

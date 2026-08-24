@@ -212,10 +212,10 @@ export function NewSequencePage({
   // Copy mode MUST wait for the source sequence before mounting the composer:
   // ScriptView seeds script, style, aspect ratio and models in `useState`
   // initialisers, and nothing re-syncs them afterwards. Mounted early it would
-  // latch onto the defaults — blank script, first style in the list — and still
-  // offer "Generate Copy", producing a copy of nothing. Navigating from the
-  // sequence hides this (its detail query is already cached); a direct link or
-  // a reload does not.
+  // latch onto create defaults — empty script, Automatic — and still offer
+  // "Generate Copy", producing a copy of nothing. Navigating from the sequence
+  // hides this (its detail query is already cached); a direct link or a reload
+  // does not.
   if (from && !sourceSequence) {
     return (
       <div className="h-full">

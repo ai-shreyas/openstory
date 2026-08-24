@@ -470,9 +470,8 @@ export const ScriptView: FC<{
     handleTrySample(tryStyleId);
   };
 
-  // Bare create defaults to Automatic (script-derived), not the first
-  // catalogue tile (Action). Generate still has a style; the Action sample
-  // no longer hides the placeholder (#1255).
+  // Backstop: if create mode ever has no pick, land on Automatic rather than
+  // the first catalogue tile (Action). Initial state already sets this.
   useEffect(() => {
     if (isEditing || styleId || sequence?.styleId) return;
     setStyleId(AUTO_STYLE_ID);
@@ -553,8 +552,7 @@ export const ScriptView: FC<{
         script: draft.script,
         styleId: draft.styleId || s.styleId,
       }));
-      // The restored draft is the user's own text — drop any leftover
-      // sample state (a Shuffle / Try from before the reload).
+      // Restored text is the user's own work, not a sample.
       setSampleStyleId(null);
       setSelections((s) => ({
         talentIds:
@@ -622,9 +620,9 @@ export const ScriptView: FC<{
   }, [isEditing, settingsLoaded, genSettings, saveSettings]);
 
   // Persist draft to localStorage when creating new sequences. An untouched
-  // sample script is not the user's work — persist it as empty so a reload
-  // (or the sign-in round-trip) re-seeds a fresh sample instead of restoring
-  // the sample as a "draft".
+  // sample (Shuffle / Try) is not the user's work — persist it as empty so a
+  // reload or sign-in restores the empty composer (placeholder + Automatic)
+  // instead of treating the sample as a draft.
   useEffect(() => {
     if (!isEditing && draftLoaded) {
       saveDraft({
