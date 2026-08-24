@@ -146,8 +146,8 @@ export async function runOneShotCreate(
     resolveTalentIds(
       {
         talent: ctx.scopedDb.talent,
-        createTalent: async (item) =>
-          createLibraryTalent(
+        createTalent: async (item) => {
+          const { talent } = await createLibraryTalent(
             {
               name: item.name,
               description: item.description,
@@ -160,7 +160,9 @@ export async function runOneShotCreate(
               portraitAttestation: item.portraitAttestation,
             },
             ctx
-          ),
+          );
+          return talent;
+        },
       },
       input.characters
     ),

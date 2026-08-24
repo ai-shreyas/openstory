@@ -111,8 +111,9 @@ IDs or run liveness checks.
    `account_terminated`, recorded in `enforcement_actions` with actor, reason,
    optional expiry, and revocation.
 5. **Enforce** — the gate in `triggerWorkflow` blocks restricted accounts from
-   starting durable work. Portrait uploads require a server-recorded likeness
-   warrant (`requireUploadAttestation`), not only the dialog checkbox.
+   starting durable work. Talent uploads require a server-recorded warrant
+   (`requireUploadAttestation`) — portrait + basis for humans, asset statement
+   for animated/other — not only the dialog checkbox.
 6. **Notify and appeal** — `ComplianceRestrictionBanner` shows the restriction
    notice and links to `/report`. If `ABUSE_REPORT_NOTIFY_EMAIL` is set, intake
    emails the operator (and fails the request if the send fails). A successful

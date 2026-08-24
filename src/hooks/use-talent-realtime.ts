@@ -203,11 +203,17 @@ export function useTalentSheetRealtime(talentId?: string) {
     []
   );
 
+  const stopGenerating = useCallback((message?: string) => {
+    setIsGenerating(false);
+    if (message) setError(message);
+  }, []);
+
   return {
     isGenerating,
     phase,
     error,
     connectionStatus: status,
     startGenerating,
+    stopGenerating,
   };
 }

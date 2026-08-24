@@ -163,7 +163,7 @@ export function useUploadTalentMedia() {
       onProgress?: (percent: number) => void;
       portraitAttestation?: {
         statementVersion: string;
-        authorizationBasis: string;
+        authorizationBasis?: string;
       };
     }) => {
       const presign = await presignTalentUploadFn({
@@ -265,6 +265,11 @@ export function useGenerateTalentSheet() {
       // Optimistically update the query - the realtime hook will handle the actual update
       void queryClient.invalidateQueries({
         queryKey: talentKeys.detail(variables.talentId),
+      });
+    },
+    onError: (error) => {
+      toast.error('Could not start sheet generation', {
+        description: error instanceof Error ? error.message : 'Unknown error',
       });
     },
   });

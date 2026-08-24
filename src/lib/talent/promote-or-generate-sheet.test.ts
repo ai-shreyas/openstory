@@ -191,4 +191,28 @@ describe('maybePromoteOrGenerateSheet', () => {
     });
     expect(mockTriggerWorkflow).toHaveBeenCalled();
   });
+
+  it('emits failed and throws when triggerWorkflow throws', async () => {
+    mockTriggerWorkflow.mockRejectedValueOnce(new Error('no binding'));
+    await expect(
+      maybePromoteOrGenerateSheet({
+        scopedDb: scopedDb(talentRow({ sheets: [] })),
+        userId: 'u1',
+        teamId: TEAM,
+        talentId: TALENT_ID,
+        imageUrl: PHOTO_URL,
+      })
+    ).rejects.toThrow('no binding');
+    expect(mockEmit).toHaveBeenCalledWith(
+      'talent.sheet:progress',
+      expect.objectContaining({
+        status: 'failed',
+        error: 'no binding',
+      })
+    );
+    expect(mockEmit).not.toHaveBeenCalledWith(
+      'talent.sheet:progress',
+      expect.objectContaining({ status: 'generating' })
+    );
+  });
 });

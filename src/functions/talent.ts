@@ -8,9 +8,9 @@ import {
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
 import {
-  portraitAttestationSchema,
   recordPortraitAttestation,
   requireUploadAttestation,
+  uploadAttestationSchema,
 } from '@/lib/compliance/likeness-upload';
 import { getRequest } from '@tanstack/react-start/server';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -25,16 +25,14 @@ import {
   getExtensionFromUrl,
   getMimeTypeFromExtension,
 } from '@/lib/utils/file';
-import { triggerWorkflow } from '@/lib/workflow/client';
-import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { createLibraryTalent } from '@/lib/talent/create-library-talent';
 import { analyzeTalentMediaForTeam } from '@/lib/talent/analyze-talent-media';
+import { enqueueLibraryTalentSheet } from '@/lib/talent/enqueue-library-talent-sheet';
 import { maybePromoteOrGenerateSheet } from '@/lib/talent/promote-or-generate-sheet';
 import { isTeamTalentStoredUrl } from '@/lib/storage/copy-stored-image';
-import { getTalentChannel } from '@/lib/realtime';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
@@ -314,7 +312,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         mediaId: ulidSchema,
         publicUrl: mediaUrlSchema,
         path: z.string().min(1),
-        portraitAttestation: portraitAttestationSchema.optional(),
+        portraitAttestation: uploadAttestationSchema.optional(),
       })
     )
   )
@@ -323,8 +321,15 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       throw new Error('Invalid storage path');
     }
 
+    const talentRecord = await context.scopedDb.talent.getById(data.talentId);
+    if (!talentRecord || !isTeamWritableTalent(talentRecord, context.teamId)) {
+      throw new Error(
+        'Talent not found or you do not have permission to modify it'
+      );
+    }
+
     const attestation = requireUploadAttestation({
-      depictsRealPerson: true,
+      depictsRealPerson: talentRecord.isHuman === true,
       attestation: data.portraitAttestation,
     });
     const request = getRequest();
@@ -336,6 +341,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         ipAddress: request.headers.get('cf-connecting-ip'),
         userAgent: request.headers.get('user-agent'),
       },
+      depictsRealPerson: talentRecord.isHuman === true,
     });
 
     const storedUrl = `/r2/${data.path}`;
@@ -399,19 +405,11 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
     workflowInput.snapshotInputHash =
       await computeLibraryTalentSheetHashFromDto(workflowInput);
 
-    await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
+    const runId = await enqueueLibraryTalentSheet({
       talentId: talentRecord.id,
-      status: 'generating',
+      workflowInput,
       activity: 'sheet',
     });
-
-    const runId = await triggerWorkflow(
-      '/library-talent-sheet',
-      workflowInput,
-      {
-        label: buildWorkflowLabel(talentRecord.id),
-      }
-    );
     return { runId };
   });
 

@@ -34,6 +34,7 @@ type SheetDetectResult = {
   url: string;
   isSheet: boolean;
   subjectKind: TalentSubjectKind;
+  classified: boolean;
 };
 
 type AddTalentDialogProps = {
@@ -59,9 +60,9 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
   const [subjectKind, setSubjectKind] = useState<TalentSubjectKind | null>(
     null
   );
-  // Portrait-rights attestation (#1180). Required whenever reference media is
-  // attached, because that is when a real person's likeness can enter the
-  // library — the same condition that sets `isHuman` below.
+  // Attestation is required whenever reference media is attached. Human →
+  // portrait statement + basis; animated/other → asset statement. `isHuman`
+  // is `subjectKind === 'human'`, not “has uploads”.
   const [attested, setAttested] = useState(false);
   const [authorizationBasis, setAuthorizationBasis] = useState('');
 
@@ -108,9 +109,18 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
   const queueSheetDetect = (file: File, url: string) => {
     const key = getFileKey(file);
     setCheckingFileKeys((prev) => new Set(prev).add(key));
-    const job = detectSheet
+    let job!: Promise<SheetDetectResult>;
+    job = detectSheet
       .mutateAsync({ imageUrls: [url], filenames: [file.name] })
       .then((result) => {
+        if (detectJobsRef.current.get(key) !== job) {
+          return {
+            url,
+            isSheet: false,
+            subjectKind: 'human' as const,
+            classified: false,
+          };
+        }
         const kind = result.subjectKind;
         if (!subjectKindLockedRef.current) {
           setSubjectKind((prev) =>
@@ -121,15 +131,37 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
           setSheetFileKeys((prev) => new Set(prev).add(key));
           toast.success('Character sheet detected');
         }
-        return { url, isSheet: result.isCharacterSheet, subjectKind: kind };
+        return {
+          url,
+          isSheet: result.isCharacterSheet,
+          subjectKind: kind,
+          classified: true,
+        };
       })
       .catch(() => {
-        if (!subjectKindLockedRef.current) {
-          setSubjectKind((prev) => prev ?? 'other');
+        if (detectJobsRef.current.get(key) !== job) {
+          return {
+            url,
+            isSheet: false,
+            subjectKind: 'human' as const,
+            classified: false,
+          };
         }
-        return { url, isSheet: false, subjectKind: 'other' as const };
+        toast.warning(
+          'Could not tell if this is a character sheet. We’ll generate one.'
+        );
+        if (!subjectKindLockedRef.current) {
+          setSubjectKind('human');
+        }
+        return {
+          url,
+          isSheet: false,
+          subjectKind: 'human' as const,
+          classified: false,
+        };
       })
       .finally(() => {
+        if (detectJobsRef.current.get(key) !== job) return;
         setCheckingFileKeys((prev) => {
           const next = new Set(prev);
           next.delete(key);
@@ -181,6 +213,7 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
       .filter((result) => result.isSheet)
       .map((result) => result.url)
       .filter((url) => uploadedUrls.includes(url));
+    const classifiedAll = detected.every((result) => result.classified);
 
     const kind =
       subjectKind ??
@@ -216,14 +249,16 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
 
     setCreatePhase('creating');
     try {
-      const talent = await createTalent.mutateAsync({
+      const { talent, sheetWorkflowRunId } = await createTalent.mutateAsync({
         name: name.trim(),
         description: description.trim() || undefined,
         isHuman: depictsRealPerson,
         referenceImageUrls: uploadedUrls,
-        // Always send an array after client classify so create does not wait
-        // on a second vision call.
-        characterSheetImageUrls: sheetUrlList,
+        // Send an array after a successful client classify so create does not
+        // re-classify every photo. Omit when classify failed so the server
+        // runs vision. If a sheet URL is present, create still runs vision
+        // once for sheet metadata.
+        characterSheetImageUrls: classifiedAll ? sheetUrlList : undefined,
         portraitAttestation:
           uploadedUrls.length > 0
             ? {
@@ -236,11 +271,16 @@ export const AddTalentDialog: React.FC<AddTalentDialogProps> = ({
       });
       if (gen !== submitGenRef.current) return;
       onCreated?.(talent);
-      toast.success(
-        sheetUrlList.length > 0
-          ? `Talent added. ${sheetProgressCopy('portrait', 'long')}`
-          : `Talent added. ${sheetProgressCopy('sheet', 'long')}`
-      );
+      if (sheetWorkflowRunId) {
+        toast.success(
+          sheetUrlList.length > 0
+            ? `Talent added. ${sheetProgressCopy('portrait', 'long')}`
+            : `Talent added. ${sheetProgressCopy('sheet', 'long')}`
+        );
+      } else {
+        toast.success('Talent added');
+        toast.error('Could not start talent sheet generation');
+      }
       closeAndReset();
     } catch (error) {
       if (gen !== submitGenRef.current) return;

@@ -8,15 +8,13 @@ import type { CharacterBibleEntry } from '@/lib/ai/scene-analysis.schema';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { getLogger } from '@/lib/observability/logger';
-import { getTalentChannel } from '@/lib/realtime';
-import { triggerWorkflow } from '@/lib/workflow/client';
-import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import {
   analyzeTalentMediaForTeam,
   sheetMetadataFromAnalysis,
 } from './analyze-talent-media';
+import { enqueueLibraryTalentSheet } from './enqueue-library-talent-sheet';
 import {
   libraryTalentGenerateDedupId,
   libraryTalentUploadDedupId,
@@ -87,14 +85,10 @@ export async function maybePromoteOrGenerateSheet(
   workflowInput.snapshotInputHash =
     await computeLibraryTalentSheetHashFromDto(workflowInput);
 
-  await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
+  await enqueueLibraryTalentSheet({
     talentId: talentRecord.id,
-    status: 'generating',
+    workflowInput,
     activity: uploadedSheetUrl ? 'portrait' : 'sheet',
-  });
-
-  await triggerWorkflow('/library-talent-sheet', workflowInput, {
-    label: buildWorkflowLabel(talentRecord.id),
     deduplicationId: uploadedSheetUrl
       ? libraryTalentUploadDedupId(talentRecord.id, uploadedSheetUrl)
       : libraryTalentGenerateDedupId(talentRecord.id),

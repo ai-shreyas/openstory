@@ -104,9 +104,15 @@ beforeEach(() => {
 
 describe('createLibraryTalent', () => {
   it('triggers sheet generation with no uploadedSheetUrl for name-only talent', async () => {
-    await createLibraryTalent({ name: 'Sam' }, makeCtx());
+    const result = await createLibraryTalent({ name: 'Sam' }, makeCtx());
 
+    expect(result.sheetWorkflowRunId).toBe('run-1');
+    expect(result.talent.id).toBe('tal-1');
     expect(mockTriggerWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockEmit).toHaveBeenCalledWith(
+      'talent.sheet:progress',
+      expect.objectContaining({ status: 'generating', activity: 'sheet' })
+    );
     const { path, payload, options } = lastTrigger();
     expect(path).toBe('/library-talent-sheet');
     expect(payload.uploadedSheetUrl).toBeUndefined();
@@ -134,6 +140,46 @@ describe('createLibraryTalent', () => {
 
     expect(mockAnalyze).not.toHaveBeenCalled();
     expect(lastTrigger().payload.uploadedSheetUrl).toBeUndefined();
+  });
+
+  it('maps client-asserted sheet temp URLs onto the permanent key', async () => {
+    await createLibraryTalent(
+      {
+        name: 'Sam',
+        isHuman: true,
+        referenceImageUrls: ['/r2/talent/team-1/temp/a.png'],
+        characterSheetImageUrls: ['/r2/talent/team-1/temp/a.png'],
+        portraitAttestation: {
+          statementVersion: 'v1',
+          authorizationBasis: 'self',
+        },
+      },
+      makeCtx()
+    );
+
+    const { payload } = lastTrigger();
+    expect(payload.sheetName).toBe('Uploaded Sheet');
+    expect(payload.uploadedSheetUrl).toMatch(/^\/r2\/talent\/team-1\/tal-1\//);
+    expect(payload.uploadedSheetUrl).not.toBe('/r2/talent/team-1/temp/a.png');
+  });
+
+  it('ignores characterSheetImageUrls that were not in this upload', async () => {
+    await createLibraryTalent(
+      {
+        name: 'Sam',
+        isHuman: true,
+        referenceImageUrls: ['/r2/talent/team-1/temp/a.png'],
+        characterSheetImageUrls: ['/r2/talent/other-team/x.png'],
+        portraitAttestation: {
+          statementVersion: 'v1',
+          authorizationBasis: 'self',
+        },
+      },
+      makeCtx()
+    );
+
+    expect(lastTrigger().payload.uploadedSheetUrl).toBeUndefined();
+    expect(lastTrigger().payload.sheetName).toBe('Default Sheet');
   });
 
   it('classifies when characterSheetImageUrls is omitted and promotes a sheet', async () => {
@@ -191,10 +237,16 @@ describe('createLibraryTalent', () => {
 
   it('emits failed when the workflow trigger throws', async () => {
     mockTriggerWorkflow.mockRejectedValueOnce(new Error('no binding'));
-    await createLibraryTalent({ name: 'Sam' }, makeCtx());
+    const result = await createLibraryTalent({ name: 'Sam' }, makeCtx());
+    expect(result.sheetWorkflowRunId).toBeNull();
+    expect(result.talent.id).toBe('tal-1');
     expect(mockEmit).toHaveBeenCalledWith(
       'talent.sheet:progress',
       expect.objectContaining({ status: 'failed' })
+    );
+    expect(mockEmit).not.toHaveBeenCalledWith(
+      'talent.sheet:progress',
+      expect.objectContaining({ status: 'generating' })
     );
   });
 

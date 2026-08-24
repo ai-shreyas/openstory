@@ -4,7 +4,7 @@ import { routeParams } from '@/components/layout/breadcrumbs';
 import { EditTalentDialog } from '@/components/talent-library/edit-talent-dialog';
 import { PortraitAttestationFields } from '@/components/talent-library/portrait-attestation-fields';
 import { TalentMediaUpload } from '@/components/talent-library/talent-media-upload';
-import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
+import { statementFor } from '@/lib/compliance/attestations';
 import { PageContainer } from '@/components/layout/page-container';
 import { getCurrentUserProfileFn } from '@/functions/user';
 import { PageDescription } from '@/components/typography/page-description';
@@ -72,7 +72,6 @@ function TalentDetailPage() {
   const [dropFiles, setDropFiles] = useState<File[]>([]);
   const [attested, setAttested] = useState(false);
   const [authorizationBasis, setAuthorizationBasis] = useState('');
-  const canUpload = attested && authorizationBasis.trim().length > 0;
 
   const canManageTalent = Boolean(
     isAuthenticated &&
@@ -87,12 +86,22 @@ function TalentDetailPage() {
     phase: generatingPhase,
     error: sheetError,
     startGenerating,
+    stopGenerating,
   } = useTalentSheetRealtime(canManageTalent ? id : undefined);
 
   const handleGenerateSheet = () => {
     if (!talent) return;
-    startGenerating(); // Show generating state immediately
-    generateSheet.mutate({ talentId: talent.id });
+    startGenerating();
+    generateSheet.mutate(
+      { talentId: talent.id },
+      {
+        onError: (error) => {
+          stopGenerating(
+            error instanceof Error ? error.message : 'Sheet generation failed'
+          );
+        },
+      }
+    );
   };
 
   const handleDelete = () => {
@@ -141,6 +150,14 @@ function TalentDetailPage() {
       </div>
     );
   }
+
+  const uploadStatement = statementFor({
+    subjectType: 'talent',
+    depictsRealPerson: talent.isHuman === true,
+  });
+  const canUpload =
+    attested &&
+    (!uploadStatement.requiresBasis || authorizationBasis.trim().length > 0);
 
   return (
     <div className="h-full overflow-auto">
@@ -267,15 +284,17 @@ function TalentDetailPage() {
           </div>
 
           {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard */}
+          {sheetError ? (
+            <p className="text-destructive text-sm mb-3" role="alert">
+              {sheetError}
+            </p>
+          ) : null}
           {isGeneratingSheet && talent.sheets.length === 0 ? (
             <Card className="p-8 text-center">
               <Loader2 className="h-12 w-12 mx-auto mb-4 animate-spin text-muted-foreground" />
               <p className="text-muted-foreground">
                 {sheetProgressCopy(generatingPhase, 'long')}
               </p>
-              {sheetError && (
-                <p className="text-destructive text-sm mt-3">{sheetError}</p>
-              )}
             </Card>
           ) : talent.sheets.length === 0 ? (
             <Card className="p-8 text-center">
@@ -284,9 +303,6 @@ function TalentDetailPage() {
                 No talent sheets yet. Drop a character sheet or generate one
                 from the name and description.
               </p>
-              {sheetError && (
-                <p className="text-destructive text-sm mb-3">{sheetError}</p>
-              )}
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -382,6 +398,7 @@ function TalentDetailPage() {
             </p>
             {dropFiles.length > 0 ? (
               <PortraitAttestationFields
+                statement={uploadStatement}
                 attested={attested}
                 onAttestedChange={setAttested}
                 authorizationBasis={authorizationBasis}
@@ -401,8 +418,10 @@ function TalentDetailPage() {
               portraitAttestation={
                 canUpload
                   ? {
-                      statementVersion: PORTRAIT_RIGHTS_V1.version,
-                      authorizationBasis: authorizationBasis.trim(),
+                      statementVersion: uploadStatement.version,
+                      authorizationBasis: uploadStatement.requiresBasis
+                        ? authorizationBasis.trim()
+                        : undefined,
                     }
                   : undefined
               }

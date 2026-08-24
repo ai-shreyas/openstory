@@ -263,9 +263,11 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
             imageUrl: storageResult.url,
             imagePath: storageResult.path,
             metadata: input.uploadedSheetMetadata,
-            // Divergent rows and generated rows stay explicit false so they
-            // cannot become the talent identity. Convergent uploads omit
-            // isDefault so the first sheet auto-promotes.
+            // Divergent and generated rows pass isDefault: false so
+            // sheets.create does not auto-promote the Default badge.
+            // Casting identity still comes from the newest convergent sheet
+            // (defaultSheet fallback) plus the headshot. Convergent uploads
+            // omit isDefault so a first sheet can auto-promote.
             ...(decision.kind === 'divergent' || sheetSource !== 'manual_upload'
               ? { isDefault: false }
               : {}),

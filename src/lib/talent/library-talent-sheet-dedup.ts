@@ -3,9 +3,11 @@
  *
  * Generate-if-missing (create, or the first photos on a sheetless talent)
  * shares one id per talent so parallel finalizes reuse the in-flight run
- * instead of billing N 4-panels. Explicit "Generate Sheet" omits this id
- * so a later click can roll a new sheet. Uploaded sheets are keyed by the
- * stored object's last path segment so two different sheets both promote.
+ * instead of billing N 4-panels. Create always uses the generate id (so an
+ * in-flight create absorbs a racing generate-if-missing). Explicit
+ * "Generate Sheet" omits this id so a later click can roll a new sheet.
+ * Later uploads on an existing talent use `libraryTalentUploadDedupId`
+ * (object tail) so two different sheets can both promote.
  */
 
 export function libraryTalentGenerateDedupId(talentId: string): string {

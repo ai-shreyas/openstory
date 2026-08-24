@@ -1,10 +1,10 @@
 /**
  * Server-side likeness attach gate (#1180).
  *
- * Identity + a recorded portrait-rights attestation must hold before any
- * path writes a real person's image into the talent library. The create
- * dialog, add-media dialog, and the public API all go through here so a
- * direct server-fn call cannot skip the checkbox.
+ * Gate for any talent-library image write: portrait statement + basis for
+ * humans, asset statement for animated/other. Create, add-media, and the
+ * public API all go through here so a server-fn call cannot skip the UI
+ * checkbox.
  */
 
 import { statementFor, statementHash } from '@/lib/compliance/attestations';
@@ -12,7 +12,7 @@ import type { ScopedDb } from '@/lib/db/scoped';
 import { AttestationRequiredError, ValidationError } from '@/lib/errors';
 import { z } from 'zod';
 
-/** Portrait path: basis is required. Used when adding media to existing talent. */
+/** Portrait path: basis is required. */
 export const portraitAttestationSchema = z.object({
   statementVersion: z.string().min(1).max(60),
   authorizationBasis: z.string().min(1).max(500),

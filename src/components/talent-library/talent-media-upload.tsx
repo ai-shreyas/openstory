@@ -28,7 +28,7 @@ type TalentMediaUploadProps = {
   /** Required by finalize when uploading onto an existing talent. */
   portraitAttestation?: {
     statementVersion: string;
-    authorizationBasis: string;
+    authorizationBasis?: string;
   };
   /** Called when all uploads complete (for talentId mode) */
   onComplete?: () => void;
