@@ -39,7 +39,7 @@ describe('generation-gate wiring', () => {
   test('request-path API middleware applies enforcement', () => {
     const source = readFileSync('src/functions/middleware.ts', 'utf8');
     const start = source.indexOf('export const authWithTeamRequestMiddleware');
-    const end = source.indexOf('export const stripeWebhookMiddleware');
+    const end = source.indexOf('export const authMiddleware');
     const block = source.slice(start, end);
     expect(block).toMatch(/loadComplianceState/);
     expect(block).toMatch(/canAccess/);

@@ -74,6 +74,7 @@
         "**/db/client.ts",
         "**/auth/config.ts",
         "**/functions/middleware.ts",
+        "**/functions/stripe-webhook-middleware.ts",
         "**/workflow/base-workflow.ts",
         "**/cron/reconcile-all.ts",
         "**/cron/reconcile-fal-billing.ts",

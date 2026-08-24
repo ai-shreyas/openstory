@@ -1,10 +1,12 @@
 /**
- * Live in-browser theatre player. Stitches scene videos + a single music track
- * via Mediabunny, without ever producing a merged-MP4 artifact server-side.
+ * Live in-browser theatre player. When `cachedVideoUrl` (an export whose input
+ * hash matches the current scenes + music choice, #1253) is available it plays
+ * that MP4 natively; otherwise it stitches scene videos + music via Mediabunny
+ * on a canvas.
  *
  * Falls back to a CTA ("Export as MP4 to download") when the browser can't
- * decode the source codecs — this is the only path to a fallback. The export
- * pipeline lives in `src/lib/sequence-player/export.ts`.
+ * decode the source codecs. The export pipeline lives in
+ * `src/lib/sequence-player/export.ts`.
  */
 
 import { Button } from '@/components/ui/button';
@@ -45,12 +47,23 @@ type SequencePlayerProps = {
    * `musicUrl` is null this is moot — no music toggle is shown.
    */
   musicEnabled: boolean;
-  /** Persist the music on/off choice (see TheatreView → setSequenceMusicFn). */
+  /** Persist the music on/off choice (see SceneCanvas → useSetSequenceMusic). */
   onMusicEnabledChange: (enabled: boolean) => void;
   aspectRatio: AspectRatio;
   className?: string;
-  /** Slot rendered as an overlay (top-right) — e.g. the Share dropdown. */
+  /** Slot rendered as an overlay (top-right) — e.g. the Download / Share actions. */
   overlayActions?: React.ReactNode;
+  /** Still shown behind the loading state (and as the native `<video>` poster) so the user isn't staring at a blank skeleton (#1253). */
+  posterUrl?: string | null;
+  /**
+   * A ready-made MP4 of exactly these scenes + music choice (the latest
+   * export whose input hash matches). When set, plays natively instead of
+   * stitching in the browser — one progressive download, instant first frame.
+   * `undefined` = lookup still pending: show the poster and don't start the
+   * stitching engine yet (it would be torn down the moment the cache lands).
+   * `null` = no fresh export, stitch.
+   */
+  cachedVideoUrl: string | null | undefined;
 };
 
 export const SequencePlayer: React.FC<SequencePlayerProps> = ({
@@ -62,6 +75,8 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
   aspectRatio,
   className,
   overlayActions,
+  posterUrl,
+  cachedVideoUrl,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<SequencePlayerEngine | null>(null);
@@ -72,10 +87,14 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
+  const [loadedScenes, setLoadedScenes] = useState(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || cachedVideoUrl !== null) return;
+    setMeta(null);
+    setLoadedScenes(0);
+    setError(null);
     if (scenes.length === 0) {
       setError('No scenes ready to play yet.');
       return;
@@ -88,6 +107,9 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
       musicUrl,
       musicLoudnessGainDb,
       musicEnabled,
+      onLoadProgress: (loaded) => {
+        if (!cancelled) setLoadedScenes(loaded);
+      },
       onTimeUpdate: (t) => {
         if (!cancelled) setCurrentTime(t);
       },
@@ -120,7 +142,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
     // musicEnabled are pushed through setters below (toggling music must not
     // re-prepare the engine, #834).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenes, musicUrl, musicLoudnessGainDb]);
+  }, [scenes, musicUrl, musicLoudnessGainDb, cachedVideoUrl]);
 
   useEffect(() => {
     engineRef.current?.setVolume(volume);
@@ -137,11 +159,18 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
   const togglePlay = () => {
     const engine = engineRef.current;
     if (!engine) return;
-    if (engine.isPlaying()) {
+    // Branch on React state, not engine.isPlaying(): the first play() waits on
+    // background dialogue decode and the engine isn't "playing" until then.
+    // Optimistic Pause during that wait; pause() cancels the pending play.
+    if (playing) {
       engine.pause();
       setPlaying(false);
     } else {
-      void engine.play().then(() => setPlaying(true));
+      setPlaying(true);
+      void engine
+        .play()
+        .then(() => setPlaying(engine.isPlaying()))
+        .catch(() => setPlaying(false));
     }
   };
 
@@ -150,6 +179,41 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
     if (!engine) return;
     void engine.seek(seconds);
   };
+
+  if (cachedVideoUrl) {
+    return (
+      <div
+        data-testid="sequence-player"
+        data-state="ready"
+        className={cn(
+          'relative w-full overflow-hidden rounded-lg bg-black',
+          className,
+          getAspectRatioClassName(aspectRatio)
+        )}
+      >
+        {/* oxlint-disable-next-line jsx-a11y/media-has-caption -- generated video, no captions exist */}
+        <video
+          src={cachedVideoUrl}
+          poster={posterUrl ?? undefined}
+          controls
+          playsInline
+          preload="metadata"
+          className="absolute inset-0 h-full w-full object-contain"
+          aria-label="Sequence playback"
+        />
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
+          {musicUrl && (
+            <MusicToggle
+              enabled={musicEnabled}
+              onToggle={() => onMusicEnabledChange(!musicEnabled)}
+              className="bg-black/50 hover:bg-black/70"
+            />
+          )}
+          {overlayActions}
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (
@@ -186,10 +250,29 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
         aria-label="Sequence playback"
       />
       {!meta && (
-        <Skeleton
-          data-testid="player-loading"
-          className="absolute inset-0 h-full w-full bg-muted/40"
-        />
+        <>
+          {posterUrl && (
+            <img
+              src={posterUrl}
+              alt=""
+              className="absolute inset-0 h-full w-full object-contain opacity-60"
+            />
+          )}
+          <Skeleton
+            data-testid="player-loading"
+            className="absolute inset-0 h-full w-full bg-muted/40"
+          />
+          <p
+            aria-live="polite"
+            className="absolute inset-x-0 bottom-3 text-center text-xs text-white/80"
+          >
+            {cachedVideoUrl === undefined
+              ? 'Loading…'
+              : loadedScenes < scenes.length
+                ? `Loading scene ${loadedScenes + 1} of ${scenes.length}…`
+                : 'Preparing playback…'}
+          </p>
+        </>
       )}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-2">
         {meta?.hasMixedResolutions && (
@@ -213,6 +296,13 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
             </TooltipContent>
           </Tooltip>
         )}
+        {musicUrl && (
+          <MusicToggle
+            enabled={musicEnabled}
+            onToggle={() => onMusicEnabledChange(!musicEnabled)}
+            className="bg-black/50 hover:bg-black/70"
+          />
+        )}
         {overlayActions}
       </div>
       {meta && (
@@ -223,13 +313,10 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
           volume={volume}
           muted={muted || !meta.hasAudio}
           hasAudio={meta.hasAudio}
-          hasMusic={Boolean(musicUrl)}
-          musicEnabled={musicEnabled}
           onTogglePlay={togglePlay}
           onSeek={seek}
           onVolumeChange={setVolume}
           onToggleMute={() => setMuted((m) => !m)}
-          onToggleMusic={() => onMusicEnabledChange(!musicEnabled)}
         />
       )}
     </div>
@@ -243,14 +330,10 @@ type PlayerControlsProps = {
   volume: number;
   muted: boolean;
   hasAudio: boolean;
-  /** The sequence has a music track, so the music on/off toggle is shown. */
-  hasMusic: boolean;
-  musicEnabled: boolean;
   onTogglePlay: () => void;
   onSeek: (seconds: number) => void;
   onVolumeChange: (v: number) => void;
   onToggleMute: () => void;
-  onToggleMusic: () => void;
 };
 
 const PlayerControls: React.FC<PlayerControlsProps> = ({
@@ -260,13 +343,10 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   volume,
   muted,
   hasAudio,
-  hasMusic,
-  musicEnabled,
   onTogglePlay,
   onSeek,
   onVolumeChange,
   onToggleMute,
-  onToggleMusic,
 }) => {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
@@ -305,34 +385,6 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           {formatTimestamp(currentTime)} / {formatTimestamp(duration)}
         </span>
         <div className="flex-1" />
-        {hasMusic && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-white hover:bg-white/10 hover:text-white"
-                onClick={onToggleMusic}
-                aria-pressed={musicEnabled}
-                aria-label={musicEnabled ? 'Turn music off' : 'Turn music on'}
-              >
-                <span className="relative inline-flex">
-                  <Music className="h-4 w-4" />
-                  {!musicEnabled && (
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute left-1/2 top-1/2 h-px w-5 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-full bg-current"
-                    />
-                  )}
-                </span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {musicEnabled ? 'Music on' : 'Music off'} — applies to playback
-              and export
-            </TooltipContent>
-          </Tooltip>
-        )}
         {hasAudio && (
           <div className="flex items-center gap-2">
             <Button
@@ -364,6 +416,41 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
     </div>
   );
 };
+
+const MusicToggle: React.FC<{
+  enabled: boolean;
+  onToggle: () => void;
+  className?: string;
+}> = ({ enabled, onToggle, className }) => (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button
+        variant="ghost"
+        size="icon"
+        className={cn(
+          'h-8 w-8 text-white hover:bg-white/10 hover:text-white',
+          className
+        )}
+        onClick={onToggle}
+        aria-pressed={enabled}
+        aria-label={enabled ? 'Turn music off' : 'Turn music on'}
+      >
+        <span className="relative inline-flex">
+          <Music className="h-4 w-4" />
+          {!enabled && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute left-1/2 top-1/2 h-px w-5 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-full bg-current"
+            />
+          )}
+        </span>
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent>
+      {enabled ? 'Music on' : 'Music off'} — applies to playback and export
+    </TooltipContent>
+  </Tooltip>
+);
 
 function formatTimestamp(seconds: number): string {
   const safe = Math.max(0, Math.round(seconds));

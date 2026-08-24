@@ -6,7 +6,7 @@ import {
 } from './batch-motion-cost';
 import { estimateVideoCost, gateEstimate } from '@/lib/billing/cost-estimation';
 import { addMicros, micros, ZERO_MICROS } from '@/lib/billing/money';
-import { snapDuration } from '@/lib/motion/motion-generation';
+import { snapDuration } from '@/lib/motion/snap-duration';
 
 const sequence = { videoModel: 'minimax_hailuo_02' };
 // `video_variants.model` of each shot's selected version (#1066).

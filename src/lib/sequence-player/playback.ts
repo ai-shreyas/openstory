@@ -7,9 +7,11 @@
  *   continuity + global timestamps).
  * - A music `Input` + `AudioBufferSink` mixed through a music-only `GainNode`
  *   that applies the variant's measured loudness gain.
- * - Per-scene dialogue audio decoded once in `prepare()` and scheduled as
- *   `AudioBufferSourceNode`s on `play()` / `seek()`, routed through a master
- *   gain node so dialogue is not attenuated by the music loudness gain.
+ * - Per-scene dialogue audio decoded in the background after `prepare()`
+ *   resolves (first frame first, #1253); `play()` awaits it, then clips are
+ *   scheduled as `AudioBufferSourceNode`s on `play()` / `seek()`, routed
+ *   through a master gain node so dialogue is not attenuated by the music
+ *   loudness gain.
  * - Codec gating up front via `prepare()`; throws so the React component can
  *   render a fallback CTA.
  *
@@ -56,6 +58,8 @@ export type SequencePlayerOptions = {
    * `setMusicEnabled` without re-preparing the engine (#834). Defaults to true.
    */
   musicEnabled?: boolean;
+  /** Scene-open progress during `prepare()` — drives the loading label (#1253). */
+  onLoadProgress?: (loadedScenes: number, totalScenes: number) => void;
   onTimeUpdate?: (time: number) => void;
   onEnded?: () => void;
   onError?: (error: Error) => void;
@@ -101,10 +105,17 @@ export class SequencePlayerEngine {
   private musicTrack: InputAudioTrack | null = null;
   private audioSink: AudioBufferSink | null = null;
   private dialogueClips: DialogueClip[] = [];
+  /**
+   * Dialogue decoding runs off the critical path so the first frame + controls
+   * show as soon as the scene headers are open (#1253). `play()` awaits it.
+   */
+  private dialogueReady: Promise<void> = Promise.resolve();
 
   private meta: SequencePlayerMeta | null = null;
 
   private playing = false;
+  /** play() was called and is waiting on dialogue decode; pause() cancels it. */
+  private playRequested = false;
   private playbackTimeAtStart = 0;
   private audioContextStartTime: number | null = null;
 
@@ -147,7 +158,7 @@ export class SequencePlayerEngine {
    * an "Export to download" fallback CTA.
    */
   async prepare(): Promise<SequencePlayerMeta> {
-    const videoMeta = await this.videoSource.prepare();
+    const videoMeta = await this.videoSource.prepare(this.opts.onLoadProgress);
 
     let musicSampleRate: number | undefined;
     let hasAudio = false;
@@ -181,29 +192,8 @@ export class SequencePlayerEngine {
       this.audioSink = new AudioBufferSink(this.musicTrack);
     }
 
-    // Per-scene dialogue/VO lives in each scene video's embedded audio track.
-    // Decode upfront so play()/seek() can schedule against the AudioContext
-    // clock without async IO in the hot path. A single failing track shouldn't
-    // kill the whole player — log and stay silent for that scene.
-    const dialogueClips: DialogueClip[] = [];
-    for (const {
-      sceneIndex,
-      sceneOffsetSeconds,
-      track,
-    } of this.videoSource.getSceneAudioTracks()) {
-      try {
-        const buffer = await decodeAudioTrack(track);
-        if (!buffer) continue;
-        dialogueClips.push({ buffer, sceneOffsetSeconds });
-      } catch (err) {
-        logger.warn(
-          `SequencePlayerEngine: failed to decode embedded audio for scene ${sceneIndex}`,
-          { err }
-        );
-      }
-    }
-    this.dialogueClips = dialogueClips;
-    if (dialogueClips.length > 0) hasAudio = true;
+    const sceneAudioTracks = this.videoSource.getSceneAudioTracks();
+    if (sceneAudioTracks.length > 0) hasAudio = true;
 
     this.opts.canvas.width = videoMeta.displayWidth;
     this.opts.canvas.height = videoMeta.displayHeight;
@@ -220,6 +210,38 @@ export class SequencePlayerEngine {
 
     await this.primeFirstFrame();
     this.startRenderLoop();
+
+    // Per-scene dialogue/VO lives in each scene video's embedded audio track.
+    // Decode in the background so the first frame + controls show as soon as
+    // the headers are open. `play()` awaits `dialogueReady` before scheduling,
+    // so the first play may wait on this; after that, play()/seek() schedule
+    // against the AudioContext clock with no async IO. A single failing track
+    // shouldn't kill the whole player — log and stay silent for that scene.
+    this.dialogueReady = (async () => {
+      const dialogueClips: DialogueClip[] = [];
+      for (const {
+        sceneIndex,
+        sceneOffsetSeconds,
+        track,
+      } of sceneAudioTracks) {
+        if (this.disposed) return;
+        try {
+          const buffer = await decodeAudioTrack(track);
+          if (!buffer) continue;
+          dialogueClips.push({ buffer, sceneOffsetSeconds });
+        } catch (err) {
+          // dispose() tears the Inputs down under an in-flight decode; that
+          // rejection isn't a broken track.
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
+          if (this.disposed) return;
+          logger.warn(
+            `SequencePlayerEngine: failed to decode embedded audio for scene ${sceneIndex}`,
+            { err }
+          );
+        }
+      }
+      this.dialogueClips = dialogueClips;
+    })();
 
     return this.meta;
   }
@@ -251,11 +273,22 @@ export class SequencePlayerEngine {
   }
 
   async play(): Promise<void> {
-    if (this.playing || !this.audioContext || !this.meta) return;
-
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+    if (this.playRequested || this.playing || !this.audioContext || !this.meta)
+      return;
+    this.playRequested = true;
+    try {
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+      await this.dialogueReady;
+    } catch (err) {
+      this.playRequested = false;
+      throw err;
     }
+    const cancelled = !this.playRequested;
+    this.playRequested = false;
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
+    if (cancelled || this.disposed) return;
 
     if (this.playbackTimeAtStart >= this.meta.durationSeconds) {
       // Snap back to the start if we ran off the end
@@ -276,6 +309,7 @@ export class SequencePlayerEngine {
   }
 
   pause(): void {
+    this.playRequested = false;
     if (!this.playing) return;
     this.playbackTimeAtStart = this.getPlaybackTime();
     this.playing = false;

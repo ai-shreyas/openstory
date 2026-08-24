@@ -2,7 +2,10 @@ import { ScenePlayer } from '@/components/motion/scene-player';
 import { CanvasMediaStage } from '@/components/scenes/canvas-media-stage';
 import { StartingFrameVariants } from '@/components/scenes/starting-frame-variants';
 import { SequencePlayer } from '@/components/theatre/sequence-player';
-import { useSequenceExport } from '@/components/theatre/use-sequence-export';
+import {
+  useSequenceExport,
+  type SequenceExportState,
+} from '@/components/theatre/use-sequence-export';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -11,6 +14,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useSetSequenceMusic } from '@/hooks/use-sequences';
 import type { TabValue } from '@/components/scenes/scene-script-prompts';
@@ -81,11 +89,11 @@ function formatExportProgress(progress: ExportProgress | null): string {
   return `${label}…`;
 }
 
-const TheatreShareOverlay: React.FC<{ sequence: Sequence }> = ({
-  sequence,
-}) => {
+const TheatreShareOverlay: React.FC<{
+  sequence: Sequence;
+  sequenceExport: SequenceExportState;
+}> = ({ sequence, sequenceExport }) => {
   const posthog = usePostHog();
-  const sequenceExport = useSequenceExport(sequence);
   const shareUrl = sequenceExport.latestExportUrl;
 
   const handleCopyShareUrl = useCallback(async () => {
@@ -109,52 +117,70 @@ const TheatreShareOverlay: React.FC<{ sequence: Sequence }> = ({
   }, [shareUrl, sequence.id, posthog]);
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 bg-black/50 text-white hover:bg-black/70"
-          aria-label="Share"
-        >
-          <Share2 className="h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => void handleCopyShareUrl()}>
-          <Link className="h-4 w-4" />
-          Copy latest export URL
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={sequenceExport.start}
-          disabled={sequenceExport.isRunning}
-        >
-          {sequenceExport.isRunning ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Download className="h-4 w-4" />
-          )}
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 bg-black/50 text-white hover:bg-black/70"
+            aria-label={
+              sequenceExport.isRunning
+                ? formatExportProgress(sequenceExport.progress)
+                : 'Download MP4'
+            }
+            aria-busy={sequenceExport.isRunning}
+            // Stays enabled while running (download() no-ops) so the tooltip
+            // can show progress — disabled buttons emit no pointer events.
+            onClick={sequenceExport.download}
+          >
+            {sequenceExport.isRunning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
           {sequenceExport.isRunning
             ? formatExportProgress(sequenceExport.progress)
-            : 'Export as MP4'}
-        </DropdownMenuItem>
-        {shareUrl && (
-          <DropdownMenuItem
-            onClick={() => {
-              const a = document.createElement('a');
-              a.href = shareUrl;
-              a.download = `${sequence.title || 'sequence'}_openstory.mp4`;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-            }}
+            : sequenceExport.freshExportUrl
+              ? 'Download MP4'
+              : 'Export and download MP4'}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 bg-black/50 text-white hover:bg-black/70"
+            aria-label="Share"
           >
-            <Download className="h-4 w-4" />
-            Download last export
+            <Share2 className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => void handleCopyShareUrl()}>
+            <Link className="h-4 w-4" />
+            Copy latest export URL
           </DropdownMenuItem>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <DropdownMenuItem
+            onClick={sequenceExport.start}
+            disabled={sequenceExport.isRunning}
+          >
+            {sequenceExport.isRunning ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            {sequenceExport.isRunning
+              ? formatExportProgress(sequenceExport.progress)
+              : 'Export as MP4'}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 };
 
@@ -193,6 +219,7 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
   }, [scopedShots]);
 
   const setMusicEnabled = useSetSequenceMusic(sequence?.id ?? '');
+  const sequenceExport = useSequenceExport(sequence);
 
   if (loadError) {
     return (
@@ -303,9 +330,20 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         onMusicEnabledChange={(enabled) => setMusicEnabled.mutate(enabled)}
         aspectRatio={aspectRatio}
         className="h-full max-h-none w-full"
+        posterUrl={scopedShots[0]?.image?.url ?? sequence.posterUrl}
+        cachedVideoUrl={
+          scope !== 'sequence'
+            ? null
+            : sequenceExport.isCacheResolved
+              ? sequenceExport.freshExportUrl
+              : undefined
+        }
         overlayActions={
           scope === 'sequence' ? (
-            <TheatreShareOverlay sequence={sequence} />
+            <TheatreShareOverlay
+              sequence={sequence}
+              sequenceExport={sequenceExport}
+            />
           ) : undefined
         }
       />

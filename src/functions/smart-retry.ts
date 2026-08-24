@@ -278,7 +278,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   }
 
   if (failedMotionShots.length > 0) {
-    const { snapDuration } = await import('@/lib/motion/motion-generation');
+    const { snapDuration } = await import('@/lib/motion/snap-duration');
     for (const shot of failedMotionShots) {
       const model = videoModelFor(shot);
       totalCost = addMicros(
