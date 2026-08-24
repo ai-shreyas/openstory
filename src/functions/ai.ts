@@ -76,6 +76,15 @@ function getClientIP(): string {
   );
 }
 
+/**
+ * The request's Cloudflare-detected country (`cf-ipcountry`), for the
+ * region-aware model picker (#1259). `null` in local dev. No auth: it is the
+ * caller's own request metadata and the composer is anonymous-browsable.
+ */
+export const getRequestCountryFn = createServerFn({ method: 'GET' }).handler(
+  async () => getRequest().headers.get('cf-ipcountry')
+);
+
 function enforceRateLimit(limiter: RateLimiter, key: string): void {
   if (limiter.isAllowed(key)) return;
   const remainingMs = limiter.getRemainingTime(key);

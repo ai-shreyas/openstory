@@ -27,8 +27,9 @@ vi.doMock('@tanstack/ai', () => ({
 // Mock create-adapter to avoid real adapter creation. `resolveNativeGrokModel`
 // returns undefined so these tests exercise the OpenRouter request shape;
 // native xAI routing has its own coverage in create-adapter.test.ts.
+const mockCreateAdapter = vi.fn(() => ({ kind: 'text', name: 'mock' }));
 vi.doMock('./create-adapter', () => ({
-  createAdapter: () => ({ kind: 'text', name: 'mock' }),
+  createAdapter: mockCreateAdapter,
   resolveNativeGrokModel: () => undefined,
 }));
 
@@ -66,6 +67,7 @@ const usage = (cost?: number): TokenUsage => ({
 describe('llm-client', () => {
   beforeEach(() => {
     mockChat.mockClear();
+    mockCreateAdapter.mockClear();
     mockAIObservabilityMiddleware.mockClear();
   });
 
@@ -321,6 +323,59 @@ describe('llm-client', () => {
         )
       ).rejects.toThrow(/empty-response/);
       expect(cancelled).toBe(false);
+    });
+
+    it('retries a region-blocked model with the DeepSeek fallback (#1259)', async () => {
+      mockChat
+        .mockReturnValueOnce(
+          (async function* () {
+            yield {
+              type: 'RUN_ERROR',
+              message: 'This model is not available in your region.',
+              model: 'anthropic/claude-opus-5-fast',
+            };
+          })()
+        )
+        .mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'fallback answer' };
+          })()
+        );
+
+      const result = await callLLM({
+        model: 'anthropic/claude-opus-5-fast',
+        messages: [{ role: 'user', content: 'test' }],
+      });
+
+      expect(result).toBe('fallback answer');
+      expect(mockChat).toHaveBeenCalledTimes(2);
+      expect(mockCreateAdapter).toHaveBeenNthCalledWith(
+        2,
+        'deepseek/deepseek-v4-pro-0813',
+        undefined
+      );
+    });
+
+    it('does not retry a region block after content was already yielded', async () => {
+      mockChat.mockReturnValueOnce(
+        (async function* () {
+          yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'partial' };
+          yield {
+            type: 'RUN_ERROR',
+            message: 'This model is not available in your region.',
+          };
+        })()
+      );
+
+      await expect(
+        drain(
+          callLLMStream({
+            model: 'anthropic/claude-opus-5-fast',
+            messages: [{ role: 'user', content: 'test' }],
+          })
+        )
+      ).rejects.toThrow('not available in your region');
+      expect(mockChat).toHaveBeenCalledTimes(1);
     });
 
     it('preserves event.code in stream errors', () => {

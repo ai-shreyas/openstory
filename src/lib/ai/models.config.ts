@@ -91,6 +91,17 @@ export const SCRIPT_ANALYSIS_MODELS = [
     description: 'Apache 2.0, 119B MoE, multimodal + agentic coding',
   },
   {
+    id: 'deepseek/deepseek-v4-pro-0813',
+    name: 'DeepSeek V4 Pro',
+    vendor: 'DeepSeek',
+    license: 'open-source' as const,
+    qualityRank: 8,
+    contextWindow: 1_048_576,
+    // Text-only.
+    vision: false,
+    description: 'Open-weights frontier reasoning, 1M context',
+  },
+  {
     id: 'deepseek/deepseek-v3.2',
     name: 'DeepSeek V3.2',
     vendor: 'DeepSeek',
@@ -100,6 +111,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     // Text-only.
     vision: false,
     description: 'MIT license, MMLU 94.2, GPT-5 class reasoning',
+    hidden: true,
   },
   {
     id: 'z-ai/glm-5.2',

@@ -21,6 +21,7 @@ import {
   DEFAULT_ANALYSIS_MODEL,
   getAnalysisModelById,
 } from '@/lib/ai/models.config';
+import { resolveModelForCountry } from '@/lib/ai/region-policy';
 import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
@@ -45,6 +46,7 @@ import { bumpStylePopularity } from '@/lib/style/bump-style-popularity';
 import { triggerStoryboard } from '@/lib/workflow/launchers';
 import type { StoryboardTriggerInput } from '@/lib/workflow/types';
 import { createServerOnlyFn } from '@tanstack/react-start';
+import { getRequest } from '@tanstack/react-start/server';
 
 export type StyleSource =
   | { kind: 'library' }
@@ -114,7 +116,7 @@ export const createSequences = createServerOnlyFn(
       script,
       styleId,
       aspectRatio,
-      analysisModels,
+      analysisModels: requestedAnalysisModels,
       imageModel: imageModelLegacy,
       imageModels: imageModelsInput,
       videoModel,
@@ -129,6 +131,43 @@ export const createSequences = createServerOnlyFn(
       elementUploads,
       sourceSequenceId,
     } = data;
+
+    // Anthropic geo-blocks some countries and our LLM calls egress from the
+    // Cloudflare colo nearest the user (#1259) — never persist an Anthropic
+    // model for a request from a blocked country. Set-dedup in case several
+    // picks collapse onto the same fallback.
+    const country = getRequest().headers.get('cf-ipcountry');
+    const analysisModels = [
+      ...new Set(
+        requestedAnalysisModels.map((m) => resolveModelForCountry(m, country))
+      ),
+    ];
+
+    // Retry-click guard (#1259): a user who sees no feedback resubmits the
+    // identical script — each click used to spawn a full pipeline. If every
+    // requested model already has a fresh live run of this exact script,
+    // reject with a visible error instead.
+    if (analysisModels.length > 0) {
+      const recent = await context.scopedDb.sequences.listPage({
+        limit: 10,
+        cursor: null,
+      });
+      const liveDuplicates = recent.filter(
+        (s) =>
+          s.status === 'processing' &&
+          s.script === script &&
+          Date.now() - s.createdAt.getTime() < 2 * 60_000
+      );
+      if (
+        analysisModels.every((m) =>
+          liveDuplicates.some((d) => d.analysisModel === m)
+        )
+      ) {
+        throw new ValidationError(
+          'Already generating this script — open the existing sequence.'
+        );
+      }
+    }
 
     // Verify source sequence access (scoped read returns null for other teams)
     if (sourceSequenceId) {
@@ -244,7 +283,8 @@ export const createSequences = createServerOnlyFn(
           deferStyleSnapshot: styleSource.kind === 'pending',
           aspectRatio,
           analysisModel:
-            getAnalysisModelById(modelId)?.id || DEFAULT_ANALYSIS_MODEL,
+            getAnalysisModelById(modelId)?.id ||
+            resolveModelForCountry(DEFAULT_ANALYSIS_MODEL, country),
           imageModel: primaryImageModel,
           videoModel: autoGenerateMotion ? primaryVideoModel : undefined,
           musicModel: persistedMusicModel,
