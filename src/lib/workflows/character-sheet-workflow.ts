@@ -37,6 +37,7 @@ import { buildCharacterSheetPrompt } from '@/lib/prompts/character-prompt';
 import { recordProvenance } from '@/lib/compliance/provenance';
 import { getGenerationChannel } from '@/lib/realtime';
 import { STORAGE_BUCKETS } from '@/lib/storage/buckets';
+import { copyStoredImage } from '@/lib/storage/copy-stored-image';
 import { uploadResponse } from '@/lib/storage/upload-response';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
@@ -67,6 +68,130 @@ const logger = getLogger(['openstory', 'workflow', 'character-sheet']);
  * anchor identity across cuts, so we stop rather than continue unanchored).
  */
 const MAX_SHEET_ATTEMPTS = 3;
+
+async function persistReusedTalentSheet(params: {
+  event: Readonly<WorkflowEvent<CharacterSheetWorkflowInput>>;
+  step: WorkflowStep;
+  scopedDb: WorkflowScopedDb;
+  input: CharacterSheetWorkflowInput;
+  workflowRunId: string;
+}): Promise<CharacterSheetWorkflowResult> {
+  const { step, scopedDb, input, workflowRunId } = params;
+  const sourceUrl = input.referenceImageUrl;
+  if (!sourceUrl) {
+    throw new WorkflowValidationError(
+      'reuseTalentSheet requires referenceImageUrl'
+    );
+  }
+  if (!input.characterDbId || !input.teamId || !input.sequenceId) {
+    throw new WorkflowValidationError(
+      'reuseTalentSheet requires characterDbId, teamId, and sequenceId'
+    );
+  }
+  const characterDbId = input.characterDbId;
+  const sequenceId = input.sequenceId;
+
+  const storageResult = await step.do('copy-talent-sheet', async () => {
+    logger.info(
+      `[CharacterSheetWorkflow:cf] Reusing talent sheet for ${input.characterName}`
+    );
+    const uniqueId = generateId();
+    const storagePath = `${input.teamId}/${sequenceId}/${characterDbId}/${uniqueId}.png`;
+    const result = await copyStoredImage({
+      sourceUrl,
+      destBucket: STORAGE_BUCKETS.CHARACTERS,
+      destPath: storagePath,
+    });
+    return {
+      url: result.publicUrl,
+      path: result.path,
+    };
+  });
+
+  await step.do('record-provenance', async () => {
+    await recordProvenance(scopedDb.provenance, {
+      teamId: input.teamId,
+      userId: input.userId,
+      assetKind: 'character_sheet',
+      assetId: characterDbId,
+      storageKey: storageResult.path,
+      provider: 'internal',
+      model: 'reuse-talent-sheet',
+      providerRequestId: null,
+      workflowRunId,
+      prompt: 'Reuse uploaded/library talent sheet without regeneration',
+      sequenceId,
+      referenceImageCount: 1,
+    });
+  });
+
+  const snapshotInputHash = input.snapshotInputHash ?? null;
+  const reconcileOutcome = await step.do(
+    'reconcile-database',
+    async (): Promise<{ kind: 'convergent' } | { kind: 'divergent' }> => {
+      const currentHash = snapshotInputHash
+        ? await computeCharacterSheetHashCurrent(input, scopedDb.liveRead)
+        : null;
+      const decision = decideSheetDivergence(snapshotInputHash, currentHash);
+      if (decision.kind === 'divergent') {
+        await saveDivergentCharacterSheet({
+          scopedDb,
+          characterId: characterDbId,
+          sequenceId,
+          model: input.imageModel ?? DEFAULT_IMAGE_MODEL,
+          url: storageResult.url,
+          storagePath: storageResult.path,
+          workflowRunId,
+          snapshotInputHash: decision.snapshotInputHash,
+        });
+        return { kind: 'divergent' };
+      }
+      await scopedDb.characters.updateSheet(
+        characterDbId,
+        storageResult.url,
+        storageResult.path,
+        snapshotInputHash
+      );
+      return { kind: 'convergent' };
+    }
+  );
+
+  if (reconcileOutcome.kind === 'divergent') {
+    await step.do('settle-divergent-status', async () => {
+      await scopedDb.characters.updateSheetStatus(characterDbId, 'completed');
+      await getGenerationChannel(sequenceId).emit(
+        'generation.character-sheet:progress',
+        {
+          characterId: characterDbId,
+          status: 'completed',
+        }
+      );
+    });
+    return {
+      sheetImageUrl: storageResult.url,
+      sheetImagePath: storageResult.path,
+      characterDbId,
+      diverged: true,
+    };
+  }
+
+  await step.do('emit-complete-event', async () => {
+    await getGenerationChannel(sequenceId).emit(
+      'generation.character-sheet:progress',
+      {
+        characterId: characterDbId,
+        status: 'completed',
+        sheetImageUrl: storageResult.url,
+      }
+    );
+  });
+
+  return {
+    sheetImageUrl: storageResult.url,
+    sheetImagePath: storageResult.path,
+    characterDbId,
+  };
+}
 
 export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<CharacterSheetWorkflowInput> {
   protected override async runImpl(
@@ -103,6 +228,16 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         );
       }
     });
+
+    if (input.reuseTalentSheet) {
+      return persistReusedTalentSheet({
+        event,
+        step,
+        scopedDb,
+        input,
+        workflowRunId,
+      });
+    }
 
     // Step 1: Validate and build prompt
     const generationParams: ImageGenerationParams = await step.do(

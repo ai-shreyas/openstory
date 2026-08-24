@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { safeTextToImageModel } from '@/lib/ai/models';
 import { resolveSequenceStyleConfig } from '@/lib/style/style-config';
 import { buildCastingAttributes } from '@/lib/prompts/character-prompt';
+import { shouldReuseTalentSheet } from '@/lib/talent/reuse-talent-sheet';
 import { getGenerationChannel } from '@/lib/realtime';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { triggerWorkflow } from '@/lib/workflow/client';
@@ -188,6 +189,17 @@ export const recastCharacterFn = createServerFn({ method: 'POST' })
       // person + "look exactly like" trips OpenAI's likeness moderation.
       talentDescription:
         `This character must exactly match the person shown in the reference image. ${talentWithSheets.description ?? ''}`.trim(),
+      reuseTalentSheet: Boolean(
+        defaultSheet?.imageUrl &&
+        shouldReuseTalentSheet({
+          characterClothing: character.standardClothing,
+          characterFeatures: character.distinguishingFeatures,
+          talentClothing: defaultSheet.metadata?.standardClothing,
+          talentFeatures: defaultSheet.metadata?.distinguishingFeatures,
+          talentPhysical: defaultSheet.metadata?.physicalDescription,
+          talentDescription: talentWithSheets.description,
+        })
+      ),
       imageModel,
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
       talentSheetInputHash: defaultSheet?.inputHash ?? null,

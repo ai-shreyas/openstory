@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
+  analyzeTalentMediaFn,
   createTalentFn,
   deleteTalentFn,
   generateTalentSheetFn,
@@ -66,6 +67,16 @@ export function useTalentById(talentId: string) {
     teamFn: () => getTalentByIdFn({ data: { talentId } }),
     publicFn: () => getPublicTalentByIdFn({ data: { talentId } }),
     enabled: !!talentId,
+  });
+}
+
+/**
+ * Classify uploaded talent images and/or draft a description from them.
+ */
+export function useAnalyzeTalentMedia() {
+  return useMutation({
+    mutationFn: (input: { imageUrls: string[]; filenames?: string[] }) =>
+      analyzeTalentMediaFn({ data: input }),
   });
 }
 
@@ -152,7 +163,7 @@ export function useUploadTalentMedia() {
       onProgress?: (percent: number) => void;
       portraitAttestation?: {
         statementVersion: string;
-        authorizationBasis: string;
+        authorizationBasis?: string;
       };
     }) => {
       const presign = await presignTalentUploadFn({
@@ -254,6 +265,11 @@ export function useGenerateTalentSheet() {
       // Optimistically update the query - the realtime hook will handle the actual update
       void queryClient.invalidateQueries({
         queryKey: talentKeys.detail(variables.talentId),
+      });
+    },
+    onError: (error) => {
+      toast.error('Could not start sheet generation', {
+        description: error instanceof Error ? error.message : 'Unknown error',
       });
     },
   });

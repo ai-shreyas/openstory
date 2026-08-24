@@ -43,6 +43,8 @@ export type ChannelHistoryMessage = {
   event: string;
   channel: string;
   data: string;
+  /** Unix ms when the event was stored. Used to expire stale generating UI. */
+  ts: number;
 };
 
 export class RealtimeChannel extends DurableObject {
@@ -114,6 +116,7 @@ export class RealtimeChannel extends DurableObject {
       // `data` is already a JSON string in storage; pass it through verbatim so
       // the caller (getChannelHistoryFn) doesn't double-encode.
       data: r.data,
+      ts: r.ts,
     }));
 
     return Response.json(messages);

@@ -1,9 +1,13 @@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
+import {
+  PORTRAIT_RIGHTS_V1,
+  type AttestationStatement,
+} from '@/lib/compliance/attestations';
 
 type PortraitAttestationFieldsProps = {
+  statement?: AttestationStatement;
   attested: boolean;
   onAttestedChange: (attested: boolean) => void;
   authorizationBasis: string;
@@ -11,13 +15,20 @@ type PortraitAttestationFieldsProps = {
 };
 
 export function PortraitAttestationFields({
+  statement = PORTRAIT_RIGHTS_V1,
   attested,
   onAttestedChange,
   authorizationBasis,
   onAuthorizationBasisChange,
 }: PortraitAttestationFieldsProps) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-destructive/40 p-4">
+    <div
+      className={
+        statement.requiresBasis
+          ? 'flex flex-col gap-3 rounded-lg border border-destructive/40 p-4'
+          : 'flex flex-col gap-3 rounded-lg border border-border p-4'
+      }
+    >
       <div className="flex items-start gap-3">
         <Checkbox
           id="portrait-attestation"
@@ -27,26 +38,28 @@ export function PortraitAttestationFields({
         />
         <div className="flex flex-col gap-2">
           <Label htmlFor="portrait-attestation" className="leading-snug">
-            {PORTRAIT_RIGHTS_V1.label}
+            {statement.label}
           </Label>
           <p
             id="portrait-attestation-text"
             className="text-xs leading-relaxed text-muted-foreground"
           >
-            {PORTRAIT_RIGHTS_V1.text}
+            {statement.text}
           </p>
         </div>
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="authorization-basis">Basis for authorization</Label>
-        <Input
-          id="authorization-basis"
-          value={authorizationBasis}
-          onChange={(event) => onAuthorizationBasisChange(event.target.value)}
-          placeholder="e.g. signed release on file, this is me, contract #123"
-          autoComplete="off"
-        />
-      </div>
+      {statement.requiresBasis ? (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="authorization-basis">Basis for authorization</Label>
+          <Input
+            id="authorization-basis"
+            value={authorizationBasis}
+            onChange={(event) => onAuthorizationBasisChange(event.target.value)}
+            placeholder="e.g. signed release on file, this is me, contract #123"
+            autoComplete="off"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

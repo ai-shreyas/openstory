@@ -2,6 +2,7 @@ import { getEnv } from '#env';
 import { z } from 'zod';
 
 import { getLogger } from '@/lib/observability/logger';
+import { sheetProgressActivitySchema } from '@/lib/talent/sheet-progress-copy';
 import type { ChannelHistoryMessage } from './realtime-channel.do';
 import type { EventData, EventPaths } from './shared-types';
 
@@ -20,6 +21,8 @@ export const realtimeSchema = {
     'sheet:progress': z.object({
       talentId: z.string(),
       status: z.enum(['generating', 'sheet_ready', 'completed', 'failed']),
+      /** What the run is actually doing. Omitted on older events → sheet. */
+      activity: sheetProgressActivitySchema.optional(),
       sheetId: z.string().optional(),
       sheetImageUrl: z.string().optional(),
       headshotImageUrl: z.string().optional(),

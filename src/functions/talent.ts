@@ -8,9 +8,9 @@ import {
 } from '@/lib/db/scoped';
 import type { TalentWithSheets } from '@/lib/db/schema';
 import {
-  portraitAttestationSchema,
   recordPortraitAttestation,
-  requireLikenessAttachment,
+  requireUploadAttestation,
+  uploadAttestationSchema,
 } from '@/lib/compliance/likeness-upload';
 import { getRequest } from '@tanstack/react-start/server';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -25,12 +25,14 @@ import {
   getExtensionFromUrl,
   getMimeTypeFromExtension,
 } from '@/lib/utils/file';
-import { triggerWorkflow } from '@/lib/workflow/client';
-import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import type { LibraryTalentSheetWorkflowInput } from '@/lib/workflow/types';
 import { computeLibraryTalentSheetHashFromDto } from '@/lib/workflows/sheet-snapshots';
 import { isTeamWritableTalent } from '@/lib/db/scoped/talent';
 import { createLibraryTalent } from '@/lib/talent/create-library-talent';
+import { analyzeTalentMediaForTeam } from '@/lib/talent/analyze-talent-media';
+import { enqueueLibraryTalentSheet } from '@/lib/talent/enqueue-library-talent-sheet';
+import { maybePromoteOrGenerateSheet } from '@/lib/talent/promote-or-generate-sheet';
+import { isTeamTalentStoredUrl } from '@/lib/storage/copy-stored-image';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
@@ -310,7 +312,7 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         mediaId: ulidSchema,
         publicUrl: mediaUrlSchema,
         path: z.string().min(1),
-        portraitAttestation: portraitAttestationSchema.optional(),
+        portraitAttestation: uploadAttestationSchema.optional(),
       })
     )
   )
@@ -319,7 +321,15 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       throw new Error('Invalid storage path');
     }
 
-    const attestation = requireLikenessAttachment({
+    const talentRecord = await context.scopedDb.talent.getById(data.talentId);
+    if (!talentRecord || !isTeamWritableTalent(talentRecord, context.teamId)) {
+      throw new Error(
+        'Talent not found or you do not have permission to modify it'
+      );
+    }
+
+    const attestation = requireUploadAttestation({
+      depictsRealPerson: talentRecord.isHuman === true,
       attestation: data.portraitAttestation,
     });
     const request = getRequest();
@@ -331,15 +341,27 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
         ipAddress: request.headers.get('cf-connecting-ip'),
         userAgent: request.headers.get('user-agent'),
       },
+      depictsRealPerson: talentRecord.isHuman === true,
     });
 
+    const storedUrl = `/r2/${data.path}`;
     await context.scopedDb.talent.media.create({
       id: data.mediaId,
       talentId: data.talentId,
       type: data.type,
-      url: data.publicUrl,
+      url: storedUrl,
       path: data.path,
     });
+
+    if (data.type === 'image') {
+      await maybePromoteOrGenerateSheet({
+        scopedDb: context.scopedDb,
+        userId: context.user.id,
+        teamId: context.teamId,
+        talentId: data.talentId,
+        imageUrl: storedUrl,
+      });
+    }
 
     return { success: true };
   });
@@ -369,14 +391,7 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
       );
     }
 
-    const imageMedia =
-      // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard
-      talentRecord.media?.filter((m) => m.type === 'image') ?? [];
-    if (imageMedia.length === 0) {
-      throw new Error(
-        'Talent must have at least one reference image to generate a sheet'
-      );
-    }
+    const imageMedia = talentRecord.media.filter((m) => m.type === 'image');
 
     const workflowInput: LibraryTalentSheetWorkflowInput = {
       userId: context.user.id,
@@ -390,14 +405,50 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
     workflowInput.snapshotInputHash =
       await computeLibraryTalentSheetHashFromDto(workflowInput);
 
-    const runId = await triggerWorkflow(
-      '/library-talent-sheet',
+    const runId = await enqueueLibraryTalentSheet({
+      talentId: talentRecord.id,
       workflowInput,
-      {
-        label: buildWorkflowLabel(talentRecord.id),
-      }
-    );
+      activity: 'sheet',
+    });
     return { runId };
+  });
+
+export const analyzeTalentMediaFn = createServerFn({ method: 'POST' })
+  .middleware([authWithTeamMiddleware])
+  .validator(
+    zodValidator(
+      z.object({
+        imageUrls: z.array(mediaUrlSchema).min(1).max(8),
+        filenames: z.array(z.string().max(255)).max(8).optional(),
+      })
+    )
+  )
+  .handler(async ({ context, data }) => {
+    for (const url of data.imageUrls) {
+      if (!isTeamTalentStoredUrl(url, context.teamId)) {
+        throw new Error('Image URL is not a talent upload for this team');
+      }
+    }
+
+    const result = await analyzeTalentMediaForTeam({
+      scopedDb: context.scopedDb,
+      userId: context.user.id,
+      imageUrls: data.imageUrls,
+      filenames: data.filenames,
+      idempotencyKey: `talent-vision:${data.imageUrls.join('|')}:${(data.filenames ?? []).join('|')}`,
+    });
+    return {
+      isCharacterSheet: result.isCharacterSheet,
+      subjectKind: result.subjectKind,
+      suggestedName: result.suggestedName,
+      description: result.description,
+      age: result.age,
+      gender: result.gender,
+      ethnicity: result.ethnicity,
+      physicalDescription: result.physicalDescription,
+      standardClothing: result.standardClothing,
+      distinguishingFeatures: result.distinguishingFeatures,
+    };
   });
 
 export const addCharacterToLibraryFn = createServerFn({ method: 'POST' })

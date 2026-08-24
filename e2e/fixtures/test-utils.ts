@@ -106,10 +106,15 @@ export async function waitForUploadComplete(
   page: Page,
   submitName = 'Add Talent'
 ): Promise<void> {
+  const dialog = page.getByRole('dialog', { name: submitName });
   await expect(
-    page.locator('[data-slot="file-upload-item"]').first()
+    dialog.locator('[data-slot="file-upload-item"]').first()
   ).toBeVisible();
-  await expect(page.getByRole('button', { name: submitName })).toBeEnabled({
+  // Scope to the open dialog: the page header still has an enabled
+  // "Add Talent" trigger, and during the PUT the dialog submit is
+  // relabeled "Uploading…". Waiting for the dialog's own submit name
+  // is what actually means the file landed.
+  await expect(dialog.getByRole('button', { name: submitName })).toBeEnabled({
     timeout: 15_000,
   });
 }

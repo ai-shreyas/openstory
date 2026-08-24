@@ -10,18 +10,19 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { PORTRAIT_RIGHTS_V1 } from '@/lib/compliance/attestations';
-import { toast } from 'sonner';
+import { statementFor } from '@/lib/compliance/attestations';
 import { PortraitAttestationFields } from './portrait-attestation-fields';
 import { TalentMediaUpload } from './talent-media-upload';
 
 type AddTalentMediaDialogProps = {
   talentId: string;
+  isHuman: boolean;
   trigger?: React.ReactNode;
 };
 
 export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
   talentId,
+  isHuman,
   trigger,
 }) => {
   const [open, setOpen] = useState(false);
@@ -38,7 +39,13 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
     setOpen(false);
   };
 
-  const canUpload = attested && authorizationBasis.trim().length > 0;
+  const statement = statementFor({
+    subjectType: 'talent',
+    depictsRealPerson: isHuman,
+  });
+  const canUpload =
+    attested &&
+    (!statement.requiresBasis || authorizationBasis.trim().length > 0);
 
   const isUploading = files.length > uploadCount;
 
@@ -54,11 +61,13 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
         <DialogHeader>
           <DialogTitle>Add Reference Media</DialogTitle>
           <DialogDescription>
-            Upload images or videos to use as reference for this talent.
+            Drop a character sheet or reference photos. Confirm authorization
+            before the files upload.
           </DialogDescription>
         </DialogHeader>
 
         <PortraitAttestationFields
+          statement={statement}
           attested={attested}
           onAttestedChange={setAttested}
           authorizationBasis={authorizationBasis}
@@ -67,25 +76,18 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
 
         <TalentMediaUpload
           files={files}
-          onFilesChange={(next) => {
-            if (!canUpload) {
-              toast.error(
-                'Confirm you have authorization for this person’s likeness'
-              );
-              return;
-            }
-            setFiles(next);
-          }}
+          onFilesChange={setFiles}
           talentId={talentId}
           portraitAttestation={
             canUpload
               ? {
-                  statementVersion: PORTRAIT_RIGHTS_V1.version,
-                  authorizationBasis: authorizationBasis.trim(),
+                  statementVersion: statement.version,
+                  authorizationBasis: statement.requiresBasis
+                    ? authorizationBasis.trim()
+                    : undefined,
                 }
               : undefined
           }
-          disabled={!canUpload}
           onComplete={() => setUploadCount((c) => c + 1)}
         />
 
@@ -93,8 +95,15 @@ export const AddTalentMediaDialog: React.FC<AddTalentMediaDialogProps> = ({
           <DialogClose asChild>
             <Button variant="outline">Cancel</Button>
           </DialogClose>
-          <Button onClick={handleClose} disabled={isUploading}>
-            {isUploading ? 'Uploading…' : 'Done'}
+          <Button
+            onClick={handleClose}
+            disabled={isUploading || (files.length > 0 && !canUpload)}
+          >
+            {isUploading
+              ? 'Uploading…'
+              : files.length > 0 && !canUpload
+                ? 'Confirm authorization to upload'
+                : 'Done'}
           </Button>
         </DialogFooter>
       </DialogContent>

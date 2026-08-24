@@ -34,6 +34,7 @@ export const getChannelHistoryFn = createServerFn({ method: 'GET' })
             event: msg.event,
             channel: msg.channel,
             data: JSON.stringify(normalizedData),
+            ts: msg.ts,
           },
         ];
       } catch {

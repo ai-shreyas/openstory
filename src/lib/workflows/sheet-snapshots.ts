@@ -204,7 +204,9 @@ export async function computeLocationSheetHashCurrent(
 /**
  * Library talent sheets are content-addressed by the inlined reference URLs:
  * talent media is append-only in practice, so the snapshot is the URL set
- * itself. We hash via `computeTalentSheetInputHash` keyed on those URLs as
+ * itself. Extra live URLs (photos dropped while a run is in flight) do not
+ * diverge: `Current` hashes the snapshot set when it is a subset of live
+ * media. We hash via `computeTalentSheetInputHash` keyed on those URLs as
  * the reference-media identity (no external `media_id` lookup required).
  */
 export async function computeLibraryTalentSheetHashFromDto(
@@ -235,13 +237,19 @@ export async function computeLibraryTalentSheetHashCurrent(
   // re-read for the same reason the URLs are: a mid-run rename changes the
   // identity the sheet was generated for, and hashing the payload copy would
   // make that divergence unrepresentable.
-  const currentImageUrls =
+  const liveImageUrls =
     talent?.media
       .filter((m) => m.type === 'image')
       .map((m) => m.url)
       .sort() ??
     input.referenceImageUrls ??
     [];
+  const snapshotUrls = input.referenceImageUrls ?? [];
+  const liveSet = new Set(liveImageUrls);
+  // Talent media is append-only. Extra live URLs must not park a generate-if-
+  // missing run as divergent (two photo finalizes, or photos dropped while a
+  // name-only sheet is in flight). Missing snapshot URLs still hash live.
+  const snapshotSubsetOfLive = snapshotUrls.every((url) => liveSet.has(url));
   return computeLibraryTalentSheetHashFromDto({
     ...input,
     talentName: talent?.name ?? input.talentName,
@@ -250,7 +258,7 @@ export async function computeLibraryTalentSheetHashCurrent(
     talentDescription: talent
       ? (talent.description ?? undefined)
       : input.talentDescription,
-    referenceImageUrls: currentImageUrls,
+    referenceImageUrls: snapshotSubsetOfLive ? snapshotUrls : liveImageUrls,
   });
 }
 
