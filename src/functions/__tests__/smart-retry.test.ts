@@ -64,7 +64,7 @@ vi.doMock('@/lib/ai/fal-pricing-live', () => ({
 }));
 
 // Dynamic imports so the mocks above apply (vi.doMock is not hoisted).
-const { executeSmartRetry } = await import('../smart-retry');
+const { executeSmartRetry } = await import('@/lib/sequences/smart-retry');
 const { GenerationInProgressError } = await import('@/lib/workflow/launchers');
 
 const NOW = new Date('2026-06-07T00:00:00.000Z');

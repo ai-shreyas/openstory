@@ -50,7 +50,7 @@ vi.doMock('@/lib/compliance/generation-gate', () => ({
 // Dynamic imports so the mocks apply (static imports would be hoisted above
 // vi.doMock and bypass them).
 const { createGeneratedAsset, validateAssetInput } =
-  await import('../model-assets');
+  await import('@/lib/models/generated-assets');
 const { createScopedDb } = await import('@/lib/db/scoped');
 
 /** A realistic fal input schema slice (flux-style). */

@@ -6,16 +6,17 @@
  *
  *   resolve style → build EnhanceScriptInput → stream deltas as SSE
  *
- * Server-only (imports the AI stack via `@/functions/ai`); kept separate from
+ * Server-only (imports the AI stack via `@/lib/ai/script-enhancement`); kept
+ * separate from
  * `enhance-input-schema.ts` so discovery/OpenAPI can import the schema without
  * pulling this in.
  */
 
+import type { EnhanceScriptInput } from '@/functions/ai';
 import {
   type EnhanceChunk,
-  type EnhanceScriptInput,
   streamScriptEnhancement,
-} from '@/functions/ai';
+} from '@/lib/ai/script-enhancement';
 import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
 import { aspectRatioSchema } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
