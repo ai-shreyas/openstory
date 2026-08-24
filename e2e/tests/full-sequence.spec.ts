@@ -129,7 +129,7 @@ testWithUser.describe('Full Sequence Pipeline', () => {
     // Pull seeded system talent + locations rather than fabricating ones
     // with placeholder URLs — workflows need real R2 reference images for
     // character/location matching and sheet rendering. The seed runs in
-    // globalSetup (see e2e/global-setup.ts).
+    // e2e/start-webserver.ts before Workerd starts.
     testTalents = [
       await getSystemTalentByName('Sienna Blake'),
       await getSystemTalentByName('Jude Calloway'),

@@ -52,7 +52,7 @@ function ensureSeededOnce(db: D1Database, e2eTest?: string): Promise<void> {
     );
     // Production pricing stays cron-only. Playwright never fires
     // `scheduled()`, and workflow isolates never hit this fetch path, so
-    // e2e also seeds from `scripts/seed.ts --test` in globalSetup. This
+    // e2e also seeds from `scripts/seed.ts --test` in start-webserver. This
     // insert-if-missing pass is the safety net when that CLI seed and the
     // worker D1 diverge.
     if (e2eTest === 'true') {

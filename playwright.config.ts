@@ -124,13 +124,14 @@ export default defineConfig({
     // on the shared .wrangler D1 SQLite under parallel workers. All direct DB
     // access from playwright fixtures has been migrated to the guarded
     // /api/test/* routes (which execute inside the single in-process Miniflare
-    // of the vite server). The comment above is retained for history; the
-    // lock risk from fixtures is now eliminated. `vite preview` still provides
-    // consistent built-server testing.
+    // of the vite server). Migrate/seed runs in start-webserver.ts *before*
+    // vite so a second Miniflare is never opened against a live Workerd D1
+    // (SQLITE_BUSY_RECOVERY). `vite preview` still provides consistent
+    // built-server testing.
     return {
       command: useBuiltServer
-        ? `${envPrefix} vite preview --port=3001`
-        : `${envPrefix} vite dev --port=3001`,
+        ? `${envPrefix} bun e2e/start-webserver.ts preview --port=3001`
+        : `${envPrefix} bun e2e/start-webserver.ts dev --port=3001`,
       // Wait for the TCP port, not an HTTP 2xx — SSR errors should surface to
       // the individual specs via `page.goto()` rather than fail server boot.
       port: 3001,
