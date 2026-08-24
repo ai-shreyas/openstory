@@ -44,6 +44,8 @@ export type SequenceExportState = {
   latestExportUrl: string | null;
   /** Latest export URL only when it was built from the current scenes + music choice. */
   freshExportUrl: string | null;
+  /** False while the exports list / input hash are still loading — `freshExportUrl` is unknown, not absent. */
+  isCacheResolved: boolean;
   start: () => void;
   /** Download the fresh export, or export first then download. */
   download: () => void;
@@ -58,7 +60,7 @@ export function useSequenceExport(
   const sequenceId = sequence?.id ?? '';
   const { data: shots } = useShotsBySequence(sequence?.id);
 
-  const { data: exports } = useQuery({
+  const { data: exports, isLoading: exportsLoading } = useQuery({
     queryKey: sequenceExportKeys.list(sequenceId),
     queryFn: () => listSequenceExportsFn({ data: { sequenceId } }),
     staleTime: 5_000,
@@ -74,11 +76,16 @@ export function useSequenceExport(
       musicUrl: sequence.includeMusic ? (sequence.musicUrl ?? null) : null,
     });
   }, [sequence, shots]);
-  const { data: inputsHash } = useQuery({
+  const {
+    data: inputsHash,
+    error: inputsHashError,
+    isLoading: hashLoading,
+  } = useQuery({
     queryKey: ['sequence-export-inputs-hash', inputsKey],
     queryFn: () => sha256Hex(inputsKey ?? ''),
     enabled: inputsKey !== null,
     staleTime: Infinity,
+    retry: false,
   });
 
   const [isRunning, setIsRunning] = useState(false);
@@ -108,6 +115,14 @@ export function useSequenceExport(
         throw new Error(
           `${shots.length - scenes.length} of ${shots.length} scenes are still generating.`
         );
+      }
+
+      // A null hash would commit an uncacheable row and silently disable the
+      // fresh-export path for everyone — fail loudly instead.
+      if (!inputsHash) {
+        throw new Error('Could not fingerprint the scenes for export.', {
+          cause: inputsHashError,
+        });
       }
 
       const reservation = await requestSequenceExportUploadUrlFn({
@@ -157,7 +172,7 @@ export function useSequenceExport(
           sequenceId: sequence.id,
           path: reservation.path,
           durationSeconds,
-          sourceShotsHash: inputsHash ?? null,
+          sourceShotsHash: inputsHash,
         },
       });
       return { reEncoded, url: committed.url, downloadOnDone };
@@ -222,6 +237,7 @@ export function useSequenceExport(
     progress,
     latestExportUrl: latest?.url ?? null,
     freshExportUrl,
+    isCacheResolved: !exportsLoading && !hashLoading,
     start,
     download,
     abort,
@@ -232,6 +248,10 @@ function triggerDownload(url: string, title: string | null | undefined): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `${title || 'sequence'}_openstory.mp4`;
+  // Browsers ignore `download` on cross-origin hrefs (the CDN domain in prod)
+  // and would navigate the theatre tab away — open in a new tab instead.
+  a.target = '_blank';
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

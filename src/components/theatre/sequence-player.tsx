@@ -1,10 +1,12 @@
 /**
- * Live in-browser theatre player. Stitches scene videos + a single music track
- * via Mediabunny, without ever producing a merged-MP4 artifact server-side.
+ * Live in-browser theatre player. When `cachedVideoUrl` (an export whose input
+ * hash matches the current scenes + music choice, #1253) is available it plays
+ * that MP4 natively; otherwise it stitches scene videos + music via Mediabunny
+ * on a canvas.
  *
  * Falls back to a CTA ("Export as MP4 to download") when the browser can't
- * decode the source codecs — this is the only path to a fallback. The export
- * pipeline lives in `src/lib/sequence-player/export.ts`.
+ * decode the source codecs. The export pipeline lives in
+ * `src/lib/sequence-player/export.ts`.
  */
 
 import { Button } from '@/components/ui/button';
@@ -45,20 +47,23 @@ type SequencePlayerProps = {
    * `musicUrl` is null this is moot — no music toggle is shown.
    */
   musicEnabled: boolean;
-  /** Persist the music on/off choice (see TheatreView → setSequenceMusicFn). */
+  /** Persist the music on/off choice (see SceneCanvas → useSetSequenceMusic). */
   onMusicEnabledChange: (enabled: boolean) => void;
   aspectRatio: AspectRatio;
   className?: string;
-  /** Slot rendered as an overlay (top-right) — e.g. the Share dropdown. */
+  /** Slot rendered as an overlay (top-right) — e.g. the Download / Share actions. */
   overlayActions?: React.ReactNode;
-  /** Still shown behind the loading state so the user isn't staring at a blank skeleton (#1253). */
+  /** Still shown behind the loading state (and as the native `<video>` poster) so the user isn't staring at a blank skeleton (#1253). */
   posterUrl?: string | null;
   /**
    * A ready-made MP4 of exactly these scenes + music choice (the latest
    * export whose input hash matches). When set, plays natively instead of
    * stitching in the browser — one progressive download, instant first frame.
+   * `undefined` = lookup still pending: show the poster and don't start the
+   * stitching engine yet (it would be torn down the moment the cache lands).
+   * `null` = no fresh export, stitch.
    */
-  cachedVideoUrl?: string | null;
+  cachedVideoUrl: string | null | undefined;
 };
 
 export const SequencePlayer: React.FC<SequencePlayerProps> = ({
@@ -86,9 +91,10 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || cachedVideoUrl) return;
+    if (!canvas || cachedVideoUrl !== null) return;
     setMeta(null);
     setLoadedScenes(0);
+    setError(null);
     if (scenes.length === 0) {
       setError('No scenes ready to play yet.');
       return;
@@ -153,11 +159,18 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
   const togglePlay = () => {
     const engine = engineRef.current;
     if (!engine) return;
-    if (engine.isPlaying()) {
+    // Branch on React state, not engine.isPlaying(): the first play() waits on
+    // background dialogue decode and the engine isn't "playing" until then.
+    // Optimistic Pause during that wait; pause() cancels the pending play.
+    if (playing) {
       engine.pause();
       setPlaying(false);
     } else {
-      void engine.play().then(() => setPlaying(true));
+      setPlaying(true);
+      void engine
+        .play()
+        .then(() => setPlaying(engine.isPlaying()))
+        .catch(() => setPlaying(false));
     }
   };
 
@@ -253,9 +266,11 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
             aria-live="polite"
             className="absolute inset-x-0 bottom-3 text-center text-xs text-white/80"
           >
-            {loadedScenes < scenes.length
-              ? `Loading scene ${loadedScenes + 1} of ${scenes.length}…`
-              : 'Preparing playback…'}
+            {cachedVideoUrl === undefined
+              ? 'Loading…'
+              : loadedScenes < scenes.length
+                ? `Loading scene ${loadedScenes + 1} of ${scenes.length}…`
+                : 'Preparing playback…'}
           </p>
         </>
       )}

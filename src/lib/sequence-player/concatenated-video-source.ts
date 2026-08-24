@@ -110,12 +110,22 @@ export type SceneAudioTrack = {
   track: InputAudioTrack;
 };
 
+type OpenedScene = {
+  input: Input;
+  videoTrack: InputVideoTrack;
+  audioTrack: InputAudioTrack | null;
+  duration: number;
+  dimensions: SceneDimensions;
+  codecProbe: SceneCodecProbe;
+};
+
 export class ConcatenatedVideoSource {
   private readonly scenes: SceneInput[];
   private inputs: Input[] = [];
   private videoTracks: InputVideoTrack[] = [];
   private audioTracks: Array<InputAudioTrack | null> = [];
   private meta: ConcatenatedVideoMeta | null = null;
+  private disposed = false;
 
   constructor(scenes: SceneInput[]) {
     if (scenes.length === 0) {
@@ -139,13 +149,26 @@ export class ConcatenatedVideoSource {
     // header fetch is latency-bound, so N sequential opens meant N round-trips
     // before the first frame could show (#1253). Order is preserved by index.
     let loaded = 0;
-    const opened = await Promise.all(
+    const settled = await Promise.allSettled(
       this.scenes.map(async (scene, i) => {
         const result = await this.openScene(scene, i);
         onProgress?.(++loaded, this.scenes.length);
         return result;
       })
     );
+    const opened: OpenedScene[] = [];
+    let failure: unknown = null;
+    for (const s of settled) {
+      if (s.status === 'fulfilled') opened.push(s.value);
+      else failure ??= s.reason;
+    }
+    // Nothing is assigned to `this.inputs` until below, so a dispose() that
+    // ran mid-open couldn't reach these — release them here.
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
+    if (failure !== null || this.disposed) {
+      for (const o of opened) o.input.dispose();
+      throw failure ?? new Error('ConcatenatedVideoSource disposed');
+    }
     const inputs = opened.map((o) => o.input);
     const videoTracks = opened.map((o) => o.videoTrack);
     const audioTracks = opened.map((o) => o.audioTrack);
@@ -185,11 +208,20 @@ export class ConcatenatedVideoSource {
     return this.meta;
   }
 
-  private async openScene(scene: SceneInput, i: number) {
+  private async openScene(scene: SceneInput, i: number): Promise<OpenedScene> {
     const input = new Input({
       formats: ALL_FORMATS,
       source: new UrlSource(addCorsCacheBuster(scene.videoUrl)),
     });
+    try {
+      return await this.probeScene(input, i);
+    } catch (err) {
+      input.dispose();
+      throw err;
+    }
+  }
+
+  private async probeScene(input: Input, i: number): Promise<OpenedScene> {
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) {
       throw new Error(`Scene ${i} has no video track`);
@@ -225,8 +257,9 @@ export class ConcatenatedVideoSource {
       );
     }
 
-    // Probe transmux-safety inputs; the verdict is computed once after the
-    // loop (see `canTransmuxScenes`) and stored on `meta.canTransmux`.
+    // Probe transmux-safety inputs; the verdict is computed once in `prepare()`
+    // after every scene is open (see `canTransmuxScenes`) and stored on
+    // `meta.canTransmux`.
     const codec = await videoTrack.getCodec();
     const decoderConfig =
       codec === 'avc' ? await videoTrack.getDecoderConfig() : null;
@@ -428,6 +461,7 @@ export class ConcatenatedVideoSource {
 
   /** Release every underlying `Input` — call when the source is no longer needed. */
   dispose(): void {
+    this.disposed = true;
     for (const input of this.inputs) input.dispose();
     this.inputs = [];
     this.videoTracks = [];

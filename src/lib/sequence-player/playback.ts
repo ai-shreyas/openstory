@@ -7,9 +7,11 @@
  *   continuity + global timestamps).
  * - A music `Input` + `AudioBufferSink` mixed through a music-only `GainNode`
  *   that applies the variant's measured loudness gain.
- * - Per-scene dialogue audio decoded once in `prepare()` and scheduled as
- *   `AudioBufferSourceNode`s on `play()` / `seek()`, routed through a master
- *   gain node so dialogue is not attenuated by the music loudness gain.
+ * - Per-scene dialogue audio decoded in the background after `prepare()`
+ *   resolves (first frame first, #1253); `play()` awaits it, then clips are
+ *   scheduled as `AudioBufferSourceNode`s on `play()` / `seek()`, routed
+ *   through a master gain node so dialogue is not attenuated by the music
+ *   loudness gain.
  * - Codec gating up front via `prepare()`; throws so the React component can
  *   render a fallback CTA.
  *
@@ -112,6 +114,8 @@ export class SequencePlayerEngine {
   private meta: SequencePlayerMeta | null = null;
 
   private playing = false;
+  /** play() was called and is waiting on dialogue decode; pause() cancels it. */
+  private playRequested = false;
   private playbackTimeAtStart = 0;
   private audioContextStartTime: number | null = null;
 
@@ -208,10 +212,11 @@ export class SequencePlayerEngine {
     this.startRenderLoop();
 
     // Per-scene dialogue/VO lives in each scene video's embedded audio track.
-    // Decode in the background (after the first frame is up) so play()/seek()
-    // can schedule against the AudioContext clock without async IO in the hot
-    // path. A single failing track shouldn't kill the whole player — log and
-    // stay silent for that scene.
+    // Decode in the background so the first frame + controls show as soon as
+    // the headers are open. `play()` awaits `dialogueReady` before scheduling,
+    // so the first play may wait on this; after that, play()/seek() schedule
+    // against the AudioContext clock with no async IO. A single failing track
+    // shouldn't kill the whole player — log and stay silent for that scene.
     this.dialogueReady = (async () => {
       const dialogueClips: DialogueClip[] = [];
       for (const {
@@ -225,6 +230,10 @@ export class SequencePlayerEngine {
           if (!buffer) continue;
           dialogueClips.push({ buffer, sceneOffsetSeconds });
         } catch (err) {
+          // dispose() tears the Inputs down under an in-flight decode; that
+          // rejection isn't a broken track.
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
+          if (this.disposed) return;
           logger.warn(
             `SequencePlayerEngine: failed to decode embedded audio for scene ${sceneIndex}`,
             { err }
@@ -264,14 +273,22 @@ export class SequencePlayerEngine {
   }
 
   async play(): Promise<void> {
-    if (this.playing || !this.audioContext || !this.meta) return;
-
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+    if (this.playRequested || this.playing || !this.audioContext || !this.meta)
+      return;
+    this.playRequested = true;
+    try {
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+      }
+      await this.dialogueReady;
+    } catch (err) {
+      this.playRequested = false;
+      throw err;
     }
-    await this.dialogueReady;
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- both can flip during the await
-    if (this.playing || this.disposed) return;
+    const cancelled = !this.playRequested;
+    this.playRequested = false;
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
+    if (cancelled || this.disposed) return;
 
     if (this.playbackTimeAtStart >= this.meta.durationSeconds) {
       // Snap back to the start if we ran off the end
@@ -292,6 +309,7 @@ export class SequencePlayerEngine {
   }
 
   pause(): void {
+    this.playRequested = false;
     if (!this.playing) return;
     this.playbackTimeAtStart = this.getPlaybackTime();
     this.playing = false;

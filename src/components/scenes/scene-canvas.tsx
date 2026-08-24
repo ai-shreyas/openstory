@@ -124,9 +124,15 @@ const TheatreShareOverlay: React.FC<{
             variant="ghost"
             size="icon"
             className="h-8 w-8 bg-black/50 text-white hover:bg-black/70"
-            aria-label="Download MP4"
+            aria-label={
+              sequenceExport.isRunning
+                ? formatExportProgress(sequenceExport.progress)
+                : 'Download MP4'
+            }
+            aria-busy={sequenceExport.isRunning}
+            // Stays enabled while running (download() no-ops) so the tooltip
+            // can show progress — disabled buttons emit no pointer events.
             onClick={sequenceExport.download}
-            disabled={sequenceExport.isRunning}
           >
             {sequenceExport.isRunning ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -326,7 +332,11 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         className="h-full max-h-none w-full"
         posterUrl={scopedShots[0]?.image?.url ?? sequence.posterUrl}
         cachedVideoUrl={
-          scope === 'sequence' ? sequenceExport.freshExportUrl : null
+          scope !== 'sequence'
+            ? null
+            : sequenceExport.isCacheResolved
+              ? sequenceExport.freshExportUrl
+              : undefined
         }
         overlayActions={
           scope === 'sequence' ? (
