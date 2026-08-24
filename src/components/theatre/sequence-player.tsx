@@ -296,6 +296,13 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
             </TooltipContent>
           </Tooltip>
         )}
+        {musicUrl && (
+          <MusicToggle
+            enabled={musicEnabled}
+            onToggle={() => onMusicEnabledChange(!musicEnabled)}
+            className="bg-black/50 hover:bg-black/70"
+          />
+        )}
         {overlayActions}
       </div>
       {meta && (
@@ -306,13 +313,10 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
           volume={volume}
           muted={muted || !meta.hasAudio}
           hasAudio={meta.hasAudio}
-          hasMusic={Boolean(musicUrl)}
-          musicEnabled={musicEnabled}
           onTogglePlay={togglePlay}
           onSeek={seek}
           onVolumeChange={setVolume}
           onToggleMute={() => setMuted((m) => !m)}
-          onToggleMusic={() => onMusicEnabledChange(!musicEnabled)}
         />
       )}
     </div>
@@ -326,14 +330,10 @@ type PlayerControlsProps = {
   volume: number;
   muted: boolean;
   hasAudio: boolean;
-  /** The sequence has a music track, so the music on/off toggle is shown. */
-  hasMusic: boolean;
-  musicEnabled: boolean;
   onTogglePlay: () => void;
   onSeek: (seconds: number) => void;
   onVolumeChange: (v: number) => void;
   onToggleMute: () => void;
-  onToggleMusic: () => void;
 };
 
 const PlayerControls: React.FC<PlayerControlsProps> = ({
@@ -343,13 +343,10 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   volume,
   muted,
   hasAudio,
-  hasMusic,
-  musicEnabled,
   onTogglePlay,
   onSeek,
   onVolumeChange,
   onToggleMute,
-  onToggleMusic,
 }) => {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
@@ -388,9 +385,6 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           {formatTimestamp(currentTime)} / {formatTimestamp(duration)}
         </span>
         <div className="flex-1" />
-        {hasMusic && (
-          <MusicToggle enabled={musicEnabled} onToggle={onToggleMusic} />
-        )}
         {hasAudio && (
           <div className="flex items-center gap-2">
             <Button
