@@ -26,12 +26,7 @@ import { ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
 import { type AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { ResolvedApiKey } from '@/lib/db/scoped/api-keys';
 import type { CredentialScopedDb } from '@/lib/db/scoped-workflow';
-import { MOTION_JSON_SCHEMAS } from '@/lib/motion/endpoint-map';
-import {
-  getDurationValues,
-  numericOf,
-  snapTo,
-} from '@/lib/motion/motion-transform';
+import { snapDuration } from '@/lib/motion/snap-duration';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import {
   ensureExternallyFetchableUrl,
@@ -70,23 +65,6 @@ export type GenerateMotionOptions = {
    */
   referenceImages?: ReferenceImageDescription[];
 };
-
-/** Snap a requested duration to the nearest valid value for a model.
- *  Reads supported durations from the model's JSON Schema and snaps directly. */
-export function snapDuration(
-  requested: number | undefined,
-  modelKey: ImageToVideoModel
-): number {
-  const endpointId = IMAGE_TO_VIDEO_MODELS[modelKey].id;
-  const jsonSchema = MOTION_JSON_SCHEMAS[endpointId];
-  const validValues = getDurationValues(jsonSchema);
-
-  const firstValue = validValues[0];
-  if (firstValue === undefined) return requested ?? 5;
-
-  const target = requested ?? numericOf(firstValue);
-  return numericOf(snapTo(target, validValues));
-}
 
 export type MotionJobSubmission = {
   jobId: string;

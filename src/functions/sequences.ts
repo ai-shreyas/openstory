@@ -16,6 +16,7 @@ import {
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
+import { sumShotDurationsSeconds } from '@/lib/sequences/shot-durations';
 import { multiplyMicros } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
@@ -371,20 +372,6 @@ export function selectEligibleVideoShots(
 ): ShotView[] {
   return shots.filter(
     (f) => f.frame.imageStatus === 'completed' && Boolean(f.image?.url)
-  );
-}
-
-/**
- * Sum a sequence's per-shot durations in seconds, falling back to 10s for any
- * shot whose duration is unknown. Shared by the add-audio and generate-music
- * paths; callers apply their own empty-sequence floor (`|| 30`).
- */
-export function sumShotDurationsSeconds(
-  shots: ReadonlyArray<Pick<Shot, 'durationMs'>>
-): number {
-  return shots.reduce(
-    (sum, shot) => sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
-    0
   );
 }
 

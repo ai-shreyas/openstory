@@ -10,7 +10,7 @@
  * the enhanced script when enhancement ran.
  */
 
-import { enhanceScriptToString } from '@/functions/ai';
+import { enhanceScriptToString } from '@/lib/ai/script-enhancement';
 import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
 import { isShortScript } from '@/lib/ai/should-enhance';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';

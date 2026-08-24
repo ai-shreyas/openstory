@@ -178,6 +178,7 @@
     "@tanstack/react-devtools": "^0.10.10",
     "@tanstack/react-query-devtools": "^5.101.4",
     "@tanstack/react-router-devtools": "^1.167.1",
+    "@tanstack/router-utils": "^1.162.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.4",

@@ -30,7 +30,7 @@ import {
 } from '@/lib/ai/models';
 import { microsToUsd, type Microdollars } from '@/lib/billing/money';
 import { buildModelInput } from '@/lib/motion/build-model-input';
-import { snapDuration } from '@/lib/motion/motion-generation';
+import { snapDuration } from '@/lib/motion/snap-duration';
 import { typedEntries } from '@/lib/utils/typed-object';
 import { createFalClient } from '@fal-ai/client';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';

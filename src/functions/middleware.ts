@@ -13,8 +13,6 @@ import type { Session, User } from '@/lib/auth/config';
 import { getAuth } from '@/lib/auth/config';
 import { isSystemAdmin, requireSystemAdmin } from '@/lib/auth/system-admin';
 import { APIError } from 'better-auth/api';
-import { isStripeEnabled } from '@/lib/billing/constants';
-import { getStripeOrThrow, getStripeWebhookSecret } from '@/lib/billing/stripe';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import {
   createScopedDb,
@@ -43,7 +41,6 @@ import type { Shot, Sequence } from '@/types/database';
 import { createMiddleware } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { zodValidator } from '@tanstack/zod-adapter';
-import type Stripe from 'stripe';
 import { z } from 'zod';
 
 // ============================================================================
@@ -61,13 +58,6 @@ export type TeamContext = AuthContext & {
 };
 
 export type SystemAdminContext = TeamContext;
-
-export type StripeWebhookContext = {
-  stripeEvent: Stripe.Event | null;
-  scopedDb: ScopedDb | null;
-  teamId: string | null;
-  userId: string | null;
-};
 
 export type SequenceContext = TeamContext & {
   sequence: Sequence;
@@ -365,98 +355,6 @@ export const authWithTeamRequestMiddleware = createMiddleware().server(
       });
     } finally {
       await scheduleFlushAnalytics();
-    }
-  }
-);
-
-/**
- * Stripe webhook signature verification middleware — for use with server routes.
- * Verifies the stripe-signature header and passes the validated event via context.
- * When Stripe is disabled, passes stripeEvent: null so the handler can early-return.
- */
-export const stripeWebhookMiddleware = createMiddleware().server(
-  async ({ next, request }) => {
-    if (!isStripeEnabled()) {
-      return next({
-        context: {
-          stripeEvent: null as Stripe.Event | null,
-          scopedDb: null as ScopedDb | null,
-          teamId: null as string | null,
-          userId: null as string | null,
-        },
-      });
-    }
-
-    const stripe = getStripeOrThrow();
-    const webhookSecret = getStripeWebhookSecret();
-    if (!webhookSecret) {
-      throw Response.json(
-        { error: 'Webhook secret not configured' },
-        { status: 500 }
-      );
-    }
-
-    const body = await request.text();
-    const signature = request.headers.get('stripe-signature');
-    if (!signature) {
-      throw Response.json(
-        { error: 'Missing stripe-signature header' },
-        { status: 400 }
-      );
-    }
-
-    try {
-      const event = await stripe.webhooks.constructEventAsync(
-        body,
-        signature,
-        webhookSecret
-      );
-
-      const obj = event.data.object;
-
-      if (
-        !('metadata' in obj) ||
-        typeof obj.metadata !== 'object' ||
-        obj.metadata === null
-      ) {
-        throw Response.json(
-          { error: `Stripe event ${event.id} missing metadata` },
-          { status: 400 }
-        );
-      }
-      const metadata = obj.metadata;
-      if (!('teamId' in metadata && 'userId' in metadata)) {
-        throw Response.json(
-          {
-            error: `Stripe event ${event.id} missing teamId or userId in metadata`,
-          },
-          { status: 400 }
-        );
-      }
-
-      const teamId = metadata.teamId;
-      const userId = metadata.userId;
-      if (typeof teamId !== 'string' || typeof userId !== 'string') {
-        throw Response.json(
-          {
-            error: `Stripe event ${event.id} missing teamId or userId in metadata`,
-          },
-          { status: 400 }
-        );
-      }
-      return next({
-        context: {
-          stripeEvent: event,
-          scopedDb: createScopedDb(teamId, userId),
-          teamId,
-          userId,
-        },
-      });
-    } catch (error) {
-      // Metadata validation throws Response above; rethrow as-is. Anything
-      // else (signature verify failure, malformed body) is an invalid webhook.
-      if (error instanceof Response) throw error;
-      throw Response.json({ error: 'Invalid signature' }, { status: 400 });
     }
   }
 );

@@ -1,47 +1,41 @@
 /**
  * AI Server Functions
  * End-to-end type-safe functions for AI operations
+ *
+ * The client imports this file for its RPC stubs, and the Start compiler
+ * keeps everything still REFERENCED outside handler bodies in the client
+ * bundle (imports used only inside handler bodies are dead-code-eliminated) —
+ * so no heavy server module may be referenced at module level or from an
+ * exported helper here (#1257). The enhancement core lives in
+ * `@/lib/ai/script-enhancement`; handlers reference it only inside their
+ * bodies, which the compiler strips.
  */
 
-import { getEnv } from '#env';
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import {
   callLLMStream,
-  ENHANCE_REASONING,
   llmCostFromUsage,
   RECOMMENDED_MODELS,
 } from '@/lib/ai/llm-client';
 import { isValidAnalysisModelId } from '@/lib/ai/models.config';
-import {
-  checkForInjectionAttempts,
-  sanitizeScriptContent,
-} from '@/lib/ai/prompt-validation';
+import { sanitizeScriptContent } from '@/lib/ai/prompt-validation';
 import {
   sceneDurationResponseSchema,
   styleRecommendationResponseSchema,
 } from '@/lib/ai/response-schemas';
 import {
-  createUserPrompt,
   RateLimiter,
   scriptEnhancementRateLimiter,
 } from '@/lib/ai/script-enhancer';
-import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
-import { estimateLLMCost } from '@/lib/billing/cost-estimation';
-import type { Microdollars } from '@/lib/billing/money';
+import {
+  prepareBilling,
+  streamScriptEnhancement,
+} from '@/lib/ai/script-enhancement';
 import { aspectRatioSchema } from '@/lib/constants/aspect-ratios';
 import { type Style } from '@/lib/db/schema/libraries';
 import { parseStyleConfig, StyleConfigSchema } from '@/lib/style/style-config';
-import type { ScopedDb } from '@/lib/db/scoped';
-import type { ResolvedLlmKey } from '@/lib/db/scoped/api-keys';
-import { InsufficientCreditsError } from '@/lib/errors';
-import {
-  getPrompt,
-  type ChatMessage,
-  type ChatMessageContentPart,
-} from '@/lib/prompts';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
-import { toVisionImageSource } from '@/lib/storage/external-url';
-import { createServerFn, createServerOnlyFn } from '@tanstack/react-start';
+import { createServerFn } from '@tanstack/react-start';
 import { getRequest } from '@tanstack/react-start/server';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
@@ -91,52 +85,6 @@ function enforceRateLimit(limiter: RateLimiter, key: string): void {
   throw new Error(
     `Rate limit exceeded. Please try again in ${Math.ceil(remainingMs / 1000)} seconds.`
   );
-}
-
-/**
- * Check pre-flight billing and resolve the key for the LLM call.
- * `deduct` is undefined when billing is skipped — the team's own key pays,
- * either their OpenRouter key or their fal key routed through fal's
- * OpenRouter endpoint (issue #895).
- */
-async function prepareBilling(
-  scopedDb: ScopedDb,
-  description: string,
-  metadata?: Record<string, unknown>
-): Promise<{
-  llmKey: ResolvedLlmKey;
-  deduct?: (actualCost: Microdollars) => Promise<void>;
-}> {
-  const model =
-    typeof metadata?.model === 'string' ? metadata.model : undefined;
-  const llmKey = await scopedDb.apiKeys.resolveLlmKey(model);
-  if (llmKey.source === 'team') return { llmKey };
-
-  const estimatedCost = estimateLLMCost(1);
-  const canAfford = await scopedDb.billing.hasEnoughCredits(estimatedCost);
-  if (!canAfford) {
-    throw new InsufficientCreditsError(
-      `Insufficient credits for ${description.toLowerCase()}`
-    );
-  }
-
-  return {
-    llmKey,
-    deduct: async (actualCost) => {
-      if (actualCost > 0) {
-        await scopedDb.billing.deductCredits(actualCost, {
-          description,
-          metadata,
-        });
-        return;
-      }
-      reportMissingBillingCost({
-        source: 'server-fn-deduct',
-        description,
-        metadata,
-      });
-    },
-  };
 }
 
 // -- Shorten Prompt --
@@ -328,168 +276,12 @@ const enhanceScriptInputSchema = z.object({
 
 export type EnhanceScriptInput = z.infer<typeof enhanceScriptInputSchema>;
 
-/**
- * One shot of an enhancement stream. Script text arrives as `delta`; the
- * model's reasoning, while its thinking pass runs, arrives as `reasoning` on
- * chunks whose `delta` is `''`.
- *
- * The two channels are kept in one stream so the UI can interleave them in
- * order, and split by field rather than by a tag so a consumer that only reads
- * `delta` — `enhanceScriptToString`, the API's SSE writer — needs no changes
- * and can never splice thinking into the script.
- */
-export type EnhanceChunk = { delta: string; reasoning?: string };
-
-/**
- * Core script-enhancement generator, shared by the streaming server function
- * (which yields deltas to the browser) and the public API's one-shot create
- * flow (which drains it to a full string). Single source of truth for billing,
- * sanitization, and the prompt/model choice.
- *
- * Note: this is a *server-only* helper but lives in a module the client imports
- * (for the `enhanceScriptStreamFn` stub). It must NOT reference request-scoped
- * server-only APIs (e.g. `getRequest`/`getClientIP`) at this level, or the
- * import-protection plugin will pull them into the client bundle. IP
- * rate-limiting therefore lives in the serverFn handler below; the public API
- * path is throttled by its per-key rate limit instead.
- */
-export async function* streamScriptEnhancement(
-  data: EnhanceScriptInput,
-  ctx: { scopedDb: ScopedDb; userId: string; teamId: string }
-): AsyncGenerator<EnhanceChunk> {
-  const model =
-    data.analysisModel && isValidAnalysisModelId(data.analysisModel)
-      ? data.analysisModel
-      : RECOMMENDED_MODELS.creative;
-
-  const { llmKey, deduct } = await prepareBilling(
-    ctx.scopedDb,
-    'Script enhancement',
-    { model }
-  );
-
-  if (checkForInjectionAttempts(data.script)) {
-    logger.warn('Script enhancement: Potential injection attempt detected');
-  }
-
-  const sanitized = sanitizeScriptContent(data.script);
-  const { compiled } = await getPrompt('script/enhance');
-  const elements = data.elements ?? [];
-  const userPrompt = createUserPrompt(sanitized, {
-    style: data.style,
-    aspectRatio: data.aspectRatio,
-    targetDuration: data.targetDuration,
-    elements: elements.length > 0 ? elements : undefined,
-  });
-
-  const systemMessage = `${compiled}\n\nReturn ONLY the enhanced script text. No JSON, no markdown formatting, no explanations.`;
-
-  // Element images must be made externally fetchable before the LLM call: in
-  // local dev they're `http://localhost/r2/…` URLs that only resolve on this
-  // machine, so providers can't fetch them. toVisionImageSource inlines those as
-  // base64 data parts and passes externally-reachable URLs through (it gates on
-  // local-serve mode, not the URL scheme) — the same shim the element-vision
-  // call already uses. A failed/expired image aborts the whole enhance, so log
-  // which element broke before rethrowing: the raw "Failed to read local storage
-  // object …" is otherwise undiagnosable.
-  const imageParts = await Promise.all(
-    elements.map<Promise<ChatMessageContentPart>>(async (el) => {
-      try {
-        return {
-          type: 'image',
-          source: await toVisionImageSource(el.imageUrl),
-        };
-      } catch (cause) {
-        logger.error('Script enhancement: failed to load element image', {
-          token: el.token,
-          imageUrl: el.imageUrl,
-          teamId: ctx.teamId,
-          userId: ctx.userId,
-          error: cause instanceof Error ? cause.message : String(cause),
-        });
-        throw new Error(
-          `Couldn't load element image "${el.token}" for script enhancement`,
-          { cause }
-        );
-      }
-    })
-  );
-  const userContent: string | ChatMessageContentPart[] =
-    elements.length > 0
-      ? [{ type: 'text', content: userPrompt }, ...imageParts]
-      : userPrompt;
-
-  const messages: ChatMessage[] = [
-    { role: 'system', content: systemMessage },
-    { role: 'user', content: userContent },
-  ];
-
-  // Web search runs as OpenRouter's server tool — the model decides when to
-  // search and OpenRouter executes it server-side within the agent loop.
-  // Gate it out of E2E entirely (record + replay): live search results would
-  // make the recorded OpenRouter request/response non-deterministic.
-  const useWebSearch = getEnv().E2E_TEST !== 'true';
-  let usage;
-  for await (const chunk of callLLMStream({
-    model,
-    messages,
-    // No max_tokens: every model routes through OpenRouter, which falls back
-    // to the model's own max output when the field is omitted — so long
-    // scripts use the full available output budget instead of an artificial
-    // cap, and the #915 truncation (seen when this was a flat 4000) can't
-    // recur.
-    temperature: 0.7,
-    ...(useWebSearch && { webSearch: true }),
-    // Always on at `low`. Omitting this on Grok 4.6 (the default) falls through
-    // to xAI's `high` — sending `low` is the fastest we can ask for. Workflows
-    // keep PROMPT_REASONING (`medium`); latency is hidden there.
-    reasoning: ENHANCE_REASONING,
-    observationName: 'script-enhance',
-    tags: ['script-enhance', model],
-    userId: ctx.userId,
-    apiKey: llmKey,
-    metadata: {
-      teamId: ctx.teamId,
-      elementCount: elements.length,
-      targetDuration: data.targetDuration,
-      aspectRatio: data.aspectRatio,
-    },
-  })) {
-    if (chunk.delta) {
-      yield { delta: chunk.delta };
-    }
-    if (!chunk.done && chunk.reasoning) {
-      yield { delta: '', reasoning: chunk.reasoning };
-    }
-    if (chunk.done) usage = chunk.usage;
-  }
-
-  await deduct?.(llmCostFromUsage(usage, model));
-}
-
-/**
- * Run script enhancement to completion and return the full enhanced text.
- * Used by the public API where there is no client streaming channel.
- */
-export const enhanceScriptToString = createServerOnlyFn(
-  async (
-    data: EnhanceScriptInput,
-    ctx: { scopedDb: ScopedDb; userId: string; teamId: string }
-  ): Promise<string> => {
-    let enhanced = '';
-    for await (const { delta } of streamScriptEnhancement(data, ctx)) {
-      enhanced += delta;
-    }
-    return enhanced.trim();
-  }
-);
-
 export const enhanceScriptStreamFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(enhanceScriptInputSchema))
   .handler(async function* ({ data, context }) {
-    // IP rate-limit the dashboard path here (kept out of the shared core so the
-    // core stays free of request-scoped server-only APIs — see note above).
+    // IP rate-limit the dashboard path here: the shared core is also driven
+    // by the public API path, which throttles per-key instead.
     enforceRateLimit(scriptEnhancementRateLimiter, getClientIP());
     yield* streamScriptEnhancement(data, {
       scopedDb: context.scopedDb,

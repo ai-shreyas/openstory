@@ -3,7 +3,7 @@
  * POST /api/billing/webhook - Handle Stripe webhook events
  */
 
-import { stripeWebhookMiddleware } from '@/functions/middleware';
+import { stripeWebhookMiddleware } from '@/functions/stripe-webhook-middleware';
 import { microsToDisplayUsd, usdToMicros } from '@/lib/billing/money';
 import { getStripeOrThrow } from '@/lib/billing/stripe';
 import { getPostHogClient } from '@/lib/posthog-server';

@@ -19,7 +19,6 @@ import {
   negateMicros,
   ZERO_MICROS,
 } from '@/lib/billing/money';
-import { getStripeOrThrow } from '@/lib/billing/stripe';
 import type { Database } from '@/lib/db/client';
 import {
   creditBatches,
@@ -580,6 +579,10 @@ export function createBillingMethods(
 
     const topUpMicros = micros(settings.autoTopUpAmountMicros);
 
+    // Dynamic import: this module is in the client module graph (via
+    // middleware → scoped), and a static `stripe` import ships the Stripe
+    // Node SDK to the browser (#1253). Only the server ever runs this path.
+    const { getStripeOrThrow } = await import('@/lib/billing/stripe');
     const stripe = getStripeOrThrow();
     const amountCents = totalCheckoutCents(topUpMicros);
 
