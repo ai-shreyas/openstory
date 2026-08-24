@@ -263,11 +263,12 @@ export function NewSequencePage({
         padding="spacious"
         fullHeight
         // Phones: every row saved here goes to the script editor inside the
-        // height-bounded composer below.
-        className="space-y-4 sm:space-y-8"
+        // height-bounded composer below. short-h (≤800px tall): same idea on
+        // 1280×720 laptops — the editor was collapsing to 0.
+        className="space-y-4 sm:space-y-8 short-h:space-y-3 short-h:py-4 sm:short-h:py-4"
       >
-        <div className="flex shrink-0 flex-col items-center gap-2 sm:gap-4">
-          <OpenStoryLogo className="h-8 sm:h-12" />
+        <div className="flex shrink-0 flex-col items-center gap-2 sm:gap-4 short-h:gap-1">
+          <OpenStoryLogo className="h-8 sm:h-12 short-h:h-8" />
           <div className="flex flex-col items-center gap-1">
             <h1 className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
               {SITE_CONFIG.tagline}
@@ -294,7 +295,7 @@ export function NewSequencePage({
               card is a sibling flex item that shrinks to fit above this. */}
           <Link
             to="/gallery"
-            className="mt-4 inline-flex shrink-0 items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground"
+            className="mt-4 inline-flex shrink-0 items-center justify-center gap-1 self-center text-sm font-medium text-muted-foreground hover:text-foreground short-h:hidden"
           >
             Browse the gallery to see what you can create
             <ArrowRight className="size-4" />

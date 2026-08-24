@@ -1313,7 +1313,7 @@ export const ScriptView: FC<{
         {/* Control bar. Below md the three reference selectors fold into one "References"
             button that opens a sheet, so the bar is a single row next to the
             settings trigger. */}
-        <CardHeader className="shrink-0 flex flex-row items-center md:flex-col md:items-start lg:flex-row justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40">
+        <CardHeader className="shrink-0 flex flex-row items-center md:flex-col md:items-start lg:flex-row justify-between gap-3 px-6 py-4 border-b border-border/50 bg-card/40 short-h:py-2">
           <GenerationSettings
             aspectRatio={aspectRatio}
             analysisModels={analysisModels}
@@ -1387,7 +1387,7 @@ export const ScriptView: FC<{
             (editor floor, see the wrapper below) with the chrome fixed.
             overflow-y-auto is a fallback for viewports too short for even the
             editor floor + Sample-script row — it only engages then. */}
-        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overscroll-contain overflow-x-hidden">
+        <CardContent className="min-h-0 @container flex flex-col gap-4 px-6 pt-6 pb-4 overflow-y-auto overscroll-contain overflow-x-hidden short-h:gap-2 short-h:pt-3 short-h:pb-2">
           {/* Shows during the reasoning pass — i.e. while enhancing but before
               any enhanced text has streamed back. Carries the model's own
               reasoning when it sent any (collapsed; see ThinkingBar), and is a
@@ -1397,50 +1397,19 @@ export const ScriptView: FC<{
             text={thinkingText || undefined}
             className="shrink-0"
           />
-          {/* Above the editor so the Shuffle button holds its position while
-              samples of different lengths grow/shrink the editor below it.
-              Always visible while composing — over the user's own text,
-              Shuffle confirms before replacing. Phones drop the caption and
-              put Shuffle in the Enhance strip below. */}
-          {!isEditing && (
-            <div className="hidden shrink-0 flex-wrap items-center justify-between gap-2 md:flex">
-              <p className="text-xs text-muted-foreground">
-                {sampleStyleId ? (
-                  <>
-                    Sample script
-                    <span className="hidden @min-[480px]:inline">
-                      {' '}
-                      — make it yours, or hit Generate to see it come to life.
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Need a starting point?
-                    <span className="hidden @min-[480px]:inline">
-                      {' '}
-                      Shuffle a sample script.
-                    </span>
-                  </>
-                )}
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={loading || isEnhancing || isSubmitting}
-                onClick={requestShuffle}
-              >
-                <Shuffle className="size-3.5" />
-                Shuffle
-              </Button>
-            </div>
-          )}
+          {/* Label only while a sample is in the box — empty composers keep
+              this row off so the placeholder is the instruction (#1255). */}
+          {!isEditing && sampleStyleId ? (
+            <p className="hidden shrink-0 text-xs text-muted-foreground md:block short-h:hidden">
+              Sample script — make it yours, or hit Generate to see it come to
+              life.
+            </p>
+          ) : null}
           {/* Grows with content above the editor floor (2 rows on phones, 4 on
               md+ — see ScriptEditor) until the card hits max-h-full, then the
-              editor scrolls. min-h-0 lets this flex child shrink so overflow
-              stays on the editor, not CardContent (#1220). */}
-          <div className="flex min-h-0 flex-1 flex-col">
+              editor scrolls. min-h-16/28 is the floor so an empty composer
+              cannot shrink to 0 on short desktops (1280×720). */}
+          <div className="flex min-h-16 flex-1 flex-col md:min-h-28">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}
@@ -1466,7 +1435,7 @@ export const ScriptView: FC<{
         {/* Pinned between the scrolling script and the Generate footer (#1187):
             the style row and tiles must never scroll away — or half-clip —
             behind a long script. */}
-        <div className="shrink-0 flex flex-col gap-2 px-6 pb-3 sm:gap-3 sm:pb-6">
+        <div className="shrink-0 flex flex-col gap-2 px-6 pb-3 sm:gap-3 sm:pb-6 short-h:gap-2 short-h:pb-3">
           {/* Phones: Shuffle and Enhance share one pinned row right under the
               script (the caption row and the style row's Enhance slot are md+). */}
           <div className="flex items-center justify-end gap-2 md:hidden">
@@ -1510,6 +1479,19 @@ export const ScriptView: FC<{
               disabled={loading || isLoadingStyles}
             />
             <div className="ml-auto hidden md:flex items-center gap-1">
+              {!isEditing && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={loading || isEnhancing || isSubmitting}
+                  onClick={requestShuffle}
+                >
+                  <Shuffle className="size-3.5" />
+                  Shuffle
+                </Button>
+              )}
               {!isMobile && enhanceControls}
             </div>
           </div>
