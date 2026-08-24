@@ -7,9 +7,12 @@
  *   4. Commit via `commitSequenceExportFn` (writes a new `sequence_exports` row).
  *
  * Every commit records `sourceShotsHash` — a SHA-256 of the scene video URLs
- * + the music choice — so the latest export doubles as a cache (#1253):
- * `freshExportUrl` is set only when that hash matches the current inputs, and
- * `download()` reuses it instead of re-stitching.
+ * + the music choice — so `sequence_exports` is a content-addressed cache of
+ * what the user is looking at (#1253). `freshExportUrl` is the cached MP4 for
+ * the CURRENT state (or null), and both user actions go through the cache:
+ * `download()` and `copyLink()` reuse a matching export, else export first and
+ * then act. There is no "export" verb in the UI and no way to share a stale
+ * cut.
  */
 
 import {
@@ -25,6 +28,7 @@ import {
   type ExportProgress,
 } from '@/lib/sequence-player/export';
 import type { Sequence } from '@/types/database';
+import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePostHog } from '@posthog/react';
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -41,14 +45,14 @@ const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 export type SequenceExportState = {
   isRunning: boolean;
   progress: ExportProgress | null;
-  latestExportUrl: string | null;
-  /** Latest export URL only when it was built from the current scenes + music choice. */
+  /** Cached export URL for the current scenes + music choice, or null. */
   freshExportUrl: string | null;
   /** False while the exports list / input hash are still loading — `freshExportUrl` is unknown, not absent. */
   isCacheResolved: boolean;
-  start: () => void;
-  /** Download the fresh export, or export first then download. */
+  /** Download the current state's MP4 — exports first if not cached. */
   download: () => void;
+  /** Copy a shareable URL for the current state's MP4 — exports first if not cached. */
+  copyLink: () => void;
   abort: () => void;
 };
 
@@ -95,10 +99,10 @@ export function useSequenceExport(
   const exportMutation = useMutation({
     mutationFn: async ({
       signal,
-      downloadOnDone,
+      andThen,
     }: {
       signal: AbortSignal;
-      downloadOnDone: boolean;
+      andThen: 'download' | 'copy-link';
     }) => {
       if (!sequence) throw new Error('No sequence selected.');
       if (!shots || shots.length === 0) {
@@ -175,10 +179,9 @@ export function useSequenceExport(
           sourceShotsHash: inputsHash,
         },
       });
-      return { reEncoded, url: committed.url, downloadOnDone };
+      return { reEncoded, url: committed.url, andThen };
     },
-    onSuccess: ({ reEncoded, url, downloadOnDone }) => {
-      toast.success('MP4 ready to download.');
+    onSuccess: ({ reEncoded, url, andThen }) => {
       posthog.capture('sequence_export_completed', {
         sequence_id: sequenceId,
         re_encoded: reEncoded,
@@ -186,7 +189,28 @@ export function useSequenceExport(
       void queryClient.invalidateQueries({
         queryKey: sequenceExportKeys.list(sequenceId),
       });
-      if (downloadOnDone) triggerDownload(url, sequence?.title);
+      if (andThen === 'download') {
+        toast.success('MP4 ready to download.');
+        triggerDownload(url, sequence?.title);
+      } else {
+        // The user gesture that started the export is long gone, so the
+        // clipboard write may be blocked — the toast's action button gives
+        // the copy a fresh gesture to run in.
+        const shareable = toShareableExportUrl(url);
+        void copyTextToClipboard(shareable).then((copied) => {
+          if (copied) {
+            toast.success('Video link copied.');
+            posthog.capture('video_url_copied', { sequence_id: sequenceId });
+          } else {
+            toast.success('MP4 ready.', {
+              action: {
+                label: 'Copy link',
+                onClick: () => void copyTextToClipboard(shareable),
+              },
+            });
+          }
+        });
+      }
     },
     onError: (error) => {
       if (abortRef.current?.signal.aborted) return;
@@ -201,19 +225,17 @@ export function useSequenceExport(
   });
 
   const run = useCallback(
-    (downloadOnDone: boolean) => {
+    (andThen: 'download' | 'copy-link') => {
       if (isRunning) return;
       const controller = new AbortController();
       abortRef.current = controller;
       setIsRunning(true);
       setProgress(null);
-      exportMutation.mutate({ signal: controller.signal, downloadOnDone });
+      exportMutation.mutate({ signal: controller.signal, andThen });
     },
     [exportMutation, isRunning]
   );
-  const start = useCallback(() => run(false), [run]);
 
-  const latest = exports?.[0] ?? null;
   // Match against ANY ready export, not just the newest: music-on and
   // music-off snapshots hash differently, and keeping both cached means the
   // music toggle flips between two already-rendered MP4s instead of forcing
@@ -230,8 +252,25 @@ export function useSequenceExport(
       posthog.capture('video_downloaded', { sequence_id: sequenceId });
       return;
     }
-    run(true);
+    run('download');
   }, [freshExportUrl, run, sequence?.title, sequenceId, posthog]);
+
+  const copyLink = useCallback(() => {
+    if (freshExportUrl) {
+      void copyTextToClipboard(toShareableExportUrl(freshExportUrl)).then(
+        (copied) => {
+          if (copied) {
+            toast.success('Video link copied.');
+            posthog.capture('video_url_copied', { sequence_id: sequenceId });
+          } else {
+            toast.error('Failed to copy URL');
+          }
+        }
+      );
+      return;
+    }
+    run('copy-link');
+  }, [freshExportUrl, run, sequenceId, posthog]);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
@@ -240,13 +279,21 @@ export function useSequenceExport(
   return {
     isRunning,
     progress,
-    latestExportUrl: latest?.url ?? null,
     freshExportUrl,
     isCacheResolved: !exportsLoading && !hashLoading,
-    start,
     download,
+    copyLink,
     abort,
   };
+}
+
+/**
+ * Stored export URLs are origin-relative (#894) — absolutize against the
+ * current origin so the copied link works when pasted elsewhere. The worker's
+ * public /r2 route serves it (redirecting to the CDN in prod).
+ */
+function toShareableExportUrl(url: string): string {
+  return new URL(url, window.location.origin).href;
 }
 
 function triggerDownload(url: string, title: string | null | undefined): void {
