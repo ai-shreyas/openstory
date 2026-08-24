@@ -83,6 +83,15 @@ export function resolveModelForCountry<M extends string>(
   return model.startsWith('anthropic/') ? REGION_FALLBACK_TEXT_MODEL : model;
 }
 
+/** Whether a model would be swapped away for this country — drives hiding it
+ *  in the model picker so users never select what they can't run. */
+export function isRegionBlockedModel(
+  model: string,
+  country: string | null | undefined
+): boolean {
+  return resolveModelForCountry(model, country) !== model;
+}
+
 /**
  * Run an LLM call; on a region-block error, retry once with the
  * region-available fallback model. Any other error rethrows untouched.

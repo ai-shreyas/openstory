@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   isRegionBlockedLlmError,
+  isRegionBlockedModel,
   REGION_FALLBACK_TEXT_MODEL,
   REGION_FALLBACK_VISION_MODEL,
   regionFallbackModel,
@@ -61,6 +62,17 @@ describe('resolveModelForCountry', () => {
     );
     expect(resolveModelForCountry('anthropic/claude-opus-5', null)).toBe(
       'anthropic/claude-opus-5'
+    );
+  });
+});
+
+describe('isRegionBlockedModel', () => {
+  it('blocks only Anthropic models in blocked countries', () => {
+    expect(isRegionBlockedModel('anthropic/claude-opus-5', 'CN')).toBe(true);
+    expect(isRegionBlockedModel('x-ai/grok-4.6', 'CN')).toBe(false);
+    expect(isRegionBlockedModel('anthropic/claude-opus-5', 'US')).toBe(false);
+    expect(isRegionBlockedModel('anthropic/claude-opus-5', undefined)).toBe(
+      false
     );
   });
 });
