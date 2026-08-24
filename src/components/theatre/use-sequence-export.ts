@@ -214,10 +214,15 @@ export function useSequenceExport(
   const start = useCallback(() => run(false), [run]);
 
   const latest = exports?.[0] ?? null;
+  // Match against ANY ready export, not just the newest: music-on and
+  // music-off snapshots hash differently, and keeping both cached means the
+  // music toggle flips between two already-rendered MP4s instead of forcing
+  // a re-stitch (#1253). listBySequence is newest-first, so ties prefer the
+  // most recent file.
   const freshExportUrl =
-    latest && inputsHash && latest.sourceShotsHash === inputsHash
-      ? latest.url
-      : null;
+    (inputsHash &&
+      exports?.find((e) => e.sourceShotsHash === inputsHash)?.url) ||
+    null;
 
   const download = useCallback(() => {
     if (freshExportUrl) {
