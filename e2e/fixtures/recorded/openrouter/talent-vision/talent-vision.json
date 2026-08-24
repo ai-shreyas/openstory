@@ -1,0 +1,17 @@
+{
+  "_preserveOnRecord": true,
+  "_comment": "Hand-injected for #1248. Add-talent upload classifies each photo via talent-vision; STRICT aimock 503s without this and create hangs past the dialog-close timeout.",
+  "fixtures": [
+    {
+      "match": {
+        "userMessage": "Analyze this talent reference: is the image already a character sheet? Describe the person.",
+        "model": "anthropic/claude-sonnet-5",
+        "turnIndex": 0,
+        "hasToolResult": false
+      },
+      "response": {
+        "content": "{\"isCharacterSheet\":false,\"suggestedName\":\"\",\"description\":\"An adult with short dark hair, a round face, and a neutral expression, wearing a plain dark shirt. Build is average. No visible tattoos, scars, or distinctive jewelry. Suitable as a generic library-talent reference photo rather than a multi-view character sheet.\",\"age\":\"adult\",\"gender\":\"\",\"ethnicity\":\"\",\"physicalDescription\":\"Short dark hair, round face, average build\",\"standardClothing\":\"Plain dark shirt\",\"distinguishingFeatures\":\"\"}"
+      }
+    }
+  ]
+}

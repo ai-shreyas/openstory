@@ -1,8 +1,32 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { DEFAULT_VISION_MODEL } from './models.config';
 import {
   buildTalentVisionMessages,
   talentMediaAnalysisSchema,
 } from './talent-vision';
+
+const talentVisionFixtureFileSchema = z.object({
+  fixtures: z
+    .array(
+      z.object({
+        match: z.object({
+          userMessage: z.string(),
+          model: z.string(),
+        }),
+        response: z.object({ content: z.string() }),
+      })
+    )
+    .min(1),
+});
+
+const TALENT_VISION_FIXTURE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../e2e/fixtures/recorded/openrouter/talent-vision/talent-vision.json'
+);
 
 describe('talentMediaAnalysisSchema', () => {
   it('accepts a full analysis object', () => {
@@ -68,5 +92,30 @@ describe('buildTalentVisionMessages', () => {
       content: expect.stringContaining('these 2 images'),
     });
     expect(parts.filter((part) => part.type === 'image')).toHaveLength(2);
+  });
+});
+
+describe('e2e talent-vision aimock fixture', () => {
+  it('matches the singular prompt and parses as TalentMediaAnalysis', () => {
+    const raw: unknown = JSON.parse(
+      readFileSync(TALENT_VISION_FIXTURE, 'utf8')
+    );
+    const fixture = talentVisionFixtureFileSchema.parse(raw).fixtures[0];
+    if (!fixture) throw new Error('talent-vision fixture is empty');
+
+    const messages = buildTalentVisionMessages([
+      { type: 'url', value: 'https://example.com/a.png' },
+    ]);
+    const parts = messages[1]?.content;
+    if (!Array.isArray(parts)) throw new Error('expected multimodal content');
+    const text = parts[0];
+    if (text?.type !== 'text') throw new Error('expected text part');
+
+    expect(fixture.match.userMessage).toBe(text.content);
+    expect(fixture.match.model).toBe(DEFAULT_VISION_MODEL);
+    expect(
+      talentMediaAnalysisSchema.parse(JSON.parse(fixture.response.content))
+        .isCharacterSheet
+    ).toBe(false);
   });
 });
