@@ -30,8 +30,8 @@ export function sheetProgressCopy(
 export function parseSheetProgressActivity(
   value: unknown
 ): SheetProgressActivity | undefined {
-  if (value === 'sheet' || value === 'portrait') return value;
-  return undefined;
+  const parsed = sheetProgressActivitySchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function activityFromProgress(data: {

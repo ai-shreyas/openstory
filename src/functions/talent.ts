@@ -10,7 +10,7 @@ import type { TalentWithSheets } from '@/lib/db/schema';
 import {
   portraitAttestationSchema,
   recordPortraitAttestation,
-  requireLikenessAttachment,
+  requireUploadAttestation,
 } from '@/lib/compliance/likeness-upload';
 import { getRequest } from '@tanstack/react-start/server';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
@@ -323,7 +323,8 @@ export const finalizeTalentUploadFn = createServerFn({ method: 'POST' })
       throw new Error('Invalid storage path');
     }
 
-    const attestation = requireLikenessAttachment({
+    const attestation = requireUploadAttestation({
+      depictsRealPerson: true,
       attestation: data.portraitAttestation,
     });
     const request = getRequest();

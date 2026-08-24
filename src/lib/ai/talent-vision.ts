@@ -87,13 +87,11 @@ Output MUST be strict JSON with these fields:
 Return ONLY the JSON object.`;
 
 function filenameSuffix(filenames?: string[]): string {
-  if (!filenames || filenames.length === 0) return '';
+  if (!filenames?.length) return '';
   const cleaned = filenames.map((name) =>
     name.replace(/[\r\n]+/g, ' ').slice(0, 255)
   );
-  const label =
-    cleaned.length === 1 ? 'Uploaded filename' : 'Uploaded filenames';
-  return `\n${label}: ${cleaned.join(', ')}`;
+  return `\nUploaded filename: ${cleaned.join(', ')}`;
 }
 
 /** Build multimodal messages. Exported for tests. */

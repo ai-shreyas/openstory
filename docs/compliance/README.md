@@ -112,7 +112,7 @@ IDs or run liveness checks.
    optional expiry, and revocation.
 5. **Enforce** — the gate in `triggerWorkflow` blocks restricted accounts from
    starting durable work. Portrait uploads require a server-recorded likeness
-   warrant (`requireLikenessAttachment`), not only the dialog checkbox.
+   warrant (`requireUploadAttestation`), not only the dialog checkbox.
 6. **Notify and appeal** — `ComplianceRestrictionBanner` shows the restriction
    notice and links to `/report`. If `ABUSE_REPORT_NOTIFY_EMAIL` is set, intake
    emails the operator (and fails the request if the send fails). A successful

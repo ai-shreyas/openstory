@@ -25,7 +25,7 @@ function walk(dir: string): string[] {
 }
 
 const GATE =
-  /requireGenerationAllowed|requireLikenessAttachment|assertCanGenerate/;
+  /requireGenerationAllowed|requireUploadAttestation|assertCanGenerate/;
 const TRIGGER = /triggerWorkflow/;
 const CREDITS_CALL = /requireCredits\s*\(/;
 

@@ -40,26 +40,7 @@ export type LikenessRequestContext = {
 };
 
 /**
- * Throw unless the request carries the attestation fields the stored
- * evidence needs. Enforcement (can this account write?) is the
- * team-middleware's job; this is only the likeness warrant.
- */
-export function requireLikenessAttachment(opts: {
-  attestation: PortraitAttestationInput | undefined;
-}): PortraitAttestationInput {
-  if (!opts.attestation?.authorizationBasis.trim()) {
-    throw new AttestationRequiredError(
-      'A rights attestation is required for this upload'
-    );
-  }
-  return {
-    statementVersion: opts.attestation.statementVersion,
-    authorizationBasis: opts.attestation.authorizationBasis.trim(),
-  };
-}
-
-/**
- * Gate for create-talent uploads. Human likeness needs the portrait statement
+ * Gate for talent uploads. Human likeness needs the portrait statement
  * plus a basis; animated/other needs the asset statement (no basis).
  */
 export function requireUploadAttestation(opts: {
