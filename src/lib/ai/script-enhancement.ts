@@ -1,12 +1,13 @@
 /**
  * Script-enhancement core + serverFn billing preflight (#1257).
  *
- * Lives OUTSIDE `src/functions/` on purpose: the Start compiler keeps a server
- * fn file's module-level and exported helpers in the CLIENT bundle (only
- * handler bodies are stripped), so when these lived in `functions/ai.ts` they
- * dragged `llm-client` → the @tanstack/ai adapter family (~10MB) into every
- * dev page load. Here they're referenced only from handler bodies and the
- * server-only API layer, so the client transform drops them.
+ * Lives OUTSIDE `src/functions/` on purpose: the Start compiler strips a
+ * server fn file's handler bodies for the client and dead-code-eliminates
+ * their imports, but exported helpers — and anything they reference — survive
+ * in the CLIENT bundle. When these lived in `functions/ai.ts`, the exported
+ * generator dragged `llm-client` → the @tanstack/ai adapter family (~10MB)
+ * into every dev page load. Here they're referenced only from handler bodies
+ * and the server-only API layer, so the client transform drops them.
  */
 
 import { getEnv } from '#env';

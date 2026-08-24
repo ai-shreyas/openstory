@@ -3,10 +3,12 @@
  * End-to-end type-safe functions for AI operations
  *
  * The client imports this file for its RPC stubs, and the Start compiler
- * keeps everything OUTSIDE handler bodies in the client bundle — so no heavy
- * server module may be referenced at module level or from an exported helper
- * here (#1257). The enhancement core lives in `@/lib/ai/script-enhancement`;
- * handlers reference it only inside their bodies, which the compiler strips.
+ * keeps everything still REFERENCED outside handler bodies in the client
+ * bundle (imports used only inside handler bodies are dead-code-eliminated) —
+ * so no heavy server module may be referenced at module level or from an
+ * exported helper here (#1257). The enhancement core lives in
+ * `@/lib/ai/script-enhancement`; handlers reference it only inside their
+ * bodies, which the compiler strips.
  */
 
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
@@ -269,8 +271,8 @@ export const enhanceScriptStreamFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(enhanceScriptInputSchema))
   .handler(async function* ({ data, context }) {
-    // IP rate-limit the dashboard path here (kept out of the shared core so the
-    // core stays free of request-scoped server-only APIs — see note above).
+    // IP rate-limit the dashboard path here: the shared core is also driven
+    // by the public API path, which throttles per-key instead.
     enforceRateLimit(scriptEnhancementRateLimiter, getClientIP());
     yield* streamScriptEnhancement(data, {
       scopedDb: context.scopedDb,

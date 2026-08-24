@@ -62,7 +62,7 @@ import type {
   MusicWorkflowInput,
 } from '@/lib/workflow/types';
 import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
-import { sumShotDurationsSeconds } from '@/functions/sequences';
+import { sumShotDurationsSeconds } from '@/lib/sequences/shot-durations';
 
 function getSceneCharacterReferenceImages(
   allCharacters: Character[],

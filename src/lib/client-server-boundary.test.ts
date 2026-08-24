@@ -11,15 +11,21 @@
  * and `src/functions` — the RPC surface the client imports for its stubs) and
  * fails if any path reaches a server-only module.
  *
- * Server fn files are walked THE WAY THE START COMPILER SHIPS THEM (#1257):
- * `.handler(…)` and `.server(…)` bodies are compiled out of the client bundle
- * and their now-unused imports dead-code-eliminated, but everything else —
- * module-level statements, exported helpers, validator schemas, middleware
- * chains — survives. So this test blanks handler/server-callback bodies
- * first, then follows only the imports still referenced by the surviving
- * code. That is exactly why heavy server logic must live in `src/lib/**` and
- * be referenced ONLY inside handler bodies — an exported helper in a
- * `functions/` file ships its whole graph to the browser.
+ * Server fn / middleware files are walked THE WAY THE START COMPILER SHIPS
+ * THEM (#1257), using the compiler's own building blocks from
+ * `@tanstack/router-utils`: `.handler(…)` / `.server(…)` arguments are
+ * compiled out of the client bundle, and `deadCodeElimination` then drops
+ * now-unreferenced private declarations and imports. What survives — and
+ * therefore ships — is anything still referenced from module level or an
+ * EXPORTED helper. That is exactly why heavy server logic must live in
+ * `src/lib/**` and be referenced ONLY inside handler bodies: an exported
+ * helper in a `functions/` file ships its whole graph to the browser.
+ * (The model errs conservative in one spot: the real compiler also strips
+ * `.validator(…)` schemas client-side; this walk keeps them.)
+ *
+ * Files the Start compiler does NOT transform (no createServerFn /
+ * createMiddleware / … marker) are served verbatim in dev, so every one of
+ * their value imports is followed — no DCE is assumed there.
  *
  * If this test fails: don't extend the allowlist — move the offending helper
  * out of the `functions/` file into a server-side `src/lib/**` module (see
@@ -27,8 +33,12 @@
  * client-safe module (see `src/lib/motion/snap-duration.ts`).
  */
 
-import { parse } from '@babel/parser';
 import type { Node } from '@babel/types';
+import {
+  deadCodeElimination,
+  findReferencedIdentifiers,
+  parseAst,
+} from '@tanstack/router-utils';
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -80,8 +90,9 @@ function resolveLocal(fromFile: string, spec: string): string | null {
 }
 
 /**
- * API routes are server-only route handlers the client router never imports —
- * their graph is not walked.
+ * `routes/api/**` files reach the client only through the generated
+ * routeTree, where the Start compiler strips their `server.handlers` the same
+ * way it strips server-fn handlers — their graphs are not walked here.
  */
 function isServerRoute(file: string): boolean {
   return file.includes('/routes/api/');
@@ -120,80 +131,56 @@ function* walkAst(value: unknown): Generator<Node> {
   }
 }
 
-/** Babel ranges are always set when parsing from source. */
-const span = (node: {
-  start?: number | null;
-  end?: number | null;
-}): [number, number] => [node.start ?? 0, node.end ?? 0];
-
-type ModuleImport = {
-  /** The import specifier, e.g. '@/lib/db/scoped'. */
-  spec: string;
-  /** Local binding names ('*' namespace included); empty = side-effect import. */
-  names: string[];
-  /** Source range of the declaration, blanked before reference counting. */
-  start: number;
-  end: number;
-};
+/**
+ * Does the Start compiler transform this module for the client? Mirrors the
+ * plugin's own source-text detection. Untransformed modules are served
+ * verbatim by vite dev, so no stripping or DCE may be assumed for them.
+ */
+const COMPILED_RE =
+  /\bcreateServerFn\b|\bcreateMiddleware\b|\bcreateIsomorphicFn\b|\bcreateServerOnlyFn\b|\.\s*handler\s*\(/;
 
 /**
- * The imports of `file` that survive the Start compiler's CLIENT transform:
- * `.handler(…)` / `.server(…)` call arguments are blanked (the compiler
- * replaces them with RPC stubs), non-exported top-level declarations that end
- * up unreferenced are dead-code-eliminated to a fixpoint (mirroring the
- * compiler's babel-dead-code-elimination pass), and then only imports whose
- * bindings are still referenced in the remaining source are returned.
- * Type-only imports pull no runtime dependency and are skipped. Dynamic
- * `import()` is the sanctioned escape hatch for genuinely shared modules —
- * Vite loads it lazily, so it never ships unless executed.
+ * The value imports of a module as the CLIENT receives it in dev.
+ *
+ * For compiler-transformed modules this replays the compiler's client pass
+ * with its own primitives: `.handler(…)` / `.server(…)` arguments are
+ * emptied (the compiler substitutes RPC stubs for handlers and removes
+ * middleware server phases), then `deadCodeElimination` — the same
+ * babel-dead-code-elimination the Start plugin runs — removes declarations
+ * and imports nothing references any more. Everything else is returned
+ * verbatim. Type-only imports pull no runtime dependency and are skipped.
+ * Dynamic `import()` is the sanctioned escape hatch for genuinely shared
+ * modules — Vite loads it lazily, so it never ships unless executed.
  */
-function retainedImports(file: string): string[] {
-  const source = readFileSync(file, 'utf8');
-  const ast = parse(source, {
-    sourceType: 'module',
-    plugins: ['typescript', 'jsx'],
-    errorRecovery: true,
-  });
+export function clientRetainedImports(source: string): string[] {
+  const ast = parseAst({ code: source });
 
-  const imports: ModuleImport[] = [];
-  const blank: Array<[number, number]> = [];
-
-  // Comments and TS type positions are erased before the compiler's DCE runs,
-  // so a name mentioned only in a docblock or a type annotation must not keep
-  // its import alive. TS nodes are blanked wholesale except the ones that
-  // contain runtime expressions (their nested type children are still blanked
-  // individually as the walk reaches them).
-  const VALUE_LEVEL_TS_NODES = new Set([
-    'TSAsExpression',
-    'TSSatisfiesExpression',
-    'TSNonNullExpression',
-    'TSInstantiationExpression',
-    'TSEnumDeclaration',
-    'TSEnumMember',
-    'TSModuleDeclaration',
-    'TSModuleBlock',
-    'TSParameterProperty',
-    'TSImportEqualsDeclaration',
-    'TSExportAssignment',
-  ]);
-  for (const comment of ast.comments ?? []) {
-    blank.push(span(comment));
+  if (COMPILED_RE.test(source)) {
+    const referenced = findReferencedIdentifiers(ast);
+    for (const node of walkAst(ast.program)) {
+      if (
+        node.type === 'CallExpression' &&
+        node.callee.type === 'MemberExpression' &&
+        node.callee.property.type === 'Identifier' &&
+        (node.callee.property.name === 'handler' ||
+          node.callee.property.name === 'server')
+      ) {
+        node.arguments = [];
+      }
+    }
+    deadCodeElimination(ast, referenced);
   }
 
-  for (const node of walkAst(ast.program)) {
-    if (node.type.startsWith('TS') && !VALUE_LEVEL_TS_NODES.has(node.type)) {
-      blank.push(span(node));
-      continue;
-    }
+  const specs: string[] = [];
+  for (const node of ast.program.body) {
     if (node.type === 'ImportDeclaration') {
       if (node.importKind === 'type') continue;
-      const names = node.specifiers
-        .filter((s) => s.type !== 'ImportSpecifier' || s.importKind !== 'type')
-        .map((s) => s.local.name);
-      // Skip declarations where every named specifier is type-only.
-      if (node.specifiers.length > 0 && names.length === 0) continue;
-      const [start, end] = span(node);
-      imports.push({ spec: node.source.value, names, start, end });
+      const hasValueBinding =
+        node.specifiers.length === 0 || // side-effect import
+        node.specifiers.some(
+          (s) => s.type !== 'ImportSpecifier' || s.importKind !== 'type'
+        );
+      if (hasValueBinding) specs.push(node.source.value);
       continue;
     }
     // Value re-exports (`export … from 'x'`) always survive the transform.
@@ -203,91 +190,69 @@ function retainedImports(file: string): string[] {
       node.source &&
       node.exportKind !== 'type'
     ) {
-      const [start, end] = span(node);
-      imports.push({ spec: node.source.value, names: ['*'], start, end });
-      continue;
-    }
-    // `x.handler(fn)` / `x.server(fn)` — blank the argument list.
-    if (node.type === 'CallExpression') {
-      const { callee } = node;
-      if (
-        callee.type === 'MemberExpression' &&
-        callee.property.type === 'Identifier' &&
-        (callee.property.name === 'handler' ||
-          callee.property.name === 'server')
-      ) {
-        blank.push([span(callee)[1], span(node)[1]]);
-      }
+      specs.push(node.source.value);
     }
   }
-
-  // Non-exported top-level declarations are DCE candidates: the compiler
-  // removes them when nothing references them after handler stripping (e.g. a
-  // private helper only handlers called), which in turn frees their imports.
-  const dceCandidates: Array<{ names: string[]; start: number; end: number }> =
-    [];
-  for (const node of ast.program.body) {
-    const names: string[] = [];
-    if (
-      node.type === 'FunctionDeclaration' ||
-      node.type === 'ClassDeclaration'
-    ) {
-      if (node.id?.name) names.push(node.id.name);
-    } else if (node.type === 'VariableDeclaration') {
-      for (const d of node.declarations) {
-        if (d.id.type === 'Identifier') names.push(d.id.name);
-        else names.length = 0; // destructuring — keep conservative
-      }
-    }
-    if (names.length > 0) {
-      const [start, end] = span(node);
-      dceCandidates.push({ names, start, end });
-    }
-  }
-
-  // Blank handler bodies and import declarations, then eliminate unreferenced
-  // private declarations to a fixpoint before checking import references.
-  // split('') keeps UTF-16 code-unit indexing, matching babel's offsets
-  // (a code-point spread would shift every position after an emoji).
-  const chars = source.split('');
-  const blankRange = (start: number, end: number) => {
-    for (let i = start; i < end; i++) chars[i] = ' ';
-  };
-  for (const [start, end] of blank) blankRange(start, end);
-  for (const { start, end } of imports) blankRange(start, end);
-
-  const referenced = (name: string, survivors: string) =>
-    new RegExp(`\\b${name}\\b`).test(survivors);
-
-  let changed = true;
-  const eliminated = new Set<(typeof dceCandidates)[number]>();
-  while (changed) {
-    changed = false;
-    const survivors = chars.join('');
-    for (const candidate of dceCandidates) {
-      if (eliminated.has(candidate)) continue;
-      // Occurrences inside the declaration itself don't keep it alive.
-      const outside =
-        survivors.slice(0, candidate.start) + survivors.slice(candidate.end);
-      if (candidate.names.some((name) => referenced(name, outside))) continue;
-      blankRange(candidate.start, candidate.end);
-      eliminated.add(candidate);
-      changed = true;
-    }
-  }
-  const survivors = chars.join('');
-
-  return imports
-    .filter(
-      ({ names }) =>
-        names.length === 0 || // side-effect import: always survives
-        names.includes('*') ||
-        names.some((name) => new RegExp(`\\b${name}\\b`).test(survivors))
-    )
-    .map(({ spec }) => spec);
+  return specs;
 }
 
 describe('client/server import boundary', () => {
+  // The repo walk below can only catch the model being too strict (a leak it
+  // wrongly reports). These cases pin the opposite direction — the one a
+  // regression would silently disarm: imports that MUST be treated as
+  // shipping to the client.
+  describe('clientRetainedImports', () => {
+    test('an exported helper keeps its import — the #1257 leak shape', () => {
+      const specs = clientRetainedImports(`
+        import { secret } from '@srv/secret';
+        import { createServerFn } from '@tanstack/react-start';
+        export function leak() { return secret(); }
+        export const fn = createServerFn().handler(() => leak());
+      `);
+      expect(specs).toContain('@srv/secret');
+    });
+
+    test('a handler-only import is dropped, via a private helper too', () => {
+      const specs = clientRetainedImports(`
+        import { getAuth } from '@srv/auth';
+        import { createMiddleware } from '@tanstack/react-start';
+        async function resolveSession() { return getAuth(); }
+        export const mw = createMiddleware().server(async () => resolveSession());
+      `);
+      expect(specs).not.toContain('@srv/auth');
+      expect(specs).toContain('@tanstack/react-start');
+    });
+
+    test('side-effect imports and value re-exports always survive', () => {
+      const specs = clientRetainedImports(`
+        import '@srv/polyfill';
+        export { widget } from '@srv/widgets';
+        import { createServerFn } from '@tanstack/react-start';
+        export const fn = createServerFn().handler(() => 1);
+      `);
+      expect(specs).toContain('@srv/polyfill');
+      expect(specs).toContain('@srv/widgets');
+    });
+
+    test('an untransformed module keeps every value import verbatim', () => {
+      const specs = clientRetainedImports(`
+        import { unused } from '@srv/unused';
+        export const plain = 1;
+      `);
+      expect(specs).toContain('@srv/unused');
+    });
+
+    test('type-only imports are never followed', () => {
+      const specs = clientRetainedImports(`
+        import type { T } from '@srv/types';
+        import { type U, real } from '@srv/mixed';
+        export const use = () => real();
+      `);
+      expect(specs).not.toContain('@srv/types');
+      expect(specs).toContain('@srv/mixed');
+    });
+  });
+
   test('no server-only module is reachable from client components/hooks/functions', () => {
     const visited = new Set<string>();
     // file → the import edge that got us there, for a readable failure trail.
@@ -303,7 +268,7 @@ describe('client/server import boundary', () => {
       if (!file || visited.has(file)) continue;
       visited.add(file);
 
-      for (const spec of retainedImports(file)) {
+      for (const spec of clientRetainedImports(readFileSync(file, 'utf8'))) {
         if (isServerOnly(spec)) {
           const trail: string[] = [file.replace(`${SRC}/`, '')];
           for (let at = file; cameFrom.has(at);) {
