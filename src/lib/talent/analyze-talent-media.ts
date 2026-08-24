@@ -18,6 +18,7 @@ export type AnalyzeTalentMediaForTeamInput = {
   scopedDb: ScopedDb;
   userId: string;
   imageUrls: string[];
+  filenames?: string[];
   idempotencyKey: string;
 };
 
@@ -38,6 +39,7 @@ export async function analyzeTalentMediaForTeam(
 
   const result = await analyzeTalentMedia({
     imageUrls: input.imageUrls,
+    filenames: input.filenames,
     llmKey: llmKeyInfo,
     observability: {
       userId: input.userId,

@@ -19,6 +19,9 @@ const mockEmit = vi.fn();
 const mockMoveFile = vi.fn();
 const mockCreate = vi.fn();
 const mockMediaCreate = vi.fn();
+const mockRequireUpload = vi.fn(
+  ({ attestation }: { attestation: unknown }) => attestation ?? null
+);
 
 vi.doMock('@/lib/workflow/client', () => ({
   triggerWorkflow: mockTriggerWorkflow,
@@ -30,9 +33,7 @@ vi.doMock('#storage', () => ({
   moveFile: mockMoveFile,
 }));
 vi.doMock('@/lib/compliance/likeness-upload', () => ({
-  requireLikenessAttachment: vi.fn(
-    ({ attestation }: { attestation: unknown }) => attestation ?? null
-  ),
+  requireUploadAttestation: mockRequireUpload,
   recordPortraitAttestation: vi.fn(),
 }));
 vi.doMock('./analyze-talent-media', () => ({
@@ -89,6 +90,7 @@ beforeEach(() => {
   mockMediaCreate.mockResolvedValue({});
   mockAnalyze.mockResolvedValue({
     isCharacterSheet: false,
+    subjectKind: 'human',
     suggestedName: '',
     description: 'A photo',
     age: '',
@@ -119,6 +121,7 @@ describe('createLibraryTalent', () => {
     await createLibraryTalent(
       {
         name: 'Sam',
+        isHuman: true,
         referenceImageUrls: ['/r2/talent/team-1/temp/a.png'],
         characterSheetImageUrls: [],
         portraitAttestation: {
@@ -136,6 +139,7 @@ describe('createLibraryTalent', () => {
   it('classifies when characterSheetImageUrls is omitted and promotes a sheet', async () => {
     mockAnalyze.mockResolvedValueOnce({
       isCharacterSheet: true,
+      subjectKind: 'human',
       suggestedName: '',
       description: 'Four-panel cowboy',
       age: '30s',
@@ -149,6 +153,7 @@ describe('createLibraryTalent', () => {
     await createLibraryTalent(
       {
         name: 'Sam',
+        isHuman: true,
         referenceImageUrls: ['/r2/talent/team-1/temp/a.png'],
         portraitAttestation: {
           statementVersion: 'v1',
@@ -170,6 +175,7 @@ describe('createLibraryTalent', () => {
     await createLibraryTalent(
       {
         name: 'Sam',
+        isHuman: true,
         referenceImageUrls: ['/r2/talent/team-1/temp/a.png'],
         portraitAttestation: {
           statementVersion: 'v1',
@@ -181,5 +187,37 @@ describe('createLibraryTalent', () => {
 
     expect(lastTrigger().payload.uploadedSheetUrl).toBeUndefined();
     expect(mockTriggerWorkflow).toHaveBeenCalled();
+  });
+
+  it('emits failed when the workflow trigger throws', async () => {
+    mockTriggerWorkflow.mockRejectedValueOnce(new Error('no binding'));
+    await createLibraryTalent({ name: 'Sam' }, makeCtx());
+    expect(mockEmit).toHaveBeenCalledWith(
+      'talent.sheet:progress',
+      expect.objectContaining({ status: 'failed' })
+    );
+  });
+
+  it('records an asset attestation when the subject is not human', async () => {
+    await createLibraryTalent(
+      {
+        name: 'Eli',
+        isHuman: false,
+        referenceImageUrls: ['/r2/talent/team-1/temp/a.png'],
+        characterSheetImageUrls: [],
+        portraitAttestation: {
+          statementVersion: 'asset-rights-v1',
+        },
+      },
+      makeCtx()
+    );
+
+    expect(mockRequireUpload).toHaveBeenCalledWith({
+      depictsRealPerson: false,
+      attestation: { statementVersion: 'asset-rights-v1' },
+    });
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ isHuman: false })
+    );
   });
 });

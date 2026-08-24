@@ -10,9 +10,9 @@
 import { moveFile } from '#storage';
 import {
   recordPortraitAttestation,
-  requireLikenessAttachment,
+  requireUploadAttestation,
   type LikenessRequestContext,
-  type PortraitAttestationInput,
+  type UploadAttestationInput,
 } from '@/lib/compliance/likeness-upload';
 import { generateId } from '@/lib/db/id';
 import type { Talent } from '@/lib/db/schema';
@@ -51,7 +51,7 @@ export type CreateLibraryTalentInput = {
    * `undefined` means classify server-side; `[]` means none are sheets.
    */
   characterSheetImageUrls?: string[];
-  portraitAttestation?: PortraitAttestationInput;
+  portraitAttestation?: UploadAttestationInput;
 };
 
 export type CreateLibraryTalentContext = {
@@ -66,8 +66,10 @@ export async function createLibraryTalent(
   ctx: CreateLibraryTalentContext
 ): Promise<Talent> {
   const tempUrls = input.referenceImageUrls ?? [];
+  const depictsRealPerson = input.isHuman === true;
   const attestation = tempUrls.length
-    ? requireLikenessAttachment({
+    ? requireUploadAttestation({
+        depictsRealPerson,
         attestation: input.portraitAttestation,
       })
     : null;
@@ -76,7 +78,7 @@ export async function createLibraryTalent(
     name: input.name,
     description: input.description,
     isFavorite: input.isFavorite ?? false,
-    isHuman: input.isHuman ?? false,
+    isHuman: depictsRealPerson,
     isInTeamLibrary: true,
   });
 
@@ -88,6 +90,7 @@ export async function createLibraryTalent(
       subjectId: newTalent.id,
       attestation,
       request: ctx.request,
+      depictsRealPerson,
     });
   }
 
@@ -191,23 +194,26 @@ export async function createLibraryTalent(
   await getTalentChannel(newTalent.id).emit('talent.sheet:progress', {
     talentId: newTalent.id,
     status: 'generating',
+    activity: uploadedSheetUrl ? 'portrait' : 'sheet',
   });
 
-  void triggerWorkflow('/library-talent-sheet', workflowInput, {
-    label: buildWorkflowLabel(newTalent.id),
-    // Shared with generate-if-missing on later photo drops so parallel
-    // finalizes reuse this run instead of billing another 4-panel.
-    deduplicationId: libraryTalentGenerateDedupId(newTalent.id),
-  }).catch((error) => {
+  try {
+    // Await enqueue so Workerd cannot drop a floating `create()` when this
+    // request returns. The spinner stays up only if a run actually started.
+    await triggerWorkflow('/library-talent-sheet', workflowInput, {
+      label: buildWorkflowLabel(newTalent.id),
+      // Shared with generate-if-missing on later photo drops so parallel
+      // finalizes reuse this run instead of billing another 4-panel.
+      deduplicationId: libraryTalentGenerateDedupId(newTalent.id),
+    });
+  } catch (error) {
     logger.error('Failed to trigger talent sheet workflow:', { err: error });
-    void getTalentChannel(newTalent.id)
-      .emit('talent.sheet:progress', {
-        talentId: newTalent.id,
-        status: 'failed',
-        error: 'Failed to start talent sheet generation',
-      })
-      .catch(() => undefined);
-  });
+    await getTalentChannel(newTalent.id).emit('talent.sheet:progress', {
+      talentId: newTalent.id,
+      status: 'failed',
+      error: 'Failed to start talent sheet generation',
+    });
+  }
 
   return newTalent;
 }

@@ -20,6 +20,7 @@ import {
   useSetDefaultSheet,
   useToggleTalentFavorite,
 } from '@/hooks/use-talent';
+import { sheetProgressCopy } from '@/lib/talent/sheet-progress-copy';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
@@ -259,9 +260,7 @@ function TalentDetailPage() {
               >
                 <Sparkles className="h-4 w-4 mr-2" />
                 {isGeneratingSheet
-                  ? generatingPhase === 'portrait'
-                    ? 'Generating portrait…'
-                    : 'Generating sheet…'
+                  ? sheetProgressCopy(generatingPhase)
                   : 'Generate Sheet'}
               </Button>
             )}
@@ -272,9 +271,7 @@ function TalentDetailPage() {
             <Card className="p-8 text-center">
               <Loader2 className="h-12 w-12 mx-auto mb-4 animate-spin text-muted-foreground" />
               <p className="text-muted-foreground">
-                {generatingPhase === 'portrait'
-                  ? 'Generating portrait from talent sheet…'
-                  : 'Generating talent sheet…'}
+                {sheetProgressCopy(generatingPhase, 'long')}
               </p>
               {sheetError && (
                 <p className="text-destructive text-sm mt-3">{sheetError}</p>
@@ -298,9 +295,7 @@ function TalentDetailPage() {
                   <div className="aspect-video bg-muted flex flex-col items-center justify-center gap-3">
                     <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">
-                      {generatingPhase === 'portrait'
-                        ? 'Generating portrait…'
-                        : 'Generating talent sheet…'}
+                      {sheetProgressCopy(generatingPhase)}
                     </p>
                   </div>
                 </Card>

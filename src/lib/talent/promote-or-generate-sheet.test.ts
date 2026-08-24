@@ -84,6 +84,7 @@ beforeEach(() => {
   mockEmit.mockResolvedValue(undefined);
   mockAnalyze.mockResolvedValue({
     isCharacterSheet: false,
+    subjectKind: 'human',
     suggestedName: '',
     description: '',
     age: '',
@@ -127,6 +128,7 @@ describe('maybePromoteOrGenerateSheet', () => {
   it('promotes an uploaded sheet even when a convergent sheet already exists', async () => {
     mockAnalyze.mockResolvedValueOnce({
       isCharacterSheet: true,
+      subjectKind: 'human',
       suggestedName: '',
       description: '',
       age: '',

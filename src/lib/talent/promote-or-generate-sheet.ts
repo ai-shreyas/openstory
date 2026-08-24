@@ -90,6 +90,7 @@ export async function maybePromoteOrGenerateSheet(
   await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
     talentId: talentRecord.id,
     status: 'generating',
+    activity: uploadedSheetUrl ? 'portrait' : 'sheet',
   });
 
   await triggerWorkflow('/library-talent-sheet', workflowInput, {

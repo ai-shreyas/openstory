@@ -96,6 +96,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       await getTalentChannel(input.talentId).emit('talent.sheet:progress', {
         talentId: input.talentId,
         status: 'generating',
+        activity: input.uploadedSheetUrl ? 'portrait' : 'sheet',
       });
     });
 
@@ -366,6 +367,7 @@ export class LibraryTalentSheetWorkflow extends OpenStoryWorkflowEntrypoint<Libr
       await getTalentChannel(input.talentId).emit('talent.sheet:progress', {
         talentId: input.talentId,
         status: 'sheet_ready',
+        activity: 'portrait',
         sheetId: sheet.id,
         sheetImageUrl: storageResult.url,
       });

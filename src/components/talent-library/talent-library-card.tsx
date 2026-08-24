@@ -12,12 +12,14 @@ import { AppImage } from '@/components/ui/app-image';
 type TalentLibraryCardProps = {
   talent: TalentWithSheets;
   isGenerating?: boolean;
+  generatingLabel?: string;
   divergentVariantId?: string;
 };
 
 export const TalentLibraryCard: React.FC<TalentLibraryCardProps> = ({
   talent,
   isGenerating = false,
+  generatingLabel = 'Generating sheet…',
   divergentVariantId,
 }) => {
   const toggleFavorite = useToggleTalentFavorite();
@@ -65,7 +67,7 @@ export const TalentLibraryCard: React.FC<TalentLibraryCardProps> = ({
             <div className="absolute inset-0 bg-background/60 backdrop-blur-sm flex items-center justify-center">
               <div className="flex flex-col items-center gap-2">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <span className="text-xs font-medium">Generating sheet…</span>
+                <span className="text-xs font-medium">{generatingLabel}</span>
               </div>
             </div>
           )}

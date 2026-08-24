@@ -5,6 +5,7 @@ describe('sheetMetadataFromAnalysis', () => {
   it('maps vision fields onto a character bible entry', () => {
     const metadata = sheetMetadataFromAnalysis('Mara Quinn', {
       isCharacterSheet: true,
+      subjectKind: 'human',
       suggestedName: 'Mara',
       description: 'A woman in a leather jacket.',
       age: '30s',
@@ -27,6 +28,7 @@ describe('sheetMetadataFromAnalysis', () => {
   it('falls back to the long description when physicalDescription is blank', () => {
     const metadata = sheetMetadataFromAnalysis('Sam', {
       isCharacterSheet: false,
+      subjectKind: 'human',
       suggestedName: '',
       description: 'A ranch hand with sunburnt skin.',
       age: '',

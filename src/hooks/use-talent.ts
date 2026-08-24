@@ -75,8 +75,8 @@ export function useTalentById(talentId: string) {
  */
 export function useAnalyzeTalentMedia() {
   return useMutation({
-    mutationFn: (imageUrls: string[]) =>
-      analyzeTalentMediaFn({ data: { imageUrls } }),
+    mutationFn: (input: { imageUrls: string[]; filenames?: string[] }) =>
+      analyzeTalentMediaFn({ data: input }),
   });
 }
 

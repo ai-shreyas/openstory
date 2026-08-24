@@ -401,6 +401,7 @@ export const generateTalentSheetFn = createServerFn({ method: 'POST' })
     await getTalentChannel(talentRecord.id).emit('talent.sheet:progress', {
       talentId: talentRecord.id,
       status: 'generating',
+      activity: 'sheet',
     });
 
     const runId = await triggerWorkflow(
@@ -419,6 +420,7 @@ export const analyzeTalentMediaFn = createServerFn({ method: 'POST' })
     zodValidator(
       z.object({
         imageUrls: z.array(mediaUrlSchema).min(1).max(8),
+        filenames: z.array(z.string().max(255)).max(8).optional(),
       })
     )
   )
@@ -433,10 +435,12 @@ export const analyzeTalentMediaFn = createServerFn({ method: 'POST' })
       scopedDb: context.scopedDb,
       userId: context.user.id,
       imageUrls: data.imageUrls,
-      idempotencyKey: `talent-vision:${data.imageUrls.join('|')}`,
+      filenames: data.filenames,
+      idempotencyKey: `talent-vision:${data.imageUrls.join('|')}:${(data.filenames ?? []).join('|')}`,
     });
     return {
       isCharacterSheet: result.isCharacterSheet,
+      subjectKind: result.subjectKind,
       suggestedName: result.suggestedName,
       description: result.description,
       age: result.age,

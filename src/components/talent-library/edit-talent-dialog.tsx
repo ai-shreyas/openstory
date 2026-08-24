@@ -250,20 +250,23 @@ export const EditTalentDialog: React.FC<EditTalentDialogProps> = ({
                       .filter((m) => m.type === 'image')
                       .map((m) => m.url)
                       .slice(0, 8);
-                    analyzeMedia.mutate(urls, {
-                      onSuccess: (result) => {
-                        setDescription(result.description);
-                        toast.success('Description generated from photos');
-                      },
-                      onError: (error) => {
-                        toast.error('Could not generate description', {
-                          description:
-                            error instanceof Error
-                              ? error.message
-                              : 'Unknown error',
-                        });
-                      },
-                    });
+                    analyzeMedia.mutate(
+                      { imageUrls: urls },
+                      {
+                        onSuccess: (result) => {
+                          setDescription(result.description);
+                          toast.success('Description generated from photos');
+                        },
+                        onError: (error) => {
+                          toast.error('Could not generate description', {
+                            description:
+                              error instanceof Error
+                                ? error.message
+                                : 'Unknown error',
+                          });
+                        },
+                      }
+                    );
                   }}
                 >
                   <Sparkles className="h-4 w-4" />

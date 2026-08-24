@@ -36,6 +36,8 @@ type TalentMediaUploadProps = {
   onFileUploaded?: (file: File, url: string) => void;
   /** File keys (see getFileKey) detected as an existing character sheet. */
   sheetFileKeys?: ReadonlySet<string>;
+  /** File keys whose sheet-vs-photo classify is still in flight. */
+  checkingFileKeys?: ReadonlySet<string>;
   disabled?: boolean;
 };
 
@@ -48,6 +50,7 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
   onComplete,
   onFileUploaded,
   sheetFileKeys,
+  checkingFileKeys,
   disabled = false,
 }) => {
   const [uploadedUrlsMap, setUploadedUrlsMap] = useState<Map<string, string>>(
@@ -254,6 +257,10 @@ export const TalentMediaUpload: React.FC<TalentMediaUploadProps> = ({
             <FileUploadItemProgress className="absolute bottom-0 left-0 right-0 h-1" />
             {sheetFileKeys?.has(getFileKey(file)) ? (
               <Badge className="absolute bottom-2 left-2">Sheet</Badge>
+            ) : checkingFileKeys?.has(getFileKey(file)) ? (
+              <Badge variant="secondary" className="absolute bottom-2 left-2">
+                Checking…
+              </Badge>
             ) : null}
             <FileUploadItemDelete asChild>
               <Button

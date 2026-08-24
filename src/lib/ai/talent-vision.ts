@@ -24,11 +24,13 @@ import {
   throwNotedRunError,
 } from './llm-client';
 import { DEFAULT_VISION_MODEL } from './models.config';
+import { talentSubjectKindSchema } from '@/lib/talent/subject-kind';
 
 export const TALENT_VISION_MODEL = DEFAULT_VISION_MODEL;
 
 export const talentMediaAnalysisSchema = z.object({
   isCharacterSheet: z.boolean(),
+  subjectKind: talentSubjectKindSchema,
   suggestedName: z.string(),
   description: z.string(),
   age: z.string(),
@@ -43,6 +45,12 @@ export type TalentMediaAnalysis = z.infer<typeof talentMediaAnalysisSchema>;
 
 export type AnalyzeTalentMediaInput = {
   imageUrls: string[];
+  /**
+   * Original upload filenames, same order as `imageUrls`. Appended to the
+   * user message so e2e aimock can key photo vs sheet vs creature fixtures
+   * (the mock matches `userMessage`, not image bytes).
+   */
+  filenames?: string[];
   llmKey?: ResolvedLlmKey;
   observability?: AIObservabilityMeta;
 };
@@ -52,32 +60,53 @@ export type TalentVisionResult = TalentMediaAnalysis & {
   usedOwnKey: boolean;
 };
 
-const SYSTEM_PROMPT = `You are a talent reference analyst for a film/video production tool. You will be shown one or more images of a person that will be stored as library talent.
+const SYSTEM_PROMPT = `You are a talent reference analyst for a film/video production tool. You will be shown one or more images stored as library talent — a real person, an illustrated or 3D character, a creature, or similar.
 
-Decide whether the image (or any of the images) is already a CHARACTER SHEET / TALENT SHEET, then describe the person so a later image model can reproduce them.
+First classify WHAT the subject is. Do NOT default to human.
 
-A character/talent sheet is a technical reference grid of the SAME person from multiple camera angles — typically 3–4 panels in a horizontal row (full-body front, close-up portrait, side profile, rear) on a clean studio or seamless backdrop. It is NOT: a single portrait, a casual photo, a comic page, a contact sheet of different people, an ID document, or a collage of unrelated photos.
+- "human": a real or photoreal identifiable person (a photograph, or a photoreal render of a specific human).
+- "animated": illustration, cartoon, anime, 3D/CGI character, robot, puppet, or other clearly non-photographic character.
+- "other": animal, creature, mascot, object, or anything that is not a human likeness and not a stylized character.
+
+A drawing, character-design sheet, robot, or stylized CGI figure is never "human".
+
+Then decide whether the image (or any of the images) is already a CHARACTER SHEET / TALENT SHEET, and describe the subject so a later image model can reproduce them.
+
+A character/talent sheet is a technical reference grid of the SAME subject from multiple camera angles — typically 3–4 panels in a horizontal row (full-body front, close-up portrait, side profile, rear) on a clean studio or seamless backdrop. It is NOT: a single portrait, a casual photo, a comic page, a contact sheet of different subjects, an ID document, or a collage of unrelated photos.
 
 Output MUST be strict JSON with these fields:
-- "isCharacterSheet": true only when the image is clearly that multi-view reference grid of one person.
+- "subjectKind": "human" | "animated" | "other" as defined above.
+- "isCharacterSheet": true only when the image is clearly that multi-view reference grid of one subject.
 - "suggestedName": a short display name if one is inferable (otherwise "").
-- "description": 40-90 words covering face, body, hair, typical clothing, and distinguishing marks. Do NOT describe studio lighting, panel layout, or the photograph itself.
-- "age", "gender", "ethnicity": short strings; use "" if unknown.
-- "physicalDescription": face, hair, build, skin, eyes.
-- "standardClothing": wardrobe visible in the image(s).
+- "description": 40-90 words covering face/body (or equivalent), typical clothing or materials, and distinguishing marks. Do NOT describe studio lighting, panel layout, or the photograph itself.
+- "age", "gender", "ethnicity": short strings; use "" if unknown or not applicable.
+- "physicalDescription": face, hair, build, skin, eyes — or the equivalent for a non-human subject.
+- "standardClothing": wardrobe or surface materials visible in the image(s).
 - "distinguishingFeatures": scars, tattoos, jewelry, unique traits; "" if none.
 
 Return ONLY the JSON object.`;
 
+function filenameSuffix(filenames?: string[]): string {
+  if (!filenames || filenames.length === 0) return '';
+  const cleaned = filenames.map((name) =>
+    name.replace(/[\r\n]+/g, ' ').slice(0, 255)
+  );
+  const label =
+    cleaned.length === 1 ? 'Uploaded filename' : 'Uploaded filenames';
+  return `\n${label}: ${cleaned.join(', ')}`;
+}
+
 /** Build multimodal messages. Exported for tests. */
 export function buildTalentVisionMessages(
-  imageSources: ChatMessageImagePart['source'][]
+  imageSources: ChatMessageImagePart['source'][],
+  filenames?: string[]
 ): ChatMessage[] {
   const count = imageSources.length;
   const userText =
-    count === 1
+    (count === 1
       ? 'Analyze this talent reference: is the image already a character sheet? Describe the person.'
-      : `Analyze this talent reference: are any of these ${count} images already a character sheet? Describe the person.`;
+      : `Analyze this talent reference: are any of these ${count} images already a character sheet? Describe the person.`) +
+    filenameSuffix(filenames);
 
   return [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -104,7 +133,7 @@ export async function analyzeTalentMedia(
   const imageSources = await Promise.all(
     input.imageUrls.map((url) => toVisionImageSource(url))
   );
-  const messages = buildTalentVisionMessages(imageSources);
+  const messages = buildTalentVisionMessages(imageSources, input.filenames);
 
   const systemPrompts: string[] = [];
   const chatMessages: Array<{
