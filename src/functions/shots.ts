@@ -17,6 +17,10 @@ import {
 } from '@/lib/shots/update-stale-depth';
 import { computePlan } from '@/lib/shots/update-stale-plan';
 import {
+  buildUpdateStalePreview,
+  type UpdateStalePreview,
+} from '@/lib/shots/update-stale-preview';
+import {
   toShotView,
   shotViewMissingFrame,
   pendingUpscaleUrlFromVersion,
@@ -585,7 +589,8 @@ const toWireStaleness = ({
   thumbnail,
   visualPrompt,
   motionPrompt,
-}: ShotStalenessResult) => ({ thumbnail, visualPrompt, motionPrompt });
+  causes,
+}: ShotStalenessResult) => ({ thumbnail, visualPrompt, motionPrompt, causes });
 
 /**
  * Batched `getShotStalenessFn` (#1077): staleness for every shot in one scene
@@ -867,4 +872,37 @@ export const getShotDownloadUrlFn = createServerFn({ method: 'GET' })
     const downloadUrl = await getVideoDownloadUrl(storagePath, filename, 3600);
 
     return { downloadUrl, filename };
+  });
+
+/**
+ * Dry-run "Update all" preview (#1194): the concrete cascade — which
+ * artifacts on which shots regenerate at each depth — plus cumulative cost
+ * estimates. Same `computePlan` the enqueue path freezes, at max depth, with
+ * no claims and no workflow: nothing is billed by looking.
+ */
+export const getUpdateStalePreviewFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .validator(
+    zodValidator(
+      z.object({
+        sequenceId: ulidSchema,
+        sceneId: ulidSchema.optional(),
+        shotId: ulidSchema.optional(),
+      })
+    )
+  )
+  .handler(async ({ data, context }): Promise<UpdateStalePreview> => {
+    const { sequence, scopedDb } = context;
+    const plan = await computePlan({
+      scopedDb,
+      sequenceId: sequence.id,
+      sceneId: data.sceneId,
+      shotId: data.shotId,
+      depth: 'music',
+    });
+    return buildUpdateStalePreview(
+      plan,
+      await getEffectiveFalPricing(),
+      sequence.musicModel
+    );
   });

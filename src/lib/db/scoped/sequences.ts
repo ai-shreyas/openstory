@@ -30,6 +30,11 @@ import { parseStyleConfig } from '@/lib/style/style-config';
 import type { ShotReadiness, ShotView } from '@/lib/shots/shot-view';
 import { getLatestPreviewByFrameIds } from './frame-variants';
 import { getPrimaryVideoByShotIds } from './video-variants';
+import {
+  buildEventInsert,
+  SETTINGS_CHANGED_EVENT,
+  SETTINGS_CHANGED_LABELS,
+} from './sequence-events';
 import { ValidationError } from '@/lib/errors';
 import { and, asc, desc, eq, inArray, isNull, lt, not, or } from 'drizzle-orm';
 
@@ -403,6 +408,22 @@ export function createSequencesMethods(
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- runtime guard: DB query may return undefined
       if (!data) {
         throw new ValidationError('Sequence not found');
+      }
+
+      // Date hash-bearing setting changes so staleness can name them (#1194);
+      // style is a snapshot, so no row timestamp says when it moved.
+      const fields = Object.keys(SETTINGS_CHANGED_LABELS).filter(
+        (f) => f in values
+      );
+      if (fields.length > 0) {
+        await buildEventInsert(db, {
+          sequenceId: id,
+          actorId: userId,
+          kind: SETTINGS_CHANGED_EVENT,
+          targetType: 'sequence',
+          targetId: id,
+          data: { fields },
+        });
       }
 
       return data;

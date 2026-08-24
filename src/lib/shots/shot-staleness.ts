@@ -19,6 +19,11 @@ import {
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { Frame, FrameVariant, Shot } from '@/lib/db/schema';
+import { dbSceneId } from '@/lib/db/schema/scenes';
+import {
+  SETTINGS_CHANGED_EVENT,
+  SETTINGS_CHANGED_LABELS,
+} from '@/lib/db/scoped/sequence-events';
 import type { SequenceStatus } from '@/lib/db/schema/sequences';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { buildRegenerateShotSnapshot } from '@/lib/workflows/regenerate-shots-snapshot';
@@ -64,6 +69,8 @@ export type ShotStalenessResult = {
   visualPrompt: ArtifactStaleness;
   motionPrompt: ArtifactStaleness;
   liveHashes: ShotLiveHashes;
+  /** Inputs edited since the stale artifacts were generated (#1194), as display labels. Empty when fresh or undeterminable. */
+  causes: string[];
 };
 
 /** Every artifact unopinionated — the missing-anchor and no-scene cases. */
@@ -72,6 +79,7 @@ export const UNTRACKED_STALENESS: ShotStalenessResult = {
   visualPrompt: 'untracked',
   motionPrompt: 'untracked',
   liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
+  causes: [],
 };
 
 /** Every artifact deferred — the sequence is mid-run (#1121). */
@@ -80,6 +88,7 @@ const GENERATING_STALENESS: ShotStalenessResult = {
   visualPrompt: 'generating',
   motionPrompt: 'generating',
   liveHashes: { thumbnail: null, visualPrompt: null, motionPrompt: null },
+  causes: [],
 };
 
 /**
@@ -236,6 +245,8 @@ export async function computeShotStaleness(args: {
 
   let visualPrompt: ArtifactStaleness = 'untracked';
   let motionPrompt: ArtifactStaleness = 'untracked';
+  let selectedMotion: { inputHash: string | null; createdAt: Date } | null =
+    null;
 
   // Reference hash resolution: prefer the SELECTED version's `inputHash`, but
   // fall back to the most recent version with a non-null one for prompts whose
@@ -285,9 +296,10 @@ export async function computeShotStaleness(args: {
 
   if (scene) {
     try {
-      let referenceHash =
-        (await scopedDb.shotPromptVersions.getSelectedMotion(shot.id))
-          ?.inputHash ?? null;
+      selectedMotion = await scopedDb.shotPromptVersions.getSelectedMotion(
+        shot.id
+      );
+      let referenceHash = selectedMotion?.inputHash ?? null;
       if (!referenceHash) {
         const fallback =
           await scopedDb.shotPromptVersions.getLatestWithInputHash(
@@ -380,5 +392,123 @@ export async function computeShotStaleness(args: {
     }
   }
 
-  return { thumbnail, visualPrompt, motionPrompt, liveHashes };
+  let causes: string[] = [];
+  if ([thumbnail, visualPrompt, motionPrompt].includes('stale')) {
+    try {
+      const resolvedRefs: ShotStalenessRefs = refs ?? {
+        characters: await scopedDb.characters.listWithSheets(sequence.id),
+        locations: await scopedDb.sequenceLocations.listWithReferences(
+          sequence.id
+        ),
+        elements: await scopedDb.sequenceElements.list(sequence.id),
+        style: sequence.styleId
+          ? await scopedDb.styles.getById(sequence.styleId)
+          : null,
+      };
+      causes = await findStalenessCauses({
+        scopedDb,
+        sequence,
+        shot,
+        refs: resolvedRefs,
+        selectedImage,
+        generatedAt: {
+          thumbnail:
+            thumbnail === 'stale' && selectedImage
+              ? (selectedImage.generatedAt ?? selectedImage.createdAt)
+              : undefined,
+          visualPrompt:
+            visualPrompt === 'stale' ? selectedPrompt?.createdAt : undefined,
+          motionPrompt:
+            motionPrompt === 'stale' ? selectedMotion?.createdAt : undefined,
+        },
+      });
+    } catch (error) {
+      // A hint, never a verdict: an unreadable row just leaves it unnamed.
+      logger.warn(`staleness causes uncomputable for shot ${shot.id}:`, {
+        err: error,
+      });
+    }
+  }
+
+  return { thumbnail, visualPrompt, motionPrompt, liveHashes, causes };
+}
+
+const after = (d: Date | null | undefined, at: number) =>
+  d != null && d.getTime() > at;
+
+/**
+ * Name what moved since the stale artifact was generated (#1194). Hashes only
+ * say THAT inputs diverged, so this is a timestamp heuristic: every input row
+ * touched after `artifactAt` is a candidate. Best-effort — a row saved without
+ * a real change can over-name, and nothing here ever changes a verdict.
+ */
+// ponytail: timestamp heuristic; store per-component hashes on the version rows if over-naming bites.
+async function findStalenessCauses(args: {
+  scopedDb: ScopedDb;
+  sequence: { id: string; styleConfig?: unknown };
+  shot: Shot;
+  refs: ShotStalenessRefs;
+  /** When each stale artifact was generated; absent → that artifact isn't stale. */
+  generatedAt: { thumbnail?: Date; visualPrompt?: Date; motionPrompt?: Date };
+  selectedImage: FrameVariant | null;
+}): Promise<string[]> {
+  const { scopedDb, sequence, shot, refs, generatedAt, selectedImage } = args;
+  const times = [
+    generatedAt.thumbnail,
+    generatedAt.visualPrompt,
+    generatedAt.motionPrompt,
+  ].flatMap((d) => (d ? [d.getTime()] : []));
+  if (times.length === 0) return [];
+  const at = Math.min(...times);
+  const causes: string[] = [];
+
+  if (shot.sceneId) {
+    const sceneId = dbSceneId(shot.sceneId);
+    const [sceneRow, script] = await Promise.all([
+      scopedDb.scenes.getById(sceneId),
+      scopedDb.sceneScriptVersions.getSelected(sceneId),
+    ]);
+    if (after(script?.createdAt, at)) causes.push('Script');
+    else if (after(sceneRow?.updatedAt, at)) causes.push('Scene details');
+  }
+
+  const events = await scopedDb.sequenceEvents.listByTarget(
+    'sequence',
+    sequence.id
+  );
+  const fields = new Set<string>();
+  for (const e of events) {
+    if (e.kind !== SETTINGS_CHANGED_EVENT || !after(e.createdAt, at)) continue;
+    const changed = e.data?.fields;
+    if (Array.isArray(changed)) {
+      for (const f of changed) if (typeof f === 'string') fields.add(f);
+    }
+  }
+  for (const f of fields) causes.push(SETTINGS_CHANGED_LABELS[f] ?? f);
+  // Catalog style edits only flow through when the sequence has no snapshot.
+  if (sequence.styleConfig == null && after(refs.style?.updatedAt, at)) {
+    if (!fields.has('styleId')) causes.push('Style');
+  }
+
+  for (const c of refs.characters) {
+    if (after(c.updatedAt, at) || after(c.sheetGeneratedAt, at)) {
+      causes.push(`Character "${c.name}"`);
+    }
+  }
+  for (const l of refs.locations) {
+    if (after(l.updatedAt, at)) causes.push(`Location "${l.name}"`);
+  }
+  for (const el of refs.elements) {
+    if (after(el.updatedAt, at)) causes.push(`Element ${el.token}`);
+  }
+  if (
+    generatedAt.motionPrompt &&
+    after(
+      selectedImage?.generatedAt ?? selectedImage?.createdAt,
+      generatedAt.motionPrompt.getTime()
+    )
+  ) {
+    causes.push('Image re-rendered');
+  }
+  return causes;
 }
