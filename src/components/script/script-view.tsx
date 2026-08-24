@@ -1405,11 +1405,11 @@ export const ScriptView: FC<{
               life.
             </p>
           ) : null}
-          {/* Grows with content above the editor floor (2 rows on phones, 4 on
-              md+ — see ScriptEditor) until the card hits max-h-full, then the
-              editor scrolls. min-h-16/28 is the floor so an empty composer
-              cannot shrink to 0 on short desktops (1280×720). */}
-          <div className="flex min-h-16 flex-1 flex-col md:min-h-28">
+          {/* Grows with content above the editor floor until the card hits
+              max-h-full, then the editor scrolls. min-h-20/28 is the floor so
+              an empty composer cannot shrink to 0, and SSR matches the
+              hydrated empty height (#1255). */}
+          <div className="flex min-h-20 flex-1 flex-col md:min-h-28">
             <ScriptEditor
               ref={textareaRef}
               value={scriptValue}
@@ -1436,24 +1436,6 @@ export const ScriptView: FC<{
             the style row and tiles must never scroll away — or half-clip —
             behind a long script. */}
         <div className="shrink-0 flex flex-col gap-2 px-6 pb-3 sm:gap-3 sm:pb-6 short-h:gap-2 short-h:pb-3">
-          {/* Phones: Shuffle and Enhance share one pinned row right under the
-              script (the caption row and the style row's Enhance slot are md+). */}
-          <div className="flex items-center justify-end gap-2 md:hidden">
-            {!isEditing && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={loading || isEnhancing || isSubmitting}
-                onClick={requestShuffle}
-              >
-                <Shuffle className="size-3.5" />
-                Shuffle
-              </Button>
-            )}
-            {isMobile && enhanceControls}
-          </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
@@ -1478,7 +1460,9 @@ export const ScriptView: FC<{
               onChange={handleStyleCategoryChange}
               disabled={loading || isLoadingStyles}
             />
-            <div className="ml-auto hidden md:flex items-center gap-1">
+            {/* CSS-only placement so SSR and hydration match — no useIsMobile
+                gate (that hid Enhance until the client effect ran). */}
+            <div className="ml-auto flex items-center gap-1">
               {!isEditing && (
                 <Button
                   type="button"
@@ -1492,7 +1476,7 @@ export const ScriptView: FC<{
                   Shuffle
                 </Button>
               )}
-              {!isMobile && enhanceControls}
+              {enhanceControls}
             </div>
           </div>
           <StyleSelector

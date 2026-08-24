@@ -298,7 +298,9 @@ export function StyleSelector({
           // tiles can't peek into it. Total height matches the measured state
           // exactly: pt + row + mb == pt + row + pb at each breakpoint.
           !measured &&
-            'grid-rows-[auto] [grid-auto-rows:0] gap-y-0 overflow-hidden pb-0 mb-1 sm:mb-2'
+            // sm:py-2 beats unprefixed pb-0, so sm:pb-0 is required or SSR
+            // keeps padding AND sm:mb-2 — an 8px jump when measured (#1255).
+            'grid-rows-[auto] [grid-auto-rows:0] gap-y-0 overflow-hidden pb-0 mb-1 sm:pb-0 sm:mb-2'
         )}
         role="grid"
         aria-label="Style selection"
