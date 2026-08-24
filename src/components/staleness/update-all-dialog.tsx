@@ -132,7 +132,7 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
   const { showCosts } = useShowCosts();
   const singleShotScope = scope.shotId != null;
 
-  const { data: preview } = useQuery({
+  const { data: preview, isError } = useQuery({
     queryKey: [
       'update-stale-preview',
       scope.sequenceId,
@@ -152,7 +152,11 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
     depth == null
       ? []
       : (levels?.filter((l) => RANK[l.depth] <= RANK[depth]) ?? []);
-  const selectedDepth = available[available.length - 1]?.depth ?? null;
+  // Preview failed: fall back to the pre-preview behaviour — a plain confirm
+  // at the old default depth — rather than blocking the update on a preview.
+  const selectedDepth =
+    available[available.length - 1]?.depth ??
+    (isError && depth != null ? 'images' : null);
   const checked = (d: UpdateStaleDepth) =>
     selectedDepth != null && RANK[d] <= RANK[selectedDepth];
   const total = levels
@@ -189,7 +193,12 @@ export const UpdateAllDialog: React.FC<UpdateAllDialogProps> = ({
         </AlertDialogHeader>
         <fieldset className="flex flex-col gap-2">
           <legend className="sr-only">What to regenerate</legend>
-          {levels == null ? (
+          {isError ? (
+            <span className="text-xs text-muted-foreground">
+              Couldn’t compute the plan — Update regenerates out-of-date prompts
+              and images.
+            </span>
+          ) : levels == null ? (
             <span className="text-xs text-muted-foreground">…</span>
           ) : levels.length === 0 ? (
             <span className="text-xs text-muted-foreground">
