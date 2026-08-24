@@ -26,6 +26,10 @@ import {
   grokTextCostFromUsage,
   nativeGrokTextModel,
 } from '@/lib/ai/grok-native';
+import {
+  isRegionBlockedLlmError,
+  regionFallbackModel,
+} from '@/lib/ai/region-policy';
 import { aiDebugLogger } from './ai-debug-logger';
 import {
   createAdapter,
@@ -255,6 +259,7 @@ const STRUCTURED_OUTPUT_MODELS = new Set([
   'anthropic/claude-opus-5-fast',
   'anthropic/claude-opus-4.8',
   'deepseek/deepseek-v3.2',
+  'deepseek/deepseek-v4-pro-0813',
   'z-ai/glm-5.2',
   'google/gemini-3.1-pro-preview',
   'openai/gpt-5.5',
@@ -696,6 +701,16 @@ export function throwNotedRunError(detail: RunErrorDetail | null): void {
   throw new Error(message);
 }
 
+/** Whether any message carries an image content part (drives which region
+ *  fallback model is eligible — DeepSeek is text-only). */
+function messagesHaveImages(messages: ChatMessage[]): boolean {
+  return messages.some(
+    (msg) =>
+      typeof msg.content !== 'string' &&
+      msg.content.some((part) => part.type === 'image')
+  );
+}
+
 export function callLLMStream<T>(
   params: LLMRequestParams<T> & { responseSchema: z.ZodType<T> }
 ): AsyncGenerator<StreamChunk<T>>;
@@ -703,6 +718,34 @@ export function callLLMStream(
   params: LLMRequestParams & { responseSchema?: undefined }
 ): AsyncGenerator<StreamChunk>;
 export async function* callLLMStream<T>(
+  params: LLMRequestParams<T>
+): AsyncGenerator<StreamChunk<T>> {
+  // Region-block fallback (#1259): a geo-blocked model (Anthropic from a
+  // mainland-China colo) fails before its first token, so retrying with a
+  // region-available model is safe — but only when nothing was yielded yet,
+  // so a mid-stream failure can never replay content into the consumer.
+  let yielded = false;
+  try {
+    for await (const chunk of callLLMStreamOnce(params)) {
+      yielded = true;
+      yield chunk;
+    }
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const fallback =
+      !yielded && isRegionBlockedLlmError(message)
+        ? regionFallbackModel(params.model, messagesHaveImages(params.messages))
+        : null;
+    if (!fallback) throw error;
+    logger.warn(
+      `Model ${params.model} is region-blocked here; retrying with ${fallback}`
+    );
+    yield* callLLMStreamOnce({ ...params, model: fallback });
+  }
+}
+
+async function* callLLMStreamOnce<T>(
   params: LLMRequestParams<T>
 ): AsyncGenerator<StreamChunk<T>> {
   let accumulated = '';

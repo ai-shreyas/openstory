@@ -27,6 +27,7 @@ import {
   getContextWindow,
   resolveVisionModel,
 } from '@/lib/ai/models.config';
+import { withRegionFallback } from '@/lib/ai/region-policy';
 import { extractStreamingStringField } from '@/lib/ai/stream-extract';
 import type { Microdollars } from '@/lib/billing/money';
 import { deductWorkflowCredits } from '@/lib/billing/workflow-deduction';
@@ -280,110 +281,115 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
       keySource: LlmKeySource;
     }> => {
       const llmKeyInfo = await resolveCallKey(callContext, modelId);
-      const adapter = createAdapter(modelId, llmKeyInfo);
+      // Region-block fallback (#1259): workflows egress from the colo nearest
+      // the user, so an Anthropic model can be geo-blocked even "server-side".
+      // Retry once on a region-available model instead of burning step retries.
+      return withRegionFallback(modelId, hasImageInput, async (model) => {
+        const adapter = createAdapter(model, llmKeyInfo);
 
-      logger.info(`[LLM:${logName}:cf] Starting call`, {
-        model: modelId,
-        requestedModel: config.modelId,
-        keySource: llmKeyInfo.source,
-        keyVia: llmKeyInfo.via,
-        messageCount: messages.length,
-      });
-
-      // Only attach the still when the effective model accepts image input.
-      // resolveVisionModel routes text-only models to DEFAULT_VISION_MODEL, so
-      // reaching here with an image but no vision support means that default is
-      // misconfigured to a text-only model. Warn and drop the image (don't fail
-      // — text-only is a supported mode) rather than send it to a text model.
-      const effectiveSupportsVision = analysisModelSupportsVision(modelId);
-      if (hasImageInput && !effectiveSupportsVision) {
-        logger.warn(
-          `[LLM:${logName}:cf] Dropping vision image(s): effective model ${modelId} (requested ${config.modelId}) is text-only; DEFAULT_VISION_MODEL may be misconfigured — running text-only`
-        );
-      }
-      const visionImageSources = effectiveSupportsVision
-        ? await resolveVisionImageSources(config.visionImageUrls)
-        : undefined;
-      const { systemPrompts, chatMessages } = buildChatMessages(
-        messages,
-        visionImageSources
-      );
-
-      const abortController = new AbortController();
-      const timeout = setTimeout(() => abortController.abort(), 300_000);
-
-      // Always stream structured output so OpenRouter attaches usage.cost
-      // (TanStack/ai#1076). No live channel here — drain for result + usage.
-      const usageCapture = createUsageCapture();
-      try {
-        const commonOptions = {
-          adapter,
-          messages: chatMessages,
-          stream: true as const,
-          abortController,
-          modelOptions: chatModelOptionsForCall(
-            modelId,
-            llmKeyInfo,
-            config.reasoning
-          ),
-          middleware: [
-            ...aiObservabilityMiddleware({
-              observationName: logName,
-              tags: logTags,
-              metadata: logMetadata,
-              sessionId: callContext.sequenceId,
-              // Fall back to the scoped db's user. Callers reliably pass
-              // `scopedDb` (it resolves the LLM key and books the credit
-              // deduction) but often not `userId`, which silently produced
-              // anonymous generations — see the media-side note in
-              // image-generation.ts.
-              userId: callContext.userId ?? callContext.scopedDb?.userId,
-            }),
-            ...usageCapture.middleware,
-          ],
-          debug: false,
-        };
-        const eventStream = chat({
-          ...commonOptions,
-          systemPrompts,
-          outputSchema: config.responseSchema,
+        logger.info(`[LLM:${logName}:cf] Starting call`, {
+          model,
+          requestedModel: config.modelId,
+          keySource: llmKeyInfo.source,
+          keyVia: llmKeyInfo.via,
+          messageCount: messages.length,
         });
 
-        let structuredObject: unknown;
-        let runError = null;
-        for await (const event of eventStream) {
-          usageCapture.noteFromStreamEvent(event);
-          const noted = extractRunError(event);
-          if (noted) {
-            runError ??= noted;
-            continue;
-          }
-          if (
-            event.type === 'CUSTOM' &&
-            event.name === 'structured-output.complete'
-          ) {
-            structuredObject = event.value.object;
-            continue;
-          }
-        }
-        throwNotedRunError(runError);
-
-        if (structuredObject === undefined) {
-          throw new NonRetryableError(
-            `[LLM:${logName}:cf] Call ended without a structured-output.complete event`
+        // Only attach the still when the effective model accepts image input.
+        // resolveVisionModel routes text-only models to DEFAULT_VISION_MODEL, so
+        // reaching here with an image but no vision support means that default is
+        // misconfigured to a text-only model. Warn and drop the image (don't fail
+        // — text-only is a supported mode) rather than send it to a text model.
+        const effectiveSupportsVision = analysisModelSupportsVision(model);
+        if (hasImageInput && !effectiveSupportsVision) {
+          logger.warn(
+            `[LLM:${logName}:cf] Dropping vision image(s): effective model ${model} (requested ${config.modelId}) is text-only; DEFAULT_VISION_MODEL may be misconfigured — running text-only`
           );
         }
-        logger.info(`[LLM:${logName}:cf] Call succeeded`);
-        // Return as JSON string — round-trips through step.do without hitting
-        // CF's Rpc.Serializable constraint on the Zod-inferred shape.
-        return {
-          jsonText: JSON.stringify(structuredObject),
-          costMicros: llmCostFromUsage(usageCapture.get(), modelId),
-          keySource: llmKeyInfo.source,
-        };
-      } finally {
-        clearTimeout(timeout);
-      }
+        const visionImageSources = effectiveSupportsVision
+          ? await resolveVisionImageSources(config.visionImageUrls)
+          : undefined;
+        const { systemPrompts, chatMessages } = buildChatMessages(
+          messages,
+          visionImageSources
+        );
+
+        const abortController = new AbortController();
+        const timeout = setTimeout(() => abortController.abort(), 300_000);
+
+        // Always stream structured output so OpenRouter attaches usage.cost
+        // (TanStack/ai#1076). No live channel here — drain for result + usage.
+        const usageCapture = createUsageCapture();
+        try {
+          const commonOptions = {
+            adapter,
+            messages: chatMessages,
+            stream: true as const,
+            abortController,
+            modelOptions: chatModelOptionsForCall(
+              model,
+              llmKeyInfo,
+              config.reasoning
+            ),
+            middleware: [
+              ...aiObservabilityMiddleware({
+                observationName: logName,
+                tags: logTags,
+                metadata: logMetadata,
+                sessionId: callContext.sequenceId,
+                // Fall back to the scoped db's user. Callers reliably pass
+                // `scopedDb` (it resolves the LLM key and books the credit
+                // deduction) but often not `userId`, which silently produced
+                // anonymous generations — see the media-side note in
+                // image-generation.ts.
+                userId: callContext.userId ?? callContext.scopedDb?.userId,
+              }),
+              ...usageCapture.middleware,
+            ],
+            debug: false,
+          };
+          const eventStream = chat({
+            ...commonOptions,
+            systemPrompts,
+            outputSchema: config.responseSchema,
+          });
+
+          let structuredObject: unknown;
+          let runError = null;
+          for await (const event of eventStream) {
+            usageCapture.noteFromStreamEvent(event);
+            const noted = extractRunError(event);
+            if (noted) {
+              runError ??= noted;
+              continue;
+            }
+            if (
+              event.type === 'CUSTOM' &&
+              event.name === 'structured-output.complete'
+            ) {
+              structuredObject = event.value.object;
+              continue;
+            }
+          }
+          throwNotedRunError(runError);
+
+          if (structuredObject === undefined) {
+            throw new NonRetryableError(
+              `[LLM:${logName}:cf] Call ended without a structured-output.complete event`
+            );
+          }
+          logger.info(`[LLM:${logName}:cf] Call succeeded`);
+          // Return as JSON string — round-trips through step.do without hitting
+          // CF's Rpc.Serializable constraint on the Zod-inferred shape.
+          return {
+            jsonText: JSON.stringify(structuredObject),
+            costMicros: llmCostFromUsage(usageCapture.get(), model),
+            keySource: llmKeyInfo.source,
+          };
+        } finally {
+          clearTimeout(timeout);
+        }
+      });
     }
   );
 
@@ -460,133 +466,141 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
       keySource: LlmKeySource;
     }> => {
       const llmKeyInfo = await resolveCallKey(callContext, modelId);
-      const adapter = createAdapter(modelId, llmKeyInfo);
+      // Region-block fallback (#1259) — see durableLLMCallCf. A geo-blocked
+      // model errors before its first token, so the realtime channel has seen
+      // nothing when the retry restarts the stream.
+      return withRegionFallback(modelId, hasImageInput, async (model) => {
+        const adapter = createAdapter(model, llmKeyInfo);
 
-      logger.info(`[LLM:${logName}:cf] Starting streaming call`, {
-        model: modelId,
-        requestedModel: config.modelId,
-        keySource: llmKeyInfo.source,
-        keyVia: llmKeyInfo.via,
-        messageCount: messages.length,
-        shotId,
-        promptType,
-      });
+        logger.info(`[LLM:${logName}:cf] Starting streaming call`, {
+          model,
+          requestedModel: config.modelId,
+          keySource: llmKeyInfo.source,
+          keyVia: llmKeyInfo.via,
+          messageCount: messages.length,
+          shotId,
+          promptType,
+        });
 
-      // Only attach the still when the effective model accepts image input;
-      // warn (don't fail) when an image is dropped — see durableLLMCallCf.
-      const effectiveSupportsVision = analysisModelSupportsVision(modelId);
-      if (hasImageInput && !effectiveSupportsVision) {
-        logger.warn(
-          `[LLM:${logName}:cf] Dropping vision image(s): effective model ${modelId} (requested ${config.modelId}) is text-only with no vision companion; running text-only`
-        );
-      }
-      const visionImageSources = effectiveSupportsVision
-        ? await resolveVisionImageSources(config.visionImageUrls)
-        : undefined;
-      const { systemPrompts, chatMessages } = buildChatMessages(
-        messages,
-        visionImageSources
-      );
-
-      const abortController = new AbortController();
-      const timeout = setTimeout(() => abortController.abort(), 300_000);
-
-      const channel = getShotPromptChannel(shotId);
-      let accumulated = '';
-      let lastExtracted = '';
-      let pendingDelta = '';
-      let lastEmitAt = 0;
-      const usageCapture = createUsageCapture();
-
-      const flushDelta = async () => {
-        if (!pendingDelta) return;
-        const delta = pendingDelta;
-        pendingDelta = '';
-        lastEmitAt = Date.now();
-        await channel.emit('shotPrompt.streaming', { promptType, delta });
-      };
-
-      const commonOptions = {
-        adapter,
-        messages: chatMessages,
-        stream: true as const,
-        abortController,
-        modelOptions: chatModelOptionsForCall(
-          modelId,
-          llmKeyInfo,
-          config.reasoning
-        ),
-        middleware: [
-          ...aiObservabilityMiddleware({
-            observationName: logName,
-            tags: logTags,
-            metadata: logMetadata,
-            sessionId: callContext.sequenceId,
-            // Same scopedDb fallback as the non-streaming path above.
-            userId: callContext.userId ?? callContext.scopedDb?.userId,
-          }),
-          ...usageCapture.middleware,
-        ],
-        debug: false,
-      };
-      const eventStream = chat({
-        ...commonOptions,
-        systemPrompts,
-        outputSchema: config.responseSchema,
-      });
-      // The orchestrator-validated result from the terminal
-      // `structured-output.complete` event. Preferred over the
-      // hand-accumulated text: it's what the library validated, and it
-      // survives any delta-assembly drift.
-      let structuredJson: string | null = null;
-      let runError = null;
-      try {
-        for await (const event of eventStream) {
-          usageCapture.noteFromStreamEvent(event);
-          const noted = extractRunError(event);
-          if (noted) {
-            runError ??= noted;
-            continue;
-          }
-          if (
-            event.type === 'TEXT_MESSAGE_CONTENT' &&
-            typeof event.delta === 'string'
-          ) {
-            accumulated += event.delta;
-            const next = extractStreamingStringField(accumulated, 'fullPrompt');
-            if (next.length > lastExtracted.length) {
-              pendingDelta += next.slice(lastExtracted.length);
-              lastExtracted = next;
-            }
-            if (pendingDelta && Date.now() - lastEmitAt >= flushIntervalMs) {
-              await flushDelta();
-            }
-            continue;
-          }
-          if (
-            event.type === 'CUSTOM' &&
-            event.name === 'structured-output.complete'
-          ) {
-            structuredJson = JSON.stringify(event.value.object);
-            continue;
-          }
-        }
-        throwNotedRunError(runError);
-        await flushDelta();
-        if (structuredJson === null) {
-          throw new NonRetryableError(
-            `[LLM:${logName}:cf] Stream ended without a structured-output.complete event`
+        // Only attach the still when the effective model accepts image input;
+        // warn (don't fail) when an image is dropped — see durableLLMCallCf.
+        const effectiveSupportsVision = analysisModelSupportsVision(model);
+        if (hasImageInput && !effectiveSupportsVision) {
+          logger.warn(
+            `[LLM:${logName}:cf] Dropping vision image(s): effective model ${model} (requested ${config.modelId}) is text-only with no vision companion; running text-only`
           );
         }
-        logger.info(`[LLM:${logName}:cf] Streaming call succeeded`);
-        return {
-          jsonText: structuredJson,
-          costMicros: llmCostFromUsage(usageCapture.get(), modelId),
-          keySource: llmKeyInfo.source,
+        const visionImageSources = effectiveSupportsVision
+          ? await resolveVisionImageSources(config.visionImageUrls)
+          : undefined;
+        const { systemPrompts, chatMessages } = buildChatMessages(
+          messages,
+          visionImageSources
+        );
+
+        const abortController = new AbortController();
+        const timeout = setTimeout(() => abortController.abort(), 300_000);
+
+        const channel = getShotPromptChannel(shotId);
+        let accumulated = '';
+        let lastExtracted = '';
+        let pendingDelta = '';
+        let lastEmitAt = 0;
+        const usageCapture = createUsageCapture();
+
+        const flushDelta = async () => {
+          if (!pendingDelta) return;
+          const delta = pendingDelta;
+          pendingDelta = '';
+          lastEmitAt = Date.now();
+          await channel.emit('shotPrompt.streaming', { promptType, delta });
         };
-      } finally {
-        clearTimeout(timeout);
-      }
+
+        const commonOptions = {
+          adapter,
+          messages: chatMessages,
+          stream: true as const,
+          abortController,
+          modelOptions: chatModelOptionsForCall(
+            model,
+            llmKeyInfo,
+            config.reasoning
+          ),
+          middleware: [
+            ...aiObservabilityMiddleware({
+              observationName: logName,
+              tags: logTags,
+              metadata: logMetadata,
+              sessionId: callContext.sequenceId,
+              // Same scopedDb fallback as the non-streaming path above.
+              userId: callContext.userId ?? callContext.scopedDb?.userId,
+            }),
+            ...usageCapture.middleware,
+          ],
+          debug: false,
+        };
+        const eventStream = chat({
+          ...commonOptions,
+          systemPrompts,
+          outputSchema: config.responseSchema,
+        });
+        // The orchestrator-validated result from the terminal
+        // `structured-output.complete` event. Preferred over the
+        // hand-accumulated text: it's what the library validated, and it
+        // survives any delta-assembly drift.
+        let structuredJson: string | null = null;
+        let runError = null;
+        try {
+          for await (const event of eventStream) {
+            usageCapture.noteFromStreamEvent(event);
+            const noted = extractRunError(event);
+            if (noted) {
+              runError ??= noted;
+              continue;
+            }
+            if (
+              event.type === 'TEXT_MESSAGE_CONTENT' &&
+              typeof event.delta === 'string'
+            ) {
+              accumulated += event.delta;
+              const next = extractStreamingStringField(
+                accumulated,
+                'fullPrompt'
+              );
+              if (next.length > lastExtracted.length) {
+                pendingDelta += next.slice(lastExtracted.length);
+                lastExtracted = next;
+              }
+              if (pendingDelta && Date.now() - lastEmitAt >= flushIntervalMs) {
+                await flushDelta();
+              }
+              continue;
+            }
+            if (
+              event.type === 'CUSTOM' &&
+              event.name === 'structured-output.complete'
+            ) {
+              structuredJson = JSON.stringify(event.value.object);
+              continue;
+            }
+          }
+          throwNotedRunError(runError);
+          await flushDelta();
+          if (structuredJson === null) {
+            throw new NonRetryableError(
+              `[LLM:${logName}:cf] Stream ended without a structured-output.complete event`
+            );
+          }
+          logger.info(`[LLM:${logName}:cf] Streaming call succeeded`);
+          return {
+            jsonText: structuredJson,
+            costMicros: llmCostFromUsage(usageCapture.get(), model),
+            keySource: llmKeyInfo.source,
+          };
+        } finally {
+          clearTimeout(timeout);
+        }
+      });
     }
   );
 
