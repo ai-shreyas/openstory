@@ -3,7 +3,10 @@
  * Analyzes shots + sequence to determine what failed and whether smart retry is possible.
  */
 
-import { isContentRejectionError } from '@/lib/ai/content-rejection';
+import {
+  contentRejectionSubjects,
+  isContentRejectionError,
+} from '@/lib/ai/content-rejection';
 import type { SceneRow } from '@/lib/db/schema/scenes';
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
@@ -72,13 +75,17 @@ function toneOf(error: string | null | undefined): FailureSummary['tone'] {
 }
 
 const FULL_RETRY_HEADLINE = 'Generation failed \u2014 full retry required';
-const CONTENT_FULL_RETRY_HEADLINE =
-  "Didn't pass the content checker \u2014 regenerate to retry";
+
+/** "A", "A and B", "A, B and C". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
 
 function fullRetryHeadline(error: string | null | undefined): string {
-  return toneOf(error) === 'warning'
-    ? CONTENT_FULL_RETRY_HEADLINE
-    : FULL_RETRY_HEADLINE;
+  if (toneOf(error) !== 'warning') return FULL_RETRY_HEADLINE;
+  const subjects = contentRejectionSubjects(error ?? '');
+  return `${subjects.length > 0 ? listNames(subjects) : 'Script'} didn't pass the content checker \u2014 regenerate to retry`;
 }
 
 function buildHeadline(

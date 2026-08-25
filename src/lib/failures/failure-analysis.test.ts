@@ -178,7 +178,22 @@ describe('analyzeFailures', () => {
     expect(result.requiresFullRetry).toBe(true);
     expect(result.tone).toBe('warning');
     expect(result.headline).toBe(
-      "Didn't pass the content checker \u2014 regenerate to retry"
+      "Script didn't pass the content checker \u2014 regenerate to retry"
+    );
+  });
+
+  test('names the blocked characters from a bible-level content rejection', () => {
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError:
+        'Child workflow analyze-script:1 failed: Character sheet generation failed: Child workflow character-bible:1 failed: Blocked by the content checker: Ron Weasley, Hermione Granger, Harry Potter',
+    });
+
+    const result = analyzeFailures([], sequence, SCENES);
+
+    expect(result.tone).toBe('warning');
+    expect(result.headline).toBe(
+      "Ron Weasley, Hermione Granger and Harry Potter didn't pass the content checker \u2014 regenerate to retry"
     );
   });
 

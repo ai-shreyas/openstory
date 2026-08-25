@@ -93,3 +93,35 @@ export const CONTENT_REJECTION_USER_TITLE = 'Blocked by the content checker';
 /** What the user can do next. */
 export const CONTENT_REJECTION_USER_HINT =
   'Edit the script or the visual prompt, or retry.';
+
+/**
+ * Bible-level failure message when EVERY child failed a content check:
+ * `Blocked by the content checker: Ron Weasley, Harry Potter`. Parent
+ * workflows only prefix, so the names survive to `sequence.statusError` and
+ * {@link contentRejectionSubjects} reads them back. `null` when any failure
+ * was something else — the caller keeps its verbose message.
+ */
+export function contentRejectionSummary(
+  failures: ReadonlyArray<{ name: string; reason: string }>
+): string | null {
+  if (
+    failures.length === 0 ||
+    !failures.every((f) => isContentRejectionError(f.reason))
+  ) {
+    return null;
+  }
+  return `${CONTENT_REJECTION_USER_TITLE}: ${failures.map((f) => f.name).join(', ')}`;
+}
+
+/** Names appended by {@link contentRejectionSummary}, or `[]`. */
+export function contentRejectionSubjects(error: string): string[] {
+  const marker = `${CONTENT_REJECTION_USER_TITLE}: `;
+  const start = error.lastIndexOf(marker);
+  if (start < 0) return [];
+  return error
+    .slice(start + marker.length)
+    .replace(/…$/, '')
+    .split(', ')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
