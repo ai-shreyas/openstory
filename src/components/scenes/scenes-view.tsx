@@ -45,7 +45,7 @@ import {
   useShotsBySequence,
   useUndiscardVariant,
 } from '@/hooks/use-shots';
-import { useStyle } from '@/hooks/use-styles';
+import { useSequenceStyle } from '@/hooks/use-styles';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_MUSIC_MODEL,
@@ -271,7 +271,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   });
   const aspectRatio = sequence?.aspectRatio || DEFAULT_ASPECT_RATIO;
   const isProcessing = sequence?.status === 'processing';
-  const { data: style } = useStyle(sequence?.styleId ?? '');
+  const { data: style } = useSequenceStyle(sequenceId);
   const styleCategory = style?.category ?? undefined;
   const sequenceMusicModel = safeAudioModel(
     sequence?.musicModel,

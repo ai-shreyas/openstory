@@ -442,6 +442,11 @@ export function updateQueryCacheFromEvent(
           `style:${styleId}`
         );
       }
+      debouncedInvalidate(
+        queryClient,
+        styleKeys.forSequence(sequenceId),
+        `style:sequence:${sequenceId}`
+      );
       // `sequence.styleConfig` flipping non-null is what ends the pending state.
       debouncedInvalidate(
         queryClient,
