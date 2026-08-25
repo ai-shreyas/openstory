@@ -56,7 +56,7 @@ export type SequenceExportState = {
   abort: () => void;
   clipsReady: number;
   clipsTotal: number;
-  /** False until at least one shot has a clip. */
+  /** False until every shot has a clip. */
   canExport: boolean;
 };
 
@@ -77,10 +77,8 @@ export function useSequenceExport(
 
   const inputsKey = useMemo(() => {
     if (!sequence || !shots) return null;
-    const sceneUrls = shots
-      .map((f) => f.video?.url)
-      .filter((url): url is string => Boolean(url));
-    if (sceneUrls.length === 0) return null;
+    const sceneUrls = shots.map((f) => f.video?.url ?? null);
+    if (sceneUrls.length === 0 || sceneUrls.some((u) => !u)) return null;
     return JSON.stringify({
       sceneUrls,
       musicUrl: sequence.includeMusic ? (sequence.musicUrl ?? null) : null,
@@ -120,6 +118,11 @@ export function useSequenceExport(
         .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
       if (scenes.length === 0) {
         throw new Error('No scene videos are ready yet.');
+      }
+      if (scenes.length !== shots.length) {
+        throw new Error(
+          `${shots.length - scenes.length} of ${shots.length} scenes are still generating.`
+        );
       }
 
       // A null hash would commit an uncacheable row and silently disable the
@@ -250,7 +253,7 @@ export function useSequenceExport(
   const shotList = shots ?? [];
   const clipsTotal = shotList.length;
   const clipsReady = shotList.filter((s) => Boolean(s.video?.url)).length;
-  const canExport = clipsReady > 0;
+  const canExport = clipsTotal > 0 && clipsReady === clipsTotal;
 
   const download = useCallback(() => {
     if (freshExportUrl) {
