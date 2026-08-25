@@ -180,14 +180,15 @@ export class ShotVariantWorkflow extends OpenStoryWorkflowEntrypoint<ShotVariant
       stepName: 'generate-image',
       params: prep.params,
       prompt: prep.basePrompt,
-      rebuild: (softened) => {
+      rebuild: (nextPrompt, model) => {
         const rebuilt = buildReferenceImagePrompt(
-          softened,
+          nextPrompt,
           prep.references,
-          IMAGE_MODELS[prep.params.model].maxPromptLength
+          IMAGE_MODELS[model].maxPromptLength
         );
         return {
           ...prep.params,
+          model,
           prompt: rebuilt.prompt,
           referenceImageUrls: rebuilt.referenceUrls,
         };

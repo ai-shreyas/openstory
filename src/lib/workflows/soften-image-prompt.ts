@@ -33,7 +33,10 @@ import { getLogger } from '@/lib/observability/logger';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import type { ImageWorkflowInput } from '@/lib/workflow/types';
-import { softenRejectedImagePrompt } from '@/lib/workflows/content-soften';
+import {
+  IMAGE_CONTENT_FALLBACK_MODEL,
+  softenRejectedImagePrompt,
+} from '@/lib/workflows/content-soften';
 import { computeShotImageSceneHash } from '@/lib/workflows/sheet-snapshots';
 import type { WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
@@ -45,9 +48,6 @@ const logger = getLogger(['openstory', 'workflow', 'image', 'soften']);
  * (#881). Matches motion / character sheet.
  */
 const MAX_IMAGE_ATTEMPTS = 3;
-
-/** Fallback after selected-model reseeds exhaust. Skip when already this. */
-const IMAGE_CONTENT_FALLBACK_MODEL: TextToImageModel = 'grok_imagine_image';
 
 export type GenerateImageWithContentRetryResult = {
   result: ImageGenerationResult;
