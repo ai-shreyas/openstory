@@ -79,7 +79,7 @@ import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -217,7 +217,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   search = {},
 }) => {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const posthog = usePostHog();
 
   const { showGate: showBillingGate } = useFalBillingGate();
@@ -1105,10 +1104,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     [shots, sequence, scenesById]
   );
 
-  const handleFullRetry = useCallback(() => {
-    void navigate({ to: '/sequences/$id/script', params: { id: sequenceId } });
-  }, [sequenceId, navigate]);
-
   const handleSmartRetry = useCallback(async () => {
     setIsRetrying(true);
     try {
@@ -1272,7 +1267,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         <FailureSummaryBanner
           summary={failureSummary}
           onRetry={() => void handleSmartRetry()}
-          onFullRetry={handleFullRetry}
+          onFullRetry={() => void handleSmartRetry()}
           isRetrying={isRetrying}
         />
       )}
