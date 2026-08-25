@@ -93,26 +93,3 @@ export const CONTENT_REJECTION_USER_TITLE = 'Blocked by the content checker';
 /** What the user can do next. */
 export const CONTENT_REJECTION_USER_HINT =
   'Edit the script or the visual prompt, or retry.';
-
-/**
- * User-facing copy for a stored generation error. Content-checker hits get a
- * warning, not the provider's "flagged by a content checker" dump.
- */
-export function userFacingGenerationError(error: string | null | undefined): {
-  title: string;
-  hint: string | null;
-  isContentRejection: boolean;
-} {
-  if (error && isContentRejectionError(error)) {
-    return {
-      title: CONTENT_REJECTION_USER_TITLE,
-      hint: CONTENT_REJECTION_USER_HINT,
-      isContentRejection: true,
-    };
-  }
-  return {
-    title: error?.trim() ? error : 'Generation failed',
-    hint: null,
-    isContentRejection: false,
-  };
-}

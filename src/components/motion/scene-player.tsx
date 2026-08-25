@@ -12,11 +12,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useShotDownloadUrl } from '@/hooks/use-shot-download-url';
 import {
-  CONTENT_REJECTION_USER_HINT,
-  CONTENT_REJECTION_USER_TITLE,
-  isContentRejectionError,
-} from '@/lib/ai/content-rejection';
-import {
   type AspectRatio,
   aspectRatioToDimensions,
   getAspectRatioClassName,
@@ -25,15 +20,7 @@ import { cn } from '@/lib/utils';
 import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import type { ShotView } from '@/lib/shots/shot-view';
 import { AppImage } from '@/components/ui/app-image';
-import {
-  AlertCircle,
-  Download,
-  Info,
-  Link,
-  Loader2,
-  Share2,
-  VideoIcon,
-} from 'lucide-react';
+import { Download, Link, Loader2, Share2, VideoIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { VideoPlayer } from './video-player';
@@ -378,33 +365,11 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             </DropdownMenu>
           )}
 
-          {/* Error overlay */}
-          <div
-            className={cn(
-              'absolute inset-0 flex items-center justify-center pointer-events-none',
-              // Use semi-transparent overlay if image exists, solid bg if not
-              displayImage ? 'bg-muted/80' : 'bg-transparent'
-            )}
-          >
-            <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              {isContentRejectionError(currentShot.primaryVideo?.error) ? (
-                <>
-                  <Info className="h-8 w-8" />
-                  <span className="max-w-xs text-center text-sm">
-                    {CONTENT_REJECTION_USER_TITLE}
-                  </span>
-                  <span className="max-w-xs text-center text-xs">
-                    {CONTENT_REJECTION_USER_HINT}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <AlertCircle className="h-8 w-8" />
-                  <span className="text-sm">Failed to generate video</span>
-                </>
-              )}
-            </div>
-          </div>
+          <VideoStateOverlay
+            thumbnailUrl={displayImage}
+            videoStatus="failed"
+            videoError={currentShot.primaryVideo?.error ?? null}
+          />
           {frameOverlay}
         </div>
       ) : (

@@ -57,15 +57,13 @@ function getSceneTitle(shot: Shot, scenesById: ScenesById): string {
   return scene?.title || `Scene ${sceneNumberOf(shot, scenesById)}`;
 }
 
-function isContentFailure(error: string | null | undefined): boolean {
-  return !!error && isContentRejectionError(error);
-}
-
 function groupIsContentOnly(group: FailureGroup): boolean {
   if (group.shots.length > 0) {
-    return group.shots.every((shot) => isContentFailure(shot.error));
+    return group.shots.every(
+      (shot) => !!shot.error && isContentRejectionError(shot.error)
+    );
   }
-  return isContentFailure(group.error);
+  return !!group.error && isContentRejectionError(group.error);
 }
 
 function buildHeadline(
@@ -121,14 +119,6 @@ function buildHeadline(
   }
 
   return parts.join(' and ');
-}
-
-function summaryTone(
-  groups: FailureGroup[],
-  requiresFullRetry: boolean
-): 'error' | 'warning' {
-  if (requiresFullRetry || groups.length === 0) return 'error';
-  return groups.every(groupIsContentOnly) ? 'warning' : 'error';
 }
 
 export function analyzeFailures(
@@ -284,6 +274,11 @@ export function analyzeFailures(
     totalFailures,
     hasFailed,
     error: sequence.statusError,
-    tone: summaryTone(groups, requiresFullRetry),
+    tone:
+      requiresFullRetry || groups.length === 0
+        ? 'error'
+        : groups.every(groupIsContentOnly)
+          ? 'warning'
+          : 'error',
   };
 }

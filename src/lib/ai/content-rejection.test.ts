@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONTENT_REJECTION_PATTERNS,
-  CONTENT_REJECTION_USER_HINT,
-  CONTENT_REJECTION_USER_TITLE,
   isContentRejectionError,
-  userFacingGenerationError,
 } from './content-rejection';
 
 /** Build a fal-shaped ApiError (422 with `body.detail`) like the client throws. */
@@ -80,23 +77,5 @@ describe('isContentRejectionError', () => {
 
   it('exposes a non-empty pattern list', () => {
     expect(CONTENT_REJECTION_PATTERNS.length).toBeGreaterThan(0);
-  });
-});
-
-describe('userFacingGenerationError', () => {
-  it('replaces a content-checker dump with edit-or-retry copy', () => {
-    const facing = userFacingGenerationError(
-      'The content could not be processed because it contained material flagged by a content checker.'
-    );
-    expect(facing.isContentRejection).toBe(true);
-    expect(facing.title).toBe(CONTENT_REJECTION_USER_TITLE);
-    expect(facing.hint).toBe(CONTENT_REJECTION_USER_HINT);
-  });
-
-  it('leaves infrastructure errors as-is', () => {
-    const facing = userFacingGenerationError('Model timeout');
-    expect(facing.isContentRejection).toBe(false);
-    expect(facing.title).toBe('Model timeout');
-    expect(facing.hint).toBeNull();
   });
 });

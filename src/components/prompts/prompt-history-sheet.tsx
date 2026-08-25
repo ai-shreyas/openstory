@@ -77,12 +77,6 @@ const SOURCE_LABEL: Record<PromptVariantSource, string> = {
   softened: 'Softened',
 };
 
-/** Extra line under the badge — only sources that need a why. */
-const SOURCE_HINT: Partial<Record<PromptVariantSource, string>> = {
-  softened:
-    'Rewritten to pass a content checker. The original is still in this list.',
-};
-
 const SOURCE_VARIANT: Record<
   PromptVariantSource,
   'default' | 'secondary' | 'outline'
@@ -582,9 +576,10 @@ const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
                   {formatTimestamp(row.createdAt)}
                 </span>
               </div>
-              {SOURCE_HINT[row.source] && (
+              {row.source === 'softened' && (
                 <p className="text-xs text-muted-foreground">
-                  {SOURCE_HINT[row.source]}
+                  Rewritten to pass a content checker. The original is still in
+                  this list.
                 </p>
               )}
               {row.createdByName && (

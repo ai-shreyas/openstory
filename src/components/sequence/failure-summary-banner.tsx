@@ -2,10 +2,17 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
   CONTENT_REJECTION_USER_HINT,
-  userFacingGenerationError,
+  CONTENT_REJECTION_USER_TITLE,
+  isContentRejectionError,
 } from '@/lib/ai/content-rejection';
 import type { FailureSummary } from '@/lib/failures/failure-analysis';
 import { AlertCircle, Info, RotateCcw } from 'lucide-react';
+
+function errorLabel(error: string | null | undefined): string {
+  if (error && isContentRejectionError(error))
+    return CONTENT_REJECTION_USER_TITLE;
+  return error?.trim() || 'Unknown error';
+}
 
 type FailureSummaryBannerProps = {
   summary: FailureSummary;
@@ -43,9 +50,7 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
         {isWarning && <p>{CONTENT_REJECTION_USER_HINT}</p>}
 
         {summary.groups.length === 0 && summary.error && !isWarning && (
-          <p className="mt-1 text-xs font-mono">
-            {userFacingGenerationError(summary.error).title}
-          </p>
+          <p className="mt-1 text-xs font-mono">{errorLabel(summary.error)}</p>
         )}
 
         {summary.groups.length > 0 && (
@@ -57,21 +62,16 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
               {summary.groups.map((group) => (
                 <div key={group.category}>
                   <span className="font-semibold">{group.category}:</span>
-                  {group.shots.map((f) => {
-                    const facing = userFacingGenerationError(f.error);
-                    return (
-                      <div key={f.shotId} className="ml-2">
-                        Scene {f.sceneNumber}
-                        {f.sceneTitle !== `Scene ${f.sceneNumber}` &&
-                          ` (${f.sceneTitle})`}
-                        {isWarning ? '' : `: ${facing.title}`}
-                      </div>
-                    );
-                  })}
-                  {group.error && !isWarning && (
-                    <div className="ml-2">
-                      {userFacingGenerationError(group.error).title}
+                  {group.shots.map((f) => (
+                    <div key={f.shotId} className="ml-2">
+                      Scene {f.sceneNumber}
+                      {f.sceneTitle !== `Scene ${f.sceneNumber}` &&
+                        ` (${f.sceneTitle})`}
+                      {isWarning ? '' : `: ${errorLabel(f.error)}`}
                     </div>
+                  ))}
+                  {group.error && !isWarning && (
+                    <div className="ml-2">{errorLabel(group.error)}</div>
                   )}
                 </div>
               ))}
