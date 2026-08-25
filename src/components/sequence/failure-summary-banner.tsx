@@ -39,10 +39,10 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
         <AlertCircle className="h-4 w-4" />
       )}
       <AlertTitle>
-        {summary.requiresFullRetry
-          ? 'Generation failed'
-          : isWarning
-            ? 'Content checker'
+        {isWarning
+          ? 'Content checker'
+          : summary.requiresFullRetry
+            ? 'Generation failed'
             : summary.headline}
       </AlertTitle>
       <AlertDescription>

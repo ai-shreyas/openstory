@@ -10,7 +10,6 @@
  * on Grok Imagine 2 skips the swap and softens in place.
  */
 
-import { z } from 'zod';
 import {
   CONTENT_REJECTION_FALLBACK_EVENT,
   CONTENT_REJECTION_RETRY_EVENT,
@@ -34,7 +33,7 @@ import { getLogger } from '@/lib/observability/logger';
 import { buildReferenceImagePrompt } from '@/lib/prompts/reference-image-prompt';
 import { getGenerationChannel } from '@/lib/realtime';
 import type { ImageWorkflowInput } from '@/lib/workflow/types';
-import { durableLLMCallCf } from '@/lib/workflows/llm-call-helper';
+import { softenRejectedImagePrompt } from '@/lib/workflows/content-soften';
 import { computeShotImageSceneHash } from '@/lib/workflows/sheet-snapshots';
 import type { WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
@@ -49,11 +48,6 @@ const MAX_IMAGE_ATTEMPTS = 3;
 
 /** Fallback after selected-model reseeds exhaust. Skip when already this. */
 const IMAGE_CONTENT_FALLBACK_MODEL: TextToImageModel = 'grok_imagine_image';
-
-/** Plain `z.string()` — no min/max (Bedrock rejects integer bounds). */
-export const softenImagePromptResponseSchema = z.object({
-  prompt: z.string(),
-});
 
 export type GenerateImageWithContentRetryResult = {
   result: ImageGenerationResult;
@@ -106,55 +100,6 @@ function rebuildParams(
     prompt: enhancedPrompt,
     referenceImageUrls: referenceUrls.length > 0 ? referenceUrls : undefined,
   };
-}
-
-async function softenRejectedImagePrompt(
-  step: WorkflowStep,
-  args: {
-    scopedDb: WorkflowScopedDb;
-    workflowRunId: string;
-    sequenceId?: string;
-    userId: string;
-    prompt: string;
-    rejection: string;
-    analysisModelId: AnalysisModelId;
-    shotId?: string;
-    model: string;
-  }
-): Promise<string> {
-  const response = await durableLLMCallCf(
-    step,
-    {
-      name: 'soften-image-prompt',
-      phase: { number: 4, name: 'Softening image prompt…' },
-      promptName: 'phase/soften-image-prompt-chat',
-      promptVariables: {
-        prompt: args.prompt,
-        rejection: args.rejection,
-      },
-      modelId: args.analysisModelId,
-      responseSchema: softenImagePromptResponseSchema,
-      additionalMetadata: {
-        shotId: args.shotId,
-        model: args.model,
-      },
-    },
-    {
-      sequenceId: args.sequenceId,
-      userId: args.userId,
-      workflowRunId: args.workflowRunId,
-      scopedDb: args.scopedDb,
-    }
-  );
-
-  const softened = response.prompt.trim();
-  if (!softened) {
-    throw new Error('Softened prompt was empty');
-  }
-  if (softened === args.prompt.trim()) {
-    throw new Error('Softened prompt was unchanged');
-  }
-  return softened;
 }
 
 type PromptProvenance = {

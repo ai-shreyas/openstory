@@ -3,7 +3,10 @@
  * Analyzes shots + sequence to determine what failed and whether smart retry is possible.
  */
 
-import { isContentRejectionError } from '@/lib/ai/content-rejection';
+import {
+  contentRejectionSubjects,
+  isContentRejectionError,
+} from '@/lib/ai/content-rejection';
 import type { SceneRow } from '@/lib/db/schema/scenes';
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
@@ -66,15 +69,34 @@ function groupIsContentOnly(group: FailureGroup): boolean {
   return !!group.error && isContentRejectionError(group.error);
 }
 
+/** A sequence-level error is only a warning when it is a content rejection. */
+function toneOf(error: string | null | undefined): FailureSummary['tone'] {
+  return error && isContentRejectionError(error) ? 'warning' : 'error';
+}
+
+const FULL_RETRY_HEADLINE = 'Generation failed \u2014 full retry required';
+
+/** "A", "A and B", "A, B and C". */
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+function fullRetryHeadline(error: string | null | undefined): string {
+  if (toneOf(error) !== 'warning') return FULL_RETRY_HEADLINE;
+  const subjects = contentRejectionSubjects(error ?? '');
+  return `${subjects.length > 0 ? listNames(subjects) : 'Script'} didn't pass the content checker \u2014 regenerate to retry`;
+}
+
 function buildHeadline(
   groups: FailureGroup[],
   requiresFullRetry: boolean,
+  error: string | null | undefined,
   clipsReady: number,
   clipsTotal: number
 ): string {
   if (groups.length === 0) {
-    if (requiresFullRetry)
-      return 'Generation failed \u2014 full retry required';
+    if (requiresFullRetry) return fullRetryHeadline(error);
     return 'No failures detected';
   }
 
@@ -86,7 +108,7 @@ function buildHeadline(
       const names = promptGroups.map((g) => g.label).join(' and ');
       return `${names} \u2014 full retry required`;
     }
-    return 'Generation failed \u2014 full retry required';
+    return fullRetryHeadline(error);
   }
 
   const parts: string[] = [];
@@ -144,12 +166,12 @@ export function analyzeFailures(
   if (shots.length === 0 && sequence.status === 'failed') {
     return {
       requiresFullRetry: true,
-      headline: 'Generation failed \u2014 full retry required',
+      headline: fullRetryHeadline(sequence.statusError),
       groups: [],
       totalFailures: 1,
       hasFailed: true,
       error: sequence.statusError,
-      tone: 'error',
+      tone: toneOf(sequence.statusError),
     };
   }
 
@@ -260,12 +282,12 @@ export function analyzeFailures(
   ) {
     return {
       requiresFullRetry: true,
-      headline: 'Generation failed \u2014 full retry required',
+      headline: fullRetryHeadline(sequence.statusError),
       groups: [],
       totalFailures: 1,
       hasFailed: true,
       error: sequence.statusError,
-      tone: 'error',
+      tone: toneOf(sequence.statusError),
     };
   }
 
@@ -286,6 +308,7 @@ export function analyzeFailures(
     headline: buildHeadline(
       groups,
       requiresFullRetry,
+      sequence.statusError,
       clipsReady,
       shots.length
     ),
@@ -295,7 +318,7 @@ export function analyzeFailures(
     error: sequence.statusError,
     tone:
       requiresFullRetry || groups.length === 0
-        ? 'error'
+        ? toneOf(sequence.statusError)
         : groups.every(groupIsContentOnly)
           ? 'warning'
           : 'error',

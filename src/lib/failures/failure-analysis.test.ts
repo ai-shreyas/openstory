@@ -167,6 +167,36 @@ describe('analyzeFailures', () => {
     expect(result.headline).toContain('full retry required');
   });
 
+  test('content-checker sequence error (no shots) is a warning, not a hard error', () => {
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError: 'Blocked by the content checker',
+    });
+
+    const result = analyzeFailures([], sequence, SCENES);
+
+    expect(result.requiresFullRetry).toBe(true);
+    expect(result.tone).toBe('warning');
+    expect(result.headline).toBe(
+      "Script didn't pass the content checker \u2014 regenerate to retry"
+    );
+  });
+
+  test('names the blocked characters from a bible-level content rejection', () => {
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError:
+        'Child workflow analyze-script:1 failed: Character sheet generation failed: Child workflow character-bible:1 failed: Blocked by the content checker: Ron Weasley, Hermione Granger, Harry Potter',
+    });
+
+    const result = analyzeFailures([], sequence, SCENES);
+
+    expect(result.tone).toBe('warning');
+    expect(result.headline).toBe(
+      "Ron Weasley, Hermione Granger and Harry Potter didn't pass the content checker \u2014 regenerate to retry"
+    );
+  });
+
   test('content-checker image failures are a warning, not a hard error', () => {
     const shots = [
       makeShot({
