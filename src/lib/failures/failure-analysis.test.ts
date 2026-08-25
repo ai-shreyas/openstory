@@ -189,7 +189,34 @@ describe('analyzeFailures', () => {
     const [imageShot] = imageGroup.shots;
     if (!imageShot) throw new Error('test setup: image shot missing');
     expect(imageShot.error).toBe('Model timeout');
-    expect(result.headline).toContain('1 image failed');
+    expect(result.headline).toBe('1 of 2 clips ready \u00b7 1 image failed');
+    expect(result.clipsReady).toBe(1);
+    expect(result.clipsTotal).toBe(2);
+  });
+
+  test('leads a single-image miss with how many clips are ready (#1286)', () => {
+    const shots = [
+      makeShot({ shot: { id: 'shot-1' } }),
+      makeShot({ shot: { id: 'shot-2' } }),
+      makeShot({ shot: { id: 'shot-3' } }),
+      makeShot({ shot: { id: 'shot-4' } }),
+      makeShot({ shot: { id: 'shot-5' } }),
+      makeShot({ shot: { id: 'shot-6' } }),
+      makeShot({
+        shot: { id: 'shot-7' },
+        frame: { imageStatus: 'failed', imageError: 'content flag' },
+        sources: { image: null },
+      }),
+    ];
+
+    const result = analyzeFailures(
+      shots,
+      makeSequence({ status: 'failed' }),
+      SCENES
+    );
+
+    expect(result.requiresFullRetry).toBe(false);
+    expect(result.headline).toBe('6 of 7 clips ready \u00b7 1 image failed');
   });
 
   test('motion-only failures', () => {

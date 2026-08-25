@@ -258,6 +258,11 @@ type SceneScriptPromptsProps = {
   scopeStalenessFailed?: boolean;
   /** Navigate down to a shot — same handler the left rail uses. */
   onSelectShot?: (shotId: string) => void;
+  /**
+   * First pipeline run still in flight — hide stale/update chrome until the
+   * sequence has finished generating (#1286).
+   */
+  firstRunActive?: boolean;
 };
 
 export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
@@ -293,6 +298,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   scopeStaleness,
   scopeStalenessFailed,
   onSelectShot,
+  firstRunActive = false,
 }) => {
   const scriptSceneId = scene?.id;
   const scriptText = scene?.script?.extract;
@@ -1352,7 +1358,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           header instead of the old filled banners. "Update all" regenerates
           only what is stale now — it doesn't cascade into artifacts the
           regeneration outdates. Video stays a manual pick on its tab. */}
-      {(shotHasStale || shotHasUpdating) && (
+      {!firstRunActive && (shotHasStale || shotHasUpdating) && (
         <StalenessIndicator
           entityType="shot"
           density="status-line"
@@ -1368,19 +1374,22 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           }
         />
       )}
-      {shotStaleUnknown && !shotHasStale && !shotHasUpdating && (
-        <StalenessIndicator
-          entityType="shot"
-          density="status-line"
-          tone="unknown"
-          message="Couldn’t check whether this shot is up to date"
-        />
-      )}
+      {!firstRunActive &&
+        shotStaleUnknown &&
+        !shotHasStale &&
+        !shotHasUpdating && (
+          <StalenessIndicator
+            entityType="shot"
+            density="status-line"
+            tone="unknown"
+            message="Couldn’t check whether this shot is up to date"
+          />
+        )}
 
       {/* Scene/sequence scope (#1077): same one-line pattern, ending in
           shot-number chips that navigate down to shot scope, plus a
           multi-shot Update all. */}
-      {!shot && scopeShots && onSelectShot && (
+      {!firstRunActive && !shot && scopeShots && onSelectShot && (
         <SceneStaleShots
           shots={scopeShots}
           sequenceId={sequenceId}
@@ -1423,6 +1432,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           <TabsTrigger key={t.value} value={t.value}>
             {t.label}
             {t.value === 'image-prompt' &&
+              !firstRunActive &&
               (staleness?.visualPrompt === 'stale' ||
                 staleness?.visualPrompt === 'updating') && (
                 <StalenessIndicator
@@ -1433,6 +1443,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                 />
               )}
             {t.value === 'motion-prompt' &&
+              !firstRunActive &&
               (staleness?.motionPrompt === 'stale' ||
                 staleness?.motionPrompt === 'updating') && (
                 <StalenessIndicator
@@ -1492,18 +1503,21 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                 {/* Quiet stale chip on the artifact itself (#1077); the
                     optimistic 'fresh' write clears it the moment Regenerate
                     is clicked. */}
-                {(staleness?.visualPrompt === 'stale' ||
-                  staleness?.visualPrompt === 'updating') && (
-                  <StalenessIndicator
-                    artifact="visual-prompt"
-                    entityType="shot"
-                    density="header-chip"
-                    isRegenerating={visualBusy}
-                    onRegenerate={() =>
-                      regeneratePromptMutation.mutate({ promptType: 'visual' })
-                    }
-                  />
-                )}
+                {!firstRunActive &&
+                  (staleness?.visualPrompt === 'stale' ||
+                    staleness?.visualPrompt === 'updating') && (
+                    <StalenessIndicator
+                      artifact="visual-prompt"
+                      entityType="shot"
+                      density="header-chip"
+                      isRegenerating={visualBusy}
+                      onRegenerate={() =>
+                        regeneratePromptMutation.mutate({
+                          promptType: 'visual',
+                        })
+                      }
+                    />
+                  )}
               </span>
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground">
@@ -1762,18 +1776,21 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                   Prompt
                 </label>
                 {/* Quiet stale chip — same pattern as the image tab (#1077). */}
-                {(staleness?.motionPrompt === 'stale' ||
-                  staleness?.motionPrompt === 'updating') && (
-                  <StalenessIndicator
-                    artifact="motion-prompt"
-                    entityType="shot"
-                    density="header-chip"
-                    isRegenerating={motionBusy}
-                    onRegenerate={() =>
-                      regeneratePromptMutation.mutate({ promptType: 'motion' })
-                    }
-                  />
-                )}
+                {!firstRunActive &&
+                  (staleness?.motionPrompt === 'stale' ||
+                    staleness?.motionPrompt === 'updating') && (
+                    <StalenessIndicator
+                      artifact="motion-prompt"
+                      entityType="shot"
+                      density="header-chip"
+                      isRegenerating={motionBusy}
+                      onRegenerate={() =>
+                        regeneratePromptMutation.mutate({
+                          promptType: 'motion',
+                        })
+                      }
+                    />
+                  )}
               </span>
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground">

@@ -19,12 +19,10 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
   <Alert variant="destructive" className="mx-4 mt-2">
     <AlertCircle className="h-4 w-4" />
     <AlertTitle>
-      {summary.requiresFullRetry
-        ? 'Generation failed'
-        : 'Generation partially failed'}
+      {summary.requiresFullRetry ? 'Generation failed' : summary.headline}
     </AlertTitle>
     <AlertDescription>
-      <p>{summary.headline}</p>
+      {summary.requiresFullRetry ? <p>{summary.headline}</p> : null}
 
       {summary.groups.length === 0 && summary.error && (
         <p className="mt-1 text-xs font-mono">{summary.error}</p>
@@ -68,7 +66,7 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
           ? 'Retrying\u2026'
           : summary.requiresFullRetry
             ? 'Regenerate Sequence'
-            : 'Retry Failed'}
+            : 'Retry'}
       </Button>
     </AlertDescription>
   </Alert>

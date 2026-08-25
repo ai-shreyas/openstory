@@ -27,6 +27,7 @@ import {
   exportSequence,
   type ExportProgress,
 } from '@/lib/sequence-player/export';
+import { exportClipProgress } from '@/lib/sequence-player/export-readiness';
 import type { Sequence } from '@/types/database';
 import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -54,6 +55,10 @@ export type SequenceExportState = {
   /** Copy a shareable URL for the current state's MP4 — exports first if not cached. */
   copyLink: () => void;
   abort: () => void;
+  clipsReady: number;
+  clipsTotal: number;
+  /** False until every shot has a clip — the export actions no-op. */
+  canExport: boolean;
 };
 
 export function useSequenceExport(
@@ -246,14 +251,17 @@ export function useSequenceExport(
       exports?.find((e) => e.sourceShotsHash === inputsHash)?.url) ||
     null;
 
+  const { clipsReady, clipsTotal, canExport } = exportClipProgress(shots ?? []);
+
   const download = useCallback(() => {
     if (freshExportUrl) {
       triggerDownload(freshExportUrl, sequence?.title);
       posthog.capture('video_downloaded', { sequence_id: sequenceId });
       return;
     }
+    if (!canExport) return;
     run('download');
-  }, [freshExportUrl, run, sequence?.title, sequenceId, posthog]);
+  }, [freshExportUrl, canExport, run, sequence?.title, sequenceId, posthog]);
 
   const copyLink = useCallback(() => {
     if (freshExportUrl) {
@@ -269,8 +277,9 @@ export function useSequenceExport(
       );
       return;
     }
+    if (!canExport) return;
     run('copy-link');
-  }, [freshExportUrl, run, sequenceId, posthog]);
+  }, [freshExportUrl, canExport, run, sequenceId, posthog]);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
@@ -284,6 +293,9 @@ export function useSequenceExport(
     download,
     copyLink,
     abort,
+    clipsReady,
+    clipsTotal,
+    canExport,
   };
 }
 

@@ -18,6 +18,8 @@ import type { AuthOptions } from '@/functions/auth-options';
 import { authClient } from '@/lib/auth/client';
 import { DEV_OTP_CODE } from '@/lib/auth/dev-otp';
 import { sanitizeAuthRedirect } from '@/lib/auth/navigation';
+import { postAuthRedirect } from '@/lib/auth/post-auth-redirect';
+import { hasPendingGenerate } from '@/lib/generation/pending-generate';
 import { usePostHog } from '@posthog/react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
@@ -75,7 +77,9 @@ export function AuthForm({
 
       // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- cancelled can be set true by cleanup between awaits
       if (!cancelled && result.data) {
-        void navigate({ to: redirectTo });
+        void navigate({
+          href: postAuthRedirect(redirectTo, hasPendingGenerate()),
+        });
       }
     };
     void preloadPasskeys();
@@ -116,7 +120,9 @@ export function AuthForm({
         });
         if (!signIn.error) {
           // user_signed_in is captured server-side on session create (#1088).
-          await navigate({ to: redirectTo });
+          await navigate({
+            href: postAuthRedirect(redirectTo, hasPendingGenerate()),
+          });
           return;
         }
         logger.warn('Dev fixed-OTP sign-in failed; falling back to verify', {
@@ -147,7 +153,10 @@ export function AuthForm({
       // callbackURLs. Style seed lives in ?style= so the composer still restores.
       await authClient.signIn.social({
         provider: 'google',
-        callbackURL: sanitizeAuthRedirect(redirectTo),
+        callbackURL: postAuthRedirect(
+          sanitizeAuthRedirect(redirectTo),
+          hasPendingGenerate()
+        ),
       });
     } catch (err) {
       logger.error('Google sign-in error:', { err });
