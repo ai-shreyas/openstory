@@ -4,7 +4,7 @@
       "match": {
         "endpoint": "fal",
         "userMessage": "Animatic frame. Scene 6 — 5s\nINT. SUBWAY PLATFORM — EVENING\nLocked, eye-level. An express train slams past behind her, stainless steel doors strobing her reflection into a coral smear. Her hair lifts in the tunnel wind; she leans a fraction toward the moving steel, checking herself in a reflection too fast to hold, then laughs and gives up.\n\n. Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail. No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.",
-        "model": "fal-ai/flux-2/turbo"
+        "model": "fal-ai/krea-2/turbo"
       },
       "response": {
         "json": {

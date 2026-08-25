@@ -4,7 +4,7 @@
       "match": {
         "endpoint": "fal",
         "userMessage": "Animatic frame. Scene 5 — 5s\nEXT. DUMPLING WINDOW, SIDE STREET — EVENING\nHandheld macro at the counter: steam curling off a paper tray, chili oil bright red. She bites a dumpling in half, chews, dabs her mouth once with a thin napkin — and the napkin comes away clean. She raises an eyebrow at the lens.\n\n. Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail. No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.",
-        "model": "fal-ai/flux-2/turbo"
+        "model": "fal-ai/krea-2/turbo"
       },
       "response": {
         "json": {

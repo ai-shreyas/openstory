@@ -4,7 +4,7 @@
       "match": {
         "endpoint": "fal",
         "userMessage": "Animatic frame. Scene 10 — 6s\nINT. COMEDY CLUB STAGE — NIGHT\nLocked frame from the back of the room, hard single spotlight. She lifts the mic off the stand, leans into it, and the room's laughter breaks across her face — head tipping back, coral mouth wide open, shoulders shaking.\n\n. Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail. No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.",
-        "model": "fal-ai/flux-2/turbo"
+        "model": "fal-ai/krea-2/turbo"
       },
       "response": {
         "json": {

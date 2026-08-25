@@ -4,7 +4,7 @@
       "match": {
         "endpoint": "fal",
         "userMessage": "Animatic frame. Scene 2 — 5s\nINT. SAME — CONTINUOUS\nLocked hero frame, slightly above, direct on-camera flash: the tube stands upright, and her fingers twist the base so the coral bullet climbs into the light, its flat-cut top glossy and untouched. She tilts it toward the lens like evidence.\n\n. Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail. No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.",
-        "model": "fal-ai/flux-2/turbo"
+        "model": "fal-ai/krea-2/turbo"
       },
       "response": {
         "json": {

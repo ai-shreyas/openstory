@@ -4,7 +4,7 @@
       "match": {
         "endpoint": "fal",
         "userMessage": "Animatic frame. CORAL — ONE SHADE, ONE CITY\n\nA wry, kinetic sixty seconds. SCARLETT VEGA, 27, stand-up comic, has a nine-minute set at 9:40pm on the far side of the city. She has one lipstick, no mirror, and forty blocks. The film is not about applying it. It's about whether it survives the night.\n\n. Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail. No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.",
-        "model": "fal-ai/flux-2/turbo"
+        "model": "fal-ai/krea-2/turbo"
       },
       "response": {
         "json": {

@@ -4,7 +4,7 @@
       "match": {
         "endpoint": "fal",
         "userMessage": "Animatic frame. Scene 1 — 5s\nINT. WALK-UP APARTMENT, KITCHEN COUNTER — LATE AFTERNOON\nOverhead flat-lay, locked, hard window light throwing clean shadows on a bone-white counter: a cracked flip phone, a folded set list on a napkin, two subway tokens, half a bagel, and a squat coral lipstick still sealed in its box. Scarlett's hand enters frame, thumbs the box open, and taps the tube out onto the counter, where it. Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail. No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.",
-        "model": "fal-ai/flux-2/turbo"
+        "model": "fal-ai/krea-2/turbo"
       },
       "response": {
         "json": {
