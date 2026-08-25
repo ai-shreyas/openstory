@@ -85,7 +85,7 @@ const MIN_RECOMMEND_SCRIPT_LENGTH = 3;
  *
  * Auth-gated (the underlying server fn is billed, like Enhance) and
  * caller-gated via `enabled` so the LLM call is only spent on an explicit
- * trigger (the Recommend button or a completed enhance pre-warm). Repeats
+ * trigger (the Recommend button — never automatically, #1279). Repeats
  * are free: the cache key is the script hash and `staleTime: Infinity` means a
  * given script is only ranked once.
  */

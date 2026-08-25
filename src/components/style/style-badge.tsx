@@ -104,14 +104,14 @@ export const StyleBadge: React.FC<StyleBadgeProps> = ({
           <button
             type="button"
             className="rounded-4xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={`Automatic style: ${style.name}. Open style menu`}
+            aria-label={`Style from script: ${style.name}. Open style menu`}
           >
             <Badge
               className={cn(
                 'flex items-center gap-1 text-xs',
                 getStyleBadgeColor(style.name)
               )}
-              title={`Automatic style: ${style.name}`}
+              title={`Style from script: ${style.name}`}
             >
               <Wand2 className="size-3" aria-hidden />
               {stylePending ? 'Deriving style…' : style.name}

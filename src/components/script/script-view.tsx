@@ -800,9 +800,9 @@ export const ScriptView: FC<{
 
   // Style recommendations. We rank a *snapshot* of the script (not the live
   // value) so the LLM call only fires on an explicit trigger — the "Recommend
-  // styles" button or a completed enhance — and editing the script afterwards
-  // doesn't re-spend a call on every keystroke. Repeats are free (cached by
-  // script hash in useRecommendedStyles).
+  // styles" button (never automatically, #1279) — and editing the script
+  // afterwards doesn't re-spend a call on every keystroke. Repeats are free
+  // (cached by script hash in useRecommendedStyles).
   const [recommendScript, setRecommendScript] = useState<string | null>(null);
   const {
     data: recommendData,
@@ -1023,13 +1023,6 @@ export const ScriptView: FC<{
       void queryClient.invalidateQueries({
         queryKey: [...BILLING_TRANSACTIONS_KEY],
       });
-      // Pre-warm the style shortlist off the freshly enhanced script so the
-      // picker is ready the moment the user looks for it.
-      // Billing is already gated above (handleEnhance returns early when
-      // needsBillingSetup), so reaching here means the recommend call can bill.
-      if (!abortController.signal.aborted && accumulated.trim().length >= 3) {
-        setRecommendScript(accumulated.trim());
-      }
     } catch (error) {
       if (!abortController.signal.aborted) {
         setEnhance(

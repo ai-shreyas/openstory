@@ -10,7 +10,7 @@ type AutoStyleTileProps = {
 };
 
 /**
- * The "Automatic" slot in the composer strip (#1213): instead of a library
+ * The "From script" slot in the composer strip (#1213): instead of a library
  * style, the storyboard run derives a style from the script itself.
  */
 export function AutoStyleTile({
@@ -39,11 +39,11 @@ export function AutoStyleTile({
           ? 'border-primary shadow-md scale-105 bg-primary/10'
           : 'border-dashed border-muted-foreground/30 hover:border-primary/50'
       )}
-      aria-label="Automatic style: derive a style from the script"
+      aria-label="Style from script: derive a style from the script"
       title="Derive a style from the script. It stays with this sequence until you add it to your library."
     >
       <Wand2 className="size-5 text-primary" aria-hidden />
-      <span className="text-center text-xs font-medium">Automatic</span>
+      <span className="text-center text-xs font-medium">From script</span>
     </button>
   );
 }
