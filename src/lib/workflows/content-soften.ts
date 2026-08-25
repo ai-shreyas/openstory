@@ -4,23 +4,28 @@
  * and location sheets, variant grids.
  *
  * Same-prompt reseeds first (#881) — stochastic checker hits often clear on a
- * fresh seed. When they don't, rewrite the prompt with an LLM (policy soften
- * and/or plainer grammar, #1272) and generate once more. One soften pass
- * bounds the loop; a second content hit fails the run with the real
- * rejection so the parent can name it. Transient errors throw so Cloudflare
- * retries the named generate step.
+ * fresh seed. When they don't, render the ORIGINAL prompt once on Grok
+ * Imagine 2 (its checker is more permissive, #1272; skipped when already on
+ * it). If that also flags, rewrite the prompt with an LLM (policy soften
+ * and/or plainer grammar) and generate once more on whichever model is
+ * current. One soften pass bounds the loop; a second content hit fails the
+ * run with the real rejection so the parent can name it. Transient errors
+ * throw so Cloudflare retries the named generate step.
  *
- * Shot stills use `generateImageWithContentRetry` (adds the Grok fallback and
- * prompt-version persistence); both paths share `softenRejectedImagePrompt`.
+ * Shot stills use `generateImageWithContentRetry` (same ladder, plus the
+ * `frame_variants` row for the swap and prompt-version persistence); both
+ * paths share `softenRejectedImagePrompt` and the fallback model.
  */
 
 import { z } from 'zod';
 import {
+  CONTENT_REJECTION_FALLBACK_EVENT,
   CONTENT_REJECTION_RETRY_EVENT,
   CONTENT_REJECTION_SOFTEN_EVENT,
   isContentRejectionError,
 } from '@/lib/ai/content-rejection';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
+import type { TextToImageModel } from '@/lib/ai/models';
 import {
   DEFAULT_ANALYSIS_MODEL,
   type AnalysisModelId,
@@ -38,8 +43,12 @@ import { NonRetryableError } from 'cloudflare:workflows';
 
 const logger = getLogger(['openstory', 'workflow', 'content-soften']);
 
-/** Same-prompt reseeds before the prompt is rewritten (#881). */
+/** Same-prompt reseeds before the model swap / prompt rewrite (#881). */
 export const MAX_CONTENT_ATTEMPTS = 3;
+
+/** Fallback after selected-model reseeds exhaust. Skipped when already this. */
+export const IMAGE_CONTENT_FALLBACK_MODEL: TextToImageModel =
+  'grok_imagine_image';
 
 /** Plain `z.string()` — no min/max (Bedrock rejects integer bounds). */
 export const softenImagePromptResponseSchema = z.object({
@@ -112,21 +121,26 @@ export type GenerateImageSofteningArgs = {
   subject: string;
   /**
    * Durable step name of the first attempt — keep the caller's historical
-   * name so in-flight runs replay. Retries and the softened attempt suffix it.
+   * name so in-flight runs replay. Retries, the fallback and the softened
+   * attempt suffix it.
    */
   stepName: string;
   params: ImageGenerationParams;
   /** Authored prompt to soften. Defaults to `params.prompt`. */
   prompt?: string;
-  /** Params for the softened prompt. Defaults to swapping `params.prompt`. */
-  rebuild?: (prompt: string) => ImageGenerationParams;
+  /**
+   * Params for a (prompt, model) pair — called for the fallback swap (original
+   * prompt, Grok) and the softened retry. Defaults to swapping both fields on
+   * `params`; pass one when the prompt carries a model-sized reference legend.
+   */
+  rebuild?: (prompt: string, model: TextToImageModel) => ImageGenerationParams;
   /** Ids for structured logs. */
   meta?: Record<string, unknown>;
 };
 
 export type GenerateImageSofteningResult = {
   result: ImageGenerationResult;
-  /** Params actually rendered — softened when `softened` is true. */
+  /** Params actually rendered — a different model and/or prompt on rescue. */
   params: ImageGenerationParams;
   softened: boolean;
 };
@@ -140,7 +154,16 @@ export async function generateImageSoftening(
 ): Promise<GenerateImageSofteningResult> {
   const { step, scopedDb, logTag, subject, stepName } = args;
   const meta = { kind: args.kind, sequenceId: args.sequenceId, ...args.meta };
-  const maxAttempts = MAX_CONTENT_ATTEMPTS + 1;
+  const prompt = args.prompt ?? args.params.prompt;
+  const rebuild =
+    args.rebuild ??
+    ((p: string, model: TextToImageModel) => ({
+      ...args.params,
+      prompt: p,
+      model,
+    }));
+  const canFallback = args.params.model !== IMAGE_CONTENT_FALLBACK_MODEL;
+  const maxAttempts = MAX_CONTENT_ATTEMPTS + (canFallback ? 1 : 0) + 1;
 
   const generateOnce = (
     name: string,
@@ -164,12 +187,13 @@ export async function generateImageSoftening(
       }
     });
 
+  let params = args.params;
   let lastRejection: string | null = null;
   for (let attempt = 0; attempt < MAX_CONTENT_ATTEMPTS; attempt++) {
     const tag = attempt === 0 ? '' : `-retry-${attempt}`;
     const outcome = await generateOnce(
       `${stepName}${tag}`,
-      args.params,
+      params,
       attempt + 1
     );
     if (outcome.ok) {
@@ -179,13 +203,13 @@ export async function generateImageSoftening(
           {
             event: CONTENT_REJECTION_RETRY_EVENT,
             outcome: 'rescued',
-            model: args.params.model,
+            model: params.model,
             attempts: attempt + 1,
             ...meta,
           }
         );
       }
-      return { result: outcome.result, params: args.params, softened: false };
+      return { result: outcome.result, params, softened: false };
     }
     lastRejection = outcome.rejection;
     logger.warn(
@@ -193,18 +217,51 @@ export async function generateImageSoftening(
     );
   }
 
+  if (canFallback) {
+    const fromModel = params.model;
+    logger.warn(
+      `${logTag} same-prompt reseeds exhausted; falling back to ${IMAGE_CONTENT_FALLBACK_MODEL} for ${subject}`,
+      {
+        event: CONTENT_REJECTION_FALLBACK_EVENT,
+        fromModel,
+        model: IMAGE_CONTENT_FALLBACK_MODEL,
+        rejection: lastRejection,
+        ...meta,
+      }
+    );
+    params = rebuild(prompt, IMAGE_CONTENT_FALLBACK_MODEL);
+    const outcome = await generateOnce(
+      `${stepName}-fallback`,
+      params,
+      MAX_CONTENT_ATTEMPTS + 1
+    );
+    if (outcome.ok) {
+      logger.info(`${logTag} fallback model rescued ${subject}`, {
+        event: CONTENT_REJECTION_FALLBACK_EVENT,
+        outcome: 'rescued',
+        fromModel,
+        model: params.model,
+        ...meta,
+      });
+      return { result: outcome.result, params, softened: false };
+    }
+    lastRejection = outcome.rejection;
+    logger.warn(
+      `${logTag} fallback model also flagged for ${subject}: ${outcome.rejection}`
+    );
+  }
+
   const rejection = lastRejection ?? 'unknown rejection';
   logger.warn(
-    `${logTag} same-prompt reseeds exhausted; softening prompt for ${subject}`,
+    `${logTag} ${canFallback ? 'fallback flagged' : 'same-prompt reseeds exhausted'}; softening prompt for ${subject}`,
     {
       event: CONTENT_REJECTION_SOFTEN_EVENT,
-      model: args.params.model,
+      model: params.model,
       rejection,
       ...meta,
     }
   );
 
-  const prompt = args.prompt ?? args.params.prompt;
   let softened: string;
   try {
     softened = await softenRejectedImagePrompt(step, {
@@ -215,7 +272,7 @@ export async function generateImageSoftening(
       prompt,
       rejection,
       analysisModelId: args.analysisModelId ?? DEFAULT_ANALYSIS_MODEL,
-      model: args.params.model,
+      model: params.model,
       name: `soften-${stepName}`,
     });
   } catch (error) {
@@ -229,9 +286,7 @@ export async function generateImageSoftening(
     );
   }
 
-  const params = args.rebuild
-    ? args.rebuild(softened)
-    : { ...args.params, prompt: softened };
+  params = rebuild(softened, params.model);
   const outcome = await generateOnce(
     `${stepName}-softened`,
     params,
