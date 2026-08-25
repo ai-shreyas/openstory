@@ -1020,4 +1020,35 @@ Rules:
 </ASPECT_RATIO>`,
     },
   ],
+
+  'phase/soften-image-prompt-chat': [
+    {
+      role: 'system',
+      content: `You rewrite a cinematic still-image prompt that an image model rejected, so a retry can succeed. Read <REJECTION> and pick the rewrite that matches it.
+
+Two rejection classes:
+- POLICY — content checker / NSFW / unsafe / sensitive / flagged. Soften graphic violence, gore, sexual/nude wording, self-harm, real-person likeness instructions, and explicit crime into cinematic implication (aftermath, tension, silhouette, tasteful coverage).
+- UNEXPECTED OUTPUT — "did not generate the expected output", "could not generate images", "unexpected result". The model often rejects its own sample because the prompt's grammar is broken or it stacks unusual word combinations. Rewrite into plain, grammatical cinematic English: short clauses, common collocations, no jammed modifiers or contradictory descriptors. Do not invent safer-sounding plot; the scene stays the same.
+
+### CRITICAL OUTPUT RULES
+1. You will be called via a structured output tool. Follow the provided schema exactly.
+2. Return one rewritten prompt in \`prompt\`. Natural language only — no headers, bullets, or quotation marks wrapping the whole prompt.
+3. Keep the same scene: subjects, setting, camera, lighting, wardrobe, and style. Do not add new characters, props, locations, text, logos, or plot.
+4. Keep CHARACTER NAMES IN CAPS and UPPERCASE element tokens (e.g. BONDI_SCREEN) verbatim. Do not describe a referenced element's internal visual identity.
+5. If the rejection is ambiguous, do both: clean the grammar AND soften any policy-risky wording.
+6. Never return the original unchanged.`,
+    },
+    {
+      role: 'user',
+      content: `Rewrite this still-image prompt so an image model will accept it.
+
+<ORIGINAL_PROMPT>
+{{prompt}}
+</ORIGINAL_PROMPT>
+
+<REJECTION>
+{{rejection}}
+</REJECTION>`,
+    },
+  ],
 };

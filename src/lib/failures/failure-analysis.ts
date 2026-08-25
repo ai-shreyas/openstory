@@ -3,6 +3,7 @@
  * Analyzes shots + sequence to determine what failed and whether smart retry is possible.
  */
 
+import { isContentRejectionError } from '@/lib/ai/content-rejection';
 import type { SceneRow } from '@/lib/db/schema/scenes';
 import type { Shot } from '@/lib/db/schema/shots';
 import type { Sequence } from '@/lib/db/schema/sequences';
@@ -39,6 +40,11 @@ export type FailureSummary = {
   totalFailures: number;
   hasFailed: boolean;
   error?: string | null;
+  /**
+   * Content-checker-only failures are a warning (edit script / prompt / retry),
+   * not a hard generation error. Mixed or infrastructure failures stay 'error'.
+   */
+  tone: 'error' | 'warning';
 };
 
 function sceneNumberOf(shot: Shot, scenesById: ScenesById): number {
@@ -49,6 +55,15 @@ function sceneNumberOf(shot: Shot, scenesById: ScenesById): number {
 function getSceneTitle(shot: Shot, scenesById: ScenesById): string {
   const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
   return scene?.title || `Scene ${sceneNumberOf(shot, scenesById)}`;
+}
+
+function groupIsContentOnly(group: FailureGroup): boolean {
+  if (group.shots.length > 0) {
+    return group.shots.every(
+      (shot) => !!shot.error && isContentRejectionError(shot.error)
+    );
+  }
+  return !!group.error && isContentRejectionError(group.error);
 }
 
 function buildHeadline(
@@ -75,15 +90,29 @@ function buildHeadline(
   const parts: string[] = [];
   for (const group of groups) {
     if (group.category === 'image') {
+      const n = group.shots.length;
       parts.push(
-        `${group.shots.length} image${group.shots.length !== 1 ? 's' : ''} failed`
+        groupIsContentOnly(group)
+          ? n === 1
+            ? "1 still didn't pass the content checker"
+            : `${n} stills didn't pass the content checker`
+          : `${n} image${n !== 1 ? 's' : ''} failed`
       );
     } else if (group.category === 'motion') {
+      const n = group.shots.length;
       parts.push(
-        `${group.shots.length} motion video${group.shots.length !== 1 ? 's' : ''} failed`
+        groupIsContentOnly(group)
+          ? n === 1
+            ? "1 clip didn't pass the content checker"
+            : `${n} clips didn't pass the content checker`
+          : `${n} motion video${n !== 1 ? 's' : ''} failed`
       );
     } else if (group.category === 'music') {
-      parts.push('music generation failed');
+      parts.push(
+        groupIsContentOnly(group)
+          ? "music didn't pass the content checker"
+          : 'music generation failed'
+      );
     } else if (group.category === 'music-prompt') {
       parts.push('music prompt generation failed');
     }
@@ -111,6 +140,7 @@ export function analyzeFailures(
       totalFailures: 1,
       hasFailed: true,
       error: sequence.statusError,
+      tone: 'error',
     };
   }
 
@@ -226,6 +256,7 @@ export function analyzeFailures(
       totalFailures: 1,
       hasFailed: true,
       error: sequence.statusError,
+      tone: 'error',
     };
   }
 
@@ -243,5 +274,11 @@ export function analyzeFailures(
     totalFailures,
     hasFailed,
     error: sequence.statusError,
+    tone:
+      requiresFullRetry || groups.length === 0
+        ? 'error'
+        : groups.every(groupIsContentOnly)
+          ? 'warning'
+          : 'error',
   };
 }
