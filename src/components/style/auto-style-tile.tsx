@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils';
-import { Wand2 } from 'lucide-react';
+import { ScrollText } from 'lucide-react';
+import { getStyleGradient } from './style-gradient';
 
 type AutoStyleTileProps = {
   selected: boolean;
@@ -10,8 +11,10 @@ type AutoStyleTileProps = {
 };
 
 /**
- * The "From script" slot in the composer strip (#1213): instead of a library
- * style, the storyboard run derives a style from the script itself.
+ * The "Match script" slot in the composer strip (#1213): instead of a library
+ * style, the storyboard run derives a style from the script itself. Laid out
+ * like a StyleInlineTile (full-bleed background + bottom name strip) so it
+ * reads as a peer style, with a dashed border as the only tell (#1279).
  */
 export function AutoStyleTile({
   selected,
@@ -30,20 +33,35 @@ export function AutoStyleTile({
       disabled={disabled}
       aria-pressed={selected}
       className={cn(
-        'relative aspect-square overflow-hidden rounded-lg border-2 whitespace-normal',
-        'flex flex-col items-center justify-center gap-1 bg-muted/40',
+        'relative aspect-square overflow-hidden rounded-lg border-2 border-dashed whitespace-normal',
         'transition-all duration-200 hover:scale-105 hover:shadow-lg',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
         selected
-          ? 'border-primary shadow-md scale-105 bg-primary/10'
-          : 'border-dashed border-muted-foreground/30 hover:border-primary/50'
+          ? 'border-primary shadow-md scale-105'
+          : 'border-muted-foreground/30 hover:border-primary/50'
       )}
-      aria-label="Style from script: derive a style from the script"
+      aria-label="Match script: derive a style from the script"
       title="Derive a style from the script. It stays with this sequence until you add it to your library."
     >
-      <Wand2 className="size-5 text-primary" aria-hidden />
-      <span className="text-center text-xs font-medium">From script</span>
+      <div
+        className="h-full w-full"
+        style={{ background: getStyleGradient([]) }}
+      />
+      <span
+        aria-hidden
+        className="absolute left-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
+      >
+        <ScrollText className="size-3" />
+      </span>
+      <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 via-black/60 to-transparent p-2">
+        <p className="line-clamp-2 whitespace-normal text-center text-xs font-medium text-white">
+          Match script
+        </p>
+      </div>
+      {selected && (
+        <div className="pointer-events-none absolute inset-0 bg-primary/10" />
+      )}
     </button>
   );
 }
