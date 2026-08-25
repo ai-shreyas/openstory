@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { WORKFLOW_CHAT_PROMPTS } from '@/lib/prompts/workflow-prompts';
 import {
   AUTO_STYLE_PLACEHOLDER_NAME,
   DEFAULT_AUTO_STYLE_CATEGORY,
@@ -241,5 +242,31 @@ describe('autoStyleResponseSchema collapsed look/motion (#1304)', () => {
         'shots',
       ])
     );
+  });
+
+  it('names every recipe field in the prompt and does not invite look/motion keys', () => {
+    const system =
+      WORKFLOW_CHAT_PROMPTS['phase/automatic-style-chat']?.[0]?.content ?? '';
+    for (const field of [
+      'mood',
+      'artStyle',
+      'medium',
+      'lighting',
+      'colorPalette',
+      'colorGrading',
+      'camera',
+      'shots',
+      'pace',
+      'energy',
+      'name',
+      'description',
+      'category',
+      'tags',
+      'references',
+    ]) {
+      expect(system).toContain(`\`${field}\``);
+    }
+    expect(system).not.toContain('`look`');
+    expect(system).not.toContain('`motion`');
   });
 });

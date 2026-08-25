@@ -51,9 +51,9 @@ const AUTO_STYLE_PLACEHOLDER_CONFIG: StyleConfig = {
  * `category`/`pace` keep their `enum` (a hard constraint on strict routes —
  * Anthropic supports `enum` + `default`) but `.catch()` to a default: this is
  * a guess, and an off-vocabulary word from a non-enforcing route must never
- * fail the run (#1285). Missing recipe strings are filled from collapsed
- * look/motion prose or the placeholder (#1304). The prompt lists both
- * vocabularies as well.
+ * fail the run (#1285). Missing recipe strings are filled from a collapsed
+ * look/motion paragraph or the placeholder (#1304) if a non-enforcing
+ * route still ignores the schema keys.
  */
 /** Where a category guess lands when the model coins its own word. */
 export const DEFAULT_AUTO_STYLE_CATEGORY = 'film';
@@ -70,12 +70,12 @@ function firstProse(...candidates: unknown[]): string | undefined {
 }
 
 /**
- * Non-enforcing routes (OpenRouter→Opus 5 on 2026-08-25, #1304) collapse the
- * recipe into the prompt's LOOK / MOTION headings as two prose strings, or
- * nest the fields under `look`/`motion` objects, and omit the flat keys the
- * schema requires. Lift those into the flat fields so a style guess never
- * fails the run. `z.preprocess` is parse-only — `z.toJSONSchema` still emits
- * the inner object, so Anthropic is not invited to emit `look`/`motion`.
+ * Non-enforcing routes (OpenRouter→Opus 5, #1304) have emitted `look` /
+ * `motion` prose instead of the flat recipe keys, or nested the fields
+ * under objects with those names. Lift those into the flat fields so a
+ * style guess never fails the run. `z.preprocess` is parse-only —
+ * `z.toJSONSchema` still emits the inner object, so the provider schema
+ * stays aligned with the prompt (no `look`/`motion` keys).
  */
 function coerceCollapsedAutoStyle(raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
