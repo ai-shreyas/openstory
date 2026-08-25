@@ -7,7 +7,7 @@ const MAX_SCRIPT_LENGTH = 500;
 const MAX_SCENE_TEXT_LENGTH = 400;
 
 const SKETCH_SUFFIX =
-  'Drawn in five seconds with a ballpoint pen on a napkin: stick figures with no faces, boxes and single lines for the set, wobbly unfinished strokes, mostly empty white paper. Amateur, childlike, unpolished. Monochrome, no shading, no colour, no rendering, no realism, no detail of any kind.';
+  'Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail.';
 
 const NO_TEXT_SUFFIX =
   'No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.';
@@ -58,8 +58,9 @@ export function buildPosterPrompt(
  *
  * Previews are stand-ins rendered before any character/location reference
  * exists, so anything rendered "for real" is wrong by construction and reads
- * as inconsistency (or worse, as the final look) — #1277. Ask for a rough
- * napkin scribble instead: stick figures, no detail to be inconsistent about.
+ * as inconsistency (or worse, as the final look) — #1277. Ask for a flat
+ * line-art animatic frame instead: outline figures, no detail to be
+ * inconsistent about.
  * Deliberately ignores the style config for the same reason — a photoreal
  * style would pull the sketch back toward realism.
  */
@@ -67,10 +68,6 @@ export function buildPreviewPrompt(sceneText: string): string {
   const excerpt = sceneText.slice(0, MAX_SCENE_TEXT_LENGTH);
 
   return clampPrompt(
-    [
-      `Crude thumbnail storyboard scribble. ${excerpt}.`,
-      SKETCH_SUFFIX,
-      NO_TEXT_SUFFIX,
-    ].join(' ')
+    [`Animatic frame. ${excerpt}.`, SKETCH_SUFFIX, NO_TEXT_SUFFIX].join(' ')
   );
 }
