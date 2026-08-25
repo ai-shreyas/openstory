@@ -136,6 +136,7 @@ export function StudioGallery({
   assets,
   isLoading,
   isAuthenticated,
+  activity,
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
@@ -143,6 +144,7 @@ export function StudioGallery({
   assets: GeneratedAsset[];
   isLoading: boolean;
   isAuthenticated: boolean;
+  activity: 'image' | 'video';
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onLoadMore: () => void;
@@ -171,7 +173,9 @@ export function StudioGallery({
         title={isAuthenticated ? 'Nothing here yet' : 'Sign in to generate'}
         description={
           isAuthenticated
-            ? 'Your stills and clips land here. Start with a prompt below.'
+            ? activity === 'video'
+              ? 'Your clips land here. Start with a prompt below.'
+              : 'Your stills land here. Start with a prompt below.'
             : 'Browse the composer, then sign in to generate and keep a library.'
         }
       />

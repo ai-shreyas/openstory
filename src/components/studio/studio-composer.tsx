@@ -38,18 +38,15 @@ const COUNTS = [1, 2, 4] as const;
 const DURATIONS = [5, 8, 10] as const;
 
 type StudioComposerProps = {
-  defaultActivity?: 'image' | 'video';
+  activity: 'image' | 'video';
 };
 
-export function StudioComposer({
-  defaultActivity = 'image',
-}: StudioComposerProps) {
+export function StudioComposer({ activity }: StudioComposerProps) {
   const { requireAuth } = useAuthGate();
   const { showGate } = useFalBillingGate();
   const { pricing } = useFalPricing();
   const create = useCreateStudioAssets();
 
-  const [activity, setActivity] = useState<'image' | 'video'>(defaultActivity);
   const [prompt, setPrompt] = useState('');
   const [imageModel, setImageModel] =
     useState<TextToImageModel>(DEFAULT_IMAGE_MODEL);
@@ -142,30 +139,11 @@ export function StudioComposer({
         submit();
       }}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <ToggleGroup
-          type="single"
-          value={activity}
-          onValueChange={(value) => {
-            if (value === 'image' || value === 'video') setActivity(value);
-          }}
-          variant="outline"
-          spacing={0}
-          aria-label="Generate stills or clips"
-        >
-          <ToggleGroupItem value="image" className="px-3">
-            Image
-          </ToggleGroupItem>
-          <ToggleGroupItem value="video" className="px-3">
-            Video
-          </ToggleGroupItem>
-        </ToggleGroup>
-        <p className="text-sm text-muted-foreground">
-          {activity === 'video'
-            ? 'A still from your prompt, then the same models as sequences animate it.'
-            : 'A still from your prompt, using the same image models as sequences.'}
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        {activity === 'video'
+          ? 'A still from your prompt, then the same models as sequences animate it.'
+          : 'A still from your prompt, using the same image models as sequences.'}
+      </p>
 
       <Textarea
         name="prompt"

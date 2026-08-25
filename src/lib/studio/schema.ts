@@ -66,7 +66,7 @@ export const studioCreateInputSchema = z.discriminatedUnion('activity', [
 
 export type StudioCreateInput = z.infer<typeof studioCreateInputSchema>;
 
-export type StudioKindFilter = 'all' | 'image' | 'video';
+export type StudioActivity = 'image' | 'video';
 
 export type StudioSort = 'newest' | 'oldest';
 

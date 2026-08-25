@@ -6,19 +6,18 @@ import { PageContainer } from '@/components/layout/page-container';
 import { PageDescription } from '@/components/typography/page-description';
 import { PageHeader } from '@/components/typography/page-header';
 import { useStudioAssets } from '@/hooks/use-studio-assets';
-import type { StudioKindFilter, StudioSort } from '@/lib/studio/schema';
+import type { StudioActivity, StudioSort } from '@/lib/studio/schema';
 import { Link } from '@tanstack/react-router';
 import { Star } from 'lucide-react';
 
 type StudioViewProps = {
-  kind: StudioKindFilter;
+  activity: StudioActivity;
   sort: StudioSort;
   favorites: boolean;
 };
 
-export function StudioView({ kind, sort, favorites }: StudioViewProps) {
+export function StudioView({ activity, sort, favorites }: StudioViewProps) {
   const { isAuthenticated } = useAuthGate();
-  const activity = kind === 'all' ? undefined : kind;
   const query = useStudioAssets({
     activity,
     favoritesOnly: favorites || undefined,
@@ -26,64 +25,71 @@ export function StudioView({ kind, sort, favorites }: StudioViewProps) {
   });
 
   const assets = query.data?.pages.flatMap((page) => page.assets) ?? [];
+  const to = activity === 'video' ? '/videos' : '/images';
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
         <PageContainer maxWidth="wide">
-          <h1 className="sr-only">Images and Videos</h1>
+          <h1 className="sr-only">
+            {activity === 'video' ? 'Videos' : 'Images'}
+          </h1>
           <PageHeader>
             <PageDescription>
-              Generate a still or a clip from a prompt. Same models as
-              sequences, kept in a library you can sort and favorite.
+              {activity === 'video'
+                ? 'Generate a clip from a prompt. Same models as sequences — a still, then motion.'
+                : 'Generate a still from a prompt. Same image models as sequences.'}
             </PageDescription>
           </PageHeader>
 
           <div className="flex flex-wrap items-center gap-2">
-            <FilterLink
-              label="All"
-              kind="all"
-              sort={sort}
-              favorites={favorites}
-              active={kind === 'all'}
-            />
-            <FilterLink
-              label="Images"
-              kind="image"
-              sort={sort}
-              favorites={favorites}
-              active={kind === 'image'}
-            />
-            <FilterLink
-              label="Videos"
-              kind="video"
-              sort={sort}
-              favorites={favorites}
-              active={kind === 'video'}
-            />
-            <FilterLink
-              label="Favorites"
-              kind={kind}
-              sort={sort}
-              favorites={!favorites}
-              active={favorites}
-              icon
-            />
+            <Button
+              asChild
+              size="sm"
+              variant={favorites ? 'default' : 'outline'}
+            >
+              <Link
+                to={to}
+                search={{
+                  sort: sort === 'newest' ? undefined : sort,
+                  favorites: favorites ? undefined : true,
+                }}
+              >
+                <Star className="size-4" aria-hidden="true" />
+                Favorites
+              </Link>
+            </Button>
             <div className="ml-auto flex items-center gap-2">
-              <FilterLink
-                label="Newest"
-                kind={kind}
-                sort="newest"
-                favorites={favorites}
-                active={sort === 'newest'}
-              />
-              <FilterLink
-                label="Oldest"
-                kind={kind}
-                sort="oldest"
-                favorites={favorites}
-                active={sort === 'oldest'}
-              />
+              <Button
+                asChild
+                size="sm"
+                variant={sort === 'newest' ? 'default' : 'outline'}
+              >
+                <Link
+                  to={to}
+                  search={{
+                    sort: undefined,
+                    favorites: favorites ? true : undefined,
+                  }}
+                >
+                  Newest
+                </Link>
+              </Button>
+              <Button
+                asChild
+                size="sm"
+                variant={sort === 'oldest' ? 'default' : 'outline'}
+              >
+                <Link
+                  to={to}
+                  search={{
+                    sort: 'oldest',
+                    favorites: favorites ? true : undefined,
+                  }}
+                >
+                  Oldest
+                </Link>
+              </Button>
             </div>
           </div>
 
@@ -91,6 +97,7 @@ export function StudioView({ kind, sort, favorites }: StudioViewProps) {
             assets={assets}
             isLoading={query.isPending && isAuthenticated}
             isAuthenticated={isAuthenticated}
+            activity={activity}
             hasNextPage={query.hasNextPage}
             isFetchingNextPage={query.isFetchingNextPage}
             onLoadMore={() => void query.fetchNextPage()}
@@ -100,43 +107,9 @@ export function StudioView({ kind, sort, favorites }: StudioViewProps) {
 
       <div className="shrink-0 border-t bg-background/80 backdrop-blur-md">
         <PageContainer maxWidth="wide" padding="compact" className="py-4">
-          <StudioComposer
-            defaultActivity={kind === 'video' ? 'video' : 'image'}
-          />
+          <StudioComposer activity={activity} />
         </PageContainer>
       </div>
     </div>
-  );
-}
-
-function FilterLink({
-  label,
-  kind,
-  sort,
-  favorites,
-  active,
-  icon,
-}: {
-  label: string;
-  kind: StudioKindFilter;
-  sort: StudioSort;
-  favorites: boolean;
-  active: boolean;
-  icon?: boolean;
-}) {
-  return (
-    <Button asChild size="sm" variant={active ? 'default' : 'outline'}>
-      <Link
-        to="/studio"
-        search={{
-          kind: kind === 'all' ? undefined : kind,
-          sort: sort === 'newest' ? undefined : sort,
-          favorites: favorites ? true : undefined,
-        }}
-      >
-        {icon && <Star className="size-4" aria-hidden="true" />}
-        {label}
-      </Link>
-    </Button>
   );
 }

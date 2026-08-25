@@ -1,5 +1,4 @@
-import { StudioView } from '@/components/studio/studio-view';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { z } from 'zod';
 
 const searchParamsSchema = z.object({
@@ -10,15 +9,15 @@ const searchParamsSchema = z.object({
 
 export const Route = createFileRoute('/_app/studio/')({
   validateSearch: searchParamsSchema,
-  component: StudioPage,
-  staticData: { breadcrumb: 'Images and Videos' },
+  beforeLoad: ({ search }) => {
+    throw redirect({
+      to: search.kind === 'video' ? '/videos' : '/images',
+      search: {
+        sort: search.sort,
+        favorites: search.favorites,
+      },
+    });
+  },
+  component: () => null,
+  staticData: { breadcrumb: 'Images' },
 });
-
-function StudioPage() {
-  const {
-    kind = 'all',
-    sort = 'newest',
-    favorites = false,
-  } = Route.useSearch();
-  return <StudioView kind={kind} sort={sort} favorites={favorites} />;
-}
