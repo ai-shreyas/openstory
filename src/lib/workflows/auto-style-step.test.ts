@@ -103,6 +103,39 @@ describe('deriveAutoStyle', () => {
     });
   });
 
+  it('saves a collapsed look/motion prose answer instead of failing the run (#1304)', async () => {
+    durableLLMCallCf.mockImplementationOnce(
+      async (_step: unknown, cfg: { responseSchema: z.ZodType }) =>
+        cfg.responseSchema.parse({
+          name: 'Bioluminescent Lab Noir',
+          description: 'Dark cinematic science-explainer.',
+          look: 'Photoreal CGI-meets-scientific-visualization in near-black negative space.',
+          motion:
+            'Slow, deliberate, gravity-free camera work on macro subjects.',
+          colorPalette: ['#05080f', '#2fe3d6'],
+          references: ['self-illuminated molecular structures'],
+          category: 'tech',
+          tags: ['science'],
+          energy: 2,
+          pace: 'measured',
+        })
+    );
+    emit.mockReset();
+    const { scopedDb, setGeneratedForSequence } = makeScopedDb(true);
+
+    const config = await deriveAutoStyle(step, { scopedDb, ...PARAMS });
+
+    expect(config.look.mood).toContain(
+      'Photoreal CGI-meets-scientific-visualization'
+    );
+    expect(config.motion.camera).toContain('Slow, deliberate, gravity-free');
+    expect(setGeneratedForSequence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({ name: 'Bioluminescent Lab Noir' }),
+      })
+    );
+  });
+
   it('saves an off-vocabulary category guess as film instead of failing the run (#1285)', async () => {
     // durableLLMCallCf parses through `responseSchema` — mirror that here.
     durableLLMCallCf.mockImplementationOnce(

@@ -1005,7 +1005,8 @@ Rules:
 6. \`references\`: 2–5 descriptive aesthetic phrases (e.g. "rain-slicked neon-noir cityscapes"), not film titles.
 7. \`name\`: a short, evocative style name of 2–4 words (e.g. "Rain-slick Neon Noir"). \`description\`: one sentence a user would read on a style card.
 8. \`category\`: the single best-fitting catalog category — exactly one of: {{categories}}. \`tags\`: 3–6 lowercase keywords.
-9. \`energy\`: integer 1 (stillness) to 5 (kinetic chaos). \`pace\`: the cutting rhythm — exactly one of: {{paces}}.`,
+9. \`energy\`: integer 1 (stillness) to 5 (kinetic chaos). \`pace\`: the cutting rhythm — exactly one of: {{paces}}.
+10. Each recipe field is its own top-level string: \`mood\`, \`artStyle\`, \`medium\`, \`lighting\`, \`colorGrading\`, \`camera\`, \`shots\`. Do not nest them under \`look\` or \`motion\`, and do not collapse LOOK or MOTION into a single string.`,
     },
     {
       role: 'user',

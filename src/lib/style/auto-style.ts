@@ -51,29 +51,82 @@ const AUTO_STYLE_PLACEHOLDER_CONFIG: StyleConfig = {
  * `category`/`pace` keep their `enum` (a hard constraint on strict routes —
  * Anthropic supports `enum` + `default`) but `.catch()` to a default: this is
  * a guess, and an off-vocabulary word from a non-enforcing route must never
- * fail the run (#1285). The prompt lists both vocabularies as well.
+ * fail the run (#1285). Missing recipe strings are filled from collapsed
+ * look/motion prose or the placeholder (#1304). The prompt lists both
+ * vocabularies as well.
  */
 /** Where a category guess lands when the model coins its own word. */
 export const DEFAULT_AUTO_STYLE_CATEGORY = 'film';
 
-export const autoStyleResponseSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  category: z.enum(STYLE_CATEGORIES).catch(DEFAULT_AUTO_STYLE_CATEGORY),
-  tags: z.array(z.string()),
-  mood: z.string(),
-  artStyle: z.string(),
-  medium: z.string(),
-  lighting: z.string(),
-  colorPalette: z.array(z.string()),
-  colorGrading: z.string(),
-  camera: z.string(),
-  shots: z.string(),
-  pace: z.enum(STYLE_PACE_VALUES).catch('measured'),
-  /** 1 = stillness, 5 = kinetic chaos. */
-  energy: z.number(),
-  references: z.array(z.string()),
-});
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function firstProse(...candidates: unknown[]): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Non-enforcing routes (OpenRouter→Opus 5 on 2026-08-25, #1304) collapse the
+ * recipe into the prompt's LOOK / MOTION headings as two prose strings, or
+ * nest the fields under `look`/`motion` objects, and omit the flat keys the
+ * schema requires. Lift those into the flat fields so a style guess never
+ * fails the run. `z.preprocess` is parse-only — `z.toJSONSchema` still emits
+ * the inner object, so Anthropic is not invited to emit `look`/`motion`.
+ */
+function coerceCollapsedAutoStyle(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const look = raw.look;
+  const motion = raw.motion;
+  const lookObj = isRecord(look) ? look : undefined;
+  const motionObj = isRecord(motion) ? motion : undefined;
+  const lookProse = typeof look === 'string' ? look : undefined;
+  const motionProse = typeof motion === 'string' ? motion : undefined;
+  const fallback = AUTO_STYLE_PLACEHOLDER_CONFIG.look;
+  return {
+    ...raw,
+    mood: firstProse(raw.mood, lookObj?.mood, lookProse) ?? fallback.mood,
+    artStyle:
+      firstProse(raw.artStyle, lookObj?.artStyle, lookProse) ??
+      fallback.artStyle,
+    medium: firstProse(raw.medium, lookObj?.medium) ?? '',
+    lighting:
+      firstProse(raw.lighting, lookObj?.lighting, lookProse) ??
+      fallback.lighting,
+    colorGrading:
+      firstProse(raw.colorGrading, lookObj?.colorGrading, lookProse) ??
+      fallback.colorGrading,
+    camera:
+      firstProse(raw.camera, motionObj?.camera, motionProse) ??
+      AUTO_STYLE_PLACEHOLDER_CONFIG.motion.camera,
+    shots: firstProse(raw.shots, motionObj?.shots) ?? '',
+  };
+}
+
+export const autoStyleResponseSchema = z.preprocess(
+  coerceCollapsedAutoStyle,
+  z.object({
+    name: z.string(),
+    description: z.string(),
+    category: z.enum(STYLE_CATEGORIES).catch(DEFAULT_AUTO_STYLE_CATEGORY),
+    tags: z.array(z.string()),
+    mood: z.string(),
+    artStyle: z.string(),
+    medium: z.string(),
+    lighting: z.string(),
+    colorPalette: z.array(z.string()),
+    colorGrading: z.string(),
+    camera: z.string(),
+    shots: z.string(),
+    pace: z.enum(STYLE_PACE_VALUES).catch('measured'),
+    /** 1 = stillness, 5 = kinetic chaos. */
+    energy: z.number(),
+    references: z.array(z.string()),
+  })
+);
 
 export type AutoStyleResponse = z.infer<typeof autoStyleResponseSchema>;
 
