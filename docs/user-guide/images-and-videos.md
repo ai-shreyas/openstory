@@ -19,7 +19,7 @@ The gallery is the library. The prompt bar stays at the bottom so you can genera
 ## Generate an image
 
 1. Open **Images**
-2. Write a prompt
+2. Write a prompt, or click **Shuffle** for a sample still
 3. Pick an image model, aspect ratio, and count (1, 2, or 4)
 4. Click **Generate image**
 
@@ -32,7 +32,7 @@ Sequence video models are image-to-video. A prompt-only clip therefore:
 1. Renders a start frame with your image model
 2. Animates that frame with your video model
 
-Open **Videos**, write the prompt, pick still and motion models, aspect ratio, duration, and optional native audio, then generate. The library card plays the clip; the start frame is kept with it.
+Open **Videos**, write a prompt or **Shuffle** a sample, pick still and motion models, aspect ratio, duration, and optional native audio, then generate. The library card plays the clip; the start frame is kept with it.
 
 ## Sort and keep
 

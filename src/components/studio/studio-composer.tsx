@@ -3,6 +3,16 @@ import { ActionCost } from '@/components/billing/action-cost';
 import { ImageModelSelector } from '@/components/model/image-model-selector';
 import { MotionModelSelector } from '@/components/model/motion-model-selector';
 import { AspectRatioPills } from '@/components/settings/aspect-ratio-pills';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
@@ -30,8 +40,12 @@ import {
 } from '@/lib/constants/aspect-ratios';
 import { isInsufficientCreditsError } from '@/lib/errors';
 import { snapDuration } from '@/lib/motion/snap-duration';
+import {
+  pickShufflePrompt,
+  studioShufflePrompts,
+} from '@/lib/studio/prompt-shuffle';
 import type { StudioCreateInput } from '@/lib/studio/schema';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Shuffle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 const COUNTS = [1, 2, 4] as const;
@@ -57,6 +71,8 @@ export function StudioComposer({ activity }: StudioComposerProps) {
   const [count, setCount] = useState<(typeof COUNTS)[number]>(1);
   const [duration, setDuration] = useState(5);
   const [generateAudio, setGenerateAudio] = useState(true);
+  const [lastShuffled, setLastShuffled] = useState<string | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = useState(false);
 
   const compatibleVideoModel = getCompatibleModel(videoModel, aspectRatio);
   const snappedDuration = snapDuration(duration, compatibleVideoModel);
@@ -96,6 +112,25 @@ export function StudioComposer({ activity }: StudioComposerProps) {
 
   const trimmed = prompt.trim();
   const canSubmit = trimmed.length > 0 && !create.isPending;
+
+  const applyShuffle = () => {
+    const next = pickShufflePrompt(
+      studioShufflePrompts(activity),
+      prompt,
+      Math.random
+    );
+    if (!next) return;
+    setPrompt(next);
+    setLastShuffled(next);
+  };
+
+  const requestShuffle = () => {
+    if (trimmed.length > 0 && trimmed !== lastShuffled) {
+      setReplaceConfirm(true);
+      return;
+    }
+    applyShuffle();
+  };
 
   const buildInput = (): StudioCreateInput => {
     if (activity === 'video') {
@@ -139,11 +174,24 @@ export function StudioComposer({ activity }: StudioComposerProps) {
         submit();
       }}
     >
-      <p className="text-sm text-muted-foreground">
-        {activity === 'video'
-          ? 'A still from your prompt, then the same models as sequences animate it.'
-          : 'A still from your prompt, using the same image models as sequences.'}
-      </p>
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+          {activity === 'video'
+            ? 'A still from your prompt, then the same models as sequences animate it.'
+            : 'A still from your prompt, using the same image models as sequences.'}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          disabled={create.isPending}
+          onClick={requestShuffle}
+        >
+          <Shuffle className="size-3.5" />
+          Shuffle
+        </Button>
+      </div>
 
       <Textarea
         name="prompt"
@@ -274,6 +322,30 @@ export function StudioComposer({ activity }: StudioComposerProps) {
           <ActionCost estimate={estimate} align="end" />
         </div>
       </div>
+
+      <AlertDialog open={replaceConfirm} onOpenChange={setReplaceConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace your prompt?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Shuffle swaps in a sample prompt. What you've written here will be
+              replaced.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep my prompt</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setReplaceConfirm(false);
+                applyShuffle();
+              }}
+            >
+              <Shuffle className="size-3.5" />
+              Replace
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   );
 }

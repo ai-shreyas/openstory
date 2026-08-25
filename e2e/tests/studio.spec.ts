@@ -24,4 +24,12 @@ test.describe('Images and Videos studio', () => {
     await page.goto('/studio');
     await expect(page).toHaveURL(/\/images/);
   });
+
+  test('Shuffle fills an empty image prompt', async ({ page }) => {
+    await page.goto('/images');
+    const prompt = page.getByRole('textbox', { name: 'Prompt' });
+    await expect(prompt).toHaveValue('');
+    await page.getByRole('button', { name: 'Shuffle' }).click();
+    await expect(prompt).not.toHaveValue('');
+  });
 });
