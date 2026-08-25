@@ -167,6 +167,21 @@ describe('analyzeFailures', () => {
     expect(result.headline).toContain('full retry required');
   });
 
+  test('content-checker sequence error (no shots) is a warning, not a hard error', () => {
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError: 'Blocked by the content checker',
+    });
+
+    const result = analyzeFailures([], sequence, SCENES);
+
+    expect(result.requiresFullRetry).toBe(true);
+    expect(result.tone).toBe('warning');
+    expect(result.headline).toBe(
+      "Didn't pass the content checker \u2014 regenerate to retry"
+    );
+  });
+
   test('content-checker image failures are a warning, not a hard error', () => {
     const shots = [
       makeShot({
