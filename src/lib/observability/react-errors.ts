@@ -32,6 +32,11 @@ export function captureReactError(
   const props = {
     react_error_kind: kind,
     component_stack: info.componentStack ?? null,
+    // Chrome translate leaves these wrappers; lets the dashboard split
+    // translate-induced hydration mismatches (#418) from real ones.
+    page_translated:
+      typeof document !== 'undefined' &&
+      document.querySelector('font[style*="vertical-align: inherit"]') !== null,
   };
   logger.error(`react ${kind} error`, { err: error, ...props });
   if (posthog.__loaded) {

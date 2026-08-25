@@ -17,12 +17,14 @@ describe('captureReactError', () => {
     expect(captureException).toHaveBeenCalledWith(error, {
       react_error_kind: 'caught',
       component_stack: '\n at Composer',
+      page_translated: false,
     });
 
     captureReactError('recoverable', error, {});
     expect(captureException).toHaveBeenLastCalledWith(error, {
       react_error_kind: 'recoverable',
       component_stack: null,
+      page_translated: false,
     });
     expect(captureException).toHaveBeenCalledTimes(2);
 
