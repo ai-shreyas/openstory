@@ -46,14 +46,20 @@ const AUTO_STYLE_PLACEHOLDER_CONFIG: StyleConfig = {
  * rejects string/array length bounds and integer min/max (see
  * `sceneDurationResponseSchema`). Bounds are applied in
  * {@link autoStyleDraftFromResponse}, which re-validates against the real
- * `StyleConfigSchema`. `category`/`pace` are open strings too: this is a
- * guess, and an out-of-vocabulary word must never fail the run (#1285) — the
- * prompt lists the vocabulary and the draft coerces to it.
+ * `StyleConfigSchema`.
+ *
+ * `category`/`pace` keep their `enum` (a hard constraint on strict routes —
+ * Anthropic supports `enum` + `default`) but `.catch()` to a default: this is
+ * a guess, and an off-vocabulary word from a non-enforcing route must never
+ * fail the run (#1285). The prompt lists both vocabularies as well.
  */
+/** Where a category guess lands when the model coins its own word. */
+export const DEFAULT_AUTO_STYLE_CATEGORY = 'film';
+
 export const autoStyleResponseSchema = z.object({
   name: z.string(),
   description: z.string(),
-  category: z.string(),
+  category: z.enum(STYLE_CATEGORIES).catch(DEFAULT_AUTO_STYLE_CATEGORY),
   tags: z.array(z.string()),
   mood: z.string(),
   artStyle: z.string(),
@@ -63,7 +69,7 @@ export const autoStyleResponseSchema = z.object({
   colorGrading: z.string(),
   camera: z.string(),
   shots: z.string(),
-  pace: z.string(),
+  pace: z.enum(STYLE_PACE_VALUES).catch('measured'),
   /** 1 = stillness, 5 = kinetic chaos. */
   energy: z.number(),
   references: z.array(z.string()),
@@ -91,18 +97,6 @@ export function placeholderAutoStyleDraft(): AutoStyleDraft {
 }
 
 const MAX_NAME_LENGTH = 60;
-
-/** Where a category guess lands when the model coins its own word. */
-export const DEFAULT_AUTO_STYLE_CATEGORY = 'film';
-
-/** Case-insensitive match against a closed vocabulary; `undefined` when off-list. */
-function pickEnum<const T extends readonly string[]>(
-  values: T,
-  raw: string
-): T[number] | undefined {
-  const needle = raw.trim().toLowerCase();
-  return values.find((v) => v === needle);
-}
 
 function clampProse(value: string): string {
   return value.trim().slice(0, 1000);
@@ -140,7 +134,7 @@ export function autoStyleDraftFromResponse(
     motion: {
       camera: clampProse(response.camera),
       shots: response.shots.trim() ? clampProse(response.shots) : undefined,
-      pace: pickEnum(STYLE_PACE_VALUES, response.pace),
+      pace: response.pace,
       energy: Math.min(5, Math.max(1, Math.round(response.energy))),
     },
     references: nonEmpty(response.references, 50),
@@ -149,9 +143,7 @@ export function autoStyleDraftFromResponse(
     name,
     description: response.description.trim() || null,
     config,
-    category:
-      pickEnum(STYLE_CATEGORIES, response.category) ??
-      DEFAULT_AUTO_STYLE_CATEGORY,
+    category: response.category,
     tags: nonEmpty(response.tags, 10),
   };
 }

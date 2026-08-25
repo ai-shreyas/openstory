@@ -67,13 +67,6 @@ export async function deriveAutoStyle(
       `Automatic style for sequence ${sequenceId} was unsalvageable: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  if (draft.category !== response.category.trim().toLowerCase()) {
-    logger.warn('[AutoStyle:cf] category guess off-vocabulary; defaulted', {
-      sequenceId,
-      guessed: response.category,
-      category: draft.category,
-    });
-  }
 
   await step.do('save-automatic-style', async () => {
     const bound = await scopedDb.styles.setGeneratedForSequence({

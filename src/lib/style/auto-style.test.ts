@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   AUTO_STYLE_PLACEHOLDER_NAME,
   DEFAULT_AUTO_STYLE_CATEGORY,
+  STYLE_CATEGORIES,
+  autoStyleResponseSchema,
   type AutoStyleResponse,
   autoStyleDraftFromResponse,
   placeholderAutoStyleDraft,
@@ -90,19 +93,25 @@ describe('placeholderAutoStyleDraft', () => {
   });
 });
 
-describe('autoStyleDraftFromResponse vocabulary guesses (#1285)', () => {
-  it('coerces category and pace to the closed vocabulary instead of failing the run', () => {
-    expect(
-      autoStyleDraftFromResponse({ ...RESPONSE, category: ' Commercial ' })
-        .category
-    ).toBe('commercial');
-    const offList = autoStyleDraftFromResponse({
+describe('autoStyleResponseSchema vocabulary guesses (#1285)', () => {
+  it('defaults an off-vocabulary category/pace instead of failing the parse', () => {
+    const parsed = autoStyleResponseSchema.parse({
       ...RESPONSE,
-      category: 'documentary',
+      category: 'Documentary',
       pace: 'rapid',
     });
-    expect(offList.category).toBe(DEFAULT_AUTO_STYLE_CATEGORY);
-    expect(offList.config.motion.pace).toBeUndefined();
-    expect(StyleConfigSchema.safeParse(offList.config).success).toBe(true);
+    expect(parsed.category).toBe(DEFAULT_AUTO_STYLE_CATEGORY);
+    expect(parsed.pace).toBe('measured');
+    expect(autoStyleResponseSchema.parse(RESPONSE).category).toBe('film');
+    const draft = autoStyleDraftFromResponse(parsed);
+    expect(StyleConfigSchema.safeParse(draft.config).success).toBe(true);
+  });
+
+  it('still sends the enum to the provider', () => {
+    const json = z.toJSONSchema(autoStyleResponseSchema);
+    expect(json.properties?.category).toMatchObject({
+      enum: [...STYLE_CATEGORIES],
+      default: DEFAULT_AUTO_STYLE_CATEGORY,
+    });
   });
 });
