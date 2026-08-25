@@ -9,6 +9,11 @@
  * the anchor frame — not into `scene.metadata` (#713). Spawned per scene by
  * `FramePromptBatchWorkflow`. */
 
+import {
+  CONTENT_REJECTION_EVENT,
+  contentFilterLlmMessage,
+  isContentFilterFinish,
+} from '@/lib/ai/content-rejection';
 import { createAdapter, resolveNativeGrokModel } from '@/lib/ai/create-adapter';
 import { computeVisualPromptInputHash } from '@/lib/ai/input-hash';
 import {
@@ -18,7 +23,7 @@ import {
   PROMPT_REASONING,
   throwNotedRunError,
 } from '@/lib/ai/llm-client';
-import { getContextWindow } from '@/lib/ai/models.config';
+import { getMaxOutputTokens } from '@/lib/ai/models.config';
 import { narrowShotPromptContext } from '@/lib/ai/prompt-context';
 import {
   type VisualPrompt,
@@ -38,6 +43,7 @@ import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { FramePromptWorkflowInput } from '@/lib/workflow/types';
 import { chat } from '@tanstack/ai';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
+import { NonRetryableError } from 'cloudflare:workflows';
 
 const logger = getLogger(['openstory', 'workflow', 'frame-prompt']);
 
@@ -214,6 +220,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
           let lastEmitAt = 0;
           let structuredObject: unknown;
           let runError = null;
+          let contentFiltered = false;
 
           const flushDelta = async () => {
             if (!channel || !streamConfig || !pendingDelta) return;
@@ -226,7 +233,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
             });
           };
 
-          const maxTokens = Math.floor(getContextWindow(analysisModelId) * 0.5);
+          const maxTokens = getMaxOutputTokens(analysisModelId);
           const native = !!resolveNativeGrokModel(analysisModelId, llmKeyInfo);
           const modelOptions = native
             ? {
@@ -260,6 +267,14 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
             debug: false,
           })) {
             usageCapture.noteFromStreamEvent(streamEvent);
+            // A safety-classifier stop ends the run with `finishReason:
+            // 'content_filter'` and either no content or content cut
+            // mid-token. Note it here so the failure below is classified as a
+            // content rejection instead of an opaque parse error (#1304).
+            if (isContentFilterFinish(streamEvent)) {
+              contentFiltered = true;
+              continue;
+            }
             const noted = extractRunError(streamEvent);
             if (noted) {
               runError ??= noted;
@@ -297,6 +312,19 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
             }
           }
           throwNotedRunError(runError);
+          // A content filter is a property of the script, not a transient
+          // fault: every retry re-runs the same prompt and stops the same way.
+          // Fail fast and name the scene so the user can edit it, instead of
+          // burning five step retries (and their credits) on a certain loss.
+          if (contentFiltered && structuredObject === undefined) {
+            logger.warn(
+              `[FramePromptWorkflow:cf] [LLM:${LOG_NAME}] content filter stopped the run`,
+              { event: CONTENT_REJECTION_EVENT, sceneId: scene.sceneId }
+            );
+            throw new NonRetryableError(
+              contentFilterLlmMessage(`Scene ${scene.sceneNumber}`)
+            );
+          }
           await flushDelta();
           logger.info(
             `[FramePromptWorkflow:cf] [LLM:${LOG_NAME}] Streaming call succeeded`

@@ -87,8 +87,56 @@ export function isContentRejectionError(error: unknown): boolean {
   return CONTENT_REJECTION_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+/**
+ * Provider finish reasons that mean "the model stopped because a safety
+ * classifier fired", as opposed to a transient fault. Anthropic returns this
+ * for the WHOLE analysis call (not just image generation), either with no
+ * content at all or with the response cut mid-token — see
+ * {@link contentFilterLlmMessage}.
+ */
+const CONTENT_FILTER_FINISH_REASONS: ReadonlySet<string> = new Set([
+  'content_filter',
+  'content-filter',
+]);
+
+/**
+ * True when a `RUN_FINISHED` stream event ended on a safety-classifier stop.
+ * Read defensively: the yielded event union is wide and a malformed provider
+ * shot can carry a non-string `finishReason`.
+ */
+export function isContentFilterFinish(event: unknown): boolean {
+  if (
+    !event ||
+    typeof event !== 'object' ||
+    !('type' in event) ||
+    event.type !== 'RUN_FINISHED' ||
+    !('finishReason' in event) ||
+    typeof event.finishReason !== 'string'
+  ) {
+    return false;
+  }
+  return CONTENT_FILTER_FINISH_REASONS.has(event.finishReason);
+}
+
 /** Overlay / list title — not "Generation failed". */
 export const CONTENT_REJECTION_USER_TITLE = 'Blocked by the content checker';
+
+/**
+ * Message for an LLM call the provider stopped on a content filter.
+ *
+ * Deliberately worded to match {@link CONTENT_REJECTION_PATTERNS} so the
+ * existing image-path classification (failure banners, `statusError` severity,
+ * PostHog rejection metrics) treats a filtered *analysis* call the same way it
+ * already treats a filtered *image* — as a warning naming the blocked subject,
+ * not an opaque "Generation failed".
+ *
+ * Without this the stop surfaced as `structured-output-missing-result` (empty
+ * response) or `Failed to parse structured output as JSON` (cut mid-token),
+ * neither of which tells the user their script tripped a safety classifier.
+ */
+export function contentFilterLlmMessage(subject: string): string {
+  return `${CONTENT_REJECTION_USER_TITLE}: ${subject} (stopped by the provider's content filter)`;
+}
 
 /** What the user can do next. */
 export const CONTENT_REJECTION_USER_HINT =
