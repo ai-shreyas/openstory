@@ -1511,7 +1511,9 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                     density="header-chip"
                     isRegenerating={visualBusy}
                     onRegenerate={() =>
-                      regeneratePromptMutation.mutate({ promptType: 'visual' })
+                      regeneratePromptMutation.mutate({
+                        promptType: 'visual',
+                      })
                     }
                   />
                 )}
@@ -1781,7 +1783,9 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                     density="header-chip"
                     isRegenerating={motionBusy}
                     onRegenerate={() =>
-                      regeneratePromptMutation.mutate({ promptType: 'motion' })
+                      regeneratePromptMutation.mutate({
+                        promptType: 'motion',
+                      })
                     }
                   />
                 )}

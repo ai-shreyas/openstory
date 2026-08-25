@@ -1266,8 +1266,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           </div>
         )}
 
-      {/* Failure summary with smart retry */}
-      {failureSummary?.hasFailed && (
+      {/* Failure summary with smart retry — wait until the run finishes so a
+          single in-flight miss doesn't headline the first result (#1286). */}
+      {failureSummary?.hasFailed && !isGenerationActive && (
         <FailureSummaryBanner
           summary={failureSummary}
           onRetry={() => void handleSmartRetry()}
@@ -1305,7 +1306,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             styleName={styleName}
             modelMissingShotIds={shotsMissingActiveImage}
             modelMissingLabel={activeImageModelLabel}
-            staleShotIds={staleShotIds}
+            staleShotIds={isGenerationActive ? undefined : staleShotIds}
           />
         </div>
 
@@ -1373,6 +1374,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                     : null
                 }
                 staleLabel={
+                  !isGenerationActive &&
                   effectiveTab === 'image-prompt' &&
                   curSelectedShotId &&
                   !regeneratingImages.has(curSelectedShotId)
@@ -1395,6 +1397,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 onGenerateSceneVariantsStart={(id) =>
                   handleRegenerateStart(id, 'scene-variants')
                 }
+                firstRunActive={isGenerationActive}
               />
             )}
           </div>

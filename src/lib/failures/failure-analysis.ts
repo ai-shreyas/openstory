@@ -68,7 +68,9 @@ function groupIsContentOnly(group: FailureGroup): boolean {
 
 function buildHeadline(
   groups: FailureGroup[],
-  requiresFullRetry: boolean
+  requiresFullRetry: boolean,
+  clipsReady: number,
+  clipsTotal: number
 ): string {
   if (groups.length === 0) {
     if (requiresFullRetry)
@@ -118,7 +120,14 @@ function buildHeadline(
     }
   }
 
-  return parts.join(' and ');
+  const failure = parts.join(' and ');
+  // Lead with what worked so a single miss doesn't headline the first run
+  // (#1286). "6 of 7 clips ready · 1 image failed".
+  if (clipsTotal > 0) {
+    const ready = `${clipsReady} of ${clipsTotal} clips ready`;
+    return failure ? `${ready} \u00b7 ${failure}` : ready;
+  }
+  return failure;
 }
 
 export function analyzeFailures(
@@ -267,9 +276,19 @@ export function analyzeFailures(
 
   const hasFailed = groups.length > 0 || sequence.status === 'failed';
 
+  const failedShotIds = new Set(
+    groups.flatMap((g) => g.shots.map((s) => s.shotId))
+  );
+  const clipsReady = shots.filter((s) => !failedShotIds.has(s.id)).length;
+
   return {
     requiresFullRetry,
-    headline: buildHeadline(groups, requiresFullRetry),
+    headline: buildHeadline(
+      groups,
+      requiresFullRetry,
+      clipsReady,
+      shots.length
+    ),
     groups,
     totalFailures,
     hasFailed,

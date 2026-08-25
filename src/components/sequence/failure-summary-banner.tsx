@@ -43,10 +43,12 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
           ? 'Generation failed'
           : isWarning
             ? 'Content checker'
-            : 'Generation partially failed'}
+            : summary.headline}
       </AlertTitle>
       <AlertDescription>
-        <p>{summary.headline}</p>
+        {summary.requiresFullRetry || isWarning ? (
+          <p>{summary.headline}</p>
+        ) : null}
         {isWarning && <p>{CONTENT_REJECTION_USER_HINT}</p>}
 
         {summary.groups.length === 0 && summary.error && !isWarning && (
@@ -99,9 +101,7 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
             ? 'Retrying\u2026'
             : summary.requiresFullRetry
               ? 'Regenerate Sequence'
-              : isWarning
-                ? 'Retry'
-                : 'Retry Failed'}
+              : 'Retry'}
         </Button>
       </AlertDescription>
     </Alert>

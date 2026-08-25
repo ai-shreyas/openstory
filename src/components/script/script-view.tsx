@@ -92,8 +92,8 @@ import {
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
 import {
-  markPendingGenerate,
-  takePendingGenerate,
+  markPendingIntent,
+  takePendingIntent,
 } from '@/lib/generation/pending-generate';
 import { estimateSceneCount } from '@/lib/generation/time-estimate';
 import { replaceTokenInText } from '@/lib/sequence-elements/cascade-rename';
@@ -924,7 +924,7 @@ export const ScriptView: FC<{
     // Remember the click too, so the resume effect below continues this exact
     // step (nudge, billing gate, generation) once sign-in completes (#1187).
     if (!requireAuth()) {
-      if (!isEditing) markPendingGenerate();
+      if (!isEditing) markPendingIntent('generate');
       return;
     }
 
@@ -957,7 +957,11 @@ export const ScriptView: FC<{
 
   const handleEnhance = async () => {
     // Enhancing runs an AI model on the server — gate it behind login too.
+    // Remember the click so post-auth resume continues Enhance, not Generate,
+    // and so we don't dump a first-time user on the empty sequences list
+    // (#1286).
     if (!requireAuth()) {
+      if (!isEditing) markPendingIntent('enhance');
       return;
     }
 
@@ -1118,18 +1122,21 @@ export const ScriptView: FC<{
   const { blocking: welcomeCreditsBlocking } = useWelcomeCreditsGate();
   const handleSubmitRef = useRef(handleSubmit);
   handleSubmitRef.current = handleSubmit;
+  const handleEnhanceRef = useRef(handleEnhance);
+  handleEnhanceRef.current = handleEnhance;
   const resumeTriedRef = useRef(false);
   useEffect(() => {
     if (isEditing || loading || !isAuthenticated) return;
     if (resumeTriedRef.current) return;
-    if (!draftLoaded || !isFormValid || isSubmitting) return;
+    if (!draftLoaded || !isFormValid || isSubmitting || isEnhancing) return;
     // Let the welcome-credits moment finish first — its "Keep creating"
     // dismiss is what hands the flow back to us, instead of the nudge
     // stacking on top of the gift dialog.
     if (welcomeCreditsBlocking) return;
     resumeTriedRef.current = true;
-    if (!takePendingGenerate()) return;
-    void handleSubmitRef.current();
+    const intent = takePendingIntent();
+    if (intent === 'generate') void handleSubmitRef.current();
+    else if (intent === 'enhance') void handleEnhanceRef.current();
   }, [
     isEditing,
     loading,
@@ -1137,6 +1144,7 @@ export const ScriptView: FC<{
     draftLoaded,
     isFormValid,
     isSubmitting,
+    isEnhancing,
     welcomeCreditsBlocking,
   ]);
 
