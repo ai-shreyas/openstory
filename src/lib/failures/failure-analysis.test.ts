@@ -167,6 +167,51 @@ describe('analyzeFailures', () => {
     expect(result.headline).toContain('full retry required');
   });
 
+  test('content-checker image failures are a warning, not a hard error', () => {
+    const shots = [
+      makeShot({
+        frame: {
+          imageStatus: 'failed',
+          imageError:
+            'The content could not be processed because it contained material flagged by a content checker.',
+        },
+        sources: { image: null },
+      }),
+    ];
+    const sequence = makeSequence({ status: 'completed' });
+
+    const result = analyzeFailures(shots, sequence, SCENES);
+
+    expect(result.hasFailed).toBe(true);
+    expect(result.tone).toBe('warning');
+    expect(result.requiresFullRetry).toBe(false);
+    expect(result.headline).toContain("didn't pass the content checker");
+    expect(result.headline).not.toContain('failed');
+  });
+
+  test('mixed content-checker and infrastructure image failures stay an error', () => {
+    const shots = [
+      makeShot({
+        frame: {
+          imageStatus: 'failed',
+          imageError: 'material flagged by a content checker.',
+        },
+        sources: { image: null },
+      }),
+      makeShot({
+        shot: { id: 'shot-2' },
+        frame: { imageStatus: 'failed', imageError: 'Model timeout' },
+        sources: { image: null },
+      }),
+    ];
+    const sequence = makeSequence({ status: 'failed' });
+
+    const result = analyzeFailures(shots, sequence, SCENES);
+
+    expect(result.tone).toBe('error');
+    expect(result.headline).toContain('images failed');
+  });
+
   test('image-only failures', () => {
     const shots = [
       makeShot({

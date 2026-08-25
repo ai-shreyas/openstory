@@ -60,6 +60,7 @@ import { useSequenceLocations } from '@/hooks/use-sequence-locations';
 import { useCreateSequence } from '@/hooks/use-sequences';
 import { useRecommendedStyles, useStyle, useStyles } from '@/hooks/use-styles';
 import { AUTO_STYLE_ID } from '@/lib/style/auto-style';
+import { errorMessage } from '@/lib/errors';
 import { toEnhanceInputs } from '@/lib/ai/enhance-inputs';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -1029,10 +1030,7 @@ export const ScriptView: FC<{
       });
     } catch (error) {
       if (!abortController.signal.aborted) {
-        setEnhance(
-          'error',
-          error instanceof Error ? error.message : 'Failed to enhance script'
-        );
+        setEnhance('error', errorMessage(error, 'Failed to enhance script'));
         setScript(previousScriptRef.current);
       }
     } finally {
