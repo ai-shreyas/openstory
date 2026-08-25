@@ -1692,7 +1692,7 @@ export const ScriptView: FC<{
               ) : (
                 <Shuffle className="size-3.5" />
               )}
-              Replace
+              <span>Replace</span>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

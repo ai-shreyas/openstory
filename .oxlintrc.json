@@ -31,8 +31,7 @@
     "eslint/no-console": "error",
     "unicorn/prefer-optional-catch-binding": "error",
     "react/rules-of-hooks": "error",
-    // warn until the 41 existing sites are fixed (#1283), then error.
-    "openstory/no-loose-text": "warn",
+    "openstory/no-loose-text": "error",
     "no-restricted-imports": [
       "error",
       {
