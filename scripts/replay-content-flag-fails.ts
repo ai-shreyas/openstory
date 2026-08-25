@@ -22,26 +22,48 @@ import { getChatPrompt } from '@/lib/prompts';
 import { chat } from '@tanstack/ai';
 import { z } from 'zod';
 
-type FailRow = {
-  variant_id: string;
-  frame_id: string;
-  sequence_id: string;
-  shot_id: string;
-  model: string;
-  error: string;
-  prompt: string | null;
-};
+const failRowSchema = z.object({
+  variant_id: z.string(),
+  frame_id: z.string(),
+  sequence_id: z.string(),
+  shot_id: z.string(),
+  model: z.string(),
+  error: z.string(),
+  prompt: z.string().nullable(),
+});
+type FailRow = z.infer<typeof failRowSchema>;
 
-type Attempt = {
-  ok: boolean;
-  contentFlag: boolean;
-  error?: string;
-  url?: string;
-};
+const attemptSchema = z.object({
+  ok: z.boolean(),
+  contentFlag: z.boolean(),
+  error: z.string().optional(),
+  url: z.string().optional(),
+});
+type Attempt = z.infer<typeof attemptSchema>;
 
 const schema = z.object({ prompt: z.string() });
 const CASES_PATH = '/tmp/content-fails-unique.json';
 const OUT_PATH = '/tmp/content-flag-replay-report.json';
+
+function toChatPayload(
+  messages: Awaited<ReturnType<typeof getChatPrompt>>['messages']
+): {
+  systemPrompts: string[];
+  chatMessages: Array<{ role: 'user' | 'assistant'; content: string }>;
+} {
+  const systemPrompts: string[] = [];
+  const chatMessages: Array<{ role: 'user' | 'assistant'; content: string }> =
+    [];
+  for (const m of messages) {
+    const content = typeof m.content === 'string' ? m.content : '';
+    if (m.role === 'system') {
+      systemPrompts.push(content);
+    } else {
+      chatMessages.push({ role: m.role, content });
+    }
+  }
+  return { systemPrompts, chatMessages };
+}
 
 function imageSizeFor(prompt: string): ImageSize {
   if (/9:16|vertical 9:16|portrait/i.test(prompt)) return 'portrait_16_9';
@@ -81,15 +103,7 @@ async function softenPrompt(
     prompt,
     rejection,
   });
-  const systemPrompts = messages
-    .filter((m) => m.role === 'system')
-    .map((m) => (typeof m.content === 'string' ? m.content : ''));
-  const chatMessages = messages
-    .filter((m) => m.role !== 'system')
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: typeof m.content === 'string' ? m.content : '',
-    }));
+  const { systemPrompts, chatMessages } = toChatPayload(messages);
   const adapter = createAdapter(DEFAULT_ANALYSIS_MODEL, llmKey);
   const eventStream = chat({
     adapter,
@@ -116,18 +130,19 @@ async function softenPrompt(
   return softened;
 }
 
-type ReportRow = {
-  n: number;
-  shotId: string;
-  sequenceId: string;
-  model: string;
-  prodError: string;
-  originalPrompt: string;
-  original: Attempt;
-  softenedPrompt?: string;
-  softenError?: string;
-  softened?: Attempt;
-};
+const reportRowSchema = z.object({
+  n: z.number(),
+  shotId: z.string(),
+  sequenceId: z.string(),
+  model: z.string(),
+  prodError: z.string(),
+  originalPrompt: z.string(),
+  original: attemptSchema,
+  softenedPrompt: z.string().optional(),
+  softenError: z.string().optional(),
+  softened: attemptSchema.optional(),
+});
+type ReportRow = z.infer<typeof reportRowSchema>;
 
 function fmtAttempt(a: Attempt): string {
   if (a.ok) return `PASS ${a.url ?? ''}`;
@@ -135,12 +150,16 @@ function fmtAttempt(a: Attempt): string {
   return `FAIL ${a.error ?? ''}`;
 }
 
-const rows = JSON.parse(readFileSync(CASES_PATH, 'utf8')) as FailRow[];
+const rows = failRowSchema
+  .array()
+  .parse(JSON.parse(readFileSync(CASES_PATH, 'utf8')));
 const cases = rows.filter((r) => r.prompt?.trim()).slice(0, 20);
 
 let report: ReportRow[] = [];
 try {
-  report = JSON.parse(readFileSync(OUT_PATH, 'utf8')) as ReportRow[];
+  report = reportRowSchema
+    .array()
+    .parse(JSON.parse(readFileSync(OUT_PATH, 'utf8')));
 } catch {
   report = [];
 }

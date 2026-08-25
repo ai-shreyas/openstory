@@ -20,12 +20,43 @@ import { z } from 'zod';
 const schema = z.object({ prompt: z.string() });
 const OUT = '/tmp/second-soften-report.json';
 
-type Attempt = {
-  ok: boolean;
-  contentFlag: boolean;
-  error?: string;
-  url?: string;
-};
+const attemptSchema = z.object({
+  ok: z.boolean(),
+  contentFlag: z.boolean(),
+  error: z.string().optional(),
+  url: z.string().optional(),
+});
+type Attempt = z.infer<typeof attemptSchema>;
+
+const firstReportRowSchema = z.object({
+  n: z.number(),
+  shotId: z.string(),
+  model: z.string(),
+  originalPrompt: z.string(),
+  original: attemptSchema,
+  softenedPrompt: z.string().optional(),
+  softened: attemptSchema.optional(),
+});
+
+function toChatPayload(
+  messages: Awaited<ReturnType<typeof getChatPrompt>>['messages']
+): {
+  systemPrompts: string[];
+  chatMessages: Array<{ role: 'user' | 'assistant'; content: string }>;
+} {
+  const systemPrompts: string[] = [];
+  const chatMessages: Array<{ role: 'user' | 'assistant'; content: string }> =
+    [];
+  for (const m of messages) {
+    const content = typeof m.content === 'string' ? m.content : '';
+    if (m.role === 'system') {
+      systemPrompts.push(content);
+    } else {
+      chatMessages.push({ role: m.role, content });
+    }
+  }
+  return { systemPrompts, chatMessages };
+}
 
 function imageSizeFor(prompt: string): ImageSize {
   if (/9:16|vertical 9:16|portrait/i.test(prompt)) return 'portrait_16_9';
@@ -65,15 +96,7 @@ async function softenPrompt(
     prompt,
     rejection,
   });
-  const systemPrompts = messages
-    .filter((m) => m.role === 'system')
-    .map((m) => (typeof m.content === 'string' ? m.content : ''));
-  const chatMessages = messages
-    .filter((m) => m.role !== 'system')
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: typeof m.content === 'string' ? m.content : '',
-    }));
+  const { systemPrompts, chatMessages } = toChatPayload(messages);
   const adapter = createAdapter(DEFAULT_ANALYSIS_MODEL, llmKey);
   const eventStream = chat({
     adapter,
@@ -98,17 +121,11 @@ async function softenPrompt(
   return softened;
 }
 
-const report = JSON.parse(
-  readFileSync('/tmp/content-flag-replay-report.json', 'utf8')
-) as Array<{
-  n: number;
-  shotId: string;
-  model: string;
-  originalPrompt: string;
-  original: Attempt;
-  softenedPrompt?: string;
-  softened?: Attempt;
-}>;
+const report = firstReportRowSchema
+  .array()
+  .parse(
+    JSON.parse(readFileSync('/tmp/content-flag-replay-report.json', 'utf8'))
+  );
 
 const stuck = report.filter(
   (r) => r.original.contentFlag && r.softened && !r.softened.ok

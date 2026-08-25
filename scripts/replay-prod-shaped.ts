@@ -16,9 +16,9 @@ import {
   type TextToImageModel,
 } from '@/lib/ai/models';
 import {
+  aspectRatioSchema,
   aspectRatioToImageSize,
   DEFAULT_ASPECT_RATIO,
-  type AspectRatio,
   type ImageSize,
 } from '@/lib/constants/aspect-ratios';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
@@ -42,24 +42,55 @@ const CASES_PATH = '/tmp/content-fails-unique.json';
 const OUT_PATH = '/tmp/replay-prod-shaped.json';
 const schema = z.object({ prompt: z.string() });
 
-type Attempt = {
-  ok: boolean;
-  contentFlag: boolean;
-  error?: string;
-  url?: string;
-};
+const attemptSchema = z.object({
+  ok: z.boolean(),
+  contentFlag: z.boolean(),
+  error: z.string().optional(),
+  url: z.string().optional(),
+});
+type Attempt = z.infer<typeof attemptSchema>;
 
-type FailRow = {
-  shot_id: string;
-  sequence_id: string;
-  model: string;
-  error: string;
-  prompt: string | null;
-};
+const failRowSchema = z.object({
+  shot_id: z.string(),
+  sequence_id: z.string(),
+  model: z.string(),
+  error: z.string(),
+  prompt: z.string().nullable(),
+});
+const continuitySchema = z.object({
+  characterTags: z.array(z.string()).optional(),
+  environmentTag: z.string().optional(),
+  elementTags: z.array(z.string()).optional(),
+});
 
-function d1Results<T>(path: string): T[] {
+function d1Results<T>(path: string, itemSchema: z.ZodType<T>): T[] {
   const t = readFileSync(path, 'utf8');
-  return JSON.parse(t.slice(t.indexOf('[')))[0].results as T[];
+  const rows = z
+    .array(z.object({ results: z.array(itemSchema) }))
+    .parse(JSON.parse(t.slice(t.indexOf('['))));
+  const first = rows[0];
+  if (!first) throw new Error(`no D1 results in ${path}`);
+  return first.results;
+}
+
+function toChatPayload(
+  messages: Awaited<ReturnType<typeof getChatPrompt>>['messages']
+): {
+  systemPrompts: string[];
+  chatMessages: Array<{ role: 'user' | 'assistant'; content: string }>;
+} {
+  const systemPrompts: string[] = [];
+  const chatMessages: Array<{ role: 'user' | 'assistant'; content: string }> =
+    [];
+  for (const m of messages) {
+    const content = typeof m.content === 'string' ? m.content : '';
+    if (m.role === 'system') {
+      systemPrompts.push(content);
+    } else {
+      chatMessages.push({ role: m.role, content });
+    }
+  }
+  return { systemPrompts, chatMessages };
 }
 
 async function tryGenerate(
@@ -101,15 +132,7 @@ async function softenPrompt(
     prompt,
     rejection,
   });
-  const systemPrompts = messages
-    .filter((m) => m.role === 'system')
-    .map((m) => (typeof m.content === 'string' ? m.content : ''));
-  const chatMessages = messages
-    .filter((m) => m.role !== 'system')
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: typeof m.content === 'string' ? m.content : '',
-    }));
+  const { systemPrompts, chatMessages } = toChatPayload(messages);
   const adapter = createAdapter(DEFAULT_ANALYSIS_MODEL, llmKey);
   const eventStream = chat({
     adapter,
@@ -142,46 +165,50 @@ function fmt(a: Attempt): string {
   return `FAIL ${a.error ?? ''}`;
 }
 
-type CharRow = {
-  sequence_id: string;
-  name: string;
-  sheet_status: string;
-  sheet_image_url: string | null;
-  physical_description: string | null;
-  character_id: string;
-  consistency_tag: string | null;
-};
-type LocRow = {
-  sequence_id: string;
-  name: string;
-  location_id: string;
-  consistency_tag: string | null;
-  description: string | null;
-  reference_image_url: string | null;
-};
-type ElRow = {
-  sequence_id: string;
-  token: string;
-  description: string | null;
-  image_url: string;
-  consistency_tag: string | null;
-};
-type ShotRow = {
-  shot_id: string;
-  sequence_id: string;
-  location: string | null;
-  continuity: string | null;
-};
-type SeqRow = { id: string; aspect_ratio: string };
-
-const cases = (JSON.parse(readFileSync(CASES_PATH, 'utf8')) as FailRow[])
+const charRowSchema = z.object({
+  sequence_id: z.string(),
+  name: z.string(),
+  sheet_status: z.string(),
+  sheet_image_url: z.string().nullable(),
+  physical_description: z.string().nullable(),
+  character_id: z.string(),
+  consistency_tag: z.string().nullable(),
+});
+const locRowSchema = z.object({
+  sequence_id: z.string(),
+  name: z.string(),
+  location_id: z.string(),
+  consistency_tag: z.string().nullable(),
+  description: z.string().nullable(),
+  reference_image_url: z.string().nullable(),
+});
+const elRowSchema = z.object({
+  sequence_id: z.string(),
+  token: z.string(),
+  description: z.string().nullable(),
+  image_url: z.string(),
+  consistency_tag: z.string().nullable(),
+});
+const shotRowSchema = z.object({
+  shot_id: z.string(),
+  sequence_id: z.string(),
+  location: z.string().nullable(),
+  continuity: z.string().nullable(),
+});
+const seqRowSchema = z.object({
+  id: z.string(),
+  aspect_ratio: z.string(),
+});
+const cases = failRowSchema
+  .array()
+  .parse(JSON.parse(readFileSync(CASES_PATH, 'utf8')))
   .filter((r) => r.prompt?.trim())
   .slice(0, 20);
-const chars = d1Results<CharRow>('/tmp/d1-chars.raw.json');
-const locs = d1Results<LocRow>('/tmp/d1-locs.raw.json');
-const els = d1Results<ElRow>('/tmp/d1-els.raw.json');
-const shotRows = d1Results<ShotRow>('/tmp/d1-shots.raw.json');
-const seqs = d1Results<SeqRow>('/tmp/d1-seqs.raw.json');
+const chars = d1Results('/tmp/d1-chars.raw.json', charRowSchema);
+const locs = d1Results('/tmp/d1-locs.raw.json', locRowSchema);
+const els = d1Results('/tmp/d1-els.raw.json', elRowSchema);
+const shotRows = d1Results('/tmp/d1-shots.raw.json', shotRowSchema);
+const seqs = d1Results('/tmp/d1-seqs.raw.json', seqRowSchema);
 
 const shotsById = new Map(shotRows.map((s) => [s.shot_id, s]));
 const seqById = new Map(seqs.map((s) => [s.id, s]));
@@ -189,11 +216,7 @@ const seqById = new Map(seqs.map((s) => [s.id, s]));
 function refsFor(shotId: string, sequenceId: string, prompt: string) {
   const shot = shotsById.get(shotId);
   const continuity = shot?.continuity
-    ? (JSON.parse(shot.continuity) as {
-        characterTags?: string[];
-        environmentTag?: string;
-        elementTags?: string[];
-      })
+    ? continuitySchema.parse(JSON.parse(shot.continuity))
     : {};
   const seqChars = chars
     .filter((c) => c.sequence_id === sequenceId)
@@ -278,12 +301,11 @@ const save = () => writeFileSync(OUT_PATH, JSON.stringify(report, null, 2));
 const prepared = cases.map((row, i) => {
   const prompt = row.prompt?.trim() ?? '';
   const model = isValidTextToImageModel(row.model) ? row.model : null;
-  const aspect = (seqById.get(row.sequence_id)?.aspect_ratio ??
-    DEFAULT_ASPECT_RATIO) as AspectRatio;
+  const parsedAspect = aspectRatioSchema.safeParse(
+    seqById.get(row.sequence_id)?.aspect_ratio ?? DEFAULT_ASPECT_RATIO
+  );
   const imageSize = aspectRatioToImageSize(
-    aspect === '16:9' || aspect === '9:16' || aspect === '1:1'
-      ? aspect
-      : DEFAULT_ASPECT_RATIO
+    parsedAspect.success ? parsedAspect.data : DEFAULT_ASPECT_RATIO
   );
   const { refs, summary } = refsFor(row.shot_id, row.sequence_id, prompt);
   return { row, n: i + 1, prompt, model, imageSize, refs, summary };

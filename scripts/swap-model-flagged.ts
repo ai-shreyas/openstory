@@ -14,6 +14,7 @@ import {
   type ImageSize,
 } from '@/lib/constants/aspect-ratios';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
+import { z } from 'zod';
 
 const MODEL_ARG = process.argv[2] ?? 'grok_imagine_image';
 if (!isValidTextToImageModel(MODEL_ARG)) {
@@ -22,12 +23,29 @@ if (!isValidTextToImageModel(MODEL_ARG)) {
 const MODEL: TextToImageModel = MODEL_ARG;
 const OUT = `/tmp/swap-model-${MODEL}.json`;
 
-type Attempt = {
-  ok: boolean;
-  contentFlag: boolean;
-  error?: string;
-  url?: string;
-};
+const attemptSchema = z.object({
+  ok: z.boolean(),
+  contentFlag: z.boolean(),
+  error: z.string().optional(),
+  url: z.string().optional(),
+});
+type Attempt = z.infer<typeof attemptSchema>;
+
+const firstReportRowSchema = z.object({
+  n: z.number(),
+  shotId: z.string(),
+  originalPrompt: z.string(),
+  original: attemptSchema,
+  softenedPrompt: z.string().optional(),
+  softened: attemptSchema.optional(),
+});
+
+const secondReportRowSchema = z.object({
+  n: z.number(),
+  shotId: z.string(),
+  secondPrompt: z.string().optional(),
+  second: attemptSchema.optional(),
+});
 
 function imageSizeFor(prompt: string): ImageSize {
   if (/9:16|vertical 9:16|portrait/i.test(prompt)) return 'portrait_16_9';
@@ -53,25 +71,15 @@ async function tryGenerate(prompt: string): Promise<Attempt> {
   }
 }
 
-const first = JSON.parse(
-  readFileSync('/tmp/content-flag-replay-report.json', 'utf8')
-) as Array<{
-  n: number;
-  shotId: string;
-  originalPrompt: string;
-  original: Attempt;
-  softenedPrompt?: string;
-  softened?: Attempt;
-}>;
+const first = firstReportRowSchema
+  .array()
+  .parse(
+    JSON.parse(readFileSync('/tmp/content-flag-replay-report.json', 'utf8'))
+  );
 
-const second = JSON.parse(
-  readFileSync('/tmp/second-soften-report.json', 'utf8')
-) as Array<{
-  n: number;
-  shotId: string;
-  secondPrompt?: string;
-  second?: Attempt;
-}>;
+const second = secondReportRowSchema
+  .array()
+  .parse(JSON.parse(readFileSync('/tmp/second-soften-report.json', 'utf8')));
 
 const jobs: Array<{
   n: number;
