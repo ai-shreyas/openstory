@@ -25,47 +25,24 @@ describe('pending generate/enhance intent', () => {
     vi.unstubAllGlobals();
   });
 
-  it('remembers a Generate click and consumes it once', async () => {
-    const {
-      markPendingGenerate,
-      hasPendingGenerate,
-      peekPendingIntent,
-      takePendingIntent,
-    } = await import('./pending-generate');
-
-    expect(hasPendingGenerate()).toBe(false);
-    markPendingGenerate();
-    expect(hasPendingGenerate()).toBe(true);
-    expect(peekPendingIntent()).toBe('generate');
-    expect(takePendingIntent()).toBe('generate');
-    expect(hasPendingGenerate()).toBe(false);
-    expect(takePendingIntent()).toBeNull();
-  });
-
-  it('remembers an Enhance click separately from Generate', async () => {
-    const { markPendingIntent, peekPendingIntent, takePendingIntent } =
+  it('remembers Generate and Enhance, consumes once, expires, reads legacy timestamps', async () => {
+    const { markPendingIntent, hasPendingGenerate, takePendingIntent } =
       await import('./pending-generate');
+
+    expect(hasPendingGenerate()).toBe(false);
+    markPendingIntent('generate');
+    expect(takePendingIntent()).toBe('generate');
+    expect(takePendingIntent()).toBeNull();
 
     markPendingIntent('enhance');
-    expect(peekPendingIntent()).toBe('enhance');
+    expect(hasPendingGenerate()).toBe(true);
     expect(takePendingIntent()).toBe('enhance');
-  });
-
-  it('still reads a legacy timestamp as Generate', async () => {
-    const { peekPendingIntent, hasPendingGenerate } =
-      await import('./pending-generate');
 
     localStorage.setItem('openstory:pending-generate', String(Date.now()));
-    expect(hasPendingGenerate()).toBe(true);
-    expect(peekPendingIntent()).toBe('generate');
-  });
-
-  it('expires after ten minutes', async () => {
-    const { markPendingIntent, peekPendingIntent } =
-      await import('./pending-generate');
+    expect(takePendingIntent()).toBe('generate');
 
     markPendingIntent('enhance');
     vi.setSystemTime(new Date('2026-08-25T12:11:00Z'));
-    expect(peekPendingIntent()).toBeNull();
+    expect(takePendingIntent()).toBeNull();
   });
 });

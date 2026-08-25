@@ -38,9 +38,6 @@ export type FailureSummary = {
   groups: FailureGroup[];
   totalFailures: number;
   hasFailed: boolean;
-  /** Shots not in a failure group — what worked (#1286). */
-  clipsReady: number;
-  clipsTotal: number;
   error?: string | null;
 };
 
@@ -52,26 +49,6 @@ function sceneNumberOf(shot: Shot, scenesById: ScenesById): number {
 function getSceneTitle(shot: Shot, scenesById: ScenesById): string {
   const scene = shot.sceneId ? scenesById.get(shot.sceneId) : null;
   return scene?.title || `Scene ${sceneNumberOf(shot, scenesById)}`;
-}
-
-function failureParts(groups: FailureGroup[]): string[] {
-  const parts: string[] = [];
-  for (const group of groups) {
-    if (group.category === 'image') {
-      parts.push(
-        `${group.shots.length} image${group.shots.length !== 1 ? 's' : ''} failed`
-      );
-    } else if (group.category === 'motion') {
-      parts.push(
-        `${group.shots.length} motion video${group.shots.length !== 1 ? 's' : ''} failed`
-      );
-    } else if (group.category === 'music') {
-      parts.push('music generation failed');
-    } else if (group.category === 'music-prompt') {
-      parts.push('music prompt generation failed');
-    }
-  }
-  return parts;
 }
 
 function buildHeadline(
@@ -97,7 +74,23 @@ function buildHeadline(
     return 'Generation failed \u2014 full retry required';
   }
 
-  const parts = failureParts(groups);
+  const parts: string[] = [];
+  for (const group of groups) {
+    if (group.category === 'image') {
+      parts.push(
+        `${group.shots.length} image${group.shots.length !== 1 ? 's' : ''} failed`
+      );
+    } else if (group.category === 'motion') {
+      parts.push(
+        `${group.shots.length} motion video${group.shots.length !== 1 ? 's' : ''} failed`
+      );
+    } else if (group.category === 'music') {
+      parts.push('music generation failed');
+    } else if (group.category === 'music-prompt') {
+      parts.push('music prompt generation failed');
+    }
+  }
+
   const failure = parts.join(' and ');
   // Lead with what worked so a single miss doesn't headline the first run
   // (#1286). "6 of 7 clips ready · 1 image failed".
@@ -126,8 +119,6 @@ export function analyzeFailures(
       groups: [],
       totalFailures: 1,
       hasFailed: true,
-      clipsReady: 0,
-      clipsTotal: 0,
       error: sequence.statusError,
     };
   }
@@ -243,8 +234,6 @@ export function analyzeFailures(
       groups: [],
       totalFailures: 1,
       hasFailed: true,
-      clipsReady: 0,
-      clipsTotal: shots.length,
       error: sequence.statusError,
     };
   }
@@ -259,17 +248,19 @@ export function analyzeFailures(
   const failedShotIds = new Set(
     groups.flatMap((g) => g.shots.map((s) => s.shotId))
   );
-  const clipsTotal = shots.length;
   const clipsReady = shots.filter((s) => !failedShotIds.has(s.id)).length;
 
   return {
     requiresFullRetry,
-    headline: buildHeadline(groups, requiresFullRetry, clipsReady, clipsTotal),
+    headline: buildHeadline(
+      groups,
+      requiresFullRetry,
+      clipsReady,
+      shots.length
+    ),
     groups,
     totalFailures,
     hasFailed,
-    clipsReady,
-    clipsTotal,
     error: sequence.statusError,
   };
 }

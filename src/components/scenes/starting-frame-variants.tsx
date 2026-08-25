@@ -61,10 +61,7 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
       cropUrl: shot.pendingUpscaleUrl,
     }) || selectVariant.isPending;
 
-  const hasStill = Boolean(shot.image?.url);
-
   const handleGenerate = useCallback(async () => {
-    if (!hasStill) return;
     onGenerateStart();
     try {
       await generateVariants.mutateAsync({
@@ -77,14 +74,7 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
         description: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-  }, [
-    hasStill,
-    onGenerateStart,
-    generateVariants,
-    sequenceId,
-    shot.id,
-    imageModel,
-  ]);
+  }, [onGenerateStart, generateVariants, sequenceId, shot.id, imageModel]);
 
   const handleSelect = useCallback(
     async (index: number) => {
@@ -174,7 +164,7 @@ export const StartingFrameVariants: React.FC<StartingFrameVariantsProps> = ({
                 }
                 void handleGenerate();
               }}
-              disabled={isGeneratingGrid || !hasStill}
+              disabled={isGeneratingGrid}
               className="w-full sm:w-auto"
             >
               {isGeneratingGrid && (

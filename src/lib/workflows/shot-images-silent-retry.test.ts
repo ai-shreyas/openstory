@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { loneFailedPrimaryJobIndex } from './shot-images-silent-retry';
+import { loneFailedPrimaryJobIndex } from './shot-images-workflow';
 
 const ok = { status: 'fulfilled' as const, value: 'https://cdn.example/a.png' };
 const fail = { status: 'rejected' as const, reason: new Error('content flag') };

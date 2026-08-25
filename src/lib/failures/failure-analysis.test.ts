@@ -190,8 +190,6 @@ describe('analyzeFailures', () => {
     if (!imageShot) throw new Error('test setup: image shot missing');
     expect(imageShot.error).toBe('Model timeout');
     expect(result.headline).toBe('1 of 2 clips ready \u00b7 1 image failed');
-    expect(result.clipsReady).toBe(1);
-    expect(result.clipsTotal).toBe(2);
   });
 
   test('leads a single-image miss with how many clips are ready (#1286)', () => {

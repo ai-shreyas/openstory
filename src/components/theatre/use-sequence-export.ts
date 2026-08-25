@@ -27,7 +27,6 @@ import {
   exportSequence,
   type ExportProgress,
 } from '@/lib/sequence-player/export';
-import { exportClipProgress } from '@/lib/sequence-player/export-readiness';
 import type { Sequence } from '@/types/database';
 import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -251,7 +250,10 @@ export function useSequenceExport(
       exports?.find((e) => e.sourceShotsHash === inputsHash)?.url) ||
     null;
 
-  const { clipsReady, clipsTotal, canExport } = exportClipProgress(shots ?? []);
+  const shotList = shots ?? [];
+  const clipsTotal = shotList.length;
+  const clipsReady = shotList.filter((s) => Boolean(s.video?.url)).length;
+  const canExport = clipsTotal > 0 && clipsReady === clipsTotal;
 
   const download = useCallback(() => {
     if (freshExportUrl) {

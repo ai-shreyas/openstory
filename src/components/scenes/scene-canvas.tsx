@@ -6,7 +6,6 @@ import {
   useSequenceExport,
   type SequenceExportState,
 } from '@/components/theatre/use-sequence-export';
-import { exportPendingLabel } from '@/lib/sequence-player/export-readiness';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -98,24 +97,21 @@ const TheatreShareOverlay: React.FC<{
   const progressLabel = formatExportProgress(sequenceExport.progress);
   const pending =
     !running && !sequenceExport.canExport && !sequenceExport.freshExportUrl;
-  const pendingLabel = exportPendingLabel(
-    sequenceExport.clipsReady,
-    sequenceExport.clipsTotal
-  );
-  const downloadLabel = running
+  const wait = running
     ? progressLabel
     : pending
-      ? pendingLabel
-      : sequenceExport.freshExportUrl
-        ? 'Download MP4'
-        : 'Export and download MP4';
-  const copyLabel = running
-    ? progressLabel
-    : pending
-      ? pendingLabel
-      : sequenceExport.freshExportUrl
-        ? 'Copy video link'
-        : 'Export and copy video link';
+      ? `Export · ${sequenceExport.clipsReady} of ${sequenceExport.clipsTotal} clips ready`
+      : null;
+  const downloadLabel =
+    wait ??
+    (sequenceExport.freshExportUrl
+      ? 'Download MP4'
+      : 'Export and download MP4');
+  const copyLabel =
+    wait ??
+    (sequenceExport.freshExportUrl
+      ? 'Copy video link'
+      : 'Export and copy video link');
   return (
     <>
       <Tooltip>

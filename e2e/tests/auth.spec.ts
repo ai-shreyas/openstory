@@ -105,7 +105,7 @@ baseTest.describe('Route Protection', () => {
       const pending = await page.evaluate(() =>
         localStorage.getItem('openstory:pending-generate')
       );
-      expect(pending).toContain('"action":"enhance"');
+      expect(pending).toMatch(/^enhance:/);
     }
   );
 

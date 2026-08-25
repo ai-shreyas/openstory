@@ -91,7 +91,6 @@ import {
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
 import {
-  markPendingGenerate,
   markPendingIntent,
   takePendingIntent,
 } from '@/lib/generation/pending-generate';
@@ -924,7 +923,7 @@ export const ScriptView: FC<{
     // Remember the click too, so the resume effect below continues this exact
     // step (nudge, billing gate, generation) once sign-in completes (#1187).
     if (!requireAuth()) {
-      if (!isEditing) markPendingGenerate();
+      if (!isEditing) markPendingIntent('generate');
       return;
     }
 

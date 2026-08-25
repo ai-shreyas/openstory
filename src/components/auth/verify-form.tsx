@@ -19,8 +19,6 @@ import {
 } from '@/components/ui/input-otp';
 import { useHydrated } from '@/hooks/use-hydrated';
 import { authClient } from '@/lib/auth/client';
-import { postAuthRedirect } from '@/lib/auth/post-auth-redirect';
-import { hasPendingGenerate } from '@/lib/generation/pending-generate';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useState, useTransition } from 'react';
 
@@ -59,9 +57,7 @@ export function VerifyForm({ email, redirectTo = '/' }: VerifyFormProps) {
           }
 
           // user_signed_in is captured server-side on session create (#1088).
-          await navigate({
-            href: postAuthRedirect(redirectTo, hasPendingGenerate()),
-          });
+          await navigate({ to: redirectTo });
         } catch (err) {
           logger.error('Verify OTP error:', { err });
           setError(err instanceof Error ? err.message : 'Verification failed');

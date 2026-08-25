@@ -1455,7 +1455,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   scopeStaleness={scopeStaleness}
                   scopeStalenessFailed={scopeStalenessFailed}
                   onSelectShot={handleSelectShot}
-                  firstRunActive={isGenerationActive}
                 />
               </ScrollArea>
             </div>

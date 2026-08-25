@@ -56,9 +56,24 @@ import {
 } from '@/lib/workflows/sheet-snapshots';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import { getLogger } from '@/lib/observability/logger';
-import { loneFailedPrimaryJobIndex } from '@/lib/workflows/shot-images-silent-retry';
 
 const logger = getLogger(['openstory', 'workflow', 'shot-images']);
+
+/** Retry a lone failed primary once so one miss of seven doesn't headline the page (#1286). */
+export function loneFailedPrimaryJobIndex(
+  jobs: ReadonlyArray<{ model: string }>,
+  results: ReadonlyArray<PromiseSettledResult<unknown>>,
+  primaryModel: string
+): number | null {
+  const primaryIndexes: number[] = [];
+  for (let i = 0; i < jobs.length; i++) {
+    if (jobs[i]?.model === primaryModel) primaryIndexes.push(i);
+  }
+  const failed = primaryIndexes.filter(
+    (i) => results[i]?.status === 'rejected'
+  );
+  return failed.length === 1 ? (failed[0] ?? null) : null;
+}
 
 type ImageChildResult = {
   imageUrl: string;
