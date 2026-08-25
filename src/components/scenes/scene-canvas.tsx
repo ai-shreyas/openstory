@@ -28,6 +28,7 @@ import type { Sequence } from '@/types/database';
 import { Download, Film, Link, Loader2 } from 'lucide-react';
 import { useMemo } from 'react';
 import type { ExportProgress } from '@/lib/sequence-player/export';
+import { toPlaybackScenes } from '@/lib/sequence-player/playback-scenes';
 
 type SceneCanvasProps = {
   selection: SceneSelection;
@@ -175,12 +176,10 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
     [selection, shots]
   );
 
-  const playbackScenes = useMemo(() => {
-    return scopedShots
-      .map((f) => f.video?.url)
-      .filter((url): url is string => Boolean(url))
-      .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
-  }, [scopedShots]);
+  const playbackScenes = useMemo(
+    () => toPlaybackScenes(scopedShots),
+    [scopedShots]
+  );
 
   const setMusicEnabled = useSetSequenceMusic(sequence?.id ?? '');
   const sequenceExport = useSequenceExport(sequence);
@@ -294,6 +293,8 @@ export const SceneCanvas: React.FC<SceneCanvasProps> = ({
         onMusicEnabledChange={(enabled) => setMusicEnabled.mutate(enabled)}
         aspectRatio={aspectRatio}
         className="h-full max-h-none w-full"
+        playSource="theatre"
+        sequenceId={sequence.id}
         posterUrl={scopedShots[0]?.image?.url ?? sequence.posterUrl}
         cachedVideoUrl={
           scope !== 'sequence'
