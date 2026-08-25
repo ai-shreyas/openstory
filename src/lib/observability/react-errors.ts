@@ -11,7 +11,9 @@
  * SDK's `loaded` callback calls `flushReactErrors`.
  */
 
+import { errorCode } from '@/lib/errors';
 import { getLogger } from '@/lib/observability/logger';
+import { isNotFound, isRedirect } from '@tanstack/react-router';
 import posthog from 'posthog-js';
 import type { ErrorInfo } from 'react';
 
@@ -24,11 +26,28 @@ type Pending = [error: unknown, props: Record<string, unknown>];
 const MAX_PENDING = 20;
 const pending: Pending[] = [];
 
+// TanStack re-throws a caught error from `componentDidCatch` when it belongs
+// to a parent route, so one error re-enters here once per nested boundary.
+const seen = new WeakSet<object>();
+
 export function captureReactError(
   kind: ReactErrorKind,
   error: unknown,
   info: ErrorInfo
 ): void {
+  // Router control flow (`notFound()`, `redirect()`) and a 404 from a stale
+  // link are routed through the same boundaries but are not app errors.
+  if (
+    isNotFound(error) ||
+    isRedirect(error) ||
+    errorCode(error) === 'NOT_FOUND'
+  ) {
+    return;
+  }
+  if (typeof error === 'object' && error !== null) {
+    if (seen.has(error)) return;
+    seen.add(error);
+  }
   const props = {
     react_error_kind: kind,
     component_stack: info.componentStack ?? null,

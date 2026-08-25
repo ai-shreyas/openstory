@@ -1,3 +1,5 @@
+import { OpenStoryError } from '@/lib/errors';
+import { notFound, redirect } from '@tanstack/react-router';
 import { describe, expect, it, vi } from 'vitest';
 
 const captureException = vi.fn();
@@ -20,8 +22,9 @@ describe('captureReactError', () => {
       page_translated: false,
     });
 
-    captureReactError('recoverable', error, {});
-    expect(captureException).toHaveBeenLastCalledWith(error, {
+    const other = new Error('hydration');
+    captureReactError('recoverable', other, {});
+    expect(captureException).toHaveBeenLastCalledWith(other, {
       react_error_kind: 'recoverable',
       component_stack: null,
       page_translated: false,
@@ -30,5 +33,24 @@ describe('captureReactError', () => {
 
     flushReactErrors();
     expect(captureException).toHaveBeenCalledTimes(2);
+  });
+
+  it('captures a rethrown error once and skips router control flow and 404s', () => {
+    captureException.mockClear();
+    posthog.__loaded = true;
+
+    const error = new Error('once');
+    captureReactError('caught', error, {});
+    captureReactError('caught', error, {});
+    expect(captureException).toHaveBeenCalledTimes(1);
+
+    captureReactError('caught', notFound(), {});
+    captureReactError('caught', redirect({ to: '/' }), {});
+    captureReactError(
+      'caught',
+      new OpenStoryError('gone', 'NOT_FOUND', 404),
+      {}
+    );
+    expect(captureException).toHaveBeenCalledTimes(1);
   });
 });
