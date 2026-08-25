@@ -24,7 +24,7 @@ import {
 import type { TextModel } from '@/lib/ai/models';
 import {
   analysisModelSupportsVision,
-  getContextWindow,
+  getMaxOutputTokens,
   resolveVisionModel,
 } from '@/lib/ai/models.config';
 import { withRegionFallback } from '@/lib/ai/region-policy';
@@ -167,7 +167,7 @@ function chatModelOptionsForCall(
   reasoning: boolean | undefined
 ) {
   const native = !!resolveNativeGrokModel(modelId, llmKeyInfo);
-  const maxTokens = Math.floor(getContextWindow(modelId) * 0.5);
+  const maxTokens = getMaxOutputTokens(modelId);
   if (native) {
     return {
       ...(reasoning

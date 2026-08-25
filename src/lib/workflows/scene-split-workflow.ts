@@ -41,7 +41,7 @@ import {
   PROMPT_REASONING,
 } from '@/lib/ai/llm-client';
 import { PREVIEW_IMAGE_MODEL } from '@/lib/ai/models';
-import { getContextWindow, SCENE_SPLIT_MODEL } from '@/lib/ai/models.config';
+import { getMaxOutputTokens, SCENE_SPLIT_MODEL } from '@/lib/ai/models.config';
 import {
   type SceneSplitBiblesResult,
   type SceneSplitScenesResult,
@@ -325,10 +325,8 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
     // Both calls see the same numbered-gutter copy of the script: the scenes
     // call reports hintLine against it, the bibles call firstMention lines.
     const gutteredScript = addLineGutter(script);
-    const splitMaxTokens = Math.floor(
-      getContextWindow(SCENE_SPLIT_MODEL) * 0.65
-    );
-    const biblesMaxTokens = Math.floor(getContextWindow(modelId) * 0.65);
+    const splitMaxTokens = getMaxOutputTokens(SCENE_SPLIT_MODEL, 0.65);
+    const biblesMaxTokens = getMaxOutputTokens(modelId, 0.65);
 
     // The two LLM calls are independent given the script, so their steps run
     // concurrently — output length drives latency and the scenes stream is
