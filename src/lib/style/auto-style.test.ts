@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTO_STYLE_PLACEHOLDER_NAME,
+  DEFAULT_AUTO_STYLE_CATEGORY,
   type AutoStyleResponse,
   autoStyleDraftFromResponse,
   placeholderAutoStyleDraft,
@@ -86,5 +87,22 @@ describe('placeholderAutoStyleDraft', () => {
     const draft = placeholderAutoStyleDraft();
     expect(draft.name).toBe(AUTO_STYLE_PLACEHOLDER_NAME);
     expect(() => StyleConfigSchema.parse(draft.config)).not.toThrow();
+  });
+});
+
+describe('autoStyleDraftFromResponse vocabulary guesses (#1285)', () => {
+  it('coerces category and pace to the closed vocabulary instead of failing the run', () => {
+    expect(
+      autoStyleDraftFromResponse({ ...RESPONSE, category: ' Commercial ' })
+        .category
+    ).toBe('commercial');
+    const offList = autoStyleDraftFromResponse({
+      ...RESPONSE,
+      category: 'documentary',
+      pace: 'rapid',
+    });
+    expect(offList.category).toBe(DEFAULT_AUTO_STYLE_CATEGORY);
+    expect(offList.config.motion.pace).toBeUndefined();
+    expect(StyleConfigSchema.safeParse(offList.config).success).toBe(true);
   });
 });

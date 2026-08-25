@@ -12,9 +12,10 @@ import { getGenerationChannel } from '@/lib/realtime';
 import {
   autoStyleDraftFromResponse,
   autoStyleResponseSchema,
+  STYLE_CATEGORIES,
   type AutoStyleDraft,
 } from '@/lib/style/auto-style';
-import type { StyleConfig } from '@/lib/style/style-config';
+import { STYLE_PACE_VALUES, type StyleConfig } from '@/lib/style/style-config';
 import { durableLLMCallCf } from '@/lib/workflows/llm-call-helper';
 import type { WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
@@ -44,6 +45,8 @@ export async function deriveAutoStyle(
       promptVariables: {
         script: params.script,
         aspectRatio: params.aspectRatio,
+        categories: STYLE_CATEGORIES.join(', '),
+        paces: STYLE_PACE_VALUES.join(', '),
       },
       modelId: params.analysisModelId,
       responseSchema: autoStyleResponseSchema,
@@ -63,6 +66,13 @@ export async function deriveAutoStyle(
     throw new NonRetryableError(
       `Automatic style for sequence ${sequenceId} was unsalvageable: ${error instanceof Error ? error.message : String(error)}`
     );
+  }
+  if (draft.category !== response.category.trim().toLowerCase()) {
+    logger.warn('[AutoStyle:cf] category guess off-vocabulary; defaulted', {
+      sequenceId,
+      guessed: response.category,
+      category: draft.category,
+    });
   }
 
   await step.do('save-automatic-style', async () => {

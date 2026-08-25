@@ -1004,8 +1004,8 @@ Rules:
 5. \`colorPalette\`: 3–6 hex colors (e.g. "#0a0a14"), dominant first.
 6. \`references\`: 2–5 descriptive aesthetic phrases (e.g. "rain-slicked neon-noir cityscapes"), not film titles.
 7. \`name\`: a short, evocative style name of 2–4 words (e.g. "Rain-slick Neon Noir"). \`description\`: one sentence a user would read on a style card.
-8. \`category\`: the single best-fitting catalog category. \`tags\`: 3–6 lowercase keywords.
-9. \`energy\`: integer 1 (stillness) to 5 (kinetic chaos). \`pace\`: the cutting rhythm.`,
+8. \`category\`: the single best-fitting catalog category — exactly one of: {{categories}}. \`tags\`: 3–6 lowercase keywords.
+9. \`energy\`: integer 1 (stillness) to 5 (kinetic chaos). \`pace\`: the cutting rhythm — exactly one of: {{paces}}.`,
     },
     {
       role: 'user',
