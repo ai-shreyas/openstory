@@ -8,6 +8,7 @@
     "jsx-a11y",
     "oxc"
   ],
+  "jsPlugins": ["./scripts/lint/no-loose-text.ts"],
   "categories": {
     "correctness": "error"
   },
@@ -30,6 +31,8 @@
     "eslint/no-console": "error",
     "unicorn/prefer-optional-catch-binding": "error",
     "react/rules-of-hooks": "error",
+    // warn until the 41 existing sites are fixed (#1283), then error.
+    "openstory/no-loose-text": "warn",
     "no-restricted-imports": [
       "error",
       {
