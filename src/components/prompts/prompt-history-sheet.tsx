@@ -77,6 +77,12 @@ const SOURCE_LABEL: Record<PromptVariantSource, string> = {
   softened: 'Softened',
 };
 
+/** Extra line under the badge — only sources that need a why. */
+const SOURCE_HINT: Partial<Record<PromptVariantSource, string>> = {
+  softened:
+    'Rewritten to pass a content checker. The original is still in this list.',
+};
+
 const SOURCE_VARIANT: Record<
   PromptVariantSource,
   'default' | 'secondary' | 'outline'
@@ -576,6 +582,11 @@ const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
                   {formatTimestamp(row.createdAt)}
                 </span>
               </div>
+              {SOURCE_HINT[row.source] && (
+                <p className="text-xs text-muted-foreground">
+                  {SOURCE_HINT[row.source]}
+                </p>
+              )}
               {row.createdByName && (
                 <span className="text-xs text-muted-foreground">
                   by {row.createdByName}
@@ -761,7 +772,7 @@ export const PromptHistorySheet: React.FC<PromptHistorySheetProps> = (
   const description = isMusic
     ? 'Append-only history. Restore writes a new entry without deleting anything.'
     : mode === 'visual'
-      ? 'Prompt edits and generated images. Selecting an image restores the still and the prompt that produced it (when linked).'
+      ? 'Prompt edits and generated images. Selecting an image restores the still and the prompt that produced it (when linked). A Softened version is an automatic rewrite to pass a content checker — the original stays here.'
       : 'Prompt edits and rendered videos. Selecting a video repoints playback without deleting anything.';
 
   return (

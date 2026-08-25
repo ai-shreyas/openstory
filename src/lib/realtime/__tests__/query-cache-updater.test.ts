@@ -126,6 +126,21 @@ describe('updateQueryCacheFromEvent — variant-only guard (#547)', () => {
       expect(invalidatedKeys).not.toContainEqual(shotKeys.list(SEQ));
     });
 
+    it('promptSoftened invalidates visual history so Versions shows the rewrite (#1272)', () => {
+      const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+      updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
+        shotId: 'shot-1',
+        status: 'generating',
+        promptSoftened: true,
+      });
+
+      vi.advanceTimersByTime(200);
+      const keys = invalidate.mock.calls.map((c) => c[0]?.queryKey);
+      expect(keys).toContainEqual(promptVariantKeys.shot('visual', 'shot-1'));
+      expect(keys).toContainEqual(shotKeys.list(SEQ));
+    });
+
     it('primary completion (no variantOnly) still writes the thumbnail onto the shot', () => {
       updateQueryCacheFromEvent(qc, SEQ, 'generation.image:progress', {
         shotId: 'shot-1',

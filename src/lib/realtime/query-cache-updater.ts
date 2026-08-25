@@ -162,6 +162,7 @@ export function updateQueryCacheFromEvent(
       // the alternate) and only refresh the per-model variant/model-list
       // queries below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
+      const promptSoftened = data.promptSoftened === true;
       if (!variantOnly) {
         queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
           old?.map((f) =>
@@ -250,6 +251,21 @@ export function updateQueryCacheFromEvent(
             `image-versions:${shotId}`
           );
         }
+      }
+      // A softened prompt version just landed (#1272) — refresh visual history
+      // and the shot list so Versions / the current prompt pick it up before
+      // the still itself completes.
+      if (promptSoftened && shotId) {
+        debouncedInvalidate(
+          queryClient,
+          promptVariantKeys.shot('visual', shotId),
+          `prompt-variants:visual:${shotId}`
+        );
+        debouncedInvalidate(
+          queryClient,
+          shotKeys.list(sequenceId),
+          `shots:${sequenceId}`
+        );
       }
       break;
     }

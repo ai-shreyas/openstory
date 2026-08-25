@@ -200,6 +200,13 @@ describe('generateImageWithContentRetry', () => {
     expect(update).toHaveBeenCalledWith('var-1', {
       promptVersionId: 'fpv-soft',
     });
+    expect(emit).toHaveBeenCalledWith(
+      'generation.image:progress',
+      expect.objectContaining({
+        shotId: 'shot-1',
+        promptSoftened: true,
+      })
+    );
     expect(out.prompt).toBe('Two figures confront each other in the alley');
     expect(generateImageWithProvider.mock.calls[3]?.[0]).toEqual(
       expect.objectContaining({
@@ -227,6 +234,10 @@ describe('generateImageWithContentRetry', () => {
 
     expect(durableLLMCallCf).toHaveBeenCalledTimes(1);
     expect(write).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith(
+      'generation.image:progress',
+      expect.objectContaining({ promptSoftened: true })
+    );
     expect(out.prompt).toBe('A tense alley standoff');
   });
 

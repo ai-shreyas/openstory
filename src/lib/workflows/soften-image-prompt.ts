@@ -354,6 +354,18 @@ export async function generateImageWithContentRetry(
           versionId: args.versionId,
           createdBy: input.userId,
         });
+        if (input.shotId && input.sequenceId) {
+          await getGenerationChannel(input.sequenceId).emit(
+            'generation.image:progress',
+            {
+              shotId: input.shotId,
+              status: 'generating',
+              promptSoftened: true,
+              model: params.model,
+              variantOnly: input.variantOnly,
+            }
+          );
+        }
       });
     }
 
