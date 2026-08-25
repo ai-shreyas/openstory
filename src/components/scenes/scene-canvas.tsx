@@ -97,10 +97,14 @@ const TheatreShareOverlay: React.FC<{
   const progressLabel = formatExportProgress(sequenceExport.progress);
   const pending =
     !running && !sequenceExport.canExport && !sequenceExport.freshExportUrl;
+  const snapshot =
+    sequenceExport.clipsReady > 0 &&
+    sequenceExport.clipsReady < sequenceExport.clipsTotal;
+  const snapshotLabel = `Export · ${sequenceExport.clipsReady} of ${sequenceExport.clipsTotal} clips ready`;
   const wait = running
     ? progressLabel
-    : pending
-      ? `Export · ${sequenceExport.clipsReady} of ${sequenceExport.clipsTotal} clips ready`
+    : pending || snapshot
+      ? snapshotLabel
       : null;
   const downloadLabel =
     wait ??

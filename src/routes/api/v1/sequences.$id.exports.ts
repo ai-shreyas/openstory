@@ -105,11 +105,10 @@ export const Route = createFileRoute('/api/v1/sequences/$id/exports')({
 
           const origin = new URL(request.url).origin;
 
-          // Resolve the whole cut here, before anything is reserved: the
-          // workflow renders this snapshot and reads no DB, so a shot
-          // finishing mid-render can't change the list under it. An
-          // incomplete sequence is a synchronous 4xx rather than a reserved
-          // row that fails a step later.
+          // Resolve the cut here, before anything is reserved: the workflow
+          // renders this snapshot and reads no DB, so a shot finishing
+          // mid-render can't change the list under it. Ready clips export
+          // even if siblings are still generating (#1286).
           const shots = await context.scopedDb.shots.listBySequence(params.id, {
             orderBy: 'sceneOrder',
             ascending: true,
@@ -131,11 +130,6 @@ export const Route = createFileRoute('/api/v1/sequences/$id/exports')({
             .map((videoUrl, orderIndex) => ({ orderIndex, videoUrl }));
           if (scenes.length === 0) {
             throw new ValidationError('No scene videos are ready yet');
-          }
-          if (scenes.length !== shots.length) {
-            throw new ValidationError(
-              `${shots.length - scenes.length} of ${shots.length} scenes are still generating`
-            );
           }
 
           // Coalesce: reuse the in-flight export instead of spawning a
