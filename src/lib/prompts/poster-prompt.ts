@@ -2,10 +2,12 @@ import type { StyleConfig } from '@/lib/db/schema/libraries';
 
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_SCRIPT_LENGTH = 500;
-const MAX_SCENE_TEXT_LENGTH = 1500;
+// Short on purpose (#1277): every extra line of screenplay is detail the model
+// tries to draw, and detail is exactly what a stand-in must not have.
+const MAX_SCENE_TEXT_LENGTH = 400;
 
 const SKETCH_SUFFIX =
-  'Loose pencil line drawing on white paper, quick gestural strokes, minimal detail. Simple placeholder figures with blank featureless faces, basic shapes for the setting, flat grey marker shading. Monochrome, no colour, no rendering, no realism, no photographic detail.';
+  'Drawn in five seconds with a ballpoint pen on a napkin: stick figures with no faces, boxes and single lines for the set, wobbly unfinished strokes, mostly empty white paper. Amateur, childlike, unpolished. Monochrome, no shading, no colour, no rendering, no realism, no detail of any kind.';
 
 const NO_TEXT_SUFFIX =
   'No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.';
@@ -57,16 +59,16 @@ export function buildPosterPrompt(
  * Previews are stand-ins rendered before any character/location reference
  * exists, so anything rendered "for real" is wrong by construction and reads
  * as inconsistency (or worse, as the final look) — #1277. Ask for a rough
- * monochrome storyboard sketch instead: featureless figures, no detail to be
- * inconsistent about. Deliberately ignores the style config for the same
- * reason — a photoreal style would pull the sketch back toward realism.
+ * napkin scribble instead: stick figures, no detail to be inconsistent about.
+ * Deliberately ignores the style config for the same reason — a photoreal
+ * style would pull the sketch back toward realism.
  */
 export function buildPreviewPrompt(sceneText: string): string {
   const excerpt = sceneText.slice(0, MAX_SCENE_TEXT_LENGTH);
 
   return clampPrompt(
     [
-      `Rough storyboard sketch. ${excerpt}.`,
+      `Crude thumbnail storyboard scribble. ${excerpt}.`,
       SKETCH_SUFFIX,
       NO_TEXT_SUFFIX,
     ].join(' ')
