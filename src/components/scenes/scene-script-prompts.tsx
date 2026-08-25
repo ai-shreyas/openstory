@@ -78,6 +78,11 @@ import {
   promptFromFalInput,
   type OptimisedPromptPreview,
 } from '@/components/scenes/optimised-prompt-panel';
+import {
+  CONTENT_REJECTION_USER_HINT,
+  CONTENT_REJECTION_USER_TITLE,
+  isContentRejectionError,
+} from '@/lib/ai/content-rejection';
 import { isNativeGrokVideoModel } from '@/lib/ai/grok-native';
 import { buildImageRequest } from '@/lib/image/build-image-request';
 import { buildGrokVideoRequest } from '@/lib/motion/build-grok-video-request';
@@ -856,9 +861,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           queryKey: [...BILLING_BALANCE_KEY],
         });
       } else {
-        toast.error('Image generation failed', {
-          description: errorMessage(error),
-        });
+        if (isContentRejectionError(error)) {
+          toast.info(CONTENT_REJECTION_USER_TITLE, {
+            description: CONTENT_REJECTION_USER_HINT,
+          });
+        } else {
+          toast.error('Image generation failed', {
+            description: errorMessage(error),
+          });
+        }
       }
 
       // Rollback on error - set status to failed
@@ -947,9 +958,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           queryKey: [...BILLING_BALANCE_KEY],
         });
       } else {
-        toast.error('Motion generation failed', {
-          description: errorMessage(error),
-        });
+        if (isContentRejectionError(error)) {
+          toast.info(CONTENT_REJECTION_USER_TITLE, {
+            description: CONTENT_REJECTION_USER_HINT,
+          });
+        } else {
+          toast.error('Motion generation failed', {
+            description: errorMessage(error),
+          });
+        }
       }
 
       // Rollback on error

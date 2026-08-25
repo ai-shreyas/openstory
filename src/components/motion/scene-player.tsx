@@ -12,6 +12,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { SceneWithScript } from '@/hooks/use-scenes';
 import { useShotDownloadUrl } from '@/hooks/use-shot-download-url';
 import {
+  CONTENT_REJECTION_USER_HINT,
+  CONTENT_REJECTION_USER_TITLE,
+  isContentRejectionError,
+} from '@/lib/ai/content-rejection';
+import {
   type AspectRatio,
   aspectRatioToDimensions,
   getAspectRatioClassName,
@@ -23,6 +28,7 @@ import { AppImage } from '@/components/ui/app-image';
 import {
   AlertCircle,
   Download,
+  Info,
   Link,
   Loader2,
   Share2,
@@ -381,8 +387,22 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             )}
           >
             <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              <AlertCircle className="h-8 w-8" />
-              <span className="text-sm">Failed to generate video</span>
+              {isContentRejectionError(currentShot.primaryVideo?.error) ? (
+                <>
+                  <Info className="h-8 w-8" />
+                  <span className="max-w-xs text-center text-sm">
+                    {CONTENT_REJECTION_USER_TITLE}
+                  </span>
+                  <span className="max-w-xs text-center text-xs">
+                    {CONTENT_REJECTION_USER_HINT}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="h-8 w-8" />
+                  <span className="text-sm">Failed to generate video</span>
+                </>
+              )}
             </div>
           </div>
           {frameOverlay}
@@ -464,6 +484,9 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             videoStatus={
               isVariantVideoPreview ? 'completed' : currentShot.videoStatus
             }
+            imageStatus={currentShot.frame.imageStatus}
+            imageError={currentShot.frame.imageError}
+            videoError={currentShot.primaryVideo?.error ?? null}
             progressMessage={progressMessage}
             retry={retry}
           />
