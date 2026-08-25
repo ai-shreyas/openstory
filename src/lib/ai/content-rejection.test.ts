@@ -22,6 +22,7 @@ describe('isContentRejectionError', () => {
       'material flagged by a content checker.',
       'The model did not generate the expected output for this prompt. It may contain unsafe content.',
       'Could not generate images with the given prompts and images. Please try again with different inputs.',
+      'Unexpected result from the model.',
       'Output audio has sensitive content.',
     ];
     for (const message of observed) {

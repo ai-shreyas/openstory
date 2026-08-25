@@ -2,9 +2,11 @@
  * Content-rejection handling for shot stills (#1272).
  *
  * Same-prompt reseeds (#881) stay first: stochastic checker hits often clear
- * on a fresh seed. When they don't, rewrite the prompt, append a `softened`
- * `frame_prompt_versions` row, and generate once more. One soften pass bounds
- * the loop — a second content hit fails the run with the real rejection.
+ * on a fresh seed. When they don't, rewrite the prompt (policy soften and/or
+ * plainer grammar — "unexpected result" flags are often odd wording, not
+ * unsafe subject matter), append a `softened` `frame_prompt_versions` row,
+ * and generate once more. One soften pass bounds the loop — a second content
+ * hit fails the run with the real rejection.
  */
 
 import { z } from 'zod';

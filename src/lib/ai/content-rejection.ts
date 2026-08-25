@@ -17,9 +17,12 @@
  *   - seedance: "Output audio has sensitive content."
  *
  * Many of these (especially the veo "did not generate / could not generate"
- * strings) are stochastic and clear on a reseeded re-roll; a subset are
- * deterministic content-checker hits. Image generation exhausts the same-prompt
- * reseed budget then writes a softened prompt version and retries once (#1272).
+ * / "unexpected result" strings) are stochastic and clear on a reseeded
+ * re-roll; a subset are deterministic. Those hits are often the model
+ * rejecting its own sample because the prompt's grammar is broken or it
+ * stacks unusual word combinations — not (only) unsafe subject matter.
+ * Image generation exhausts the same-prompt reseed budget then rewrites the
+ * prompt (policy soften AND/OR plainer grammar) and retries once (#1272).
  */
 
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
@@ -36,6 +39,7 @@ export const CONTENT_REJECTION_PATTERNS: readonly RegExp[] = [
   /flagged by a content/i,
   /did not generate the expected output/i,
   /could not generate images?/i,
+  /unexpected (?:result|output)/i,
   /unsafe content/i,
   /sensitive content/i,
   /content could not be processed/i,
