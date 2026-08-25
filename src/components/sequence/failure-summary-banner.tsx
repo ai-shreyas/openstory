@@ -64,10 +64,14 @@ export const FailureSummaryBanner: React.FC<FailureSummaryBannerProps> = ({
                   <span className="font-semibold">{group.category}:</span>
                   {group.shots.map((f) => (
                     <div key={f.shotId} className="ml-2">
-                      Scene {f.sceneNumber}
-                      {f.sceneTitle !== `Scene ${f.sceneNumber}` &&
-                        ` (${f.sceneTitle})`}
-                      {isWarning ? '' : `: ${errorLabel(f.error)}`}
+                      {[
+                        `Scene ${f.sceneNumber}`,
+                        f.sceneTitle !== `Scene ${f.sceneNumber}` &&
+                          ` (${f.sceneTitle})`,
+                        !isWarning && `: ${errorLabel(f.error)}`,
+                      ]
+                        .filter(Boolean)
+                        .join('')}
                     </div>
                   ))}
                   {group.error && !isWarning && (
