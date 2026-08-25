@@ -47,21 +47,17 @@ const getStyleInputSchema = z.object({
 });
 
 /**
- * Get a single style by ID
- * @returns The style
+ * Get a single style by ID.
+ * @returns The style, or `null` when it is not visible to this team — a
+ * deleted / de-listed style still referenced by a persisted composer draft,
+ * or another team's automatic style (#1271). That is an outcome, not a
+ * failure: a throw here was retried by the query client and logged at error.
  */
 export const getStyleFn = createServerFn({ method: 'GET' })
   .middleware([authWithTeamMiddleware])
   .validator(zodValidator(getStyleInputSchema))
-  .handler(async ({ data, context }) => {
-    // Style lookup doesn't require team scoping (styles can be public)
-    const style = await context.scopedDb.styles.getById(data.styleId);
-
-    if (!style) {
-      throw new Error('Style not found');
-    }
-
-    return style;
+  .handler(async ({ data, context }): Promise<Style | null> => {
+    return context.scopedDb.styles.getById(data.styleId);
   });
 
 // ============================================================================
@@ -100,7 +96,7 @@ export const updateStyleFn = createServerFn({ method: 'POST' })
     const style = await context.scopedDb.styles.update(styleId, updateData);
 
     if (!style) {
-      throw new Error(
+      throw new NotFoundError(
         'Style not found or you do not have permission to update it'
       );
     }
@@ -127,7 +123,7 @@ export const deleteStyleFn = createServerFn({ method: 'POST' })
     const style = await context.scopedDb.styles.getById(data.styleId);
 
     if (!style) {
-      throw new Error('Style not found');
+      throw new NotFoundError('Style not found');
     }
 
     await requireTeamAdminAccess(context.user.id, style.teamId);

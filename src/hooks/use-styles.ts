@@ -45,9 +45,10 @@ export function useStyles(teamId?: string, enabled = true) {
   });
 }
 
-// Hook for getting single style
+// Hook for getting single style. `null` when the id resolves to nothing the
+// team can see (see getStyleFn) — callers render as if there were no style.
 export function useStyle(id: string) {
-  return useQuery<Style>({
+  return useQuery<Style | null>({
     queryKey: styleKeys.detail(id),
     queryFn: async () => {
       return getStyleFn({ data: { styleId: id } });

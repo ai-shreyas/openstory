@@ -397,9 +397,22 @@ export const ScriptView: FC<{
     effectiveStyleId != null &&
     effectiveStyleId !== AUTO_STYLE_ID &&
     !styles.some((s) => s.id === effectiveStyleId);
-  const { data: boundStyle } = useStyle(
+  const { data: boundStyle, isSuccess: boundStyleResolved } = useStyle(
     needsBoundStyleLookup ? effectiveStyleId : ''
   );
+  // A persisted draft can carry an id nothing resolves any more (a deleted or
+  // de-listed style, or one picked under another account in this browser).
+  // Fall back to Automatic instead of generating against a dead id (#1271).
+  useEffect(() => {
+    if (
+      styleId &&
+      needsBoundStyleLookup &&
+      boundStyleResolved &&
+      boundStyle === null
+    ) {
+      setContentState((s) => ({ ...s, styleId: AUTO_STYLE_ID }));
+    }
+  }, [styleId, needsBoundStyleLookup, boundStyleResolved, boundStyle]);
   const autoStyleSelected =
     effectiveStyleId === AUTO_STYLE_ID ||
     (boundStyle?.sequenceId != null && boundStyle.id === effectiveStyleId);
