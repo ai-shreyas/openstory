@@ -77,6 +77,38 @@ export function reportBillingDrift(ctx: BillingDriftContext): void {
   });
 }
 
+export type SkippedDeductionContext = {
+  teamId?: string;
+  workflowName?: string;
+  description?: string;
+  costMicros: number;
+  idempotencyKey?: string;
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Last-resort skip: the generation already ran and the team still cannot
+ * pay. Should be unreachable once spend is reserved before the provider
+ * call (#1310). Emitted so unbilled spend is a queryable metric rather
+ * than a log grep.
+ */
+export function reportSkippedDeduction(ctx: SkippedDeductionContext): void {
+  logger.warn('Completed AI generation skipped deduction', ctx);
+
+  const posthog = getPostHogClient();
+  posthog?.capture({
+    distinctId: ctx.teamId ?? 'system',
+    event: 'billing_skipped_deduction',
+    properties: {
+      workflow_name: ctx.workflowName,
+      description: ctx.description,
+      cost_micros: ctx.costMicros,
+      idempotency_key: ctx.idempotencyKey,
+      ...ctx.metadata,
+    },
+  });
+}
+
 /** Log and emit analytics when a completed generation has nothing to bill. */
 export function reportMissingBillingCost(ctx: MissingBillingCostContext): void {
   logger.warn('Completed AI generation with no billable cost reported', ctx);

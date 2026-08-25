@@ -23,10 +23,11 @@ import {
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import { computeVideoManifestInputHash } from '@/lib/ai/input-hash';
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
-import { microsToUsd } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   recordFalUsageStep,
+  releaseWorkflowCredits,
+  reserveWorkflowCredits,
 } from '@/lib/billing/workflow-deduction';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { ensureImageUnderLimit } from '@/lib/image/image-compress';
@@ -170,12 +171,24 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         const falKeyInfo = await scopedDb.credentials.resolveKey('fal');
         const usedOwnKey = falKeyInfo.source === 'team';
         if (cost > 0 && !usedOwnKey) {
-          const canAfford =
-            await scopedDb.liveRead.billing.hasEnoughCredits(cost);
-          if (!canAfford) {
-            logger.warn(
-              `[MotionWorkflow:cf] Insufficient credits for team ${input.teamId} (cost: $${microsToUsd(cost).toFixed(4)}), skipping deduction`
-            );
+          // Debit the estimate now so concurrent siblings cannot all pass a
+          // live-balance read and then skip charging after the clip exists
+          // (#1310). settle vs actual happens in deduct-credits; onFailure
+          // releases the hold if this run never completes.
+          const reserved = await reserveWorkflowCredits({
+            scopedDb,
+            costMicros: cost,
+            usedOwnKey,
+            description: `Motion generation (${model})`,
+            idempotencyKey: `${workflowRunId}:motion`,
+            metadata: {
+              model,
+              shotId: input.shotId,
+              sequenceId: input.sequenceId,
+            },
+            workflowName: 'MotionWorkflow:cf',
+          });
+          if (!reserved) {
             throw new NonRetryableError(
               `Insufficient credits for motion generation`
             );
@@ -645,10 +658,9 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         })
       : {};
 
-    // Deduct credits (skip if team used own fal key). Routed through
-    // deductWorkflowCredits so insufficient balances warn-and-skip (with an
-    // auto-top-up attempt) like every other workflow, instead of debiting
-    // the balance negative.
+    // Settle the spawn-time reservation against fal's billed cost. If this
+    // run never reserved (BYOK / unpriced), deductWorkflowCredits falls back
+    // to an atomic try-deduct and last-resort skip.
     if (actualCost > 0 && input.teamId && !gatedUsedOwnKey) {
       await step.do('deduct-credits', async () => {
         await deductWorkflowCredits({
@@ -787,6 +799,19 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
   }): Promise<void> {
     const input = event.payload;
     const model = input.model || DEFAULT_VIDEO_MODEL;
+
+    try {
+      await releaseWorkflowCredits({
+        scopedDb,
+        idempotencyKey: `${event.instanceId}:motion`,
+        workflowName: 'MotionWorkflow:cf',
+      });
+    } catch (releaseError) {
+      logger.error(
+        `[MotionWorkflow:cf] Failed to release credit reservation for shot ${input.shotId}:`,
+        { err: releaseError }
+      );
+    }
 
     // The success span is recorded in runImpl, which every failure exit skips
     // (submit 422, hard poll failure, poll-budget timeout, content-rejection

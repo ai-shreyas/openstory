@@ -9,31 +9,68 @@ import { describe, expect, it, vi } from 'vitest';
 import { micros, ZERO_MICROS } from './money';
 
 const reportMissingBillingCost = vi.fn();
+const reportSkippedDeduction = vi.fn();
 vi.doMock('./billing-observability', () => ({
   reportMissingBillingCost,
+  reportSkippedDeduction,
 }));
 
-function makeScopedDb({ canAfford = true } = {}) {
-  const deductCredits = vi.fn().mockResolvedValue({
-    newBalance: micros(0),
-    chargedAmount: micros(0),
-    transactionId: 'tx1',
+function makeScopedDb({
+  canAfford = true,
+  settleStatus = 'missing',
+}: {
+  canAfford?: boolean;
+  settleStatus?: 'missing' | 'settled' | 'released';
+} = {}) {
+  const tryDeductCredits = vi.fn().mockResolvedValue(
+    canAfford
+      ? {
+          ok: true,
+          newBalance: micros(0),
+          chargedAmount: micros(0),
+          transactionId: 'tx1',
+          replay: false,
+        }
+      : { ok: false }
+  );
+  const reserveCredits = vi.fn().mockResolvedValue(
+    canAfford
+      ? {
+          reserved: true,
+          newBalance: micros(0),
+          reservedAmount: micros(0),
+          transactionId: 'tx1',
+          replay: false,
+        }
+      : { reserved: false }
+  );
+  const settleReservation = vi.fn().mockResolvedValue({
+    status: settleStatus,
   });
+  const releaseReservation = vi.fn().mockResolvedValue({ status: 'released' });
   const hasEnoughCredits = vi.fn().mockResolvedValue(canAfford);
   const checkAutoTopUp = vi.fn().mockResolvedValue(undefined);
   const recordUsage = vi.fn().mockResolvedValue(undefined);
   const scopedDbStub = {
-    // The affordability read goes through the sanctioned live-read surface;
-    // the deduction and the usage sample are writes.
+    teamId: 'team_1',
     liveRead: { billing: { hasEnoughCredits, checkAutoTopUp } },
-    billing: { deductCredits },
+    billing: {
+      tryDeductCredits,
+      reserveCredits,
+      settleReservation,
+      releaseReservation,
+      checkAutoTopUp,
+    },
     modelUsage: { record: recordUsage },
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowScopedDb stub exposing only the billing methods under test
   const scopedDb = scopedDbStub as unknown as WorkflowScopedDb;
   return {
     scopedDb,
-    deductCredits,
+    tryDeductCredits,
+    reserveCredits,
+    settleReservation,
+    releaseReservation,
     hasEnoughCredits,
     checkAutoTopUp,
     recordUsage,
@@ -42,12 +79,14 @@ function makeScopedDb({ canAfford = true } = {}) {
 
 const {
   deductWorkflowCredits: deductWorkflowCreditsImpl,
+  reserveWorkflowCredits: reserveWorkflowCreditsImpl,
+  releaseWorkflowCredits: releaseWorkflowCreditsImpl,
   recordFalUsage: recordFalUsageImpl,
 } = await import('./workflow-deduction');
 
 describe('deductWorkflowCredits', () => {
-  it('forwards the idempotencyKey to deductCredits', async () => {
-    const { scopedDb, deductCredits } = makeScopedDb();
+  it('forwards the idempotencyKey to tryDeductCredits when no reservation exists', async () => {
+    const { scopedDb, tryDeductCredits, settleReservation } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -58,16 +97,70 @@ describe('deductWorkflowCredits', () => {
       metadata: { shotId: 'f1' },
     });
 
-    expect(deductCredits).toHaveBeenCalledTimes(1);
-    expect(deductCredits).toHaveBeenCalledWith(micros(2_000_000), {
+    expect(settleReservation).toHaveBeenCalledWith({
+      reservationKey: 'env_image_abc123:image:reserve',
+      settleKey: 'env_image_abc123:image:settle',
+      actualCostMicros: micros(2_000_000),
+      description: 'Image generation (test-model)',
+      metadata: { shotId: 'f1' },
+    });
+    expect(tryDeductCredits).toHaveBeenCalledTimes(1);
+    expect(tryDeductCredits).toHaveBeenCalledWith(micros(2_000_000), {
       description: 'Image generation (test-model)',
       metadata: { shotId: 'f1' },
       idempotencyKey: 'env_image_abc123:image',
     });
   });
 
+  it('settles a reservation instead of charging the full actual again', async () => {
+    const { scopedDb, tryDeductCredits, settleReservation } = makeScopedDb({
+      settleStatus: 'settled',
+    });
+
+    await deductWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(2_000_000),
+      usedOwnKey: false,
+      description: 'Motion generation (test-model)',
+      idempotencyKey: 'wf-1:motion',
+    });
+
+    expect(settleReservation).toHaveBeenCalledTimes(1);
+    expect(tryDeductCredits).not.toHaveBeenCalled();
+  });
+
+  it('alerts when settling a reservation cannot collect the extra actual', async () => {
+    reportSkippedDeduction.mockClear();
+    const settleReservation = vi.fn().mockResolvedValue({
+      status: 'settled',
+      skippedDeltaMicros: micros(250_000),
+    });
+    const { scopedDb, tryDeductCredits, checkAutoTopUp } = makeScopedDb({
+      settleStatus: 'settled',
+    });
+    scopedDb.billing.settleReservation = settleReservation;
+
+    await deductWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(1_250_000),
+      usedOwnKey: false,
+      description: 'Motion generation (test-model)',
+      idempotencyKey: 'wf-1:motion',
+      workflowName: 'MotionWorkflow:cf',
+    });
+
+    expect(tryDeductCredits).not.toHaveBeenCalled();
+    expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
+    expect(reportSkippedDeduction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costMicros: micros(250_000),
+        workflowName: 'MotionWorkflow:cf',
+      })
+    );
+  });
+
   it('skips when the team used its own key', async () => {
-    const { scopedDb, deductCredits } = makeScopedDb();
+    const { scopedDb, tryDeductCredits, settleReservation } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -77,12 +170,13 @@ describe('deductWorkflowCredits', () => {
       idempotencyKey: 'env_image_abc123:image',
     });
 
-    expect(deductCredits).not.toHaveBeenCalled();
+    expect(tryDeductCredits).not.toHaveBeenCalled();
+    expect(settleReservation).not.toHaveBeenCalled();
   });
 
   it('reports missing cost and skips deduction for zero cost', async () => {
     reportMissingBillingCost.mockClear();
-    const { scopedDb, deductCredits } = makeScopedDb();
+    const { scopedDb, tryDeductCredits } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -93,17 +187,18 @@ describe('deductWorkflowCredits', () => {
       workflowName: 'ImageWorkflow',
     });
 
-    expect(deductCredits).not.toHaveBeenCalled();
+    expect(tryDeductCredits).not.toHaveBeenCalled();
     expect(reportMissingBillingCost).toHaveBeenCalledWith({
       source: 'workflow-deduction',
       workflowName: 'ImageWorkflow',
       description: 'LLM analysis (model)',
       metadata: undefined,
+      teamId: 'team_1',
     });
   });
 
   it('skips without a scopedDb (anonymous workflow)', async () => {
-    const { deductCredits } = makeScopedDb();
+    const { tryDeductCredits } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb: undefined,
@@ -113,11 +208,12 @@ describe('deductWorkflowCredits', () => {
       idempotencyKey: 'env_image_abc123:image',
     });
 
-    expect(deductCredits).not.toHaveBeenCalled();
+    expect(tryDeductCredits).not.toHaveBeenCalled();
   });
 
-  it('warns and skips (but still kicks auto-top-up) when credits are insufficient', async () => {
-    const { scopedDb, deductCredits, checkAutoTopUp } = makeScopedDb({
+  it('warns, emits billing_skipped_deduction, and kicks auto-top-up when credits are insufficient', async () => {
+    reportSkippedDeduction.mockClear();
+    const { scopedDb, tryDeductCredits, checkAutoTopUp } = makeScopedDb({
       canAfford: false,
     });
 
@@ -130,10 +226,90 @@ describe('deductWorkflowCredits', () => {
       workflowName: 'ImageWorkflow',
     });
 
-    expect(deductCredits).not.toHaveBeenCalled();
+    expect(tryDeductCredits).toHaveBeenCalledTimes(1);
+    expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
+    expect(reportSkippedDeduction).toHaveBeenCalledWith({
+      teamId: 'team_1',
+      workflowName: 'ImageWorkflow',
+      description: 'Image generation (test-model)',
+      costMicros: micros(2_000_000),
+      idempotencyKey: 'env_image_abc123:image',
+      metadata: undefined,
+    });
+  });
+});
+
+describe('reserveWorkflowCredits', () => {
+  it('holds the estimate against the balance before the provider call', async () => {
+    const { scopedDb, reserveCredits } = makeScopedDb();
+
+    const reserved = await reserveWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(1_222_200),
+      usedOwnKey: false,
+      description: 'Motion generation (seedance)',
+      idempotencyKey: 'wf-1:motion',
+      workflowName: 'MotionWorkflow:cf',
+    });
+
+    expect(reserved).toBe(true);
+    expect(reserveCredits).toHaveBeenCalledWith(micros(1_222_200), {
+      description: 'Motion generation (seedance)',
+      metadata: undefined,
+      idempotencyKey: 'wf-1:motion:reserve',
+    });
+  });
+
+  it('returns false and does not start work when the hold cannot be taken', async () => {
+    const { scopedDb, checkAutoTopUp } = makeScopedDb({ canAfford: false });
+
+    const reserved = await reserveWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(1_222_200),
+      usedOwnKey: false,
+      description: 'Motion generation (seedance)',
+      idempotencyKey: 'wf-1:motion',
+      workflowName: 'MotionWorkflow:cf',
+    });
+
+    expect(reserved).toBe(false);
     expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
   });
 
+  it('skips the hold for BYOK teams', async () => {
+    const { scopedDb, reserveCredits } = makeScopedDb();
+
+    const reserved = await reserveWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(1_222_200),
+      usedOwnKey: true,
+      description: 'Motion generation (seedance)',
+      idempotencyKey: 'wf-1:motion',
+    });
+
+    expect(reserved).toBe(true);
+    expect(reserveCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('releaseWorkflowCredits', () => {
+  it('releases the matching reservation key', async () => {
+    const { scopedDb, releaseReservation } = makeScopedDb();
+
+    await releaseWorkflowCreditsImpl({
+      scopedDb,
+      idempotencyKey: 'wf-1:motion',
+      workflowName: 'MotionWorkflow:cf',
+    });
+
+    expect(releaseReservation).toHaveBeenCalledWith({
+      reservationKey: 'wf-1:motion:reserve',
+      releaseKey: 'wf-1:motion:release',
+    });
+  });
+});
+
+describe('deductWorkflowCredits usage isolation', () => {
   it('never records a usage observation — that is recordFalUsage’s job', async () => {
     // Deduction is guarded by `cost > 0 && !usedOwnKey` at every call site, so
     // a recorder living in here would never see BYOK or unpriced generations.

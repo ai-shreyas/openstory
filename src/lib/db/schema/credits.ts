@@ -25,9 +25,10 @@ export type TransactionType = (typeof TRANSACTION_TYPES)[number];
  * deduction (see `deductCredits`), not derived from the ledger.
  *
  * The CHECK is the backstop under the application-level gates
- * (`requireCredits` before the work, `hasEnoughCredits` after it): if either
- * ever lets through a charge that would overdraw a team, the UPDATE fails
- * loudly instead of quietly going negative.
+ * (`requireCredits` before the work, `reserveCredits` at spawn with
+ * `WHERE balance >= amount`, `hasEnoughCredits` after it): if a charge
+ * would overdraw a team, the UPDATE matches zero rows instead of going
+ * negative. Concurrent siblings serialize on that UPDATE (#1310).
  */
 export const credits = snakeCase.table(
   'credits',

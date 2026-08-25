@@ -284,11 +284,6 @@ const ALLOWED_LIVE_READS: Record<string, SanctionedRead[]> = {
       why: 'Resolved inside the charging step; usedOwnKey rides the step result so the gate and the deduction agree on one pinned read.',
     },
     {
-      read: 'billing.hasEnoughCredits',
-      bucket: 'BALANCE',
-      why: 'A key or balance change mid-run must not let a charge land on a balance the gate never checked.',
-    },
-    {
       read: 'shots.getById',
       bucket: 'EXISTENCE-GUARD',
       why: 'Shot deleted mid-run is a stand-down, not a failure.',

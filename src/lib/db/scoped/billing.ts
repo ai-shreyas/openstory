@@ -17,6 +17,7 @@ import {
   microsToDisplayUsd,
   microsToUsd,
   negateMicros,
+  subtractMicros,
   ZERO_MICROS,
 } from '@/lib/billing/money';
 import type { Database } from '@/lib/db/client';
@@ -33,7 +34,7 @@ import type {
 } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
 import { getBillingChannel } from '@/lib/realtime';
-import { and, count, desc, eq, notExists, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, notExists, sql } from 'drizzle-orm';
 import { generateId } from '../id';
 import { giftTokenRedemptions, giftTokens } from '../schema';
 
@@ -66,6 +67,85 @@ async function emitBalanceUpdated(opts: {
 }
 
 const logger = getLogger(['openstory', 'db', 'billing']);
+
+type ReservationStatus =
+  | 'open'
+  | 'settling'
+  | 'settled'
+  | 'releasing'
+  | 'released';
+
+const RESERVATION_KIND = 'credit_reservation';
+
+type ReservationMeta = {
+  kind: typeof RESERVATION_KIND;
+  reservationStatus: ReservationStatus;
+  reservedMicros: number;
+  skippedDeltaMicros?: number;
+};
+
+type TryDebitResult =
+  | {
+      ok: true;
+      newBalance: Microdollars;
+      chargedAmount: Microdollars;
+      transactionId: string;
+      replay: boolean;
+    }
+  | { ok: false };
+
+export type ReserveCreditsResult =
+  | {
+      reserved: true;
+      newBalance: Microdollars;
+      reservedAmount: Microdollars;
+      transactionId: string;
+      replay: boolean;
+    }
+  | { reserved: false };
+
+export type SettleReservationResult =
+  | { status: 'missing' }
+  | { status: 'released' }
+  | { status: 'settled'; skippedDeltaMicros?: Microdollars };
+
+export type ReleaseReservationResult =
+  | { status: 'missing' }
+  | { status: 'settled' }
+  | { status: 'released' };
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- JSON column
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function reservationStatus(metadata: unknown): ReservationStatus | undefined {
+  const status = asRecord(metadata).reservationStatus;
+  if (
+    status === 'open' ||
+    status === 'settling' ||
+    status === 'settled' ||
+    status === 'releasing' ||
+    status === 'released'
+  ) {
+    return status;
+  }
+  return undefined;
+}
+
+function reservedMicrosOf(
+  row: { amount: number; metadata: unknown },
+  fallback: Microdollars
+): Microdollars {
+  const raw = asRecord(row.metadata).reservedMicros;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    return micros(raw);
+  }
+  return fallback;
+}
 
 function mapBatchSource(
   type: TransactionType,
@@ -486,6 +566,511 @@ export function createBillingMethods(
     };
   }
 
+  async function getTransactionByIdempotencyKey(idempotencyKey: string) {
+    const [row] = await db
+      .select()
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.teamId, teamId),
+          eq(transactions.idempotencyKey, idempotencyKey)
+        )
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
+  /**
+   * Atomic conditional debit: `UPDATE credits SET balance = balance - n
+   * WHERE balance >= n` plus a ledger row, in one `db.batch`. The INSERT
+   * only lands when the UPDATE actually changed a row (`changes() > 0`),
+   * so an overdraft is a no-op rather than a CHECK failure or a phantom
+   * charge. Replay of the same `idempotencyKey` recovers the original row.
+   */
+  async function tryDebit(
+    amountMicros: Microdollars,
+    opts: {
+      description: string;
+      metadata: Record<string, unknown>;
+      idempotencyKey: string;
+      type?: TransactionType;
+    }
+  ): Promise<TryDebitResult> {
+    if (amountMicros <= 0) return { ok: false };
+
+    const existing = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+    if (existing) {
+      const [balanceRow] = await db
+        .select({ balance: credits.balance })
+        .from(credits)
+        .where(eq(credits.teamId, teamId))
+        .limit(1);
+      return {
+        ok: true,
+        replay: true,
+        transactionId: existing.id,
+        chargedAmount: micros(Math.abs(existing.amount)),
+        newBalance: micros(balanceRow?.balance ?? 0),
+      };
+    }
+
+    await db
+      .insert(credits)
+      .values({ teamId, balance: 0 })
+      .onConflictDoNothing();
+
+    const txId = generateId();
+    const now = new Date();
+    const nowSeconds = Math.floor(now.getTime() / 1000);
+    const txType = opts.type ?? 'credit_usage';
+    const signedAmount =
+      txType === 'credit_usage' ? negateMicros(amountMicros) : amountMicros;
+
+    const updateBalance = db
+      .update(credits)
+      .set({
+        balance: sql`${credits.balance} - ${amountMicros}`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(credits.teamId, teamId),
+          gte(credits.balance, amountMicros),
+          notExists(
+            db
+              .select({ id: transactions.id })
+              .from(transactions)
+              .where(
+                and(
+                  eq(transactions.teamId, teamId),
+                  eq(transactions.idempotencyKey, opts.idempotencyKey)
+                )
+              )
+          )
+        )
+      );
+
+    const insertTransaction = db
+      .insert(transactions)
+      .select(
+        db
+          .select({
+            id: sql<string>`${txId}`.as('id'),
+            teamId: sql<string>`${teamId}`.as('team_id'),
+            userId: sql<string>`${userId}`.as('user_id'),
+            type: sql<string>`${txType}`.as('type'),
+            amount: sql<number>`${signedAmount}`.as('amount'),
+            balanceAfter: credits.balance,
+            description: sql<string>`${opts.description}`.as('description'),
+            metadata: sql`${JSON.stringify(opts.metadata)}`.as('metadata'),
+            idempotencyKey: sql<string>`${opts.idempotencyKey}`.as(
+              'idempotency_key'
+            ),
+            createdAt: sql`${nowSeconds}`.as('created_at'),
+          })
+          .from(credits)
+          .where(and(eq(credits.teamId, teamId), sql`changes() > 0`))
+      )
+      .onConflictDoNothing()
+      .returning({ id: transactions.id });
+
+    const readBackBalance = db
+      .select({ balance: credits.balance })
+      .from(credits)
+      .where(eq(credits.teamId, teamId));
+
+    const [, insertedRows, balanceRows] = await db.batch([
+      updateBalance,
+      insertTransaction,
+      readBackBalance,
+    ]);
+
+    const balanceRow = balanceRows[0];
+    if (!balanceRow) {
+      throw new Error(
+        `tryDebit: credits row missing for team ${teamId} after batch`
+      );
+    }
+    const newBalance = micros(balanceRow.balance);
+    const transactionId = insertedRows[0]?.id;
+    if (!transactionId) {
+      const raced = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+      if (raced) {
+        return {
+          ok: true,
+          replay: true,
+          transactionId: raced.id,
+          chargedAmount: micros(Math.abs(raced.amount)),
+          newBalance,
+        };
+      }
+      return { ok: false };
+    }
+
+    await emitBalanceUpdated({
+      teamId,
+      newBalance,
+      amountMicros: signedAmount,
+      transactionId,
+      type: txType,
+    });
+
+    if (txType === 'credit_usage') {
+      void maybeAutoTopUp(newBalance).catch((err) => {
+        logger.error('Auto top-up failed after reservation debit', {
+          teamId,
+          balanceMicros: newBalance,
+          err,
+        });
+      });
+    }
+
+    return {
+      ok: true,
+      replay: false,
+      transactionId,
+      chargedAmount: amountMicros,
+      newBalance,
+    };
+  }
+
+  async function creditBalance(
+    amountMicros: Microdollars,
+    opts: {
+      description: string;
+      metadata: Record<string, unknown>;
+      idempotencyKey: string;
+    }
+  ): Promise<TryDebitResult> {
+    if (amountMicros <= 0) return { ok: false };
+
+    const existing = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+    if (existing) {
+      const [balanceRow] = await db
+        .select({ balance: credits.balance })
+        .from(credits)
+        .where(eq(credits.teamId, teamId))
+        .limit(1);
+      return {
+        ok: true,
+        replay: true,
+        transactionId: existing.id,
+        chargedAmount: micros(Math.abs(existing.amount)),
+        newBalance: micros(balanceRow?.balance ?? 0),
+      };
+    }
+
+    await db
+      .insert(credits)
+      .values({ teamId, balance: 0 })
+      .onConflictDoNothing();
+
+    const txId = generateId();
+    const now = new Date();
+    const nowSeconds = Math.floor(now.getTime() / 1000);
+
+    const updateBalance = db
+      .update(credits)
+      .set({
+        balance: sql`${credits.balance} + ${amountMicros}`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(credits.teamId, teamId),
+          notExists(
+            db
+              .select({ id: transactions.id })
+              .from(transactions)
+              .where(
+                and(
+                  eq(transactions.teamId, teamId),
+                  eq(transactions.idempotencyKey, opts.idempotencyKey)
+                )
+              )
+          )
+        )
+      );
+
+    const insertTransaction = db
+      .insert(transactions)
+      .select(
+        db
+          .select({
+            id: sql<string>`${txId}`.as('id'),
+            teamId: sql<string>`${teamId}`.as('team_id'),
+            userId: sql<string>`${userId}`.as('user_id'),
+            type: sql<string>`${'credit_refund'}`.as('type'),
+            amount: sql<number>`${amountMicros}`.as('amount'),
+            balanceAfter: credits.balance,
+            description: sql<string>`${opts.description}`.as('description'),
+            metadata: sql`${JSON.stringify(opts.metadata)}`.as('metadata'),
+            idempotencyKey: sql<string>`${opts.idempotencyKey}`.as(
+              'idempotency_key'
+            ),
+            createdAt: sql`${nowSeconds}`.as('created_at'),
+          })
+          .from(credits)
+          .where(and(eq(credits.teamId, teamId), sql`changes() > 0`))
+      )
+      .onConflictDoNothing()
+      .returning({ id: transactions.id });
+
+    const readBackBalance = db
+      .select({ balance: credits.balance })
+      .from(credits)
+      .where(eq(credits.teamId, teamId));
+
+    const [, insertedRows, balanceRows] = await db.batch([
+      updateBalance,
+      insertTransaction,
+      readBackBalance,
+    ]);
+
+    const balanceRow = balanceRows[0];
+    if (!balanceRow) {
+      throw new Error(
+        `creditBalance: credits row missing for team ${teamId} after batch`
+      );
+    }
+    const newBalance = micros(balanceRow.balance);
+    const transactionId = insertedRows[0]?.id;
+    if (!transactionId) {
+      const raced = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+      if (raced) {
+        return {
+          ok: true,
+          replay: true,
+          transactionId: raced.id,
+          chargedAmount: micros(Math.abs(raced.amount)),
+          newBalance,
+        };
+      }
+      return { ok: false };
+    }
+
+    await emitBalanceUpdated({
+      teamId,
+      newBalance,
+      amountMicros,
+      transactionId,
+      type: 'credit_refund',
+    });
+
+    return {
+      ok: true,
+      replay: false,
+      transactionId,
+      chargedAmount: amountMicros,
+      newBalance,
+    };
+  }
+
+  async function casReservationStatus(
+    transactionId: string,
+    from: ReservationStatus,
+    to: ReservationStatus,
+    extra: Record<string, unknown> = {}
+  ): Promise<boolean> {
+    const skipped = extra.skippedDeltaMicros;
+    const setSql =
+      typeof skipped === 'number'
+        ? sql`json_set(${transactions.metadata}, '$.reservationStatus', ${to}, '$.skippedDeltaMicros', ${skipped})`
+        : sql`json_set(${transactions.metadata}, '$.reservationStatus', ${to})`;
+
+    const [updated] = await db
+      .update(transactions)
+      .set({ metadata: setSql })
+      .where(
+        and(
+          eq(transactions.id, transactionId),
+          sql`json_extract(${transactions.metadata}, '$.reservationStatus') = ${from}`
+        )
+      )
+      .returning({ id: transactions.id });
+    return Boolean(updated);
+  }
+
+  async function tryDeductCredits(
+    amountMicros: Microdollars,
+    opts: {
+      description?: string;
+      metadata?: Record<string, unknown>;
+      idempotencyKey: string;
+    }
+  ): Promise<TryDebitResult> {
+    return tryDebit(amountMicros, {
+      description:
+        opts.description ?? `Usage: $${microsToUsd(amountMicros).toFixed(4)}`,
+      metadata: opts.metadata ?? {},
+      idempotencyKey: opts.idempotencyKey,
+    });
+  }
+
+  async function reserveCredits(
+    amountMicros: Microdollars,
+    opts: {
+      description: string;
+      metadata?: Record<string, unknown>;
+      idempotencyKey: string;
+    }
+  ): Promise<ReserveCreditsResult> {
+    const metadata: ReservationMeta & Record<string, unknown> = {
+      ...opts.metadata,
+      kind: RESERVATION_KIND,
+      reservationStatus: 'open',
+      reservedMicros: amountMicros,
+    };
+    const result = await tryDebit(amountMicros, {
+      description: opts.description,
+      metadata,
+      idempotencyKey: opts.idempotencyKey,
+    });
+    if (!result.ok) return { reserved: false };
+    return {
+      reserved: true,
+      newBalance: result.newBalance,
+      reservedAmount: result.chargedAmount,
+      transactionId: result.transactionId,
+      replay: result.replay,
+    };
+  }
+
+  async function settleReservation(opts: {
+    reservationKey: string;
+    settleKey: string;
+    actualCostMicros: Microdollars;
+    description?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<SettleReservationResult> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const reservation = await getTransactionByIdempotencyKey(
+        opts.reservationKey
+      );
+      if (!reservation) return { status: 'missing' };
+
+      const status = reservationStatus(reservation.metadata);
+      if (status === 'settled') {
+        const skipped = asRecord(reservation.metadata).skippedDeltaMicros;
+        return typeof skipped === 'number' && skipped > 0
+          ? { status: 'settled', skippedDeltaMicros: micros(skipped) }
+          : { status: 'settled' };
+      }
+      if (status === 'released' || status === 'releasing') {
+        return { status: 'released' };
+      }
+
+      if (status === 'open') {
+        const claimed = await casReservationStatus(
+          reservation.id,
+          'open',
+          'settling'
+        );
+        if (!claimed) continue;
+      } else if (status !== 'settling') {
+        continue;
+      }
+
+      const reservedAmount = reservedMicrosOf(
+        reservation,
+        micros(Math.abs(reservation.amount))
+      );
+      const actual = opts.actualCostMicros;
+      const delta = subtractMicros(actual, reservedAmount);
+      let skippedDeltaMicros: Microdollars | undefined;
+
+      if (delta > 0) {
+        const extra = await tryDebit(delta, {
+          description:
+            opts.description ??
+            reservation.description ??
+            `Usage: $${microsToUsd(delta).toFixed(4)}`,
+          metadata: {
+            kind: 'credit_reservation_settle',
+            ...opts.metadata,
+          },
+          idempotencyKey: opts.settleKey,
+        });
+        if (!extra.ok) skippedDeltaMicros = delta;
+      } else if (delta < 0) {
+        await creditBalance(negateMicros(delta), {
+          description:
+            opts.description ?? reservation.description ?? 'Unused reservation',
+          metadata: {
+            kind: 'credit_reservation_settle',
+            ...opts.metadata,
+          },
+          idempotencyKey: opts.settleKey,
+        });
+      }
+
+      await casReservationStatus(
+        reservation.id,
+        'settling',
+        'settled',
+        skippedDeltaMicros ? { skippedDeltaMicros } : {}
+      );
+
+      return skippedDeltaMicros
+        ? { status: 'settled', skippedDeltaMicros }
+        : { status: 'settled' };
+    }
+
+    throw new Error(
+      `settleReservation: could not claim reservation ${opts.reservationKey} for team ${teamId}`
+    );
+  }
+
+  async function releaseReservation(opts: {
+    reservationKey: string;
+    releaseKey: string;
+  }): Promise<ReleaseReservationResult> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const reservation = await getTransactionByIdempotencyKey(
+        opts.reservationKey
+      );
+      if (!reservation) return { status: 'missing' };
+
+      const status = reservationStatus(reservation.metadata);
+      if (status === 'settled' || status === 'settling') {
+        return { status: 'settled' };
+      }
+      if (status === 'released') {
+        return { status: 'released' };
+      }
+
+      if (status === 'open') {
+        const claimed = await casReservationStatus(
+          reservation.id,
+          'open',
+          'releasing'
+        );
+        if (!claimed) continue;
+      } else if (status !== 'releasing') {
+        continue;
+      }
+
+      const reservedAmount = reservedMicrosOf(
+        reservation,
+        micros(Math.abs(reservation.amount))
+      );
+      await creditBalance(reservedAmount, {
+        description: reservation.description
+          ? `Released: ${reservation.description}`
+          : 'Released reservation',
+        metadata: { kind: 'credit_reservation_release' },
+        idempotencyKey: opts.releaseKey,
+      });
+
+      await casReservationStatus(reservation.id, 'releasing', 'released');
+      return { status: 'released' };
+    }
+
+    throw new Error(
+      `releaseReservation: could not claim reservation ${opts.reservationKey} for team ${teamId}`
+    );
+  }
+
   async function updateAutoTopUpSettings(settings: {
     enabled: boolean;
     thresholdMicros?: Microdollars;
@@ -776,6 +1361,10 @@ export function createBillingMethods(
     addCredits,
     saveStripeCustomerId,
     deductCredits,
+    tryDeductCredits,
+    reserveCredits,
+    settleReservation,
+    releaseReservation,
     updateAutoTopUpSettings,
     checkAutoTopUp,
     reconcileBatchBalance,
