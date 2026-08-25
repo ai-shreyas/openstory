@@ -1,6 +1,5 @@
 import { cn } from '@/lib/utils';
 import { ScrollText } from 'lucide-react';
-import { getStyleGradient } from './style-gradient';
 
 type AutoStyleTileProps = {
   selected: boolean;
@@ -13,7 +12,7 @@ type AutoStyleTileProps = {
 /**
  * The "Match script" slot in the composer strip (#1213): instead of a library
  * style, the storyboard run derives a style from the script itself. Laid out
- * like a StyleInlineTile (full-bleed background + bottom name strip) so it
+ * like a StyleInlineTile (full-bleed still + bottom name strip) so it
  * reads as a peer style; the ScrollText badge + label are the tell (#1279).
  */
 export function AutoStyleTile({
@@ -44,9 +43,13 @@ export function AutoStyleTile({
       aria-label="Match script: derive a style from the script"
       title="Derive a style from the script. It stays with this sequence until you add it to your library."
     >
-      <div
-        className="h-full w-full"
-        style={{ background: getStyleGradient([]) }}
+      <img
+        src="/match-script.jpg"
+        width={130}
+        height={130}
+        alt=""
+        className="h-full w-full object-cover"
+        decoding="async"
       />
       <span
         aria-hidden
