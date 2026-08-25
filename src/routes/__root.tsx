@@ -64,6 +64,11 @@ export const Route = createRootRouteWithContext<RouterContext>()({
           ? [{ name: 'robots', content: 'noindex, nofollow' }]
           : []),
         { charSet: 'utf-8' },
+        // Chrome auto-translate rewrites text nodes into <font> wrappers, which
+        // React then trips over (insertBefore/removeChild, hydration #418) —
+        // every crash in #1283 was a non-English browser. Paired with
+        // translate="no" on <html>.
+        { name: 'google', content: 'notranslate' },
         {
           name: 'viewport',
           content: 'width=device-width, initial-scale=1',
@@ -154,7 +159,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 function RootLayout() {
   const { queryClient } = Route.useRouteContext();
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" translate="no">
       <head>
         <HeadContent />
       </head>

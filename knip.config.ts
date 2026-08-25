@@ -3,6 +3,7 @@ import type { KnipConfig } from 'knip';
 export default {
   entry: [
     'src/router.tsx',
+    'src/client.tsx', // TanStack Start client entry (resolved by the plugin)
     'src/routes/**/*.{ts,tsx}', // file-based routes
     'src/functions/**/*.ts', // createServerFn endpoints
     'scripts/**/*.ts',
