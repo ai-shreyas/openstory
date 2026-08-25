@@ -46,7 +46,7 @@ const logger = getLogger(['openstory', 'workflow', 'image', 'soften']);
 const MAX_IMAGE_ATTEMPTS = 3;
 
 /** Plain `z.string()` — no min/max (Bedrock rejects integer bounds). */
-const softenImagePromptResponseSchema = z.object({
+export const softenImagePromptResponseSchema = z.object({
   prompt: z.string(),
 });
 
