@@ -353,7 +353,7 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
                   {cancelling && (
                     <Loader2 className="mr-2 h-3 w-3 animate-spin motion-reduce:animate-none" />
                   )}
-                  Cancel
+                  <span>Cancel</span>
                 </Button>
               </div>
             )}
@@ -403,7 +403,7 @@ const MediaHistoryList: React.FC<MediaHistoryListProps> = ({
                       {selecting && (
                         <Loader2 className="mr-2 h-3 w-3 animate-spin" />
                       )}
-                      Use this version
+                      <span>Use this version</span>
                     </Button>
                   </div>
                 )}
@@ -534,7 +534,7 @@ const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
                     {cancelling && (
                       <Loader2 className="mr-2 h-3 w-3 animate-spin motion-reduce:animate-none" />
                     )}
-                    Cancel
+                    <span>Cancel</span>
                   </Button>
                 </div>
               )}
@@ -611,7 +611,7 @@ const PromptHistoryList: React.FC<PromptHistoryListProps> = ({
                       {restorePending && (
                         <Loader2 className="mr-2 h-3 w-3 animate-spin" />
                       )}
-                      Restore this version
+                      <span>Restore this version</span>
                     </Button>
                   </div>
                 )}

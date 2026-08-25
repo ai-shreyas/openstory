@@ -357,6 +357,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       aria-invalid={ariaInvalid}
       data-testid={dataTestId}
       data-slot="markdown-editor"
+      // Chrome auto-translate rewriting a contenteditable desyncs
+      // ProseMirror's view (#1283); the script is the user's own text anyway.
+      translate="no"
       data-markdown={value}
       // The ProseMirror node only spans its text, so the empty area below the
       // last line (the box's min-height) is otherwise a dead zone — clicking
