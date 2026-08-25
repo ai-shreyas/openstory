@@ -379,17 +379,20 @@ function toGrokReasoningEffort(
 // chat(). The public LLMRequestParams surface keeps its OpenAI-style
 // snake_case names; this is the single mapping point.
 function buildModelOptions(params: LLMRequestParams) {
-  // `requireParameters`: only route to upstreams that support every parameter
-  // we send. Without it OpenRouter treats `response_format` as a soft
-  // preference — Google Vertex advertises `response_format` but not
-  // `structured_outputs`, so a Claude call landing there returned free-form
-  // JSON with no error (#1285). Azure-hosted Claude compiles strict schemas
-  // against a much smaller grammar budget and rejects ours ("The compiled
-  // grammar is too large"), so Anthropic models stay off Azure. Caller-supplied
-  // preferences layer on top.
+  // Anthropic models: pin to Anthropic's own endpoint. OpenRouter also hosts
+  // Claude on Google Vertex (advertises `response_format` but not
+  // `structured_outputs` — silent free-form JSON, #1285) and Azure (grammar
+  // too small for our schemas). `requireParameters: true` was meant to skip
+  // those hosts, but Vertex still matches on `response_format`, and once
+  // Vertex is disabled at the account the remaining filter
+  // (`requireParameters` + ignore azure) empties the candidate set (#1302:
+  // "No endpoints found that can handle the requested parameters").
+  // `only: ['anthropic']` is the actual selection; requireParameters stays
+  // for every other vendor. Caller-supplied preferences layer on top.
   const provider: ProviderPreferences = {
-    requireParameters: true,
-    ...(params.model.startsWith('anthropic/') && { ignore: ['azure'] }),
+    ...(params.model.startsWith('anthropic/')
+      ? { only: ['anthropic'] }
+      : { requireParameters: true }),
     ...params.provider,
   };
   return {
