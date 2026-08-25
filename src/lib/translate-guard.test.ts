@@ -1,3 +1,5 @@
+// Structural fakes stand in for DOM nodes (no jsdom in the unit env).
+/* oxlint-disable typescript/no-unsafe-type-assertion */
 import { describe, expect, it, vi } from 'vitest';
 import { installTranslateGuard } from './translate-guard';
 
@@ -6,7 +8,6 @@ describe('installTranslateGuard', () => {
     const removeChild = vi.fn((c: Node) => c);
     const insertBefore = vi.fn((n: Node, _ref: Node | null) => n);
     const proto = { removeChild, insertBefore };
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
     installTranslateGuard(proto as unknown as Node);
 
     const parent = {} as Node;

@@ -28,7 +28,8 @@ export function installTranslateGuard(proto: NodeProto = Node.prototype): void {
       report('removeChild');
       return child;
     }
-    return removeChild.call(this, child) as T;
+    removeChild.call(this, child);
+    return child;
   };
 
   proto.insertBefore = function <T extends Node>(
@@ -38,8 +39,10 @@ export function installTranslateGuard(proto: NodeProto = Node.prototype): void {
   ): T {
     if (ref && ref.parentNode !== this) {
       report('insertBefore');
-      return insertBefore.call(this, node, null) as T;
+      insertBefore.call(this, node, null);
+      return node;
     }
-    return insertBefore.call(this, node, ref) as T;
+    insertBefore.call(this, node, ref);
+    return node;
   };
 }
