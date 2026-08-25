@@ -7,7 +7,7 @@ const MAX_SCRIPT_LENGTH = 500;
 const MAX_SCENE_TEXT_LENGTH = 400;
 
 const SKETCH_SUFFIX =
-  'Simple black line drawing on plain flat white, thin clean outlines only. Figures reduced to basic outline shapes with blank faces, the setting reduced to a few straight lines. No shading, no texture, no colour, no rendering, no realism, no detail.';
+  'Loose freehand black line drawing on plain flat white, quick gesture strokes, nothing ruled or geometric. Figures as a few flowing outline strokes with blank faces, the setting hinted with a handful of loose lines. No shading, no texture, no colour, no rendering, no realism, no detail.';
 
 const NO_TEXT_SUFFIX =
   'No text, no titles, no subtitles, no watermarks, no letters, no words, no signs, no UI elements.';
