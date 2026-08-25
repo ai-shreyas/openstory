@@ -69,6 +69,14 @@ export const CONTENT_REJECTION_SOFTEN_EVENT =
   'content_rejection_soften' as const;
 
 /**
+ * Stable marker when image generation swaps to Grok Imagine 2 after the
+ * selected model's reseeds exhaust (#1272). Soften only runs if this fallback
+ * also content-flags.
+ */
+export const CONTENT_REJECTION_FALLBACK_EVENT =
+  'content_rejection_fallback' as const;
+
+/**
  * True when `error` looks like a provider content-filter / model-rejection
  * hit. Operates on the extracted fal message so it works whether the caller
  * hands us the raw fal `ApiError` (422 with `body.detail`) or an already

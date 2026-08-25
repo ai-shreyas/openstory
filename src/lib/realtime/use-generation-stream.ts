@@ -286,6 +286,14 @@ export function useGenerationStream(
           description: 'The original is kept in Versions.',
         });
       }
+      if (
+        eventName === 'generation.image:progress' &&
+        data.modelFallback === true
+      ) {
+        toast.info('Retrying on Grok Imagine after the content checker', {
+          description: 'The selected model is kept in Versions.',
+        });
+      }
 
       // Map event to typed action and dispatch
       const action = mapEventToAction(eventName, data);

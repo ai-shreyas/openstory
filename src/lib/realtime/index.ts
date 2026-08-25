@@ -161,6 +161,10 @@ export const realtimeSchema = {
       // Invalidates visual history and toasts so the user knows the original
       // is still in Versions.
       promptSoftened: z.boolean().optional(),
+      // Set when this run swapped to Grok Imagine 2 after the selected model
+      // content-flagged (#1272). Invalidates the per-model variant list so the
+      // fallback still shows up, and toasts the swap.
+      modelFallback: z.boolean().optional(),
     }),
 
     // Fast preview shots replaced by AI-analyzed shots

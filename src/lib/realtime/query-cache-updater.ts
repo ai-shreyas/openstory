@@ -163,6 +163,7 @@ export function updateQueryCacheFromEvent(
       // queries below so the new model appears in the dropdown.
       const variantOnly = data.variantOnly === true;
       const promptSoftened = data.promptSoftened === true;
+      const modelFallback = data.modelFallback === true;
       if (!variantOnly) {
         queryClient.setQueryData<ShotView[]>(shotKeys.list(sequenceId), (old) =>
           old?.map((f) =>
@@ -265,6 +266,25 @@ export function updateQueryCacheFromEvent(
           queryClient,
           shotKeys.list(sequenceId),
           `shots:${sequenceId}`
+        );
+      }
+      // Fallback still is a new `kind: 'model'` row on Grok — refresh the
+      // model switcher / version history before it completes.
+      if (modelFallback && shotId) {
+        debouncedInvalidate(
+          queryClient,
+          ['sequence-image-variants', sequenceId],
+          `image-variants:${sequenceId}`
+        );
+        debouncedInvalidate(
+          queryClient,
+          ['sequence-image-models', sequenceId],
+          `image-models:${sequenceId}`
+        );
+        debouncedInvalidate(
+          queryClient,
+          shotKeys.imageVersions(shotId),
+          `image-versions:${shotId}`
         );
       }
       break;

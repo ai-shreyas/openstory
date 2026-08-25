@@ -2,21 +2,23 @@
  * Content-rejection handling for shot stills (#1272).
  *
  * Same-prompt reseeds (#881) stay first: stochastic checker hits often clear
- * on a fresh seed. When they don't, rewrite the prompt (policy soften and/or
- * plainer grammar — "unexpected result" flags are often odd wording, not
- * unsafe subject matter), append a `softened` `frame_prompt_versions` row,
- * and generate once more. One soften pass bounds the loop — a second content
- * hit fails the run with the real rejection.
+ * on a fresh seed. When they don't, swap to Grok Imagine 2 on the original
+ * prompt + refs (a new `kind: 'model'` variant — the selected model's row
+ * stays failed). If Grok also flags, rewrite the prompt (policy soften and/or
+ * plainer grammar) and generate once more on Grok. One soften pass bounds the
+ * loop — a second content hit fails the run with the real rejection. Already
+ * on Grok Imagine 2 skips the swap and softens in place.
  */
 
 import { z } from 'zod';
 import {
+  CONTENT_REJECTION_FALLBACK_EVENT,
   CONTENT_REJECTION_RETRY_EVENT,
   CONTENT_REJECTION_SOFTEN_EVENT,
   isContentRejectionError,
 } from '@/lib/ai/content-rejection';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
-import { IMAGE_MODELS } from '@/lib/ai/models';
+import { IMAGE_MODELS, type TextToImageModel } from '@/lib/ai/models';
 import {
   DEFAULT_ANALYSIS_MODEL,
   getAnalysisModelById,
@@ -40,10 +42,13 @@ import { NonRetryableError } from 'cloudflare:workflows';
 const logger = getLogger(['openstory', 'workflow', 'image', 'soften']);
 
 /**
- * Same-prompt reseeds before we rewrite (#881). Matches motion / character
- * sheet. The softened generate is one extra attempt on top of this.
+ * Same-prompt reseeds on the selected model before we swap or rewrite
+ * (#881). Matches motion / character sheet.
  */
 const MAX_IMAGE_ATTEMPTS = 3;
+
+/** Fallback after selected-model reseeds exhaust. Skip when already this. */
+const IMAGE_CONTENT_FALLBACK_MODEL: TextToImageModel = 'grok_imagine_image';
 
 /** Plain `z.string()` — no min/max (Bedrock rejects integer bounds). */
 export const softenImagePromptResponseSchema = z.object({
@@ -56,11 +61,16 @@ export type GenerateImageWithContentRetryResult = {
   /** Authored prompt actually rendered (not the Image-N enhanced form). */
   prompt: string;
   /**
-   * Hash to stamp on the completed variant. Original unless we softened, in
-   * which case it is recomputed over the new visual prompt so the still does
-   * not immediately read stale against the selected version.
+   * Hash to stamp on the completed variant. Original unless we swapped model
+   * or softened, in which case it is recomputed so the still does not
+   * immediately read stale against the selected version.
    */
   snapshotInputHash: string | null;
+  /**
+   * `frame_variants` row this result should complete. The prep claim unless
+   * we swapped to Grok, in which case it is the appended fallback row.
+   */
+  versionId: string;
 };
 
 type GenerateArgs = {
@@ -258,6 +268,26 @@ async function generateOnce(
   });
 }
 
+async function recomputeSnapshotHash(
+  step: WorkflowStep,
+  stepName: string,
+  input: ImageWorkflowInput,
+  visualPrompt: string,
+  model: TextToImageModel,
+  current: string | null
+): Promise<string | null> {
+  if (!input.sceneSnapshot || !input.aspectRatio) return current;
+  const sceneSnapshot = input.sceneSnapshot;
+  const aspectRatio = input.aspectRatio;
+  return step.do(stepName, async () =>
+    computeShotImageSceneHash(
+      { ...sceneSnapshot, visualPrompt },
+      model,
+      aspectRatio
+    )
+  );
+}
+
 export async function generateImageWithContentRetry(
   args: GenerateArgs
 ): Promise<GenerateImageWithContentRetryResult> {
@@ -265,7 +295,9 @@ export async function generateImageWithContentRetry(
   let params = args.params;
   let prompt = input.prompt;
   let snapshotInputHash = args.snapshotInputHash;
-  const maxAttempts = MAX_IMAGE_ATTEMPTS + 1;
+  let versionId = args.versionId;
+  const canFallback = params.model !== IMAGE_CONTENT_FALLBACK_MODEL;
+  const maxAttempts = MAX_IMAGE_ATTEMPTS + (canFallback ? 1 : 0) + 1;
 
   let lastRejection: string | null = null;
   let result: ImageGenerationResult | null = null;
@@ -304,9 +336,111 @@ export async function generateImageWithContentRetry(
     );
   }
 
+  if (!result && lastRejection && canFallback) {
+    const selectedModel = params.model;
+    logger.warn(
+      `[ImageWorkflow] same-prompt reseeds exhausted; falling back to ${IMAGE_CONTENT_FALLBACK_MODEL} for shot ${input.shotId}`,
+      {
+        event: CONTENT_REJECTION_FALLBACK_EVENT,
+        kind: 'image',
+        fromModel: selectedModel,
+        model: IMAGE_CONTENT_FALLBACK_MODEL,
+        shotId: input.shotId,
+        sequenceId: input.sequenceId,
+        rejection: lastRejection,
+      }
+    );
+
+    params = rebuildParams(
+      input,
+      { ...params, model: IMAGE_CONTENT_FALLBACK_MODEL },
+      prompt
+    );
+    snapshotInputHash = await recomputeSnapshotHash(
+      step,
+      'hash-fallback-snapshot',
+      input,
+      prompt,
+      IMAGE_CONTENT_FALLBACK_MODEL,
+      snapshotInputHash
+    );
+
+    const frameId = input.frameId;
+    const sequenceId = input.sequenceId;
+    if (frameId && sequenceId && versionId && !input.skipStorage) {
+      const originalVersionId = versionId;
+      const originalRejection = lastRejection;
+      const fallbackHash = snapshotInputHash;
+      versionId = await step.do('switch-to-fallback-model', async () => {
+        await scopedDb.frameVariants.update(originalVersionId, {
+          status: 'failed',
+          error: originalRejection,
+        });
+        const fallbackVersion = await scopedDb.frameVariants.appendVersion({
+          frameId,
+          sequenceId,
+          kind: 'model',
+          model: IMAGE_CONTENT_FALLBACK_MODEL,
+          status: 'generating',
+          workflowRunId,
+          promptVersionId: input.promptVersionId ?? null,
+          pendingInputHash: fallbackHash,
+        });
+        if (!input.variantOnly) {
+          await scopedDb.frames.setPendingPromoteVersionId(
+            frameId,
+            fallbackVersion.id
+          );
+        }
+        if (input.shotId) {
+          await getGenerationChannel(sequenceId).emit(
+            'generation.image:progress',
+            {
+              shotId: input.shotId,
+              status: 'generating',
+              modelFallback: true,
+              model: IMAGE_CONTENT_FALLBACK_MODEL,
+              variantOnly: input.variantOnly,
+            }
+          );
+        }
+        return fallbackVersion.id;
+      });
+    }
+
+    const outcome = await generateOnce(
+      step,
+      'generate-image-fallback',
+      args,
+      params,
+      MAX_IMAGE_ATTEMPTS + 1,
+      maxAttempts
+    );
+    if (outcome.ok) {
+      result = outcome.result;
+      logger.info(
+        `[ImageWorkflow] fallback model rescued frame ${input.shotId}`,
+        {
+          event: CONTENT_REJECTION_FALLBACK_EVENT,
+          outcome: 'rescued',
+          kind: 'image',
+          fromModel: selectedModel,
+          model: IMAGE_CONTENT_FALLBACK_MODEL,
+          shotId: input.shotId,
+          sequenceId: input.sequenceId,
+        }
+      );
+    } else {
+      lastRejection = outcome.rejection;
+      logger.warn(
+        `[ImageWorkflow] fallback model also flagged for shot ${input.shotId}: ${outcome.rejection}`
+      );
+    }
+  }
+
   if (!result && lastRejection) {
     logger.warn(
-      `[ImageWorkflow] same-prompt reseeds exhausted; softening prompt for shot ${input.shotId}`,
+      `[ImageWorkflow] ${canFallback ? 'fallback flagged' : 'same-prompt reseeds exhausted'}; softening prompt for shot ${input.shotId}`,
       {
         event: CONTENT_REJECTION_SOFTEN_EVENT,
         kind: 'image',
@@ -351,7 +485,7 @@ export async function generateImageWithContentRetry(
           frameId,
           text: softened,
           provenance,
-          versionId: args.versionId,
+          versionId,
           createdBy: input.userId,
         });
         if (input.shotId && input.sequenceId) {
@@ -371,17 +505,14 @@ export async function generateImageWithContentRetry(
 
     prompt = softened;
     params = rebuildParams(input, params, softened);
-    if (input.sceneSnapshot && input.aspectRatio) {
-      const sceneSnapshot = input.sceneSnapshot;
-      const aspectRatio = input.aspectRatio;
-      snapshotInputHash = await step.do('hash-softened-snapshot', async () =>
-        computeShotImageSceneHash(
-          { ...sceneSnapshot, visualPrompt: softened },
-          params.model,
-          aspectRatio
-        )
-      );
-    }
+    snapshotInputHash = await recomputeSnapshotHash(
+      step,
+      'hash-softened-snapshot',
+      input,
+      softened,
+      params.model,
+      snapshotInputHash
+    );
 
     const outcome = await generateOnce(
       step,
@@ -433,5 +564,5 @@ export async function generateImageWithContentRetry(
     );
   }
 
-  return { result, params, prompt, snapshotInputHash };
+  return { result, params, prompt, snapshotInputHash, versionId };
 }

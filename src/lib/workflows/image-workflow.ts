@@ -301,10 +301,11 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
       };
     }
 
-    // Same-prompt reseeds on content-flag (#881), then one softened prompt
-    // version + retry (#1272). Transient errors still throw so CF retries
-    // the named generate step. A deterministic checker hit that survives
-    // both is NonRetryableError — onFailure records the real message.
+    // Same-prompt reseeds on content-flag (#881), then Grok Imagine 2 on
+    // the original prompt, then one softened prompt + retry (#1272).
+    // Transient errors still throw so CF retries the named generate step.
+    // A deterministic checker hit that survives all three is
+    // NonRetryableError — onFailure records the real message.
     const generation = await generateImageWithContentRetry({
       step,
       scopedDb,
@@ -363,7 +364,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
             ? simpleHash(generation.prompt)
             : null;
           const { model } = generation.params;
-          const versionId = prep.versionId;
+          const versionId = generation.versionId || prep.versionId;
 
           // The same frame `set-generating-status` claimed on — re-read only to
           // confirm it survived the render.
@@ -510,7 +511,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
           teamId,
           userId: input.userId,
           assetKind: 'frame_variant',
-          assetId: prep.versionId,
+          assetId: generation.versionId || prep.versionId,
           storageKey: buildR2Key(STORAGE_BUCKETS.THUMBNAILS, upload.path),
           provider: imageResult.via,
           model: generation.params.model,
@@ -553,7 +554,7 @@ export class ImageWorkflow extends OpenStoryWorkflowEntrypoint<ImageWorkflowInpu
         await scopedDb.frameVariants.recordPreview({
           frameId: anchor.id,
           sequenceId: anchor.sequenceId,
-          model: prep.params.model,
+          model: generation.params.model,
           url: imageUrl,
           promptHash: generation.prompt ? simpleHash(generation.prompt) : null,
           workflowRunId,
