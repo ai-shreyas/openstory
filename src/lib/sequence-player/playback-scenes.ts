@@ -22,9 +22,8 @@ export function toPlaybackScenes(
 }
 
 /**
- * Identity of a stitched playback list. SequencePlayer must rebuild its engine
- * only when this changes — a new `SceneInput[]` of the same URLs (shots
- * refetch while other clips generate) is not a new sequence (#1284).
+ * Identity of a stitched clip list (order + URLs). A new `SceneInput[]` of
+ * the same clips (shots refetch while others generate) is not a new list (#1284).
  */
 export function scenePlaybackKey(scenes: readonly SceneInput[]): string {
   return scenes.map((s) => `${s.orderIndex}:${s.videoUrl}`).join('\n');

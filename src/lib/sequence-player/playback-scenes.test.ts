@@ -1,8 +1,7 @@
 /**
- * SequencePlayer rebuilds its engine whenever the `scenes` effect dep
- * changes identity. Shots refetch on every generation tick, so a new array of
- * the *same* URLs used to dispose a playing engine (stuck at 0:00, #1284).
- * The playback key must stay stable across those refetches.
+ * `scenePlaybackKey` must stay stable when only non-URL shot fields change.
+ * SequencePlayer used to depend on `scenes` identity; a shots refetch of the
+ * same URLs disposed a playing engine (stuck at 0:00, #1284).
  */
 import { describe, expect, it } from 'vitest';
 

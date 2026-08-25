@@ -41,6 +41,7 @@ import {
   isInputDisposedError,
 } from './disposed-iterator';
 import { computeMusicGain } from './music-gain';
+import { type PlayAttemptResult, settlePlayWait } from './play-attempt';
 
 import { getLogger } from '@/lib/observability/logger';
 
@@ -90,14 +91,6 @@ export type SequencePlayerMeta = {
   resolutionsLabel: string;
 };
 
-/** Outcome of `play()` so the UI can tell a user-cancel from a failed start. */
-type PlayAttemptResult =
-  | 'playing'
-  | 'already-playing'
-  | 'cancelled'
-  | 'disposed'
-  | 'not-ready';
-
 type DialogueClip = {
   buffer: AudioBuffer;
   sceneOffsetSeconds: number;
@@ -128,6 +121,8 @@ export class SequencePlayerEngine {
   private playing = false;
   /** play() was called and is waiting on dialogue decode; pause() cancels it. */
   private playRequested = false;
+  /** Bumped on each new play() so a stale await cannot steal the live request. */
+  private playGeneration = 0;
   private playbackTimeAtStart = 0;
   private audioContextStartTime: number | null = null;
 
@@ -288,6 +283,7 @@ export class SequencePlayerEngine {
     if (this.disposed) return 'disposed';
     if (this.playRequested || this.playing) return 'already-playing';
     if (!this.audioContext || !this.meta) return 'not-ready';
+    const generation = ++this.playGeneration;
     this.playRequested = true;
     try {
       if (this.audioContext.state === 'suspended') {
@@ -295,17 +291,27 @@ export class SequencePlayerEngine {
       }
       await this.dialogueReady;
     } catch (err) {
-      this.playRequested = false;
+      if (generation === this.playGeneration) this.playRequested = false;
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
       if (this.disposed && isInputDisposedError(err)) return 'disposed';
       throw err;
     }
-    const cancelled = !this.playRequested;
+    const settled = settlePlayWait({
+      attemptGeneration: generation,
+      currentGeneration: this.playGeneration,
+      playRequested: this.playRequested,
+      disposed: this.disposed,
+    });
+    if (settled === 'cancelled') {
+      // Stale attempts must not clear a newer play()'s playRequested.
+      if (generation === this.playGeneration) this.playRequested = false;
+      return 'cancelled';
+    }
+    if (settled === 'disposed') {
+      this.playRequested = false;
+      return 'disposed';
+    }
     this.playRequested = false;
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
-    if (cancelled) return 'cancelled';
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
-    if (this.disposed) return 'disposed';
 
     if (this.playbackTimeAtStart >= this.meta.durationSeconds) {
       // Snap back to the start if we ran off the end
@@ -350,8 +356,8 @@ export class SequencePlayerEngine {
     this.queuedAudioNodes.clear();
   }
 
-  async seek(seconds: number): Promise<void> {
-    if (!this.meta) return;
+  async seek(seconds: number): Promise<PlayAttemptResult | null> {
+    if (!this.meta) return null;
     const wasPlaying = this.playing;
     if (wasPlaying) this.pause();
 
@@ -362,10 +368,13 @@ export class SequencePlayerEngine {
     this.opts.onTimeUpdate?.(this.playbackTimeAtStart);
 
     await this.restartVideoIterator();
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- flips during the await
+    if (this.disposed) return 'disposed';
 
     if (wasPlaying && this.playbackTimeAtStart < this.meta.durationSeconds) {
-      void this.play();
+      return this.play();
     }
+    return null;
   }
 
   setVolume(volume: number): void {

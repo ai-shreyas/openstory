@@ -57,4 +57,25 @@ describe('player events', () => {
       captureSequenceReadySeen(null, { sequence_id: 'seq_1', scene_count: 0 })
     ).not.toThrow();
   });
+
+  it('swallows capture() throws so analytics cannot flip play state', () => {
+    const capture = vi.fn(() => {
+      throw new Error('posthog down');
+    });
+    expect(() =>
+      captureVideoPlay({ capture }, { source: 'theatre', sequence_id: 'seq_1' })
+    ).not.toThrow();
+    expect(() =>
+      captureVideoPlayFailed(
+        { capture },
+        { source: 'theatre', reason: 'disposed', sequence_id: 'seq_1' }
+      )
+    ).not.toThrow();
+    expect(() =>
+      captureSequenceReadySeen(
+        { capture },
+        { sequence_id: 'seq_1', scene_count: 3 }
+      )
+    ).not.toThrow();
+  });
 });
