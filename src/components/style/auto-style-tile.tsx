@@ -33,9 +33,9 @@ export function AutoStyleTile({
       disabled={disabled}
       aria-pressed={selected}
       className={cn(
-        'relative aspect-square overflow-hidden rounded-lg border-2 whitespace-normal',
+        'group relative aspect-square overflow-hidden rounded-lg border-2 whitespace-normal',
         'transition-all duration-200 hover:scale-105 hover:shadow-lg',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+        'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
         selected
           ? 'border-primary shadow-md scale-105'
