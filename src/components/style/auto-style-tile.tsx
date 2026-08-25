@@ -14,7 +14,7 @@ type AutoStyleTileProps = {
  * The "Match script" slot in the composer strip (#1213): instead of a library
  * style, the storyboard run derives a style from the script itself. Laid out
  * like a StyleInlineTile (full-bleed background + bottom name strip) so it
- * reads as a peer style, with a dashed border as the only tell (#1279).
+ * reads as a peer style; the ScrollText badge + label are the tell (#1279).
  */
 export function AutoStyleTile({
   selected,
@@ -33,13 +33,13 @@ export function AutoStyleTile({
       disabled={disabled}
       aria-pressed={selected}
       className={cn(
-        'relative aspect-square overflow-hidden rounded-lg border-2 border-dashed whitespace-normal',
+        'relative aspect-square overflow-hidden rounded-lg border-2 whitespace-normal',
         'transition-all duration-200 hover:scale-105 hover:shadow-lg',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
         selected
           ? 'border-primary shadow-md scale-105'
-          : 'border-muted-foreground/30 hover:border-primary/50'
+          : 'border-transparent hover:border-primary/50'
       )}
       aria-label="Match script: derive a style from the script"
       title="Derive a style from the script. It stays with this sequence until you add it to your library."
