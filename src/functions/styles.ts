@@ -14,7 +14,7 @@ import {
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
-import { authWithTeamMiddleware } from './middleware';
+import { authWithTeamMiddleware, sequenceAccessMiddleware } from './middleware';
 export { getPublicStylesFn } from './public-styles';
 
 // ============================================================================
@@ -58,6 +58,18 @@ export const getStyleFn = createServerFn({ method: 'GET' })
   .validator(zodValidator(getStyleInputSchema))
   .handler(async ({ data, context }): Promise<Style | null> => {
     return context.scopedDb.styles.getById(data.styleId);
+  });
+
+/**
+ * The style a sequence was generated with, resolved in the sequence's own
+ * team scope — so an admin reviewing another team's sequence still sees its
+ * automatic style, which `getStyleFn` (viewer's team) hides (#1271). The id
+ * comes from the sequence row, never from the client.
+ */
+export const getSequenceStyleFn = createServerFn({ method: 'GET' })
+  .middleware([sequenceAccessMiddleware])
+  .handler(async ({ context }): Promise<Style | null> => {
+    return context.scopedDb.styles.getById(context.sequence.styleId);
   });
 
 // ============================================================================

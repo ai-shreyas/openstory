@@ -4,6 +4,7 @@ import {
 } from '@/functions/ai';
 import {
   getPublicStylesFn,
+  getSequenceStyleFn,
   getStyleFn,
   getStylesFn,
   promoteSequenceStyleFn,
@@ -23,6 +24,8 @@ export const styleKeys = {
   public: () => publicStylesQueryKey,
   details: () => [...styleKeys.all, 'detail'] as const,
   detail: (id: string) => [...styleKeys.details(), id] as const,
+  forSequence: (sequenceId: string) =>
+    [...styleKeys.all, 'sequence', sequenceId] as const,
   // Recommendations are keyed by a hash of the (trimmed) script, so the same
   // script never re-spends an LLM call and enhancing — which changes the
   // script — naturally lands on a fresh key.
@@ -55,6 +58,21 @@ export function useStyle(id: string) {
     },
     staleTime: 10 * 60 * 1000,
     enabled: !!id,
+  });
+}
+
+/**
+ * The style a sequence was generated with, resolved in the sequence's team
+ * scope (see getSequenceStyleFn). Prefer this over `useStyle(sequence.styleId)`
+ * whenever a sequence is in hand — it also works for admins viewing another
+ * team's sequence. `null` when the row is gone.
+ */
+export function useSequenceStyle(sequenceId: string) {
+  return useQuery<Style | null>({
+    queryKey: styleKeys.forSequence(sequenceId),
+    queryFn: () => getSequenceStyleFn({ data: { sequenceId } }),
+    staleTime: 10 * 60 * 1000,
+    enabled: !!sequenceId,
   });
 }
 
