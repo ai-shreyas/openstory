@@ -1481,6 +1481,24 @@ export interface AssetGenerationWorkflowInput extends UserWorkflowContext {
 }
 
 /**
+ * Prompt-only Images and Videos (#1274). Sequence models only; everything
+ * the run needs is snapshotted here so the workflow never re-reads the row.
+ * Video is still-then-motion: `imageModel` renders the start frame, then
+ * `videoModel` animates it.
+ */
+export interface StudioGenerationWorkflowInput extends UserWorkflowContext {
+  assetId: string;
+  activity: 'image' | 'video';
+  prompt: string;
+  imageModel: TextToImageModel;
+  aspectRatio: AspectRatio;
+  imageSize: ImageSize;
+  videoModel?: ImageToVideoModel;
+  duration?: number;
+  generateAudio?: boolean;
+}
+
+/**
  * Server-side sequence export (#968). Everything the render needs is resolved
  * by the POST handler that reserves the `sequence_exports` row, so the
  * workflow reads no DB: a shot finishing mid-export can't change the cut

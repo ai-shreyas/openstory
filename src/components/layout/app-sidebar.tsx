@@ -28,6 +28,7 @@ import {
   BadgeDollarSign,
   Boxes,
   Clapperboard,
+  Images,
   LifeBuoy,
   Mail,
   MapPin,
@@ -41,6 +42,7 @@ import { UserSidebarFooter } from './user-sidebar-footer';
 
 const navLinks = [
   { to: '/sequences', label: 'Sequences', icon: Video },
+  { to: '/studio', label: 'Images and Videos', icon: Images },
   { to: '/styles', label: 'Styles', icon: Palette },
   { to: '/talent', label: 'Talent', icon: Users },
   { to: '/locations', label: 'Locations', icon: MapPin },

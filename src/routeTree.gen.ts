@@ -51,6 +51,7 @@ import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/ind
 import { Route as AppSettingsApiKeysRouteImport } from './routes/_app/settings/api-keys'
 import { Route as AppSettingsDeveloperRouteImport } from './routes/_app/settings/developer'
 import { Route as AppSettingsPasskeysRouteImport } from './routes/_app/settings/passkeys'
+import { Route as AppStudioIndexRouteImport } from './routes/_app/studio/index'
 import { Route as AppStylesIndexRouteImport } from './routes/_app/styles/index'
 import { Route as AppTalentIndexRouteImport } from './routes/_app/talent/index'
 import { Route as AppTalentIdRouteImport } from './routes/_app/talent/$id'
@@ -299,6 +300,11 @@ const AppSettingsPasskeysRoute = AppSettingsPasskeysRouteImport.update({
   id: '/passkeys',
   path: '/passkeys',
   getParentRoute: () => AppSettingsRouteRoute,
+} as any)
+const AppStudioIndexRoute = AppStudioIndexRouteImport.update({
+  id: '/studio/',
+  path: '/studio/',
+  getParentRoute: () => AppRouteRoute,
 } as any)
 const AppStylesIndexRoute = AppStylesIndexRouteImport.update({
   id: '/styles/',
@@ -567,6 +573,7 @@ export interface FileRoutesByFullPath {
   '/models/': typeof AppModelsIndexRoute
   '/sequences/': typeof AppSequencesIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/studio/': typeof AppStudioIndexRoute
   '/styles/': typeof AppStylesIndexRoute
   '/talent/': typeof AppTalentIndexRoute
   '/api/v1/': typeof ApiV1IndexRoute
@@ -647,6 +654,7 @@ export interface FileRoutesByTo {
   '/models': typeof AppModelsIndexRoute
   '/sequences': typeof AppSequencesIndexRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/studio': typeof AppStudioIndexRoute
   '/styles': typeof AppStylesIndexRoute
   '/talent': typeof AppTalentIndexRoute
   '/api/v1': typeof ApiV1IndexRoute
@@ -732,6 +740,7 @@ export interface FileRoutesById {
   '/_app/models/': typeof AppModelsIndexRoute
   '/_app/sequences/': typeof AppSequencesIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/studio/': typeof AppStudioIndexRoute
   '/_app/styles/': typeof AppStylesIndexRoute
   '/_app/talent/': typeof AppTalentIndexRoute
   '/api/v1/': typeof ApiV1IndexRoute
@@ -816,6 +825,7 @@ export interface FileRouteTypes {
     | '/models/'
     | '/sequences/'
     | '/settings/'
+    | '/studio/'
     | '/styles/'
     | '/talent/'
     | '/api/v1/'
@@ -896,6 +906,7 @@ export interface FileRouteTypes {
     | '/models'
     | '/sequences'
     | '/settings'
+    | '/studio'
     | '/styles'
     | '/talent'
     | '/api/v1'
@@ -980,6 +991,7 @@ export interface FileRouteTypes {
     | '/_app/models/'
     | '/_app/sequences/'
     | '/_app/settings/'
+    | '/_app/studio/'
     | '/_app/styles/'
     | '/_app/talent/'
     | '/api/v1/'
@@ -1326,6 +1338,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/passkeys'
       preLoaderRoute: typeof AppSettingsPasskeysRouteImport
       parentRoute: typeof AppSettingsRouteRoute
+    }
+    '/_app/studio/': {
+      id: '/_app/studio/'
+      path: '/studio'
+      fullPath: '/studio/'
+      preLoaderRoute: typeof AppStudioIndexRouteImport
+      parentRoute: typeof AppRouteRoute
     }
     '/_app/styles/': {
       id: '/_app/styles/'
@@ -1690,6 +1709,7 @@ interface AppRouteRouteChildren {
   AppLocationsIndexRoute: typeof AppLocationsIndexRoute
   AppModelsIndexRoute: typeof AppModelsIndexRoute
   AppSequencesIndexRoute: typeof AppSequencesIndexRoute
+  AppStudioIndexRoute: typeof AppStudioIndexRoute
   AppStylesIndexRoute: typeof AppStylesIndexRoute
   AppTalentIndexRoute: typeof AppTalentIndexRoute
   AppModelsFamilySplatRoute: typeof AppModelsFamilySplatRoute
@@ -1714,6 +1734,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppLocationsIndexRoute: AppLocationsIndexRoute,
   AppModelsIndexRoute: AppModelsIndexRoute,
   AppSequencesIndexRoute: AppSequencesIndexRoute,
+  AppStudioIndexRoute: AppStudioIndexRoute,
   AppStylesIndexRoute: AppStylesIndexRoute,
   AppTalentIndexRoute: AppTalentIndexRoute,
   AppModelsFamilySplatRoute: AppModelsFamilySplatRoute,

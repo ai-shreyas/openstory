@@ -59,6 +59,30 @@ baseTest.describe('Route Protection', () => {
   );
 
   baseTest(
+    'anonymous visitor can open Images and Videos without being redirected',
+    async ({ page }) => {
+      await page.goto('/studio');
+      await expect(page).toHaveURL(/\/studio/);
+      await expect(page).not.toHaveURL(/\/login/);
+      await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+    }
+  );
+
+  baseTest(
+    'anonymous studio generate is intercepted by the login dialog',
+    async ({ page }) => {
+      await page.goto('/studio');
+      await page
+        .getByRole('textbox', { name: 'Prompt' })
+        .fill('A red fox in fog at dawn');
+      await page.getByRole('button', { name: 'Generate image' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Sign in to continue' });
+      await expect(dialog).toBeVisible();
+      await expect(page).toHaveURL(/\/studio/);
+    }
+  );
+
+  baseTest(
     'anonymous generate is intercepted by the login dialog',
     async ({ page }) => {
       await page.goto('/');

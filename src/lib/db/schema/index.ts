@@ -362,6 +362,7 @@ export type {
   GeneratedAssetActivity,
   GeneratedAssetInput,
   GeneratedAssetOutput,
+  GeneratedAssetSource,
   JsonValue,
 } from './generated-assets';
 
