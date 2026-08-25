@@ -18,8 +18,8 @@
  *
  * Many of these (especially the veo "did not generate / could not generate"
  * strings) are stochastic and clear on a reseeded re-roll; a subset are
- * deterministic content-checker hits that will exhaust the retry budget and
- * fail as before (acceptable — a later prompt-sanitize pass targets those).
+ * deterministic content-checker hits. Image generation exhausts the same-prompt
+ * reseed budget then writes a softened prompt version and retries once (#1272).
  */
 
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
@@ -56,6 +56,13 @@ export const CONTENT_REJECTION_RETRY_EVENT = 'content_rejection_retry' as const;
  * PostHog Logs metric across both paths, regardless of the retry mechanism.
  */
 export const CONTENT_REJECTION_EVENT = 'content_rejection' as const;
+
+/**
+ * Stable marker when image generation rewrites the prompt after reseeds
+ * exhaust (#1272). Queryable alongside {@link CONTENT_REJECTION_RETRY_EVENT}.
+ */
+export const CONTENT_REJECTION_SOFTEN_EVENT =
+  'content_rejection_soften' as const;
 
 /**
  * True when `error` looks like a provider content-filter / model-rejection

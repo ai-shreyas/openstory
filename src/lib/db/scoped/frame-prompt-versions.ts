@@ -61,6 +61,13 @@ export type WriteFramePromptVersionInput = WriteFramePromptVersionBase &
         inputHash: string | null;
         analysisModel: string | null;
       }
+    | {
+        // Copies the rejected row's hash + model so staleness still tracks
+        // the same upstream context; null when the original had none.
+        source: 'softened';
+        inputHash: string | null;
+        analysisModel: string | null;
+      }
   );
 
 // One bound param per frame id; 90 keeps each query under D1's 100-bound-

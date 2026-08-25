@@ -74,6 +74,7 @@ const SOURCE_LABEL: Record<PromptVariantSource, string> = {
   'user-edit': 'You',
   regenerated: 'Regenerated',
   restored: 'Restored',
+  softened: 'Softened',
 };
 
 const SOURCE_VARIANT: Record<
@@ -84,6 +85,7 @@ const SOURCE_VARIANT: Record<
   'user-edit': 'default',
   regenerated: 'outline',
   restored: 'outline',
+  softened: 'outline',
 };
 
 const TITLE: Record<PromptHistoryMode, string> = {

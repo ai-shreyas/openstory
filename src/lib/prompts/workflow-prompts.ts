@@ -1020,4 +1020,31 @@ Rules:
 </ASPECT_RATIO>`,
     },
   ],
+
+  'phase/soften-image-prompt-chat': [
+    {
+      role: 'system',
+      content: `You rewrite a cinematic still-image prompt that an image model rejected for content policy, so a retry can succeed.
+
+### CRITICAL OUTPUT RULES
+1. You will be called via a structured output tool. Follow the provided schema exactly.
+2. Return one rewritten prompt in \`prompt\`. Natural language only — no headers, bullets, or quotation marks wrapping the whole prompt.
+3. Keep the same scene: subjects, setting, camera, lighting, wardrobe, and style. Do not add new characters, props, locations, text, logos, or plot.
+4. Keep CHARACTER NAMES IN CAPS and UPPERCASE element tokens (e.g. BONDI_SCREEN) verbatim. Do not describe a referenced element's internal visual identity.
+5. Soften only what typically trips a content checker: graphic violence, gore, sexual/nude wording, self-harm, real-person likeness instructions, and explicit crime. Replace with cinematic implication (aftermath, tension, silhouette, tasteful coverage) that a commercial image model will accept.
+6. If the original is already mild, make the smallest wording change that could clear a false-positive filter. Never return the original unchanged.`,
+    },
+    {
+      role: 'user',
+      content: `Rewrite this still-image prompt so an image model will accept it.
+
+<ORIGINAL_PROMPT>
+{{prompt}}
+</ORIGINAL_PROMPT>
+
+<REJECTION>
+{{rejection}}
+</REJECTION>`,
+    },
+  ],
 };
