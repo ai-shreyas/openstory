@@ -357,9 +357,13 @@ export const ScriptView: FC<{
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     if (!allowElementDrop || !hasDraggedImages(e)) return;
-    e.preventDefault();
     dragCounterRef.current = 0;
     setIsDraggingFiles(false);
+    // A nested dropzone (talent/location dialog, element popover) already took
+    // this drop — portals still bubble React events here, so don't add it as
+    // an element too (#1269).
+    if (e.defaultPrevented) return;
+    e.preventDefault();
     const snapshot = snapshotDataTransfer(e.dataTransfer);
     void extractImagesFromSnapshot(snapshot).then(({ files, failedUrls }) => {
       if (files.length > 0) {
