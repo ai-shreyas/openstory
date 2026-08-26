@@ -72,14 +72,14 @@ import {
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import type { ShotView } from '@/lib/shots/shot-view';
-import { analyzeFailures } from '@/lib/failures/failure-analysis';
+import { analyzeLoadedFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
 import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -217,7 +217,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   search = {},
 }) => {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const posthog = usePostHog();
 
   const { showGate: showBillingGate } = useFalBillingGate();
@@ -1100,14 +1099,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const [isRetrying, setIsRetrying] = useState(false);
 
   const failureSummary = useMemo(
-    () =>
-      sequence ? analyzeFailures(shots ?? [], sequence, scenesById) : null,
+    () => analyzeLoadedFailures(shots, sequence, scenesById),
     [shots, sequence, scenesById]
   );
-
-  const handleFullRetry = useCallback(() => {
-    void navigate({ to: '/sequences/$id/script', params: { id: sequenceId } });
-  }, [sequenceId, navigate]);
 
   const handleSmartRetry = useCallback(async () => {
     setIsRetrying(true);
@@ -1272,7 +1266,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         <FailureSummaryBanner
           summary={failureSummary}
           onRetry={() => void handleSmartRetry()}
-          onFullRetry={handleFullRetry}
+          onFullRetry={() => void handleSmartRetry()}
           isRetrying={isRetrying}
         />
       )}

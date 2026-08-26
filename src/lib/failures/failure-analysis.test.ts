@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { analyzeFailures } from './failure-analysis';
+import { analyzeFailures, analyzeLoadedFailures } from './failure-analysis';
 import type { Frame, SceneRow, Shot, VideoVariant } from '@/lib/db/schema';
 import type { Sequence } from '@/lib/db/schema/sequences';
 import {
@@ -458,5 +458,55 @@ describe('analyzeFailures', () => {
 
     expect(result.hasFailed).toBe(false);
     expect(result.requiresFullRetry).toBe(false);
+  });
+});
+
+describe('analyzeLoadedFailures', () => {
+  test('returns null while shots are still loading so SSR does not emit a full-retry banner', () => {
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError: 'Generation was interrupted — use Retry to run it again.',
+    });
+
+    expect(analyzeLoadedFailures(undefined, sequence, SCENES)).toBeNull();
+  });
+
+  test('returns null while the sequence is still loading', () => {
+    expect(analyzeLoadedFailures([], undefined, SCENES)).toBeNull();
+  });
+
+  test('empty loaded shots still produce the content-checker banner', () => {
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError: 'Blocked by the content checker: Harry Potter',
+    });
+
+    const result = analyzeLoadedFailures([], sequence, SCENES);
+
+    expect(result?.tone).toBe('warning');
+    expect(result?.headline).toContain("didn't pass the content checker");
+  });
+
+  test('loaded shot-level content failures produce the content-checker banner', () => {
+    const shots = [
+      makeShot({
+        frame: {
+          imageStatus: 'failed',
+          imageError:
+            'The content could not be processed because it contained material flagged by a content checker.',
+        },
+        sources: { image: null },
+      }),
+    ];
+    const sequence = makeSequence({
+      status: 'failed',
+      statusError: 'Generation was interrupted — use Retry to run it again.',
+    });
+
+    const result = analyzeLoadedFailures(shots, sequence, SCENES);
+
+    expect(result?.tone).toBe('warning');
+    expect(result?.headline).toContain("didn't pass the content checker");
+    expect(result?.headline).not.toContain('full retry required');
   });
 });
