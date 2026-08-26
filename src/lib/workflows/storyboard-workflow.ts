@@ -236,6 +236,13 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
       await seq.updateStatus('completed');
     });
 
+    await step.do('emit-complete', async () => {
+      await getGenerationChannel(sequenceId).emit('generation.complete', {
+        sequenceId,
+      });
+    });
+
+    // After emit-complete: a send retry must not strand the player on processing.
     await step.do('email-ready', async () => {
       await notifySequenceReady({
         scopedDb,
@@ -246,12 +253,6 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
         posterUrl,
         notify: input.notify,
         userId,
-      });
-    });
-
-    await step.do('emit-complete', async () => {
-      await getGenerationChannel(sequenceId).emit('generation.complete', {
-        sequenceId,
       });
     });
   }

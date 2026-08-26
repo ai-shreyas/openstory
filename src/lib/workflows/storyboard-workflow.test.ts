@@ -231,7 +231,7 @@ function makeRunImplDb() {
 }
 
 describe('StoryboardWorkflow email-ready', () => {
-  test('runs the email-ready step after mark-completed', async () => {
+  test('runs the email-ready step after emit-complete', async () => {
     notifySequenceReady.mockReset();
     notifySequenceReady.mockResolvedValue('sent');
     spawnAndAwaitChild.mockReset();
@@ -244,10 +244,13 @@ describe('StoryboardWorkflow email-ready', () => {
     await makeWorkflow().invokeRunImpl(makeEvent('seq_1'), step, scopedDb);
 
     expect(names).toEqual(
-      expect.arrayContaining(['mark-completed', 'email-ready', 'emit-complete'])
+      expect.arrayContaining(['mark-completed', 'emit-complete', 'email-ready'])
+    );
+    expect(names.indexOf('emit-complete')).toBeGreaterThan(
+      names.indexOf('mark-completed')
     );
     expect(names.indexOf('email-ready')).toBeGreaterThan(
-      names.indexOf('mark-completed')
+      names.indexOf('emit-complete')
     );
     expect(updateStatus).toHaveBeenCalledWith('completed');
     expect(notifySequenceReady).toHaveBeenCalledTimes(1);

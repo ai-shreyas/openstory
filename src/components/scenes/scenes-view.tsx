@@ -277,12 +277,17 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const isProcessing = sequence?.status === 'processing';
   const processingRef = useRef(isProcessing);
   processingRef.current = isProcessing;
+  const leftCapturedRef = useRef(false);
+
+  useEffect(() => {
+    leftCapturedRef.current = false;
+  }, [sequenceId]);
 
   useEffect(() => {
     const captureLeave = () => {
-      if (processingRef.current) {
-        posthog.capture('render_wait_left', { sequence_id: sequenceId });
-      }
+      if (!processingRef.current || leftCapturedRef.current) return;
+      leftCapturedRef.current = true;
+      posthog.capture('render_wait_left', { sequence_id: sequenceId });
     };
     window.addEventListener('pagehide', captureLeave);
     return () => {
@@ -1249,18 +1254,44 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // generationState.currentPhase here would let leftover phase events from
   // past runs hijack the UI back to the 5-stage banner.
   const isGenerationActive = isProcessing;
-  const etaMinutes = useMemo(() => {
-    const seconds = estimateTotalSeconds(
-      generationState.scenes.length,
-      sequence?.script ? estimateSceneCount(sequence.script) : undefined,
-      generationState.phases.length
+  const willEmail = isGenerationActive && !sequence.readyEmailSentAt;
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const startTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isProcessing) {
+      startTimeRef.current = null;
+      setElapsedSeconds(0);
+      return;
+    }
+    startTimeRef.current = sequence.updatedAt.getTime();
+    const tick = () => {
+      const start = startTimeRef.current ?? Date.now();
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [isProcessing, sequenceId, sequence?.updatedAt]);
+
+  const remainingSeconds = useMemo(() => {
+    const phase1Completed = generationState.phases[0]?.status === 'completed';
+    const sceneCount = phase1Completed ? generationState.scenes.length : 0;
+    return Math.max(
+      0,
+      estimateTotalSeconds(
+        sceneCount,
+        sequence?.script ? estimateSceneCount(sequence.script) : undefined,
+        generationState.phases.length
+      ) - elapsedSeconds
     );
-    return Math.max(1, Math.round(seconds / 60));
   }, [
+    elapsedSeconds,
+    generationState.phases,
     generationState.scenes.length,
-    generationState.phases.length,
     sequence?.script,
   ]);
+  const etaMinutes = Math.max(1, Math.round(remainingSeconds / 60));
 
   return (
     <div className="flex h-full flex-col">
@@ -1272,6 +1303,8 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             isProcessing={isProcessing}
             startedAt={sequence.updatedAt}
             script={sequence.script ?? undefined}
+            remainingSeconds={remainingSeconds}
+            willEmail={willEmail}
           />
         </div>
       )}
@@ -1414,7 +1447,10 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 }
                 progressMessage={
                   isGenerationActive ? (
-                    <RenderWaitCopy etaMinutes={etaMinutes} />
+                    <RenderWaitCopy
+                      etaMinutes={etaMinutes}
+                      willEmail={willEmail}
+                    />
                   ) : (
                     generationState.phases.find((p) => p.status === 'active')
                       ?.phaseName
