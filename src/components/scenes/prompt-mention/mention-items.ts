@@ -11,7 +11,8 @@ import type {
 } from '@/lib/db/schema';
 
 /**
- * `references` = stills attached to a studio composer (pill `@ImageN`);
+ * `references` = stills, clips, and audio attached to a studio composer
+ * (pill `@ImageN` / `@VideoN` / `@AudioN`);
  * `images` = the team's generated stills, offered so picking one attaches it.
  */
 export type MentionSection =

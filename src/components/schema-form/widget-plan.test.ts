@@ -119,7 +119,7 @@ describe('isOmittedFormValue / withOptionalField', () => {
   it('treats empty widgets as omit, but keeps 0', () => {
     expect(isOmittedFormValue(undefined)).toBe(true);
     expect(isOmittedFormValue('')).toBe(true);
-    expect(isOmittedFormValue(false)).toBe(true);
+    expect(isOmittedFormValue(false)).toBe(false);
     expect(isOmittedFormValue([])).toBe(true);
     expect(isOmittedFormValue({})).toBe(true);
     expect(isOmittedFormValue(0)).toBe(false);

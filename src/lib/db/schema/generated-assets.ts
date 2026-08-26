@@ -50,8 +50,8 @@ export type GeneratedAssetActivity =
 
 /**
  * Where the run was created. `catalog` is the flagged `/models` playground
- * (#458). `studio` is the prompt-only Images and Videos surface (#1274) that
- * uses the same models as sequences.
+ * (#458). `studio` is the Images and Videos surface (#1274) that uses the
+ * same models as sequences.
  */
 const GENERATED_ASSET_SOURCES = ['catalog', 'studio'] as const;
 export type GeneratedAssetSource = (typeof GENERATED_ASSET_SOURCES)[number];
@@ -115,7 +115,7 @@ export const generatedAssets = snakeCase.table(
       table.endpointId,
       table.id
     ),
-    // Studio library: team + source (catalog vs prompt-only) + recency.
+    // Studio library: team + source (catalog vs studio) + recency.
     index('idx_generated_assets_team_source').on(
       table.teamId,
       table.source,

@@ -1,7 +1,7 @@
 /**
- * Prompt-only Images and Videos (#1274).
+ * Images and Videos (#1274).
  *
- * Team-scoped create/list/get/favorite/delete for studio `generated_assets`.
+ * Team-scoped create/list/favorite/delete for studio `generated_assets`.
  * Always on — unlike `/models` this is not gated by MODELS_ENABLED. Create
  * lives in `@/lib/studio/create-studio-asset` so the Start compiler does not
  * ship the workflow client into the browser bundle (#1257).
@@ -15,14 +15,23 @@ import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
 import { estimateLLMCost } from '@/lib/billing/cost-estimation';
 import { InsufficientCreditsError } from '@/lib/errors';
 import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
+import { getLogger } from '@/lib/observability/logger';
+import { STORAGE_BUCKETS, r2KeyFromUrl } from '@/lib/storage/buckets';
+import { deleteFile } from '@/lib/storage/storage-cloudflare';
 import { createStudioAssets } from '@/lib/studio/create-studio-asset';
-import { studioCreateInputSchema } from '@/lib/studio/schema';
-import { GENERATED_ASSET_ACTIVITIES } from '@/lib/db/schema';
+import {
+  studioActivitySchema,
+  studioCreateInputSchema,
+  studioReferenceKindSchema,
+  studioSortSchema,
+} from '@/lib/studio/schema';
 import { ulidSchema } from '@/lib/schemas/id.schemas';
 import { createServerFn } from '@tanstack/react-start';
 import { zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { authWithTeamMiddleware } from './middleware';
+
+const logger = getLogger(['openstory', 'serverFn', 'studio-assets']);
 
 export const createStudioAssetsFn = createServerFn({ method: 'POST' })
   .middleware([authWithTeamMiddleware])
@@ -32,9 +41,9 @@ export const createStudioAssetsFn = createServerFn({ method: 'POST' })
   });
 
 const listStudioAssetsInputSchema = z.object({
-  activity: z.enum(GENERATED_ASSET_ACTIVITIES).optional(),
+  activity: studioActivitySchema.optional(),
   favoritesOnly: z.boolean().optional(),
-  order: z.enum(['newest', 'oldest']).optional(),
+  order: studioSortSchema.optional(),
   limit: z.number().int().min(1).max(100).optional(),
   cursor: ulidSchema.optional(),
 });
@@ -51,17 +60,6 @@ export const listStudioAssetsFn = createServerFn({ method: 'GET' })
       limit: data?.limit,
       cursor: data?.cursor,
     });
-  });
-
-export const getStudioAssetFn = createServerFn({ method: 'GET' })
-  .middleware([authWithTeamMiddleware])
-  .validator(zodValidator(z.object({ id: ulidSchema })))
-  .handler(async ({ context, data }) => {
-    const asset = await context.scopedDb.generatedAssets.getById(data.id);
-    if (!asset || asset.source !== 'studio') {
-      throw new Error('Generated asset not found');
-    }
-    return asset;
   });
 
 export const setStudioAssetFavoriteFn = createServerFn({ method: 'POST' })
@@ -95,13 +93,24 @@ export const deleteStudioAssetFn = createServerFn({ method: 'POST' })
       throw new Error('Generated asset not found');
     }
     await context.scopedDb.generatedAssets.delete(data.id);
+    // Storage deletion is best-effort: a leaked object beats a failed delete.
+    for (const { url } of asset.outputs ?? []) {
+      const key = r2KeyFromUrl(url);
+      if (!key) continue;
+      const bucket = key.startsWith(`${STORAGE_BUCKETS.VIDEOS}/`)
+        ? STORAGE_BUCKETS.VIDEOS
+        : STORAGE_BUCKETS.THUMBNAILS;
+      await deleteFile(bucket, key.slice(bucket.length + 1)).catch((err) =>
+        logger.warn('Failed to delete studio asset object', { err, key })
+      );
+    }
     return { id: data.id };
   });
 
 const draftReferenceSchema = z.object({
   url: mediaUrlSchema,
   label: z.string().min(1).max(200),
-  kind: z.enum(['image', 'video', 'audio']),
+  kind: studioReferenceKindSchema,
 });
 
 /**
@@ -113,7 +122,7 @@ export const draftStudioPromptFn = createServerFn({ method: 'POST' })
   .validator(
     zodValidator(
       z.object({
-        activity: z.enum(['image', 'video']),
+        activity: studioActivitySchema,
         references: z.array(draftReferenceSchema).max(15).default([]),
         startImageUrl: mediaUrlSchema.optional(),
         endImageUrl: mediaUrlSchema.optional(),

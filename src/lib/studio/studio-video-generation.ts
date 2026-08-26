@@ -1,6 +1,7 @@
 /**
- * Submit/poll for prompt-only studio clips. Hits each sequence video
- * family's text-to-video sibling — never the image-to-video path.
+ * Submit/poll for studio clips. `mode` picks the endpoint: the family's T2V
+ * sibling, its reference-to-video sibling, or the sequence image-to-video
+ * endpoint (frames).
  */
 
 import { getEnv } from '#env';
@@ -14,7 +15,7 @@ import {
   isNativeGrokVideoModel,
   NATIVE_GROK_VIDEO_MODEL,
 } from '@/lib/ai/grok-native';
-import { DEFAULT_VIDEO_MODEL, type ImageToVideoModel } from '@/lib/ai/models';
+import { IMAGE_TO_VIDEO_MODELS, type ImageToVideoModel } from '@/lib/ai/models';
 import { assertMediaVia, type MediaVia } from '@/lib/ai/via';
 import { workersSafeFetch } from '@/lib/ai/workers-safe-fetch';
 import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
@@ -22,10 +23,7 @@ import { ZERO_MICROS } from '@/lib/billing/money';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import type { ResolvedApiKey } from '@/lib/db/scoped/api-keys';
 import type { CredentialScopedDb } from '@/lib/db/scoped-workflow';
-import {
-  MOTION_TRANSFORMS,
-  type MotionEndpointId,
-} from '@/lib/motion/endpoint-map';
+import { MOTION_TRANSFORMS } from '@/lib/motion/endpoint-map';
 import {
   ensureExternallyFetchableUrls,
   toDataOrCdnUrl,
@@ -49,7 +47,7 @@ import { createGrokVideo } from '@tanstack/ai-grok';
 export type StudioVideoJobOptions = {
   scopedDb?: CredentialScopedDb;
   prompt: string;
-  model?: ImageToVideoModel;
+  model: ImageToVideoModel;
   duration?: number;
   aspectRatio?: AspectRatio;
   generateAudio?: boolean;
@@ -93,10 +91,8 @@ function createNativeVideoAdapter(apiKey: string) {
 }
 
 /**
- * Reference and frames modes go through the image-to-video transforms the
- * sequence path already validates against (`MOTION_TRANSFORMS`), so field
- * names, duration encoding and prompt limits come from the generated schemas.
- * Stored `/r2/` URLs are made fetchable first.
+ * Reference: the T2V body plus the stills/clips/audio fields. Frames: see
+ * below. Stored `/r2/` URLs are made fetchable first.
  */
 async function buildStudioImageModeInput(
   options: StudioVideoJobOptions,
@@ -104,8 +100,6 @@ async function buildStudioImageModeInput(
   mode: Exclude<StudioVideoMode, 'text'>,
   falApiKey: string
 ): Promise<{ endpointId: string; built: StudioVideoRequest }> {
-  const endpointId = studioVideoEndpointId(modelKey, mode);
-
   if (mode === 'reference') {
     // Reference siblings share the T2V body shape (duration / aspect / audio
     // / resolution) plus the stills, so reuse that builder and add the field.
@@ -124,7 +118,7 @@ async function buildStudioImageModeInput(
       generateAudio: options.generateAudio,
     });
     return {
-      endpointId,
+      endpointId: studioVideoEndpointId(modelKey, mode),
       built: {
         ...built,
         modelOptions: {
@@ -140,14 +134,8 @@ async function buildStudioImageModeInput(
   // Frames: the image-to-video endpoints the sequence path already validates
   // against (`MOTION_TRANSFORMS`), so field names, duration encoding and
   // prompt limits come from the generated schemas.
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- guarded below
-  const transform = MOTION_TRANSFORMS[endpointId as MotionEndpointId];
-  // oxlint-disable-next-line typescript-eslint/no-unnecessary-condition -- unregistered endpoints throw
-  if (!transform) {
-    throw new Error(
-      `No motion transform registered for endpoint: ${endpointId}`
-    );
-  }
+  const endpointId = IMAGE_TO_VIDEO_MODELS[modelKey].id;
+  const transform = MOTION_TRANSFORMS[endpointId];
   const stored = [options.startImageUrl, options.endImageUrl].filter(
     (url): url is string => Boolean(url)
   );
@@ -175,8 +163,11 @@ async function buildStudioImageModeInput(
 export async function submitStudioVideoJob(
   options: StudioVideoJobOptions
 ): Promise<StudioVideoJobSubmission> {
-  const modelKey = options.model || DEFAULT_VIDEO_MODEL;
+  const modelKey = options.model;
   const mode = options.mode ?? 'text';
+  const size = options.aspectRatio
+    ? (`${options.aspectRatio}_720p` as const)
+    : undefined;
   const xaiKey = isNativeGrokVideoModel(modelKey)
     ? await resolveOptionalXaiKey(options.scopedDb)
     : undefined;
@@ -213,9 +204,6 @@ export async function submitStudioVideoJob(
         }))
       )),
     ];
-    const size = options.aspectRatio
-      ? (`${options.aspectRatio}_720p` as const)
-      : undefined;
     const job = await generateVideo({
       adapter: createNativeVideoAdapter(xaiKey.key),
       prompt: parts,
@@ -258,7 +246,6 @@ export async function submitStudioVideoJob(
     };
   }
 
-  const via: MediaVia = xaiKey ? 'xai' : 'fal';
   const built = buildStudioVideoInput({
     prompt: options.prompt,
     model: modelKey,
@@ -267,13 +254,7 @@ export async function submitStudioVideoJob(
     generateAudio: options.generateAudio,
   });
 
-  if (via === 'xai') {
-    if (!xaiKey) {
-      throw new Error('xAI video via selected with no xAI key');
-    }
-    const size = options.aspectRatio
-      ? (`${options.aspectRatio}_720p` as const)
-      : undefined;
+  if (xaiKey) {
     const job = await generateVideo({
       adapter: createNativeVideoAdapter(xaiKey.key),
       prompt: built.prompt,
@@ -286,7 +267,7 @@ export async function submitStudioVideoJob(
       jobId: job.jobId,
       modelKey,
       endpointId: NATIVE_GROK_VIDEO_MODEL,
-      via,
+      via: 'xai',
       usedOwnKey: xaiKey.source === 'team',
     };
   }
@@ -304,7 +285,7 @@ export async function submitStudioVideoJob(
     jobId: job.jobId,
     modelKey,
     endpointId,
-    via,
+    via: 'fal',
     usedOwnKey: key.source === 'team',
   };
 }

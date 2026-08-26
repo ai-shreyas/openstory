@@ -4,7 +4,7 @@
  *
  *   - `text`      — the family's text-to-video sibling (prompt only)
  *   - `reference` — reference-to-video: up to N stills bound in the prompt as
- *                   `@Image1`…`@ImageN` (Seedance 2.0 only today)
+ *                   `@Image1`…`@ImageN`
  *   - `frames`    — image-to-video: a start frame, plus an end frame where the
  *                   endpoint has `end_image_url` (Kling, LTX, Seedance)
  *
@@ -15,7 +15,7 @@ import { IMAGE_TO_VIDEO_MODELS, type ImageToVideoModel } from '@/lib/ai/models';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 
 const STUDIO_TEXT_TO_VIDEO_ENDPOINTS = {
-  grok_imagine_video_1_5: 'xai/grok-imagine-video/text-to-video',
+  grok_imagine_video_1_5: 'xai/grok-imagine-video/v1.5/text-to-video',
   ltx_2_3_pro: 'fal-ai/ltx-2.3/text-to-video',
   veo3_1: 'fal-ai/veo3.1',
   kling_v3_pro: 'fal-ai/kling-video/v3/pro/text-to-video',
@@ -36,14 +36,15 @@ const STUDIO_VIDEO_DURATIONS = {
   seedance_v2: RANGE(4, 15),
 } as const satisfies Record<ImageToVideoModel, readonly number[]>;
 
+/** Of our `AspectRatio` set, the ones the T2V sibling accepts. */
 const STUDIO_VIDEO_ASPECTS = {
-  grok_imagine_video_1_5: ['16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16'],
+  grok_imagine_video_1_5: ['16:9', '1:1', '9:16'],
   ltx_2_3_pro: ['16:9', '9:16'],
   veo3_1: ['16:9', '9:16'],
   kling_v3_pro: ['16:9', '9:16', '1:1'],
   minimax_hailuo_02: [],
-  seedance_v2: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-} as const satisfies Record<ImageToVideoModel, readonly string[]>;
+  seedance_v2: ['16:9', '1:1', '9:16'],
+} as const satisfies Record<ImageToVideoModel, readonly AspectRatio[]>;
 
 const STUDIO_VIDEO_HAS_AUDIO = {
   grok_imagine_video_1_5: false,
@@ -65,9 +66,9 @@ type StudioReferenceEndpoint = {
   /** How the prompt names still N (1-based). */
   imageTag: (n: number) => string;
   maxImages: number;
-  /** MP4/MOV, 2–15s combined, ≤720p; bound in the prompt as `@Video1`… */
+  /** Bound in the prompt as `@Video1`… (Seedance: MP4/MOV, 2–15s combined, ≤720p). */
   maxVideos: number;
-  /** MP3/WAV, ≤15s combined; bound in the prompt as `@Audio1`… */
+  /** Bound in the prompt as `@Audio1`… (Seedance: MP3/WAV, ≤15s combined). */
   maxAudio: number;
   /** Shown when the reference sibling is a different Kling/Grok tier. */
   note?: string;
@@ -155,7 +156,8 @@ export function studioSupportsMode(
   return mode !== 'reference' || studioReferenceLimit(model) > 0;
 }
 
-export type StudioReferenceKind = 'Image' | 'Video' | 'Audio';
+/** Prompt-token prefix, not a media kind (that is `StudioReferenceKind`). */
+export type StudioReferenceToken = 'Image' | 'Video' | 'Audio';
 
 /**
  * Bare `ImageN` / `VideoN` / `AudioN` tokens (what the pill stores) → the
@@ -184,7 +186,7 @@ export function tagStudioReferences(
 export function renumberStudioReferences(
   prompt: string,
   removedIndex: number,
-  kind: StudioReferenceKind = 'Image'
+  kind: StudioReferenceToken = 'Image'
 ): string {
   return prompt.replace(
     new RegExp(`(^|[^A-Za-z0-9_-])@?${kind}(\\d+)(?=[^A-Za-z0-9_-]|$)`, 'g'),
@@ -202,21 +204,6 @@ const STUDIO_VIDEO_RESOLUTION: Partial<Record<ImageToVideoModel, string>> = {
   veo3_1: '1080p',
   seedance_v2: '720p',
 };
-
-function snapToNearest(target: number, values: readonly number[]): number {
-  const first = values[0];
-  if (first === undefined) return target;
-  let best = first;
-  let bestDist = Math.abs(first - target);
-  for (const value of values) {
-    const dist = Math.abs(value - target);
-    if (dist < bestDist) {
-      best = value;
-      bestDist = dist;
-    }
-  }
-  return best;
-}
 
 export function studioVideoEndpointId(
   model: ImageToVideoModel,
@@ -237,16 +224,16 @@ export function studioVideoEndpointId(
   }
 }
 
+/** Every fal endpoint a studio clip can hit, for the pricing refresh. */
 export function studioVideoEndpointIds(): string[] {
-  return Object.values(STUDIO_TEXT_TO_VIDEO_ENDPOINTS);
+  return [
+    ...Object.values(STUDIO_TEXT_TO_VIDEO_ENDPOINTS),
+    ...Object.values(STUDIO_REFERENCE_ENDPOINTS).map((e) => e.endpointId),
+  ];
 }
 
 export function studioVideoSupportsAudio(model: ImageToVideoModel): boolean {
   return STUDIO_VIDEO_HAS_AUDIO[model];
-}
-
-export function studioVideoHasDuration(model: ImageToVideoModel): boolean {
-  return STUDIO_VIDEO_DURATIONS[model].length > 0;
 }
 
 /** Every second count the model accepts, ascending. Empty = not a request field. */
@@ -262,7 +249,10 @@ export function snapStudioVideoDuration(
 ): number {
   const valid = STUDIO_VIDEO_DURATIONS[model];
   if (valid.length === 0) return requested ?? 5;
-  return snapToNearest(requested ?? valid[0] ?? 5, valid);
+  const target = requested ?? valid[0] ?? 5;
+  return valid.reduce((best, value) =>
+    Math.abs(value - target) < Math.abs(best - target) ? value : best
+  );
 }
 
 function encodeDuration(
@@ -286,7 +276,7 @@ function truncatePrompt(prompt: string, model: ImageToVideoModel): string {
   return `${prompt.slice(0, max - 3)}...`;
 }
 
-export type StudioVideoInput = {
+type StudioVideoInput = {
   prompt: string;
   model: ImageToVideoModel;
   duration?: number;
@@ -301,8 +291,9 @@ export type StudioVideoRequest = {
 };
 
 /**
- * Fal T2V body for a sequence video key. Prompt-only: never an image field.
- * Native Grok ignores `modelOptions` and uses `prompt` + `duration` + size.
+ * Fal T2V body for a sequence video key (reference mode adds its media
+ * fields on top). Native Grok ignores `modelOptions` and uses `prompt` +
+ * `duration` + size.
  */
 export function buildStudioVideoInput(
   options: StudioVideoInput
@@ -316,7 +307,7 @@ export function buildStudioVideoInput(
     modelOptions.duration = encodeDuration(duration, model);
   }
 
-  const allowedAspects: readonly string[] = STUDIO_VIDEO_ASPECTS[model];
+  const allowedAspects: readonly AspectRatio[] = STUDIO_VIDEO_ASPECTS[model];
   if (options.aspectRatio && allowedAspects.includes(options.aspectRatio)) {
     modelOptions.aspect_ratio = options.aspectRatio;
   }

@@ -7,7 +7,7 @@ order: 13
 
 **Images** and **Videos** are for one-off stills and clips. You type a prompt, pick the same models used in sequences, and the results land in a library you can sort and favorite.
 
-They are not a sequence: there is no script, scene list, or Theatre cut. Use **Sequences** when you want a full film. Use **Models** in the sidebar (or `/models`) for the full catalog — any image, video, or audio endpoint, with its own parameter form.
+They are not a sequence: there is no script, scene list, or Theatre cut. Use **Sequences** when you want a full film.
 
 ## Open a library
 
@@ -20,7 +20,7 @@ The gallery is the library. The prompt bar stays at the bottom so you can genera
 
 1. Open **Images**
 2. Write a prompt, or click **Shuffle** for a sample still
-3. On models with an edit endpoint (Flux 2, Nano Banana, GPT Image, Grok Imagine, Seedream…) attach reference stills with the dashed tile — they become `@Image1`… in the prompt, and **Draft prompt** can write the prompt from them
+3. On models with an edit endpoint (Flux 2, Nano Banana, GPT Image, Grok Imagine, Seedream…) attach reference stills with the dashed tile — they become `@Image1`… in the prompt
 4. Open the settings chip to pick an image model, aspect ratio, and count (1, 2, or 4)
 5. Press the arrow (or Ctrl/Cmd+Enter)
 

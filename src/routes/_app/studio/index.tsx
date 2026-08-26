@@ -1,9 +1,10 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
+import { studioSortSchema } from '@/lib/studio/schema';
 import { z } from 'zod';
 
 const searchParamsSchema = z.object({
   kind: z.enum(['all', 'image', 'video']).optional(),
-  sort: z.enum(['newest', 'oldest']).optional(),
+  sort: studioSortSchema.optional(),
   favorites: z.boolean().optional(),
 });
 

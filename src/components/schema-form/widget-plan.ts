@@ -267,7 +267,6 @@ export function partitionObjectFields(schema: JsonSchema): {
  */
 export function isOmittedFormValue(value: JsonValue | undefined): boolean {
   if (value === undefined || value === null) return true;
-  if (value === false) return true;
   if (value === '') return true;
   if (Array.isArray(value) && value.length === 0) return true;
   if (
@@ -280,7 +279,10 @@ export function isOmittedFormValue(value: JsonValue | undefined): boolean {
   return false;
 }
 
-/** Set or drop an optional field so empty widgets never reach the payload. */
+/**
+ * Set or drop a field. Empty optional widgets never reach the payload;
+ * `undefined` drops the key whether or not the field is required.
+ */
 export function withOptionalField(
   value: Record<string, JsonValue>,
   name: string,

@@ -6,14 +6,9 @@ export function studioPrimaryOutput(
   asset: GeneratedAsset
 ): GeneratedAssetOutput | undefined {
   const outputs = asset.outputs ?? [];
-  if (asset.activity === 'video') {
-    return (
-      outputs.find((output) => output.contentType.startsWith('video/')) ??
-      outputs[0]
-    );
-  }
+  const prefix = asset.activity === 'video' ? 'video/' : 'image/';
   return (
-    outputs.find((output) => output.contentType.startsWith('image/')) ??
+    outputs.find((output) => output.contentType.startsWith(prefix)) ??
     outputs[0]
   );
 }

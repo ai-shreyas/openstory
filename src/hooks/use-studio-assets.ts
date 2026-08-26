@@ -6,7 +6,11 @@ import {
   listStudioAssetsFn,
   setStudioAssetFavoriteFn,
 } from '@/functions/studio-assets';
-import type { StudioCreateInput } from '@/lib/studio/schema';
+import type {
+  StudioActivity,
+  StudioCreateInput,
+  StudioSort,
+} from '@/lib/studio/schema';
 import {
   useInfiniteQuery,
   useMutation,
@@ -14,22 +18,21 @@ import {
 } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
+type StudioAssetFilters = {
+  activity?: StudioActivity;
+  favoritesOnly?: boolean;
+  order?: StudioSort;
+};
+
 const studioAssetKeys = {
   all: ['studio-assets'] as const,
-  list: (filters: {
-    activity?: 'image' | 'video';
-    favoritesOnly?: boolean;
-    order?: 'newest' | 'oldest';
-  }) => [...studioAssetKeys.all, 'list', filters] as const,
+  list: (filters: StudioAssetFilters) =>
+    [...studioAssetKeys.all, 'list', filters] as const,
 };
 
 const PAGE_SIZE = 40;
 
-export function useStudioAssets(filters: {
-  activity?: 'image' | 'video';
-  favoritesOnly?: boolean;
-  order?: 'newest' | 'oldest';
-}) {
+export function useStudioAssets(filters: StudioAssetFilters) {
   const { isAuthenticated } = useAuthGate();
 
   return useInfiniteQuery({

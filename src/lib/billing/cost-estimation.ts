@@ -184,21 +184,15 @@ export function estimateVideoCost(
   );
 }
 
-/**
- * Pre-flight cost of a prompt-only studio clip. Prices the T2V sibling,
- * not the sequence image-to-video endpoint.
- */
+/** Pre-flight cost of a studio clip; `mode` picks the endpoint priced. */
 export function estimateStudioVideoCost(
   model: ImageToVideoModel,
   durationSeconds: number,
-  opts: { pricing: FalPricingMap; resolution?: string; mode?: StudioVideoMode }
+  opts: { pricing: FalPricingMap; mode?: StudioVideoMode }
 ): Microdollars | null {
   return estimateFalCost(
     studioVideoEndpointId(model, opts.mode),
-    {
-      durationSeconds,
-      resolution: opts.resolution,
-    },
+    { durationSeconds },
     opts.pricing
   );
 }

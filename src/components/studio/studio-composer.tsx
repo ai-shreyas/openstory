@@ -21,7 +21,6 @@ import {
   StudioReferencePicker,
   useStudioLibrary,
   type StudioReference,
-  type StudioReferenceKind,
 } from '@/components/studio/studio-reference-picker';
 import { MarkdownEditor } from '@/components/text-editor/markdown-editor';
 import {
@@ -85,7 +84,10 @@ import {
   studioShufflePrompts,
 } from '@/lib/studio/prompt-shuffle';
 import { parseStudioPaste } from '@/lib/studio/paste-import';
-import type { StudioCreateInput } from '@/lib/studio/schema';
+import type {
+  StudioCreateInput,
+  StudioReferenceKind,
+} from '@/lib/studio/schema';
 import {
   renumberStudioReferences,
   snapStudioVideoDuration,
@@ -96,8 +98,8 @@ import {
   studioVideoRefLimit,
   studioSupportsMode,
   studioVideoDurations,
-  studioVideoHasDuration,
   studioVideoSupportsAudio,
+  type StudioReferenceToken,
   type StudioVideoMode,
 } from '@/lib/studio/text-to-video';
 import {
@@ -131,6 +133,12 @@ const MODE_LABELS: Record<StudioVideoMode, string> = {
 
 type PickerTarget = 'reference' | 'start' | 'end';
 
+const REFERENCE_TOKENS = {
+  image: 'Image',
+  video: 'Video',
+  audio: 'Audio',
+} as const satisfies Record<StudioReferenceKind, StudioReferenceToken>;
+
 type StudioComposerProps = {
   activity: 'image' | 'video';
 };
@@ -138,7 +146,7 @@ type StudioComposerProps = {
 function referenceMentionItem(
   reference: StudioReference,
   index: number,
-  kind: 'Image' | 'Video' | 'Audio' = 'Image'
+  kind: StudioReferenceToken = 'Image'
 ): MentionItem {
   const tag = `${kind}${index + 1}`;
   return {
@@ -157,55 +165,39 @@ function referenceMentionItem(
   };
 }
 
-function AudioTile({
-  reference,
-  badge,
-  onRemove,
-}: {
-  reference: StudioReference;
-  badge: string;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="group relative flex size-20 shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border bg-muted px-1">
-      <AudioLines className="size-5 text-muted-foreground" aria-hidden="true" />
-      <span
-        className="w-full truncate text-center text-[10px]"
-        title={reference.label}
-      >
-        {reference.label}
-      </span>
-      <span className="absolute bottom-1 left-1 rounded bg-background/85 px-1 font-mono text-[10px] leading-4">
-        {badge}
-      </span>
-      <Button
-        type="button"
-        size="icon-xs"
-        variant="secondary"
-        className="absolute top-1 right-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-        aria-label={`Remove ${reference.label}`}
-        onClick={onRemove}
-      >
-        <X aria-hidden="true" />
-      </Button>
-    </div>
-  );
-}
-
 function Tile({
   reference,
   badge,
   onRemove,
-  removeLabel,
+  removeLabel = `Remove ${reference.label}`,
 }: {
   reference: StudioReference;
   badge: string;
   onRemove: () => void;
-  removeLabel: string;
+  removeLabel?: string;
 }) {
   return (
-    <div className="group relative size-20 shrink-0 overflow-hidden rounded-lg border bg-muted">
-      {reference.kind === 'video' ? (
+    <div
+      className={cn(
+        'group relative size-20 shrink-0 overflow-hidden rounded-lg border bg-muted',
+        reference.kind === 'audio' &&
+          'flex flex-col items-center justify-center gap-1 px-1'
+      )}
+    >
+      {reference.kind === 'audio' ? (
+        <>
+          <AudioLines
+            className="size-5 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <span
+            className="w-full truncate text-center text-[10px]"
+            title={reference.label}
+          >
+            {reference.label}
+          </span>
+        </>
+      ) : reference.kind === 'video' ? (
         <video
           src={reference.url}
           poster={reference.posterUrl}
@@ -309,9 +301,9 @@ export function StudioComposer({ activity }: StudioComposerProps) {
     compatibleVideoModel
   );
   const audioCapable = studioVideoSupportsAudio(compatibleVideoModel);
-  const durationCapable = studioVideoHasDuration(compatibleVideoModel);
+  const durationCapable = studioVideoDurations(compatibleVideoModel).length > 0;
   // Images: the model's edit endpoint takes stills (no clips/audio). Models
-  // without a per-endpoint cap accept up to 9.
+  // without a per-endpoint cap get the schema's cap of 9.
   const imageRefLimit = supportsReferenceImages(imageModel)
     ? capReferenceImages(imageModel, Array.from({ length: 9 })).length
     : 0;
@@ -323,7 +315,13 @@ export function StudioComposer({ activity }: StudioComposerProps) {
   /** Whether this composer can attach anything at all. */
   const refsCapable = isVideo || imageRefLimit > 0;
   const endFrameCapable = studioSupportsEndFrame(compatibleVideoModel);
-  const effectiveMode: StudioVideoMode = isVideo ? mode : 'text';
+  // Reference mode with nothing attached submits as text, so the default
+  // mode never dead-ends a plain prompt.
+  const effectiveMode: StudioVideoMode = !isVideo
+    ? 'text'
+    : mode === 'reference' && references.length + videoRefs.length === 0
+      ? 'text'
+      : mode;
 
   const estimate = useMemo(() => {
     if (!pricing) return null;
@@ -362,18 +360,21 @@ export function StudioComposer({ activity }: StudioComposerProps) {
 
   // --- references -----------------------------------------------------------
 
-  const limitFor = (kind: StudioReferenceKind): number =>
-    kind === 'image'
-      ? referenceLimit
-      : kind === 'video'
-        ? videoRefLimit
-        : audioLimit;
-  const countFor = (kind: StudioReferenceKind): number =>
-    kind === 'image'
-      ? references.length
-      : kind === 'video'
-        ? videoRefs.length
-        : audioRefs.length;
+  const limits: Record<StudioReferenceKind, number> = {
+    image: referenceLimit,
+    video: videoRefLimit,
+    audio: audioLimit,
+  };
+  const counts: Record<StudioReferenceKind, number> = {
+    image: references.length,
+    video: videoRefs.length,
+    audio: audioRefs.length,
+  };
+  const setListFor = {
+    image: setReferences,
+    video: setVideoRefs,
+    audio: setAudioRefs,
+  };
   const slots = useMemo<Record<StudioReferenceKind, number>>(
     () => ({
       image: Math.max(0, referenceLimit - references.length),
@@ -392,37 +393,22 @@ export function StudioComposer({ activity }: StudioComposerProps) {
 
   /** Append to the list for its kind; returns the new index, or -1 at cap. */
   const addReference = (reference: StudioReference): number => {
-    const index = countFor(reference.kind);
-    if (index >= limitFor(reference.kind)) {
-      toast.error(
-        `Up to ${limitFor(reference.kind)} reference ${reference.kind}s`
-      );
+    const { kind } = reference;
+    const index = counts[kind];
+    if (index >= limits[kind]) {
+      toast.error(`Up to ${limits[kind]} reference ${kind}s`);
       return -1;
     }
-    const setter =
-      reference.kind === 'image'
-        ? setReferences
-        : reference.kind === 'video'
-          ? setVideoRefs
-          : setAudioRefs;
-    setter((prev) => [...prev, reference]);
+    setListFor[kind]((prev) => [...prev, reference]);
     if (isVideo && mode !== 'reference') setMode('reference');
     return index;
   };
 
-  const removeReference = (index: number) => {
-    setReferences((prev) => prev.filter((_, i) => i !== index));
-    setPrompt((prev) => renumberStudioReferences(prev, index));
-  };
-
-  const removeVideo = (index: number) => {
-    setVideoRefs((prev) => prev.filter((_, i) => i !== index));
-    setPrompt((prev) => renumberStudioReferences(prev, index, 'Video'));
-  };
-
-  const removeAudio = (index: number) => {
-    setAudioRefs((prev) => prev.filter((_, i) => i !== index));
-    setPrompt((prev) => renumberStudioReferences(prev, index, 'Audio'));
+  const removeReference = (kind: StudioReferenceKind, index: number) => {
+    setListFor[kind]((prev) => prev.filter((_, i) => i !== index));
+    setPrompt((prev) =>
+      renumberStudioReferences(prev, index, REFERENCE_TOKENS[kind])
+    );
   };
 
   const placeReference = (reference: StudioReference, target: PickerTarget) => {
@@ -460,7 +446,7 @@ export function StudioComposer({ activity }: StudioComposerProps) {
       if (taken[kind] >= room) {
         toast.error(
           target === 'reference'
-            ? `Up to ${limitFor(kind)} reference ${kind}s`
+            ? `Up to ${limits[kind]} reference ${kind}s`
             : 'One image per frame'
         );
         continue;
@@ -683,15 +669,22 @@ export function StudioComposer({ activity }: StudioComposerProps) {
     }
     setPrompt(imported.prompt);
     setLastShuffled(imported.prompt);
-    const total =
+    const requested =
       imported.images.length +
       imported.videos.length +
       imported.audio.length +
       (imported.startImageUrl ? 1 : 0) +
       (imported.endImageUrl ? 1 : 0);
+    const total = imported.startImageUrl
+      ? 1 + (imported.endImageUrl && endFrameCapable ? 1 : 0)
+      : Math.min(imported.images.length, referenceLimit) +
+        Math.min(imported.videos.length, videoRefLimit) +
+        Math.min(imported.audio.length, audioLimit);
+    const dropped = requested - total;
     toast.success(
       total > 0
-        ? `Imported the prompt and ${total} reference${total === 1 ? '' : 's'}`
+        ? `Imported the prompt and ${total} reference${total === 1 ? '' : 's'}` +
+            (dropped > 0 ? ` (${dropped} over the model's limit dropped)` : '')
         : 'Imported the prompt'
     );
   };
@@ -715,14 +708,15 @@ export function StudioComposer({ activity }: StudioComposerProps) {
         duration: snappedDuration,
         count,
         generateAudio: audioCapable ? generateAudio : undefined,
-        mode,
+        mode: effectiveMode,
         referenceImages:
-          mode === 'reference' ? references.map((r) => r.url) : [],
+          effectiveMode === 'reference' ? references.map((r) => r.url) : [],
         referenceVideos:
-          mode === 'reference' ? videoRefs.map((r) => r.url) : [],
-        referenceAudio: mode === 'reference' ? audioRefs.map((r) => r.url) : [],
-        startImageUrl: mode === 'frames' ? startFrame?.url : undefined,
-        endImageUrl: mode === 'frames' ? endFrame?.url : undefined,
+          effectiveMode === 'reference' ? videoRefs.map((r) => r.url) : [],
+        referenceAudio:
+          effectiveMode === 'reference' ? audioRefs.map((r) => r.url) : [],
+        startImageUrl: effectiveMode === 'frames' ? startFrame?.url : undefined,
+        endImageUrl: effectiveMode === 'frames' ? endFrame?.url : undefined,
       };
     }
     return {
@@ -826,8 +820,7 @@ export function StudioComposer({ activity }: StudioComposerProps) {
                     key={`${reference.url}-${index}`}
                     reference={reference}
                     badge={`@Image${index + 1}`}
-                    removeLabel={`Remove ${reference.label}`}
-                    onRemove={() => removeReference(index)}
+                    onRemove={() => removeReference('image', index)}
                   />
                 ))}
                 {videoRefs.map((reference, index) => (
@@ -835,16 +828,15 @@ export function StudioComposer({ activity }: StudioComposerProps) {
                     key={`${reference.url}-${index}`}
                     reference={reference}
                     badge={`@Video${index + 1}`}
-                    removeLabel={`Remove ${reference.label}`}
-                    onRemove={() => removeVideo(index)}
+                    onRemove={() => removeReference('video', index)}
                   />
                 ))}
                 {audioRefs.map((reference, index) => (
-                  <AudioTile
+                  <Tile
                     key={`${reference.url}-${index}`}
                     reference={reference}
                     badge={`@Audio${index + 1}`}
-                    onRemove={() => removeAudio(index)}
+                    onRemove={() => removeReference('audio', index)}
                   />
                 ))}
                 {slots.image + slots.video + slots.audio > uploading && (

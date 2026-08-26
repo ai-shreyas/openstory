@@ -1,15 +1,18 @@
 /**
- * Prompt-only Images and Videos (#1274).
+ * Images and Videos (#1274).
  *
- * Sequence models only — `generateImageWithProvider` for stills, and the
- * family's text-to-video sibling for clips (not image-to-video). Native
- * Grok and billed fal units work the same way as sequences.
+ * Sequence models only — `generateImageWithProvider` for stills; for clips
+ * `mode` picks the endpoint (see `text-to-video.ts`). Native Grok and billed
+ * fal units work the same way as sequences.
  *
  *   1. set-running
- *   2. generate-image, or submit/poll T2V
+ *   2. generate-image, or submit/poll video (retried on a content flag)
  *   3. deduct-credits from reported units
  *   4. upload outputs to R2
- *   5. persist-result on the reserved `generated_assets` row
+ *   5. record-provenance
+ *   6. persist-result on the reserved `generated_assets` row — last, so a
+ *      failure anywhere before it leaves the row `failed`, never
+ *      `completed` then flipped
  */
 
 import {
@@ -17,12 +20,13 @@ import {
   isContentRejectionError,
 } from '@/lib/ai/content-rejection';
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
-import { ZERO_MICROS, type Microdollars } from '@/lib/billing/money';
+import { ZERO_MICROS } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   recordFalUsageStep,
 } from '@/lib/billing/workflow-deduction';
 import { recordProvenance } from '@/lib/compliance/provenance';
+import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import type { GeneratedAssetOutput } from '@/lib/db/schema';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
@@ -32,6 +36,7 @@ import {
   studioVideoCostFromUsage,
   submitStudioVideoJob,
 } from '@/lib/studio/studio-video-generation';
+import type { StudioCreateInput } from '@/lib/studio/schema';
 import { tagStudioReferences } from '@/lib/studio/text-to-video';
 import { uploadStudioImage, uploadStudioVideo } from '@/lib/studio/upload';
 import { OpenStoryWorkflowEntrypoint } from '@/lib/workflow/base-workflow';
@@ -58,72 +63,33 @@ function classifyMotionFailure(message: string): StudioPollOutcome {
     : { kind: 'failed', error: `Motion generation failed: ${message}` };
 }
 
-export type StudioPersistScopedDb = {
-  generatedAssets: {
-    markRunning: (id: string) => Promise<void>;
-    markCompleted: (
-      id: string,
-      fields: { outputs: GeneratedAssetOutput[]; costMicros?: number | null }
-    ) => Promise<void>;
-    markFailed: (id: string, error: string) => Promise<void>;
-  };
-};
-
-export async function persistStudioCompletion(params: {
-  scopedDb: StudioPersistScopedDb;
-  assetId: string;
-  outputs: GeneratedAssetOutput[];
-  costMicros: Microdollars | null;
-}): Promise<void> {
-  await params.scopedDb.generatedAssets.markCompleted(params.assetId, {
-    outputs: params.outputs,
-    costMicros: params.costMicros,
-  });
-}
-
-export async function persistStudioFailure(params: {
-  scopedDb: StudioPersistScopedDb;
-  assetId: string;
-  error: string;
-}): Promise<void> {
-  await params.scopedDb.generatedAssets.markFailed(
-    params.assetId,
-    params.error
-  );
-}
-
 export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<StudioGenerationWorkflowInput> {
   protected override async runImpl(
     event: Readonly<WorkflowEvent<StudioGenerationWorkflowInput>>,
     step: WorkflowStep,
     scopedDb: WorkflowScopedDb
   ): Promise<{ assetId: string; outputs: GeneratedAssetOutput[] }> {
-    const input = event.payload;
-    const { activity, assetId } = input;
+    const { assetId, input } = event.payload;
 
     await step.do('set-running', async () => {
       await scopedDb.generatedAssets.markRunning(assetId);
     });
 
-    if (activity === 'image') {
-      return this.runImage(event, step, scopedDb);
+    if (input.activity === 'image') {
+      return this.runImage(event, input, step, scopedDb);
     }
-    return this.runVideo(event, step, scopedDb);
+    return this.runVideo(event, input, step, scopedDb);
   }
 
   private async runImage(
     event: Readonly<WorkflowEvent<StudioGenerationWorkflowInput>>,
+    input: Extract<StudioCreateInput, { activity: 'image' }>,
     step: WorkflowStep,
     scopedDb: WorkflowScopedDb
   ): Promise<{ assetId: string; outputs: GeneratedAssetOutput[] }> {
-    const input = event.payload;
-    const { assetId, teamId } = input;
-
-    const imageModel = input.imageModel;
-    const imageSize = input.imageSize;
-    if (!imageModel || !imageSize) {
-      throw new Error('Studio image generation requires an image model');
-    }
+    const { assetId, teamId, userId } = event.payload;
+    const { imageModel } = input;
+    const imageSize = aspectRatioToImageSize(input.aspectRatio);
 
     const imageResult = await step.do('generate-image', async () => {
       logger.info(
@@ -132,12 +98,12 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
       return generateImageWithProvider(
         {
           model: imageModel,
-          prompt: input.referenceImages?.length
+          prompt: input.referenceImages.length
             ? tagStudioReferences(input.prompt)
             : input.prompt,
           imageSize,
           numImages: 1,
-          ...(input.referenceImages?.length && {
+          ...(input.referenceImages.length > 0 && {
             referenceImageUrls: input.referenceImages,
           }),
         },
@@ -146,7 +112,7 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
           observability: {
             observationName: 'studio-image',
             tags: ['studio', 'image'],
-            userId: input.userId,
+            userId,
             metadata: { assetId, model: imageModel },
           },
         }
@@ -194,19 +160,10 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
       { url: upload.url, contentType: upload.contentType },
     ];
 
-    await step.do('persist-result', async () => {
-      await persistStudioCompletion({
-        scopedDb,
-        assetId,
-        outputs,
-        costMicros: imageCost,
-      });
-    });
-
     await step.do('record-provenance', async () => {
       await recordProvenance(scopedDb.provenance, {
         teamId,
-        userId: input.userId,
+        userId,
         assetKind: 'generated_asset',
         assetId,
         storageKey: upload.path,
@@ -218,20 +175,24 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
       });
     });
 
+    await step.do('persist-result', async () => {
+      await scopedDb.generatedAssets.markCompleted(assetId, {
+        outputs,
+        costMicros: imageCost,
+      });
+    });
+
     return { assetId, outputs };
   }
 
   private async runVideo(
     event: Readonly<WorkflowEvent<StudioGenerationWorkflowInput>>,
+    input: Extract<StudioCreateInput, { activity: 'video' }>,
     step: WorkflowStep,
     scopedDb: WorkflowScopedDb
   ): Promise<{ assetId: string; outputs: GeneratedAssetOutput[] }> {
-    const input = event.payload;
-    const { assetId, teamId } = input;
-    const videoModel = input.videoModel;
-    if (!videoModel) {
-      throw new Error('Studio video generation requires a video model');
-    }
+    const { assetId, teamId, userId } = event.payload;
+    const { videoModel } = input;
 
     let videoUrl = '';
     let billedUsage: TokenUsage | undefined;
@@ -430,19 +391,10 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
       { url: videoUpload.url, contentType: videoUpload.contentType },
     ];
 
-    await step.do('persist-result', async () => {
-      await persistStudioCompletion({
-        scopedDb,
-        assetId,
-        outputs,
-        costMicros: videoCost,
-      });
-    });
-
     await step.do('record-provenance', async () => {
       await recordProvenance(scopedDb.provenance, {
         teamId,
-        userId: input.userId,
+        userId,
         assetKind: 'generated_asset',
         assetId,
         storageKey: videoUpload.path,
@@ -451,6 +403,13 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
         providerRequestId: job.jobId,
         workflowRunId: event.instanceId,
         prompt: input.prompt,
+      });
+    });
+
+    await step.do('persist-result', async () => {
+      await scopedDb.generatedAssets.markCompleted(assetId, {
+        outputs,
+        costMicros: videoCost,
       });
     });
 
@@ -466,11 +425,7 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
     error: string;
     scopedDb: WorkflowScopedDb;
   }): Promise<void> {
-    await persistStudioFailure({
-      scopedDb,
-      assetId: event.payload.assetId,
-      error,
-    });
+    await scopedDb.generatedAssets.markFailed(event.payload.assetId, error);
     logger.error(
       `[StudioGenerationWorkflow] Asset ${event.payload.assetId} failed: ${error}`
     );

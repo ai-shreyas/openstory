@@ -25,7 +25,7 @@ describe('studioVideoEndpointId', () => {
       studioVideoEndpointId(model)
     );
     expect(ids).toEqual([
-      'xai/grok-imagine-video/text-to-video',
+      'xai/grok-imagine-video/v1.5/text-to-video',
       'fal-ai/ltx-2.3/text-to-video',
       'fal-ai/veo3.1',
       'fal-ai/kling-video/v3/pro/text-to-video',
@@ -33,7 +33,15 @@ describe('studioVideoEndpointId', () => {
       'bytedance/seedance-2.0/enterprise/v2/text-to-video',
     ]);
     expect(ids.some((id) => id.includes('image-to-video'))).toBe(false);
-    expect(studioVideoEndpointIds()).toEqual(ids);
+    // Pricing refresh sees the reference siblings too.
+    expect(studioVideoEndpointIds()).toEqual(
+      expect.arrayContaining([
+        ...ids,
+        'xai/grok-imagine-video/v1.5/reference-to-video',
+        'fal-ai/veo3.1/reference-to-video',
+        'fal-ai/kling-video/o3/pro/reference-to-video',
+      ])
+    );
   });
 });
 

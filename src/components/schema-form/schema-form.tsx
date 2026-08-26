@@ -406,17 +406,11 @@ const BooleanControl: FC<{
   onChange: (value: JsonValue | undefined) => void;
   required: boolean;
   disabled: boolean;
-}> = ({ id, value, onChange, required, disabled }) => (
+}> = ({ id, value, onChange, disabled }) => (
   <Switch
     id={id}
     checked={value === true}
-    onCheckedChange={(checked) => {
-      if (!required && !checked) {
-        onChange(undefined);
-        return;
-      }
-      onChange(checked);
-    }}
+    onCheckedChange={onChange}
     disabled={disabled}
   />
 );

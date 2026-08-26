@@ -29,6 +29,7 @@ interface UploadPosterOptions {
 type StorageResult = {
   url: string;
   path: string;
+  contentType: string;
 };
 
 /**
@@ -36,7 +37,7 @@ type StorageResult = {
  * `buildPath` receives the resolved file extension so callers own the
  * key layout without duplicating the type sniffing below.
  */
-async function uploadImageFromUrl(
+export async function uploadImageFromUrl(
   imageUrl: string,
   buildPath: (extension: string) => string
 ): Promise<StorageResult> {
@@ -80,6 +81,7 @@ async function uploadImageFromUrl(
   return {
     url: result.publicUrl,
     path: storagePath,
+    contentType,
   };
 }
 

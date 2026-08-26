@@ -189,10 +189,12 @@ describe('createStudioAssets', () => {
       expect.objectContaining({
         userId: USER_ID,
         teamId: TEAM_ID,
-        activity: 'image',
-        prompt: 'a red fox in fog',
-        imageModel: 'gpt_image_2',
-        aspectRatio: '16:9',
+        input: expect.objectContaining({
+          activity: 'image',
+          prompt: 'a red fox in fog',
+          imageModel: 'gpt_image_2',
+          aspectRatio: '16:9',
+        }),
       }),
       expect.objectContaining({
         deduplicationId: expect.stringMatching(/^studio-/),
@@ -301,16 +303,18 @@ describe('createStudioAssets', () => {
     expect(mockTriggerWorkflow).toHaveBeenCalledWith(
       '/studio',
       expect.objectContaining({
-        activity: 'video',
-        prompt: 'the fox turns toward camera',
-        videoModel: 'seedance_v2',
-        aspectRatio: '9:16',
+        input: expect.objectContaining({
+          activity: 'video',
+          prompt: 'the fox turns toward camera',
+          videoModel: 'seedance_v2',
+          aspectRatio: '9:16',
+        }),
       }),
       expect.objectContaining({
         deduplicationId: expect.stringMatching(/^studio-/),
       })
     );
-    expect(mockTriggerWorkflow.mock.calls[0]?.[1]).not.toHaveProperty(
+    expect(mockTriggerWorkflow.mock.calls[0]?.[1].input).not.toHaveProperty(
       'imageModel'
     );
   });

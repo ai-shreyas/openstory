@@ -1,9 +1,9 @@
 /**
- * Prompt-only Images and Videos (#1274). Client-safe: no env, no adapters.
+ * Images and Videos (#1274). Client-safe: no env, no adapters.
  *
  * Sequence image + video families only — not the flagged `/models` catalog.
- * Video is text-to-video: the prompt goes to each family's T2V sibling, not
- * through a still and image-to-video.
+ * Video `mode` picks the endpoint: T2V sibling, reference-to-video sibling,
+ * or the sequence image-to-video endpoint (frames).
  */
 
 import {
@@ -54,6 +54,14 @@ const promptSchema = z
   .max(50_000, 'Prompt is too long');
 
 const countSchema = z.number().int().min(1).max(4);
+
+export const studioActivitySchema = z.enum(['image', 'video']);
+export const studioSortSchema = z.enum(['newest', 'oldest']);
+export const studioReferenceKindSchema = z.enum(['image', 'video', 'audio']);
+
+export type StudioActivity = z.infer<typeof studioActivitySchema>;
+export type StudioSort = z.infer<typeof studioSortSchema>;
+export type StudioReferenceKind = z.infer<typeof studioReferenceKindSchema>;
 
 export const studioCreateInputSchema = z.discriminatedUnion('activity', [
   z
@@ -159,10 +167,6 @@ export const studioCreateInputSchema = z.discriminatedUnion('activity', [
 ]);
 
 export type StudioCreateInput = z.infer<typeof studioCreateInputSchema>;
-
-export type StudioActivity = 'image' | 'video';
-
-export type StudioSort = 'newest' | 'oldest';
 
 type StudioCreateAsset = {
   id: string;

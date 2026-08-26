@@ -117,7 +117,7 @@ describe('submitStudioVideoJob', () => {
   it('falls back to fal Grok T2V when no xAI key exists', async () => {
     mockGenerateVideo.mockResolvedValue({
       jobId: 'fal-grok-t2v',
-      model: 'xai/grok-imagine-video/text-to-video',
+      model: 'xai/grok-imagine-video/v1.5/text-to-video',
     });
 
     const result = await submitStudioVideoJob({
@@ -127,7 +127,7 @@ describe('submitStudioVideoJob', () => {
     });
 
     expect(result.via).toBe('fal');
-    expect(result.endpointId).toBe('xai/grok-imagine-video/text-to-video');
+    expect(result.endpointId).toBe('xai/grok-imagine-video/v1.5/text-to-video');
     expect(mockCreateGrokVideo).not.toHaveBeenCalled();
   });
 });

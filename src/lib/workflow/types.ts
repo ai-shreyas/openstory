@@ -60,7 +60,7 @@ import type {
 } from '@/lib/db/schema';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import type { UpdateStalePlan } from '@/lib/shots/update-stale-plan';
-import type { StudioVideoMode } from '@/lib/studio/text-to-video';
+import type { StudioCreateInput } from '@/lib/studio/schema';
 import type { Json } from '@/types/database';
 import { z } from 'zod';
 import type { musicDesignResultSchema } from '../ai/response-schemas';
@@ -1482,30 +1482,14 @@ export interface AssetGenerationWorkflowInput extends UserWorkflowContext {
 }
 
 /**
- * Prompt-only Images and Videos (#1274). Sequence models only; everything
- * the run needs is snapshotted here so the workflow never re-reads the row.
- * Video is text-to-video: `videoModel` picks the family, the run hits that
- * family's T2V sibling. Image runs still snapshot `imageModel` + `imageSize`.
+ * Images and Videos (#1274). The validated create input rides along whole,
+ * so the run never re-reads the row and the `activity` discriminant keeps
+ * image/video fields where the types can prove them. Video `duration` is
+ * already snapped to the model's accepted seconds.
  */
 export interface StudioGenerationWorkflowInput extends UserWorkflowContext {
   assetId: string;
-  activity: 'image' | 'video';
-  prompt: string;
-  aspectRatio: AspectRatio;
-  imageModel?: TextToImageModel;
-  imageSize?: ImageSize;
-  videoModel?: ImageToVideoModel;
-  duration?: number;
-  generateAudio?: boolean;
-  /** Video only. `text` (default) is prompt-only; see `text-to-video.ts`. */
-  mode?: StudioVideoMode;
-  /** Reference mode: stored URLs, in `@Image1`…`@ImageN` order. */
-  referenceImages?: string[];
-  referenceVideos?: string[];
-  referenceAudio?: string[];
-  /** Frames mode: stored URLs. */
-  startImageUrl?: string;
-  endImageUrl?: string;
+  input: StudioCreateInput;
 }
 
 /**

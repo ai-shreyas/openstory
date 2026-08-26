@@ -227,25 +227,30 @@ export function NewSequencePage({
     );
   }
 
-  // Signed-in: the script box fills the screen (no marketing chrome).
+  // Signed-in: one-liner + full-height script box (no logo).
   // Logged-out: logo + tagline + composer.
   if (user) {
     return (
       <div className="h-full">
         {billingGate}
-        <PageContainer maxWidth="narrow" fullHeight>
-          <ScriptView
-            key={from ? `copy:${from}` : composerKey}
-            loading={false}
-            onSuccess={handleSuccess}
-            sequence={sourceSequence}
-            allowScriptEdit={!!from}
-            onCancel={handleCancelCopy}
-            initialScript={from ? undefined : seedScript}
-            initialStyleId={from ? undefined : seedStyleId}
-            initialScriptIsSample={!from && !!seedScript}
-            onStyleChange={from ? undefined : handleStyleChange}
-          />
+        <PageContainer maxWidth="narrow" fullHeight className="space-y-4">
+          <p className="shrink-0 text-center text-sm text-muted-foreground text-pretty">
+            {SITE_CONFIG.taglineSub}
+          </p>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ScriptView
+              key={from ? `copy:${from}` : composerKey}
+              loading={false}
+              onSuccess={handleSuccess}
+              sequence={sourceSequence}
+              allowScriptEdit={!!from}
+              onCancel={handleCancelCopy}
+              initialScript={from ? undefined : seedScript}
+              initialStyleId={from ? undefined : seedStyleId}
+              initialScriptIsSample={!from && !!seedScript}
+              onStyleChange={from ? undefined : handleStyleChange}
+            />
+          </div>
         </PageContainer>
       </div>
     );

@@ -1,3 +1,14 @@
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -22,14 +33,7 @@ import {
 } from '@/lib/studio/outputs';
 import { cn } from '@/lib/utils';
 import { Download, Images, Star, Trash2 } from 'lucide-react';
-import { useRef, useState } from 'react';
-
-function aspectClass(asset: GeneratedAsset): string {
-  const ratio = studioAspectRatio(asset);
-  if (ratio === '9:16') return 'aspect-[9/16]';
-  if (ratio === '1:1') return 'aspect-square';
-  return 'aspect-video';
-}
+import { useState } from 'react';
 
 function StudioCard({
   asset,
@@ -39,7 +43,6 @@ function StudioCard({
   onOpen: () => void;
 }) {
   const favorite = useToggleStudioFavorite();
-  const videoRef = useRef<HTMLVideoElement>(null);
   const primary = studioPrimaryOutput(asset);
   const poster = studioPosterOutput(asset);
   const prompt = studioPrompt(asset);
@@ -51,10 +54,8 @@ function StudioCard({
       <button
         type="button"
         onClick={onOpen}
-        className={cn(
-          'block w-full overflow-hidden text-left',
-          aspectClass(asset)
-        )}
+        className="block w-full overflow-hidden text-left"
+        style={{ aspectRatio: studioAspectRatio(asset).replace(':', ' / ') }}
         aria-label={prompt || 'Generated asset'}
       >
         {inFlight ? (
@@ -65,7 +66,6 @@ function StudioCard({
           </div>
         ) : isVideo && primary ? (
           <video
-            ref={videoRef}
             src={primary.url}
             poster={poster?.url}
             muted
@@ -278,18 +278,43 @@ export function StudioGallery({
                     </Button>
                   );
                 })()}
-                <Button
-                  type="button"
-                  variant="destructive"
-                  onClick={() => {
-                    remove.mutate(openAsset.id, {
-                      onSuccess: () => setOpenId(null),
-                    });
-                  }}
-                >
-                  <Trash2 aria-hidden="true" />
-                  Delete
-                </Button>
+                {openAsset.status !== 'queued' &&
+                  openAsset.status !== 'running' && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          disabled={remove.isPending}
+                        >
+                          <Trash2 aria-hidden="true" />
+                          Delete
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            Delete this generation?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            It is removed from your library for good.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Keep</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => {
+                              remove.mutate(openAsset.id, {
+                                onSuccess: () => setOpenId(null),
+                              });
+                            }}
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
               </div>
             </>
           )}

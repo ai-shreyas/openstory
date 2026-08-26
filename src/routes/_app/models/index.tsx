@@ -33,8 +33,7 @@ function ModelsPage() {
         <h1 className="sr-only">Models</h1>
         <PageHeader>
           <PageDescription>
-            Browse the full fal.ai model catalog — image, video, and audio. Open
-            a model to see its parameters and run it directly.
+            The latest generation models — sometimes before they're announced.
           </PageDescription>
         </PageHeader>
 

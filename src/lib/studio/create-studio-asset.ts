@@ -1,5 +1,5 @@
 /**
- * Prompt-only studio create flow (#1274).
+ * Images and Videos create flow (#1274).
  *
  * Lives outside `src/functions/` because the Start compiler keeps a server
  * fn file's exported helpers in the CLIENT bundle (#1257). The handler
@@ -18,10 +18,6 @@ import {
 import { multiplyMicros, type Microdollars } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { requireGenerationAllowed } from '@/lib/compliance/generation-gate';
-import {
-  aspectRatioToImageSize,
-  type AspectRatio,
-} from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { GeneratedAssetInput } from '@/lib/db/schema';
 import { getLogger } from '@/lib/observability/logger';
@@ -98,50 +94,6 @@ function snapshotInput(input: StudioCreateInput): GeneratedAssetInput {
   };
 }
 
-function workflowPayload(
-  scopedDb: ScopedDb,
-  assetId: string,
-  input: StudioCreateInput
-): StudioGenerationWorkflowInput {
-  const aspectRatio: AspectRatio = input.aspectRatio;
-  if (input.activity === 'video') {
-    return {
-      userId: scopedDb.userId,
-      teamId: scopedDb.teamId,
-      assetId,
-      activity: 'video',
-      prompt: input.prompt,
-      aspectRatio,
-      videoModel: input.videoModel,
-      duration: snapStudioVideoDuration(input.duration, input.videoModel),
-      generateAudio: input.generateAudio,
-      mode: input.mode,
-      ...(input.mode === 'reference' && {
-        referenceImages: input.referenceImages,
-        referenceVideos: input.referenceVideos,
-        referenceAudio: input.referenceAudio,
-      }),
-      ...(input.mode === 'frames' && {
-        startImageUrl: input.startImageUrl,
-        endImageUrl: input.endImageUrl,
-      }),
-    };
-  }
-  return {
-    userId: scopedDb.userId,
-    teamId: scopedDb.teamId,
-    assetId,
-    activity: 'image',
-    prompt: input.prompt,
-    imageModel: input.imageModel,
-    aspectRatio,
-    imageSize: aspectRatioToImageSize(aspectRatio),
-    ...(input.referenceImages.length > 0 && {
-      referenceImages: input.referenceImages,
-    }),
-  };
-}
-
 /**
  * Reserve `count` studio rows and trigger a `/studio` run for each.
  */
@@ -149,6 +101,12 @@ export async function createStudioAssets(
   scopedDb: ScopedDb,
   input: StudioCreateInput
 ): Promise<StudioCreateResult> {
+  if (input.activity === 'video') {
+    input = {
+      ...input,
+      duration: snapStudioVideoDuration(input.duration, input.videoModel),
+    };
+  }
   const pricing = await getEffectiveFalPricing();
   const estimatedCost = estimateStudioCost(input, pricing);
 
@@ -180,7 +138,12 @@ export async function createStudioAssets(
       status: 'queued',
     });
 
-    const workflowInput = workflowPayload(scopedDb, row.id, input);
+    const workflowInput: StudioGenerationWorkflowInput = {
+      userId: scopedDb.userId,
+      teamId: scopedDb.teamId,
+      assetId: row.id,
+      input,
+    };
 
     let workflowRunId: string;
     try {

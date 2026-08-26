@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 
-export type StudioPasteImport = {
+type StudioPasteImport = {
   prompt: string;
   images: string[];
   videos: string[];

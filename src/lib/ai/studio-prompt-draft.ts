@@ -2,9 +2,10 @@
  * Draft a studio prompt from the attached references (#1274).
  *
  * A vision LLM sees the attached stills (clips contribute only their label —
- * the chat adapter takes image parts) and writes a one-shot video prompt
- * that binds each reference by its `@ImageN` / `@VideoN` / `@AudioN` token,
- * in the bare form the composer's pills store (`Image1`, not `@Image1`).
+ * the chat adapter takes image parts) and writes a one-shot prompt that binds
+ * each reference by its `@ImageN` / `@VideoN` / `@AudioN` token, in the bare
+ * form the composer's pills store (`Image1`, not `@Image1`). The `image`
+ * activity is supported but not yet reachable from the composer.
  */
 
 import type { Microdollars } from '@/lib/billing/money';
@@ -14,6 +15,7 @@ import {
   type AIObservabilityMeta,
 } from '@/lib/observability/ai-otel';
 import type { ChatMessage } from '@/lib/prompts';
+import type { StudioActivity, StudioReferenceKind } from '@/lib/studio/schema';
 import { toVisionImageSource } from '@/lib/storage/external-url';
 import { chat } from '@tanstack/ai';
 import { createAdapter } from './create-adapter';
@@ -30,11 +32,11 @@ export const STUDIO_DRAFT_MODEL = DEFAULT_VISION_MODEL;
 type DraftReference = {
   url: string;
   label: string;
-  kind: 'image' | 'video' | 'audio';
+  kind: StudioReferenceKind;
 };
 
 export type DraftStudioPromptInput = {
-  activity: 'image' | 'video';
+  activity: StudioActivity;
   /** Attached references in `@Image1`… order, per kind. */
   references: DraftReference[];
   /** Frames mode: start (and optional end) frame. */
@@ -46,7 +48,7 @@ export type DraftStudioPromptInput = {
   observability?: AIObservabilityMeta;
 };
 
-export type DraftStudioPromptResult = {
+type DraftStudioPromptResult = {
   prompt: string;
   costMicros: Microdollars;
   usedOwnKey: boolean;

@@ -1,6 +1,7 @@
 import { SignInPrompt } from '@/components/auth/sign-in-prompt';
 import { EvalView } from '@/components/eval/eval-view';
 import { PageContainer } from '@/components/layout/page-container';
+import { PageDescription } from '@/components/typography/page-description';
 import { useUser } from '@/hooks/use-user';
 import { createFileRoute } from '@tanstack/react-router';
 import { Video } from 'lucide-react';
@@ -27,6 +28,9 @@ function SequencesPage() {
       className="flex-1 flex flex-col overflow-hidden"
     >
       <h1 className="sr-only">Your Sequences</h1>
+      <PageDescription>
+        Your films, from first draft to final cut.
+      </PageDescription>
       {currentUser ? (
         <EvalView initialUserFilter={user} />
       ) : (

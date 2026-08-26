@@ -6,6 +6,8 @@
  * can play in a few seconds. `random` is injected so tests stay deterministic.
  */
 
+import type { StudioActivity } from '@/lib/studio/schema';
+
 const STUDIO_IMAGE_PROMPTS = [
   'A red fox in knee-high marsh grass at blue hour, breath visible, 35mm, shallow depth of field',
   'Overhead still life: a cracked pomegranate on a zinc counter, juice pooling toward a silver knife, hard side light',
@@ -37,7 +39,7 @@ const STUDIO_VIDEO_PROMPTS = [
 ] as const;
 
 export function studioShufflePrompts(
-  activity: 'image' | 'video'
+  activity: StudioActivity
 ): readonly string[] {
   return activity === 'video' ? STUDIO_VIDEO_PROMPTS : STUDIO_IMAGE_PROMPTS;
 }

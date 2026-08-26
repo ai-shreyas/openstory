@@ -49,9 +49,8 @@ import {
   Upload,
   Users,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
-
-export type StudioReferenceKind = 'image' | 'video' | 'audio';
+import type { StudioReferenceKind } from '@/lib/studio/schema';
+import { useMemo, useRef, useState } from 'react';
 
 export type StudioReference = {
   /** Stored (origin-relative `/r2/…`) or absolute URL. */
@@ -87,13 +86,12 @@ const SOURCES: { key: Source; label: string; icon: typeof Sparkles }[] = [
   { key: 'audio', label: 'Audio', icon: AudioLines },
 ];
 
-const EMPTY: Record<Source, string> = {
+const EMPTY: Record<Exclude<Source, 'audio'>, string> = {
   generations:
     'No generations yet — make an image or clip and it shows up here.',
   sequences: 'No sequences yet.',
   cast: 'No talent with a headshot yet.',
   locations: 'No locations with a reference image yet.',
-  audio: '',
 };
 
 function shotReferences(sequence: SequenceWithShots): StudioReference[] {
@@ -124,54 +122,56 @@ export function useStudioLibrary(): StudioLibrary {
   const images = useStudioAssets({ activity: 'image' });
   const videos = useStudioAssets({ activity: 'video' });
 
-  const generations = [
-    ...(images.data?.pages ?? []).flatMap((page) => page.assets),
-    ...(videos.data?.pages ?? []).flatMap((page) => page.assets),
-  ]
-    .filter((asset) => asset.status === 'completed')
-    .flatMap((asset): StudioReference[] => {
-      const url = studioPrimaryOutput(asset)?.url;
-      if (!url) return [];
-      const label = studioPrompt(asset).slice(0, 60) || 'Generation';
-      return asset.activity === 'video'
-        ? [
-            {
-              url,
-              label,
-              kind: 'video',
-              posterUrl: studioPosterOutput(asset)?.url,
-            },
-          ]
-        : [{ url, label, kind: 'image' }];
-    });
+  return useMemo((): StudioLibrary => {
+    const generations = [
+      ...(images.data?.pages ?? []).flatMap((page) => page.assets),
+      ...(videos.data?.pages ?? []).flatMap((page) => page.assets),
+    ]
+      .filter((asset) => asset.status === 'completed')
+      .flatMap((asset): StudioReference[] => {
+        const url = studioPrimaryOutput(asset)?.url;
+        if (!url) return [];
+        const label = studioPrompt(asset).slice(0, 60) || 'Generation';
+        return asset.activity === 'video'
+          ? [
+              {
+                url,
+                label,
+                kind: 'video',
+                posterUrl: studioPosterOutput(asset)?.url,
+              },
+            ]
+          : [{ url, label, kind: 'image' }];
+      });
 
-  return {
-    generations,
-    sequences: (sequences ?? []).map((sequence) => {
-      const shots = shotReferences(sequence);
-      return {
-        id: sequence.id,
-        title: sequence.title,
-        posterUrl: shots.find((r) => r.kind === 'image')?.url,
-        shotCount: sequence.shots.length,
-      };
-    }),
-    cast: (talent ?? []).flatMap((t) => {
-      const url = t.imageUrl ?? t.defaultSheet?.imageUrl;
-      return url ? [{ url, label: t.name, kind: 'image' as const }] : [];
-    }),
-    locations: (locations ?? []).flatMap((loc) =>
-      loc.referenceImageUrl
-        ? [
-            {
-              url: loc.referenceImageUrl,
-              label: loc.name,
-              kind: 'image' as const,
-            },
-          ]
-        : []
-    ),
-  };
+    return {
+      generations,
+      sequences: sequences.map((sequence) => {
+        const shots = shotReferences(sequence);
+        return {
+          id: sequence.id,
+          title: sequence.title,
+          posterUrl: shots.find((r) => r.kind === 'image')?.url,
+          shotCount: sequence.shots.length,
+        };
+      }),
+      cast: (talent ?? []).flatMap((t) => {
+        const url = t.imageUrl ?? t.defaultSheet?.imageUrl;
+        return url ? [{ url, label: t.name, kind: 'image' as const }] : [];
+      }),
+      locations: (locations ?? []).flatMap((loc) =>
+        loc.referenceImageUrl
+          ? [
+              {
+                url: loc.referenceImageUrl,
+                label: loc.name,
+                kind: 'image' as const,
+              },
+            ]
+          : []
+      ),
+    };
+  }, [talent, locations, sequences, images.data, videos.data]);
 }
 
 type TileGridProps = {
@@ -374,14 +374,13 @@ export function StudioReferencePicker({
   onUpload,
 }: StudioReferencePickerProps) {
   const fileInput = useRef<HTMLInputElement>(null);
-  const audioInput = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState<Source>('generations');
   const [sequenceId, setSequenceId] = useState<string | null>(null);
   const [pending, setPending] = useState<StudioReference[]>([]);
   const { data: sequences } = useSequencesWithShots();
   const sources = SOURCES.filter((s) => s.key !== 'audio' || slots.audio > 0);
   const openSequence = sequenceId
-    ? (sequences ?? []).find((s) => s.id === sequenceId)
+    ? sequences.find((s) => s.id === sequenceId)
     : undefined;
 
   const close = () => {
@@ -405,12 +404,15 @@ export function StudioReferencePicker({
 
   const grid = { attached, pending, slots, multiple, onToggle: toggle };
 
-  const accept = [
-    'image/*',
-    ...(slots.video > 0
-      ? ['video/mp4', 'video/quicktime', '.mp4', '.mov']
-      : []),
-  ].join(',');
+  const accept =
+    source === 'audio'
+      ? 'audio/mpeg,audio/wav,.mp3,.wav'
+      : [
+          'image/*',
+          ...(slots.video > 0
+            ? ['video/mp4', 'video/quicktime', '.mp4', '.mov']
+            : []),
+        ].join(',');
 
   return (
     <Dialog
@@ -433,22 +435,7 @@ export function StudioReferencePicker({
             ref={fileInput}
             type="file"
             accept={accept}
-            multiple={multiple}
-            className="hidden"
-            onChange={(event) => {
-              const files = Array.from(event.currentTarget.files ?? []);
-              event.currentTarget.value = '';
-              if (files.length > 0) {
-                onUpload(files);
-                close();
-              }
-            }}
-          />
-          <input
-            ref={audioInput}
-            type="file"
-            accept="audio/mpeg,audio/wav,.mp3,.wav"
-            multiple
+            multiple={multiple || source === 'audio'}
             className="hidden"
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? []);
@@ -463,9 +450,7 @@ export function StudioReferencePicker({
             type="button"
             variant="outline"
             size="sm"
-            onClick={() =>
-              (source === 'audio' ? audioInput : fileInput).current?.click()
-            }
+            onClick={() => fileInput.current?.click()}
           >
             <Upload aria-hidden="true" />
             Upload {source === 'audio' ? 'audio' : ''}
@@ -505,14 +490,15 @@ export function StudioReferencePicker({
             {source === 'audio' ? (
               <div className="flex flex-col items-start gap-3 p-4">
                 <p className="text-sm text-muted-foreground">
-                  MP3 or WAV, up to {slots.audio} more, 15 seconds combined.
-                  Each clip becomes <span className="font-mono">@Audio1</span>,{' '}
+                  MP3 or WAV, up to {slots.audio} more. Seedance: 15 seconds
+                  combined. Each clip becomes{' '}
+                  <span className="font-mono">@Audio1</span>,{' '}
                   <span className="font-mono">@Audio2</span>… in the prompt.
                 </p>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => audioInput.current?.click()}
+                  onClick={() => fileInput.current?.click()}
                 >
                   <Upload aria-hidden="true" />
                   Upload audio

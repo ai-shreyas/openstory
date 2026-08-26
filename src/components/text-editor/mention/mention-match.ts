@@ -77,13 +77,13 @@ export function splitMentions(
     // Cast names + element tokens pill ONLY in their ALL-CAPS form (the
     // deliberate `SCARLETT` / `BONDI_SCREEN` references) — never lowercase
     // prose or a stale lowercased form. A legacy kebab alias is exempt.
-    if (
-      !mentionShowsAt(item.section) &&
-      form.toLowerCase() === item.tag.toLowerCase() &&
-      form !== form.toUpperCase()
-    ) {
-      continue;
-    }
+    // `@`-sections pill on an explicit `@` or the exact-case tag, so prose
+    // like "image1" stays text.
+    const caseOk = mentionShowsAt(item.section)
+      ? prefixChar === '@' || form === item.tag
+      : form.toLowerCase() !== item.tag.toLowerCase() ||
+        form === form.toUpperCase();
+    if (!caseOk) continue;
     const matchStart = m.index;
     const formStart = matchStart + prefixChar.length;
     const formEnd = formStart + form.length;
