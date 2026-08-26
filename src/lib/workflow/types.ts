@@ -258,6 +258,18 @@ export interface StoryboardWorkflowInput extends SequenceWorkflowContext {
   suggestedTalent?: SuggestedTalentSnapshot[];
   /** @see LocationMatchingWorkflowInput.suggestedLocations — resolved by the launcher. */
   suggestedLocations?: SuggestedLocationSnapshot[];
+  /**
+   * Owner's email at trigger time (#1276). Null when the triggering user has
+   * no address on the team — the ready-email step then no-ops.
+   */
+  ownerEmail?: string | null;
+  /** Absolute `/sequences/:id/scenes` URL, snapshotted with the app origin. */
+  sequenceUrl: string;
+  /**
+   * When false, skip the ready email. API-key `/api/v1` callers poll and
+   * don't want a mailbox ping. Default (undefined) is send.
+   */
+  notify?: boolean;
 }
 
 /**
@@ -278,6 +290,8 @@ export type StoryboardTriggerInput = Omit<
   | 'musicPromptSource'
   | 'suggestedTalent'
   | 'suggestedLocations'
+  | 'ownerEmail'
+  | 'sequenceUrl'
 >;
 
 /**

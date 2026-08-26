@@ -17,7 +17,7 @@ type VideoStateOverlayProps = {
   imageError?: string | null;
   videoError?: string | null;
   className?: string;
-  progressMessage?: string;
+  progressMessage?: React.ReactNode;
   /**
    * In-flight retry state (#882). When set, the overlay reads "Retrying
    * (attempt/maxAttempts)…" (or a bare "Retrying…" when the budget has no fixed

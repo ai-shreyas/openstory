@@ -1,4 +1,5 @@
 import { GenerationProgressBanner } from '@/components/generation/generation-progress-banner';
+import { RenderWaitCopy } from '@/components/generation/render-wait-copy';
 import { MotionProgressBanner } from '@/components/generation/motion-progress-banner';
 import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
 import { DivergenceCompareDialog } from '@/components/scenes/divergence-compare-dialog';
@@ -80,7 +81,11 @@ import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  estimateSceneCount,
+  estimateTotalSeconds,
+} from '@/lib/generation/time-estimate';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 /**
@@ -270,6 +275,21 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   });
   const aspectRatio = sequence?.aspectRatio || DEFAULT_ASPECT_RATIO;
   const isProcessing = sequence?.status === 'processing';
+  const processingRef = useRef(isProcessing);
+  processingRef.current = isProcessing;
+
+  useEffect(() => {
+    const captureLeave = () => {
+      if (processingRef.current) {
+        posthog.capture('render_wait_left', { sequence_id: sequenceId });
+      }
+    };
+    window.addEventListener('pagehide', captureLeave);
+    return () => {
+      window.removeEventListener('pagehide', captureLeave);
+      captureLeave();
+    };
+  }, [sequenceId, posthog]);
   const { data: style } = useSequenceStyle(sequenceId);
   const styleCategory = style?.category ?? undefined;
   const sequenceMusicModel = safeAudioModel(
@@ -1229,6 +1249,18 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // generationState.currentPhase here would let leftover phase events from
   // past runs hijack the UI back to the 5-stage banner.
   const isGenerationActive = isProcessing;
+  const etaMinutes = useMemo(() => {
+    const seconds = estimateTotalSeconds(
+      generationState.scenes.length,
+      sequence?.script ? estimateSceneCount(sequence.script) : undefined,
+      generationState.phases.length
+    );
+    return Math.max(1, Math.round(seconds / 60));
+  }, [
+    generationState.scenes.length,
+    generationState.phases.length,
+    sequence?.script,
+  ]);
 
   return (
     <div className="flex h-full flex-col">
@@ -1381,8 +1413,12 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                     : null
                 }
                 progressMessage={
-                  generationState.phases.find((p) => p.status === 'active')
-                    ?.phaseName
+                  isGenerationActive ? (
+                    <RenderWaitCopy etaMinutes={etaMinutes} />
+                  ) : (
+                    generationState.phases.find((p) => p.status === 'active')
+                      ?.phaseName
+                  )
                 }
                 retry={selectedShotRetry}
                 onSelectShot={handleSelectShot}

@@ -47,7 +47,7 @@ type SceneCanvasProps = {
   modelMismatchLabel?: string | null;
   /** Quiet stale chip for the displayed image (#1077). */
   staleLabel?: string | null;
-  progressMessage?: string;
+  progressMessage?: React.ReactNode;
   retry?: { attempt: number; maxAttempts?: number };
   onSelectShot?: (shotId: string) => void;
   /** Scene-level image model (#909) used to generate starting-frame variants. */
