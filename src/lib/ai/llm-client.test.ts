@@ -696,6 +696,24 @@ describe('llm-client', () => {
         });
       });
 
+      it('sends max_tokens, not max_completion_tokens, so requireParameters keeps DeepSeek routable', async () => {
+        // DeepSeek endpoints advertise `max_tokens` only; `max_completion_tokens`
+        // + requireParameters returned "No endpoints found" on the region fallback.
+        mockChat.mockReturnValue(textStream());
+
+        await drain(
+          callLLMStream({
+            model: 'deepseek/deepseek-v4-pro-0813',
+            max_tokens: 300,
+            messages: [{ role: 'user', content: 'test' }],
+          })
+        );
+
+        const options = mockChat.mock.calls[0]?.[0]?.modelOptions;
+        expect(options.maxTokens).toBe(300);
+        expect(options.maxCompletionTokens).toBeUndefined();
+      });
+
       it('caller-supplied provider preferences layer on top', async () => {
         mockChat.mockReturnValue(textStream());
 

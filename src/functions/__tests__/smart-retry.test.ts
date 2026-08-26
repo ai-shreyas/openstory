@@ -62,6 +62,13 @@ vi.doMock('@/lib/billing/preflight', () => ({
   ) => work(),
 }));
 
+const notifySequenceReadyMock = vi.fn();
+vi.doMock('@/lib/emails/notify-sequence-ready', () => ({
+  notifySequenceReady: notifySequenceReadyMock,
+  sequenceScenesUrl: (id: string) =>
+    `https://openstory.so/sequences/${id}/scenes`,
+}));
+
 // The live pricing loader reads D1 (unavailable under node tests).
 vi.doMock('@/lib/ai/fal-pricing-live', () => ({
   getEffectiveFalPricing: async () => FAL_PRICING,
@@ -107,6 +114,7 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
     musicPromptInputHash: null,
     includeMusic: true,
     posterUrl: null,
+    readyEmailSentAt: null,
     autoGenerateMotion: false,
     autoGenerateMusic: false,
     suggestedTalentIds: null,
@@ -354,6 +362,9 @@ function makeContext(
     characters: { listWithSheets },
     shotPromptVersions: { getSelectedMotionByShots },
     sequence: vi.fn(() => ({ updateStatus, updateMusicFields })),
+    teamManagement: {
+      getMemberEmail: vi.fn(async () => 'owner@example.com'),
+    },
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only what executeSmartRetry touches
   const scopedDb = stub as unknown as ScopedDb;
@@ -374,6 +385,8 @@ function resetMocks() {
   triggerWorkflowMock.mockResolvedValue('wf_child');
   reserveRunCreditsMock.mockReset();
   reserveRunCreditsMock.mockResolvedValue(undefined);
+  notifySequenceReadyMock.mockReset();
+  notifySequenceReadyMock.mockResolvedValue('sent');
 }
 
 describe('executeSmartRetry — generation mutex (#839)', () => {

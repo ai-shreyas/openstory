@@ -51,6 +51,7 @@ import { NotFoundError, ValidationError } from '@/lib/errors';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { type Sequence } from '@/lib/db/schema';
 import { resolveSequenceStyleConfig } from '@/lib/style/style-config';
+import { sequenceScenesUrl } from '@/lib/emails/notify-sequence-ready';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
 import { resolveRunState } from '@/lib/workflow/reconcile';
@@ -200,6 +201,8 @@ async function resolveStoryboardPayload(
     // grandchild runs long after this row could have gained a prompt, and a
     // lookup down there would relabel the version on a retry.
     musicPromptSource: sequence.musicPrompt ? 'regenerated' : 'ai-generated',
+    ownerEmail: await scopedDb.teamManagement.getMemberEmail(input.userId),
+    sequenceUrl: sequenceScenesUrl(sequenceId),
   };
 }
 

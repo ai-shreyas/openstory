@@ -124,7 +124,10 @@ type WorkflowLiveReads = Pick<ScopedDb, 'teamId' | 'userId'> & {
   /** Whether the team owns a usable key — the BYOK half of a charge gate. */
   apiKeys: Pick<ScopedDb['apiKeys'], 'hasUsableKey'>;
   /** Balance at charge time (and the top-up it triggers) — the point is that it moved. */
-  billing: Pick<ScopedDb['billing'], 'hasEnoughCredits' | 'checkAutoTopUp'>;
+  billing: Pick<
+    ScopedDb['billing'],
+    'hasEnoughCredits' | 'checkAutoTopUp' | 'getBalance'
+  >;
   /** `getById`: divergence recompute. `listWithSheets`: live bibles for a re-render. */
   characters: Pick<ScopedDb['characters'], 'getById' | 'listWithSheets'>;
   /**
@@ -152,8 +155,11 @@ type WorkflowLiveReads = Pick<ScopedDb, 'teamId' | 'userId'> & {
   >;
   /** Existence guards, plus the music spawn-time billing guards (music has no claim rows). */
   sequences: Pick<ScopedDb['sequences'], 'getById' | 'getForUser'>;
-  /** Existence guards — "deleted mid-run" is a stand-down, not a failure. */
-  shots: Pick<ScopedDb['shots'], 'getById' | 'getByIds'>;
+  /**
+   * Existence guards, plus the ready-email clip/duration line (#1276) —
+   * those numbers are this run's own writes, not knowable at the trigger.
+   */
+  shots: Pick<ScopedDb['shots'], 'getById' | 'getByIds' | 'listBySequence'>;
   /** `getByIds`: wait-for-sheets polling. `getWithRelations`: divergence recompute. */
   talent: Pick<ScopedDb['talent'], 'getByIds' | 'getWithRelations'>;
   /** Spawn-time billing guards — video has no claim rows to hold the slot. */

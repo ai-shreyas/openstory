@@ -152,6 +152,21 @@ function buildHeadline(
   return failure;
 }
 
+/**
+ * `analyzeFailures` only once the shot list has resolved. `shots ?? []` on a
+ * failed sequence is the same shape as "analysis never produced shots", so
+ * SSR would emit the generic full-retry banner and hydration would replace it
+ * with the content-checker banner once shots land.
+ */
+export function analyzeLoadedFailures(
+  shots: ShotView[] | undefined,
+  sequence: Sequence | undefined,
+  scenesById: ScenesById
+): FailureSummary | null {
+  if (!sequence || shots === undefined) return null;
+  return analyzeFailures(shots, sequence, scenesById);
+}
+
 export function analyzeFailures(
   // The still's lifecycle lives on the anchor frame (#989) and the video's on
   // the segment's primary render (#1067).

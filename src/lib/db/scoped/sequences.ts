@@ -371,6 +371,36 @@ export function createSequencesMethods(
       return claimed.length > 0;
     },
 
+    /**
+     * CAS-claim the ready-email slot (#1276). Returns true only for the first
+     * caller; later retries / smart-retry re-completes see false.
+     */
+    claimReadyEmailSend: async (sequenceId: string): Promise<boolean> => {
+      const claimed = await db
+        .update(sequences)
+        .set({ readyEmailSentAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(
+            eq(sequences.id, sequenceId),
+            eq(sequences.teamId, teamId),
+            isNull(sequences.readyEmailSentAt)
+          )
+        )
+        .returning({ id: sequences.id });
+      return claimed.length > 0;
+    },
+
+    /**
+     * Drop the ready-email claim so a failed send can retry. Only the sender
+     * that just claimed should call this.
+     */
+    releaseReadyEmailSend: async (sequenceId: string): Promise<void> => {
+      await db
+        .update(sequences)
+        .set({ readyEmailSentAt: null, updatedAt: new Date() })
+        .where(and(eq(sequences.id, sequenceId), eq(sequences.teamId, teamId)));
+    },
+
     update: async (params: {
       id: string;
       title?: string;

@@ -216,7 +216,10 @@ export async function runOneShotCreate(
   });
 
   // 4. Run the shared create core (credits → fan-out → trigger storyboard).
-  const { entries } = await createSequences(parsed, ctx);
+  const { entries } = await createSequences(parsed, {
+    ...ctx,
+    notify: false,
+  });
 
   return {
     sequences: entries.map(({ sequence, workflowRunId }) => {
