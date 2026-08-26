@@ -398,7 +398,10 @@ function buildModelOptions(params: LLMRequestParams) {
   return {
     provider,
     ...(params.reasoning && { reasoning: params.reasoning }),
-    maxCompletionTokens: params.max_tokens,
+    // `maxTokens`, not `maxCompletionTokens`: DeepSeek endpoints advertise only
+    // `max_tokens`, so `max_completion_tokens` + requireParameters empties the
+    // candidate set ("No endpoints found…") on the region fallback.
+    maxTokens: params.max_tokens,
     temperature: params.temperature,
     topP: params.top_p,
     frequencyPenalty: params.frequency_penalty,
