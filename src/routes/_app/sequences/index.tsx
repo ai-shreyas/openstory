@@ -1,23 +1,20 @@
 import { SignInPrompt } from '@/components/auth/sign-in-prompt';
 import { EvalView } from '@/components/eval/eval-view';
 import { PageContainer } from '@/components/layout/page-container';
+import { useSequencesListPrefs } from '@/hooks/use-sequences-list-prefs';
 import { useUser } from '@/hooks/use-user';
+import { sequencesListSearchSchema } from '@/lib/sequences/list-prefs';
 import { createFileRoute } from '@tanstack/react-router';
 import { Video } from 'lucide-react';
-import { z } from 'zod';
-
-const searchSchema = z.object({
-  user: z.string().email().optional(),
-});
 
 export const Route = createFileRoute('/_app/sequences/')({
-  validateSearch: searchSchema,
+  validateSearch: sequencesListSearchSchema,
   component: SequencesPage,
   staticData: { breadcrumb: 'Sequences' },
 });
 
 function SequencesPage() {
-  const { user } = Route.useSearch();
+  const search = Route.useSearch();
   const { data: currentUser } = useUser();
 
   return (
@@ -28,7 +25,7 @@ function SequencesPage() {
     >
       <h1 className="sr-only">Your Sequences</h1>
       {currentUser ? (
-        <EvalView initialUserFilter={user} />
+        <SequencesEvalView search={search} />
       ) : (
         <SignInPrompt
           icon={<Video className="h-12 w-12" />}
@@ -38,4 +35,15 @@ function SequencesPage() {
       )}
     </PageContainer>
   );
+}
+
+function SequencesEvalView({
+  search,
+}: {
+  search: ReturnType<typeof Route.useSearch>;
+}) {
+  const navigate = Route.useNavigate();
+  const { prefs, setPrefs } = useSequencesListPrefs(search, navigate);
+
+  return <EvalView search={search} prefs={prefs} setPrefs={setPrefs} />;
 }
