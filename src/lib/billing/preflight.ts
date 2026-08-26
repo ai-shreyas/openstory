@@ -79,9 +79,9 @@ export async function requireCredits(
 }
 
 /**
- * Create a run envelope instead of a read-only preflight. Returns null when
- * BYOK skips the hold. Throws InsufficientCreditsError if available funds
- * cannot cover the estimate.
+ * Create a run envelope instead of a read-only preflight. Returns undefined
+ * when BYOK skips the hold. Throws InsufficientCreditsError if available
+ * funds cannot cover the estimate.
  */
 export async function reserveRunCredits(
   scopedDb: ReservationPreflightScopedDb,
@@ -121,9 +121,9 @@ type ReservationReleaseDb = {
 };
 
 /**
- * Zero a hold if the work after `reserveRunCredits` throws (trigger
- * failed, sequence insert failed). Success leaves leftover for the
- * workflow that owns the envelope to capture against and zero.
+ * Zero this hold if work after `reserveRunCredits` throws. On success,
+ * leftover stays for the run to capture; release is the parent's
+ * success/`onFailure` path, not this helper.
  */
 export async function releaseReservationOnThrow<T>(
   scopedDb: ReservationReleaseDb,

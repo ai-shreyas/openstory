@@ -531,6 +531,8 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     });
 
     if (!renderGate.spawnRenders) {
+      // Gate already zeroed leftover. Fail the sequence and throw so the
+      // parent does not mark it completed with no stills.
       const shortMessage = `Not enough credits to generate images for ${scenes.length} scenes. Add credits and retry.`;
       await step.do('emit-reservation-short', async () => {
         if (!sequenceId) return;

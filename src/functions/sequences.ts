@@ -449,7 +449,9 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         sequence.id
       );
       assertModelNotAlreadyAdded(existing, model, 'audio');
-      if (!sequence.musicPrompt || !sequence.musicTags) {
+      const musicPrompt = sequence.musicPrompt;
+      const musicTags = sequence.musicTags;
+      if (!musicPrompt || !musicTags) {
         throw new Error(
           'Generate music once before adding another audio model'
         );
@@ -471,55 +473,50 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         }
       );
 
-      await scopedDb.sequenceVariants.upsertMusicPrimary({
-        sequenceId: sequence.id,
-        model,
-        prompt: sequence.musicPrompt,
-        tags: sequence.musicTags,
-        durationSeconds: Math.round(totalDuration),
-        status: 'pending',
-      });
-
-      const musicInput = {
-        ...buildAddAudioMusicInput({
-          baseCtx,
-          prompt: sequence.musicPrompt,
-          tags: sequence.musicTags,
-          durationSeconds: totalDuration,
-          model,
-        }),
-        reservationId,
-        ownsReservation: true,
-      };
       try {
-        const workflowRunId = await triggerWorkflow('/music', musicInput, {
-          deduplicationId: `add-audio-${sequence.id}-${model}-${Date.now()}`,
-          label: buildWorkflowLabel(sequence.id),
-        });
-        return {
-          workflowRunId,
-          variantType,
-          model,
-          count: 1,
-          failed: 0,
-        } satisfies AddModelResult;
+        return await releaseReservationOnThrow(
+          scopedDb,
+          reservationId,
+          async () => {
+            await scopedDb.sequenceVariants.upsertMusicPrimary({
+              sequenceId: sequence.id,
+              model,
+              prompt: musicPrompt,
+              tags: musicTags,
+              durationSeconds: Math.round(totalDuration),
+              status: 'pending',
+            });
+
+            const musicInput = {
+              ...buildAddAudioMusicInput({
+                baseCtx,
+                prompt: musicPrompt,
+                tags: musicTags,
+                durationSeconds: totalDuration,
+                model,
+              }),
+              reservationId,
+              ownsReservation: true,
+            };
+            const workflowRunId = await triggerWorkflow('/music', musicInput, {
+              deduplicationId: `add-audio-${sequence.id}-${model}-${Date.now()}`,
+              label: buildWorkflowLabel(sequence.id),
+            });
+            return {
+              workflowRunId,
+              variantType,
+              model,
+              count: 1,
+              failed: 0,
+            } satisfies AddModelResult;
+          }
+        );
       } catch (error) {
         logger.error('add-model: failed to trigger music workflow', {
           err: error,
           sequenceId: sequence.id,
           model,
         });
-        if (reservationId) {
-          try {
-            await scopedDb.billing.zeroReservation(reservationId);
-          } catch (releaseError) {
-            logger.error('add-model: failed to zero music reservation', {
-              err: releaseError,
-              sequenceId: sequence.id,
-              reservationId,
-            });
-          }
-        }
         // Mark the pre-stamped row failed so the model can be re-added. Guard
         // the compensating write so its own failure can't mask the original
         // trigger error (which is what we want to surface to the user).
@@ -527,8 +524,8 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           await scopedDb.sequenceVariants.upsertMusicPrimary({
             sequenceId: sequence.id,
             model,
-            prompt: sequence.musicPrompt,
-            tags: sequence.musicTags,
+            prompt: musicPrompt,
+            tags: musicTags,
             durationSeconds: Math.round(totalDuration),
             status: 'failed',
           });
@@ -615,70 +612,71 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         }
       );
 
-      const sceneContext = await loadSceneContextBySequence(
-        scopedDb,
-        sequence.id
-      );
-      const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
-        resolveSceneForShot(s, sceneContext).scene;
-
-      // No pre-seeded `video_variants` version here (mirrors the image branch
-      // below, #990): each shot's motion child opens its own in-flight
-      // `video_variants` version in `set-generating-status` (keyed by
-      // (renderSegmentId, model, workflowRunId), materializing the degenerate
-      // one-shot segment), and the workflow's `onFailure` marks it failed.
-      // Pre-seeding a `pending` row the workflow can't reconcile (it dedupes on
-      // the run id the pending row lacks) would orphan it and — being non-failed
-      // — permanently block re-adding the model via `assertModelNotAlreadyAdded`.
-      // Structured motion prompt now lives on the shot's selected
-      // `shot_prompt_versions` row (#713), not `metadata.prompts.motion`. Batch
-      // it once; `motion-batch` re-assembles per model from `motionPrompt`.
-      const selectedMotionByShot =
-        await scopedDb.shotPromptVersions.getSelectedMotionByShots(
-          eligible.map((f) => f.id)
-        );
-      const workflowInput: BatchMotionMusicWorkflowInput = {
-        ...baseCtx,
-        reservationId,
-        includeMusic: false,
-        videoModels: [model],
-        // Adding a video model lands as an alternate only — never the primary
-        // video. Promote later with "Set". (#547)
-        variantOnly: true,
-        shots: eligible.map((f) => {
-          const selectedMotion = selectedMotionByShot.get(f.id);
-          const motionPrompt = selectedMotion
-            ? motionPromptFromVersion(selectedMotion)
-            : undefined;
-          return {
-            shotId: f.id,
-            imageUrl: f.image?.url ?? '',
-            prompt: resolveMotionPrompt(
-              {
-                motionPrompt: motionPrompt ?? null,
-                characterTags: sceneOf(f)?.continuity?.characterTags,
-                description: sceneOf(f)?.originalScript.extract ?? null,
-              },
-              model
-            ),
-            model,
-            motionPrompt,
-            sceneTitle: sceneOf(f)?.metadata?.title,
-            characterTags: sceneOf(f)?.continuity?.characterTags,
-            duration: f.durationMs ? f.durationMs / 1000 : 3,
-            aspectRatio: sequence.aspectRatio,
-          };
-        }),
-      };
       try {
         const workflowRunId = await releaseReservationOnThrow(
           scopedDb,
           reservationId,
-          () =>
-            triggerWorkflow('/motion-batch', workflowInput, {
+          async () => {
+            const sceneContext = await loadSceneContextBySequence(
+              scopedDb,
+              sequence.id
+            );
+            const sceneOf = (s: Pick<Shot, 'sceneId' | 'durationMs'>) =>
+              resolveSceneForShot(s, sceneContext).scene;
+
+            // No pre-seeded `video_variants` version here (mirrors the image branch
+            // below, #990): each shot's motion child opens its own in-flight
+            // `video_variants` version in `set-generating-status` (keyed by
+            // (renderSegmentId, model, workflowRunId), materializing the degenerate
+            // one-shot segment), and the workflow's `onFailure` marks it failed.
+            // Pre-seeding a `pending` row the workflow can't reconcile (it dedupes on
+            // the run id the pending row lacks) would orphan it and — being non-failed
+            // — permanently block re-adding the model via `assertModelNotAlreadyAdded`.
+            // Structured motion prompt now lives on the shot's selected
+            // `shot_prompt_versions` row (#713), not `metadata.prompts.motion`. Batch
+            // it once; `motion-batch` re-assembles per model from `motionPrompt`.
+            const selectedMotionByShot =
+              await scopedDb.shotPromptVersions.getSelectedMotionByShots(
+                eligible.map((f) => f.id)
+              );
+            const workflowInput: BatchMotionMusicWorkflowInput = {
+              ...baseCtx,
+              reservationId,
+              includeMusic: false,
+              videoModels: [model],
+              // Adding a video model lands as an alternate only — never the primary
+              // video. Promote later with "Set". (#547)
+              variantOnly: true,
+              shots: eligible.map((f) => {
+                const selectedMotion = selectedMotionByShot.get(f.id);
+                const motionPrompt = selectedMotion
+                  ? motionPromptFromVersion(selectedMotion)
+                  : undefined;
+                return {
+                  shotId: f.id,
+                  imageUrl: f.image?.url ?? '',
+                  prompt: resolveMotionPrompt(
+                    {
+                      motionPrompt: motionPrompt ?? null,
+                      characterTags: sceneOf(f)?.continuity?.characterTags,
+                      description: sceneOf(f)?.originalScript.extract ?? null,
+                    },
+                    model
+                  ),
+                  model,
+                  motionPrompt,
+                  sceneTitle: sceneOf(f)?.metadata?.title,
+                  characterTags: sceneOf(f)?.continuity?.characterTags,
+                  duration: f.durationMs ? f.durationMs / 1000 : 3,
+                  aspectRatio: sequence.aspectRatio,
+                };
+              }),
+            };
+            return triggerWorkflow('/motion-batch', workflowInput, {
               deduplicationId: `add-video-${sequence.id}-${model}-${Date.now()}`,
               label: buildWorkflowLabel(sequence.id),
-            })
+            });
+          }
         );
         return {
           workflowRunId,

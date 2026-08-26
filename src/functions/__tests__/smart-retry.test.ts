@@ -604,12 +604,20 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     // the sequence default.
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/image',
-      expect.objectContaining({ shotId: 'shot-a', model: 'gpt_image_2' }),
+      expect.objectContaining({
+        shotId: 'shot-a',
+        model: 'gpt_image_2',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/image',
-      expect.objectContaining({ shotId: 'shot-b', model: 'flux_2_max' }),
+      expect.objectContaining({
+        shotId: 'shot-b',
+        model: 'flux_2_max',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
 
@@ -660,12 +668,20 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
 
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/motion',
-      expect.objectContaining({ shotId: 'shot-a', model: 'seedance_v2' }),
+      expect.objectContaining({
+        shotId: 'shot-a',
+        model: 'seedance_v2',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/motion',
-      expect.objectContaining({ shotId: 'shot-b', model: 'kling_v3_pro' }),
+      expect.objectContaining({
+        shotId: 'shot-b',
+        model: 'kling_v3_pro',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
   });

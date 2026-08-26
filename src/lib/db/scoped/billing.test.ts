@@ -352,6 +352,34 @@ describe('createReservation / captureReservation / zeroReservation (#1310)', () 
 
     expect(captured).toEqual({ ok: true, captured: actual });
     expect(await billing.getBalance()).toBe(STARTING_BALANCE - actual);
+
+    const replay = await billing.captureReservation(
+      created.reservationId,
+      actual,
+      {
+        description: 'Motion generation',
+        idempotencyKey: 'run-1:motion',
+      }
+    );
+    expect(replay).toEqual({ ok: true, captured: actual });
+    const afterReplay = await billing.getAvailable();
+    expect(afterReplay.reserved).toBe(0);
+    expect(afterReplay.balance).toBe(STARTING_BALANCE - actual);
+
+    const [hold] = await db
+      .select({
+        remaining: creditReservations.remainingAmount,
+        original: creditReservations.originalAmount,
+      })
+      .from(creditReservations)
+      .where(eq(creditReservations.id, created.reservationId));
+    expect(hold).toEqual({ remaining: 0, original: actual });
+
+    const rows = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.teamId, teamId));
+    expect(rows).toHaveLength(1);
   });
 
   it('capture extra that cannot be paid charges remaining and reports the skipped delta', async () => {
@@ -382,6 +410,38 @@ describe('createReservation / captureReservation / zeroReservation (#1310)', () 
     expect(captured.captured).toBe(cost);
     expect(captured.skippedDeltaMicros).toBe(micros(250_000));
     expect(await billing.getBalance()).toBe(0);
+  });
+
+  it('capture against emptied remaining reports skipped delta instead of silent zero', async () => {
+    await db
+      .update(credits)
+      .set({ balance: 1_000_000 })
+      .where(eq(credits.teamId, teamId));
+
+    const billing = createBillingMethods(db, teamId, userId);
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    await billing.captureReservation(created.reservationId, cost, {
+      description: 'first',
+      idempotencyKey: 'run-1:a',
+    });
+    const second = await billing.captureReservation(
+      created.reservationId,
+      micros(500_000),
+      {
+        description: 'second',
+        idempotencyKey: 'run-1:b',
+      }
+    );
+    expect(second).toEqual({
+      ok: true,
+      captured: 0,
+      skippedDeltaMicros: micros(500_000),
+    });
   });
 
   it('concurrent captures split remaining instead of silent-zeroing a sibling', async () => {

@@ -77,9 +77,10 @@ export interface UserWorkflowContext {
    */
   reservationId?: string;
   /**
-   * This run created the envelope (add-model / smart-retry / single-shot).
-   * The base class zeros leftover on success and failure. Leave unset on
-   * children of a shared parent envelope — only the parent zeros.
+   * This instance created a private envelope (add-model per shot, smart-retry
+   * leaf). The base class zeros leftover on success and failure. Leave unset
+   * on shared-envelope children so the base class does not zero; parents may
+   * still zero explicitly.
    */
   ownsReservation?: boolean;
 }

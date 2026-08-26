@@ -86,12 +86,6 @@ export type SkippedDeductionContext = {
   metadata?: Record<string, unknown>;
 };
 
-/**
- * Last-resort skip: the generation already ran and the team still cannot
- * pay. Should be unreachable once spend is reserved before the provider
- * call (#1310). Emitted so unbilled spend is a queryable metric rather
- * than a log grep.
- */
 export type ReservationShortContext = {
   teamId?: string;
   sequenceId?: string;
@@ -123,6 +117,11 @@ export function reportReservationShort(ctx: ReservationShortContext): void {
   });
 }
 
+/**
+ * Generation ran but some or all of the cost was not posted: missing hold,
+ * capture short of actual, or posted-balance tryDeduct refused. Emitted so
+ * unbilled spend is a queryable metric rather than a log grep.
+ */
 export function reportSkippedDeduction(ctx: SkippedDeductionContext): void {
   logger.warn('Completed AI generation skipped deduction', ctx);
 

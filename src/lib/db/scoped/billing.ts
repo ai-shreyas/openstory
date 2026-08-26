@@ -407,8 +407,8 @@ export function createBillingMethods(
   }
 
   /**
-   * Charges provider cost at face value (no usage fee). Triggers auto-top-up if balance drops below
-   * threshold.
+   * Charges provider cost at face value (no usage fee). Triggers auto-top-up
+   * if available funds (posted minus open holds) drop to the threshold.
    *
    * Pass `opts.idempotencyKey` (convention: `${workflowInstanceId}:<charge-name>`)
    * from any retryable context — a workflow `step.do` that throws partway

@@ -46,5 +46,7 @@ describe('storyboard envelope wiring', () => {
     expect(source.indexOf('gateStoryboardRenders')).toBeLessThan(
       source.indexOf('spawn-shot-images')
     );
+    expect(source).toMatch(/updateStatus\('failed'/);
+    expect(source).toMatch(/NonRetryableError/);
   });
 });

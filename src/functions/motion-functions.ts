@@ -158,71 +158,76 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       }
     );
 
-    // Both of these are snapshotted HERE rather than re-read in the workflow:
-    // that read would be racy against concurrent append-only version writes and
-    // replay-unsafe, since this very run repoints the selection pointer
-    // (#713/#991).
-    const userEditProvenance = shouldRecordUserEdit({
-      userEditedPrompt,
-      prompt,
-      currentPrompt: selectedMotion?.text ?? null,
-    })
-      ? await buildUserEditProvenance({
-          kind: 'motion',
-          scopedDb: context.scopedDb,
-          sequence,
-          scene: context.scene
-            ? { ...context.scene, continuity: effectiveContinuity }
-            : null,
-          startingFrameImageUrl: imageUrl,
-        })
-      : undefined;
-
-    const workflowInput: BatchMotionMusicWorkflowInput = {
-      userId: context.user.id,
-      teamId,
-      sequenceId: sequence.id,
-      reservationId,
-      includeMusic: false,
-      shots: [
-        {
-          shotId: shot.id,
-          sceneId: shot.sceneId,
-          imageUrl,
-          frameVersionId: selectedStill.id,
-          motionPromptVersionId: selectedMotion?.id ?? null,
-          prompt,
-          model,
-          duration,
-          fps: data.fps,
-          motionBucket: data.motionBucket,
-          aspectRatio: sequence.aspectRatio,
-          generateAudio: data.generateAudio,
-          sceneTitle: context.scene?.metadata?.title,
-          sequenceTitle: sequence.title,
-          userEditProvenance,
-          priorMotion: userEditProvenance
-            ? {
-                dialogue: selectedMotion?.dialogue ?? null,
-                audio: selectedMotion?.audio ?? null,
-              }
-            : undefined,
-          referenceImages,
-        },
-      ],
-    };
-
-    const workflowRunId = await releaseReservationOnThrow(
+    return releaseReservationOnThrow(
       context.scopedDb,
       reservationId,
-      () =>
-        triggerWorkflow('/motion-batch', workflowInput, {
-          deduplicationId: `motion-batch-${shot.id}-${Date.now()}`,
-          label: buildWorkflowLabel(sequence.id),
+      async () => {
+        // Both of these are snapshotted HERE rather than re-read in the workflow:
+        // that read would be racy against concurrent append-only version writes and
+        // replay-unsafe, since this very run repoints the selection pointer
+        // (#713/#991).
+        const userEditProvenance = shouldRecordUserEdit({
+          userEditedPrompt,
+          prompt,
+          currentPrompt: selectedMotion?.text ?? null,
         })
-    );
+          ? await buildUserEditProvenance({
+              kind: 'motion',
+              scopedDb: context.scopedDb,
+              sequence,
+              scene: context.scene
+                ? { ...context.scene, continuity: effectiveContinuity }
+                : null,
+              startingFrameImageUrl: imageUrl,
+            })
+          : undefined;
 
-    return { workflowRunId, shotId: shot.id };
+        const workflowInput: BatchMotionMusicWorkflowInput = {
+          userId: context.user.id,
+          teamId,
+          sequenceId: sequence.id,
+          reservationId,
+          includeMusic: false,
+          shots: [
+            {
+              shotId: shot.id,
+              sceneId: shot.sceneId,
+              imageUrl,
+              frameVersionId: selectedStill.id,
+              motionPromptVersionId: selectedMotion?.id ?? null,
+              prompt,
+              model,
+              duration,
+              fps: data.fps,
+              motionBucket: data.motionBucket,
+              aspectRatio: sequence.aspectRatio,
+              generateAudio: data.generateAudio,
+              sceneTitle: context.scene?.metadata?.title,
+              sequenceTitle: sequence.title,
+              userEditProvenance,
+              priorMotion: userEditProvenance
+                ? {
+                    dialogue: selectedMotion?.dialogue ?? null,
+                    audio: selectedMotion?.audio ?? null,
+                  }
+                : undefined,
+              referenceImages,
+            },
+          ],
+        };
+
+        const workflowRunId = await triggerWorkflow(
+          '/motion-batch',
+          workflowInput,
+          {
+            deduplicationId: `motion-batch-${shot.id}-${Date.now()}`,
+            label: buildWorkflowLabel(sequence.id),
+          }
+        );
+
+        return { workflowRunId, shotId: shot.id };
+      }
+    );
   });
 
 // -- Batch Generate Motion for Sequence ----------------------------------
@@ -354,6 +359,12 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       }
     );
 
+    const includeMusic =
+      (data.includeMusic ?? false) && sequence.musicStatus !== 'generating';
+    if (includeMusic && (!sequence.musicPrompt || !sequence.musicTags)) {
+      throw new Error('No music prompt or tags found');
+    }
+
     const reservationId = await reserveRunCredits(
       context.scopedDb,
       estimatedCost,
@@ -363,111 +374,110 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       }
     );
 
-    const includeMusic =
-      (data.includeMusic ?? false) && sequence.musicStatus !== 'generating';
-
-    // Persist the batch model picks so the sequence header chip, future batch
-    // sessions, and storyboard regen reflect what the user just chose.
-    const videoModelChanged = data.model && data.model !== sequence.videoModel;
-    const musicModelChanged =
-      includeMusic &&
-      data.musicModel &&
-      data.musicModel !== sequence.musicModel;
-    if (videoModelChanged || musicModelChanged) {
-      await context.scopedDb.sequences.update({
-        id: sequence.id,
-        ...(videoModelChanged ? { videoModel: data.model } : {}),
-        ...(musicModelChanged ? { musicModel: data.musicModel } : {}),
-      });
-    }
-
-    // Build music config if requested
-    let musicConfig: BatchMotionMusicWorkflowInput['music'];
-    if (includeMusic) {
-      if (!sequence.musicPrompt || !sequence.musicTags) {
-        throw new Error('No music prompt or tags found');
-      }
-
-      const totalDuration = allShots.reduce(
-        (sum, shot) => sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
-        0
-      );
-
-      musicConfig = {
-        prompt: sequence.musicPrompt,
-        tags: sequence.musicTags,
-        duration: totalDuration || 30,
-        model: data.musicModel,
-      };
-    }
-
-    // Batch-load the selected motion prompt version for every eligible shot —
-    // the resolution source of truth (#713), replacing `metadata.prompts.motion`.
-    const selectedMotionByShot =
-      await context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
-        eligibleShots.map((s) => s.id)
-      );
-
-    const workflowInput: BatchMotionMusicWorkflowInput = {
-      userId: user.id,
-      teamId,
-      sequenceId: sequence.id,
-      reservationId,
-      includeMusic,
-      shots: eligibleShots.map((shot) => {
-        const shotModel = resolveShotVideoModel(shot);
-        const scene = sceneOf(shot);
-        const selectedMotion = selectedMotionByShot.get(shot.id);
-        return {
-          shotId: shot.id,
-          sceneId: shot.sceneId,
-          imageUrl: shot.image?.url ?? '',
-          // The versions this clip renders from, pinned here so the render
-          // manifest can't name rows a concurrent edit repointed to.
-          frameVersionId: shot.image?.id ?? null,
-          motionPromptVersionId: selectedMotion?.id ?? null,
-          prompt: resolveMotionPromptFromVersion(
-            selectedMotion,
-            {
-              characterTags: scene?.continuity?.characterTags,
-              description: scene?.originalScript.extract ?? null,
-            },
-            shotModel
-          ),
-          model: shotModel,
-          sceneTitle: scene?.metadata?.title,
-          sequenceTitle: sequence.title,
-          duration:
-            data.duration ?? (shot.durationMs ? shot.durationMs / 1000 : 3),
-          fps: data.fps,
-          motionBucket: data.motionBucket,
-          aspectRatio: sequence.aspectRatio,
-          generateAudio: data.generateAudio,
-          referenceImages: buildMotionReferenceImages({
-            scene,
-            characters,
-            elements,
-          }),
-        };
-      }),
-      music: musicConfig,
-    };
-
-    const workflowRunId = await releaseReservationOnThrow(
+    return releaseReservationOnThrow(
       context.scopedDb,
       reservationId,
-      () =>
-        triggerWorkflow('/motion-batch', workflowInput, {
-          deduplicationId: `motion-batch-${sequence.id}-${Date.now()}`,
-          label: buildWorkflowLabel(sequence.id),
-        })
-    );
+      async () => {
+        // Persist the batch model picks so the sequence header chip, future batch
+        // sessions, and storyboard regen reflect what the user just chose.
+        const videoModelChanged =
+          data.model && data.model !== sequence.videoModel;
+        const musicModelChanged =
+          includeMusic &&
+          data.musicModel &&
+          data.musicModel !== sequence.musicModel;
+        if (videoModelChanged || musicModelChanged) {
+          await context.scopedDb.sequences.update({
+            id: sequence.id,
+            ...(videoModelChanged ? { videoModel: data.model } : {}),
+            ...(musicModelChanged ? { musicModel: data.musicModel } : {}),
+          });
+        }
 
-    return {
-      sequenceId: sequence.id,
-      totalShots: allShots.length,
-      eligibleShots: eligibleShots.length,
-      workflowRunId,
-      includeMusic,
-    };
+        let musicConfig: BatchMotionMusicWorkflowInput['music'];
+        if (includeMusic && sequence.musicPrompt && sequence.musicTags) {
+          const totalDuration = allShots.reduce(
+            (sum, shot) =>
+              sum + (shot.durationMs ? shot.durationMs / 1000 : 10),
+            0
+          );
+
+          musicConfig = {
+            prompt: sequence.musicPrompt,
+            tags: sequence.musicTags,
+            duration: totalDuration || 30,
+            model: data.musicModel,
+          };
+        }
+
+        // Batch-load the selected motion prompt version for every eligible shot —
+        // the resolution source of truth (#713), replacing `metadata.prompts.motion`.
+        const selectedMotionByShot =
+          await context.scopedDb.shotPromptVersions.getSelectedMotionByShots(
+            eligibleShots.map((s) => s.id)
+          );
+
+        const workflowInput: BatchMotionMusicWorkflowInput = {
+          userId: user.id,
+          teamId,
+          sequenceId: sequence.id,
+          reservationId,
+          includeMusic,
+          shots: eligibleShots.map((shot) => {
+            const shotModel = resolveShotVideoModel(shot);
+            const scene = sceneOf(shot);
+            const selectedMotion = selectedMotionByShot.get(shot.id);
+            return {
+              shotId: shot.id,
+              sceneId: shot.sceneId,
+              imageUrl: shot.image?.url ?? '',
+              // The versions this clip renders from, pinned here so the render
+              // manifest can't name rows a concurrent edit repointed to.
+              frameVersionId: shot.image?.id ?? null,
+              motionPromptVersionId: selectedMotion?.id ?? null,
+              prompt: resolveMotionPromptFromVersion(
+                selectedMotion,
+                {
+                  characterTags: scene?.continuity?.characterTags,
+                  description: scene?.originalScript.extract ?? null,
+                },
+                shotModel
+              ),
+              model: shotModel,
+              sceneTitle: scene?.metadata?.title,
+              sequenceTitle: sequence.title,
+              duration:
+                data.duration ?? (shot.durationMs ? shot.durationMs / 1000 : 3),
+              fps: data.fps,
+              motionBucket: data.motionBucket,
+              aspectRatio: sequence.aspectRatio,
+              generateAudio: data.generateAudio,
+              referenceImages: buildMotionReferenceImages({
+                scene,
+                characters,
+                elements,
+              }),
+            };
+          }),
+          music: musicConfig,
+        };
+
+        const workflowRunId = await triggerWorkflow(
+          '/motion-batch',
+          workflowInput,
+          {
+            deduplicationId: `motion-batch-${sequence.id}-${Date.now()}`,
+            label: buildWorkflowLabel(sequence.id),
+          }
+        );
+
+        return {
+          sequenceId: sequence.id,
+          totalShots: allShots.length,
+          eligibleShots: eligibleShots.length,
+          workflowRunId,
+          includeMusic,
+        };
+      }
+    );
   });
