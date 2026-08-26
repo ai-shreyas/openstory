@@ -141,6 +141,8 @@ type MarkdownEditorProps = {
    * later becomes a list, or the extension never registers.
    */
   mentionItems?: MentionItem[];
+  /** Map the chosen @ row to the item to insert (see `createMentionSuggestion`). */
+  onMentionSelect?: (item: MentionItem) => MentionItem;
 };
 
 const containerBaseClasses =
@@ -174,6 +176,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   'aria-invalid': ariaInvalid,
   'data-testid': dataTestId,
   mentionItems,
+  onMentionSelect,
 }) => {
   // useEditor captures props at init. Bag the live onKeyDown in a ref so the
   // handler reads the freshest callback without needing to recreate the editor.
@@ -191,6 +194,8 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   const mentionItemsRef = useRef<MentionItem[]>(mentionItems ?? []);
   mentionItemsRef.current = mentionItems ?? [];
   const hasMentions = mentionItems !== undefined;
+  const onMentionSelectRef = useRef(onMentionSelect);
+  onMentionSelectRef.current = onMentionSelect;
 
   // Signature changes when the set of available tags changes; drives the
   // "re-pill on items load" effect below.
@@ -235,7 +240,8 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             PromptMention.configure({
               // oxlint-disable-next-line typescript/no-unsafe-type-assertion
               suggestion: createMentionSuggestion(
-                () => mentionItemsRef.current
+                () => mentionItemsRef.current,
+                () => onMentionSelectRef.current
               ) as MentionConfigure['suggestion'],
             }),
           ]

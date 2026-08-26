@@ -60,6 +60,7 @@ import type {
 } from '@/lib/db/schema';
 import type { ReferenceImageDescription } from '@/lib/prompts/reference-image-prompt';
 import type { UpdateStalePlan } from '@/lib/shots/update-stale-plan';
+import type { StudioCreateInput } from '@/lib/studio/schema';
 import type { Json } from '@/types/database';
 import { z } from 'zod';
 import type { musicDesignResultSchema } from '../ai/response-schemas';
@@ -1501,6 +1502,17 @@ export interface AssetGenerationWorkflowInput extends UserWorkflowContext {
   activity: GeneratedAssetActivity;
   /** Schema-validated endpoint input, forwarded verbatim to fal. */
   input: GeneratedAssetInput;
+}
+
+/**
+ * Images and Videos (#1274). The validated create input rides along whole,
+ * so the run never re-reads the row and the `activity` discriminant keeps
+ * image/video fields where the types can prove them. Video `duration` is
+ * already snapped to the model's accepted seconds.
+ */
+export interface StudioGenerationWorkflowInput extends UserWorkflowContext {
+  assetId: string;
+  input: StudioCreateInput;
 }
 
 /**

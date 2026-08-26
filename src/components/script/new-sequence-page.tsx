@@ -1,6 +1,7 @@
 import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { OpenStoryLogo } from '@/components/icons/openstory-logo';
 import { PageContainer } from '@/components/layout/page-container';
+import { PageIntro } from '@/components/typography/page-intro';
 import { ScriptView } from '@/components/script/script-view';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useBillingGate } from '@/hooks/use-billing-gate';
@@ -227,25 +228,34 @@ export function NewSequencePage({
     );
   }
 
-  // Signed-in: the script box fills the screen (no marketing chrome).
-  // Logged-out: logo + tagline + composer.
+  // Signed-in: same left one-liner as Sequences / Images / Models, then the
+  // script box. Logged-out: logo + centered tagline + composer.
   if (user) {
     return (
-      <div className="h-full">
+      <div className="flex h-full flex-col overflow-hidden">
         {billingGate}
-        <PageContainer maxWidth="narrow" fullHeight>
-          <ScriptView
-            key={from ? `copy:${from}` : composerKey}
-            loading={false}
-            onSuccess={handleSuccess}
-            sequence={sourceSequence}
-            allowScriptEdit={!!from}
-            onCancel={handleCancelCopy}
-            initialScript={from ? undefined : seedScript}
-            initialStyleId={from ? undefined : seedStyleId}
-            initialScriptIsSample={!from && !!seedScript}
-            onStyleChange={from ? undefined : handleStyleChange}
-          />
+        <PageIntro title={SITE_CONFIG.tagline} maxWidth="narrow">
+          {SITE_CONFIG.taglineSub}
+        </PageIntro>
+        <PageContainer
+          maxWidth="narrow"
+          padding="none"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
+          <div className="flex min-h-0 flex-1 flex-col">
+            <ScriptView
+              key={from ? `copy:${from}` : composerKey}
+              loading={false}
+              onSuccess={handleSuccess}
+              sequence={sourceSequence}
+              allowScriptEdit={!!from}
+              onCancel={handleCancelCopy}
+              initialScript={from ? undefined : seedScript}
+              initialStyleId={from ? undefined : seedStyleId}
+              initialScriptIsSample={!from && !!seedScript}
+              onStyleChange={from ? undefined : handleStyleChange}
+            />
+          </div>
         </PageContainer>
       </div>
     );

@@ -1,6 +1,7 @@
 import { SignInPrompt } from '@/components/auth/sign-in-prompt';
 import { EvalView } from '@/components/eval/eval-view';
 import { PageContainer } from '@/components/layout/page-container';
+import { PageIntro } from '@/components/typography/page-intro';
 import { useSequencesListPrefs } from '@/hooks/use-sequences-list-prefs';
 import { useUser } from '@/hooks/use-user';
 import { sequencesListSearchSchema } from '@/lib/sequences/list-prefs';
@@ -18,22 +19,26 @@ function SequencesPage() {
   const { data: currentUser } = useUser();
 
   return (
-    <PageContainer
-      maxWidth="full"
-      padding="compact"
-      className="flex-1 flex flex-col overflow-hidden"
-    >
-      <h1 className="sr-only">Your Sequences</h1>
-      {currentUser ? (
-        <SequencesEvalView search={search} />
-      ) : (
-        <SignInPrompt
-          icon={<Video className="h-12 w-12" />}
-          title="Sign in to see your sequences"
-          description="Your generated sequences live here once you create an account."
-        />
-      )}
-    </PageContainer>
+    <>
+      <PageIntro title="Your Sequences" maxWidth="full">
+        Your films, from first draft to final cut.
+      </PageIntro>
+      <PageContainer
+        maxWidth="full"
+        padding="none"
+        className="flex min-h-0 flex-1 flex-col overflow-hidden pb-4"
+      >
+        {currentUser ? (
+          <SequencesEvalView search={search} />
+        ) : (
+          <SignInPrompt
+            icon={<Video className="h-12 w-12" />}
+            title="Sign in to see your sequences"
+            description="Your generated sequences live here once you create an account."
+          />
+        )}
+      </PageContainer>
+    </>
   );
 }
 
