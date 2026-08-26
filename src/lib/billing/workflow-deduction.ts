@@ -3,8 +3,8 @@
  * throwing) on insufficient credits, since the work is already done.
  *
  * When the payload carries a `reservationId` (run envelope, #1310), capture
- * posts usage against that hold. Otherwise last-resort `tryDeductCredits`
- * charges posted balance. The post-hoc skip is a last-resort guard.
+ * posts usage against that hold. Otherwise `tryDeductCredits` charges posted
+ * balance. A missing hold or a short capture reports the unbilled remainder.
  *
  * Pricing observations are deliberately NOT recorded here: call sites guard
  * deduction behind `cost > 0 && !usedOwnKey`, so a recorder inside this
@@ -79,7 +79,7 @@ function skipDeduction(
  * warn, skip, and fire an auto-top-up attempt.
  *
  * When `reservationId` is set, capture against that envelope. Otherwise
- * last-resort atomic deduct.
+ * atomic deduct of posted balance.
  */
 export async function deductWorkflowCredits(
   opts: WorkflowDeductionOpts
@@ -110,7 +110,11 @@ export async function deductWorkflowCredits(
         idempotencyKey: opts.idempotencyKey,
       }
     );
-    if (captured.ok && captured.skippedDeltaMicros) {
+    if (!captured.ok) {
+      skipDeduction(scopedDb, opts);
+      return;
+    }
+    if (captured.skippedDeltaMicros) {
       skipDeduction(scopedDb, {
         ...opts,
         costMicros: captured.skippedDeltaMicros,

@@ -18,7 +18,10 @@ import {
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { sumShotDurationsSeconds } from '@/lib/sequences/shot-durations';
 import { multiplyMicros } from '@/lib/billing/money';
-import { reserveRunCredits } from '@/lib/billing/preflight';
+import {
+  releaseReservationOnThrow,
+  reserveRunCredits,
+} from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
@@ -201,21 +204,23 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
       // persistence (#839), and the trigger-time content snapshot. Regeneration
       // used to trigger `/storyboard` raw, so it both bypassed the mutex and
       // left the workflow to re-derive the payload mid-run.
-      await triggerStoryboard(context.scopedDb, {
-        userId: context.user.id,
-        teamId: context.teamId,
-        sequenceId,
-        reservationId,
-        options: {
-          shotsPerScene: 3,
-          generateThumbnails: true,
-          generateDescriptions: true,
-          aiProvider: 'openrouter',
-          regenerateAll: true,
-        },
-        autoGenerateMotion: sequence.autoGenerateMotion,
-        autoGenerateMusic: sequence.autoGenerateMusic,
-      });
+      await releaseReservationOnThrow(context.scopedDb, reservationId, () =>
+        triggerStoryboard(context.scopedDb, {
+          userId: context.user.id,
+          teamId: context.teamId,
+          sequenceId,
+          reservationId,
+          options: {
+            shotsPerScene: 3,
+            generateThumbnails: true,
+            generateDescriptions: true,
+            aiProvider: 'openrouter',
+            regenerateAll: true,
+          },
+          autoGenerateMotion: sequence.autoGenerateMotion,
+          autoGenerateMusic: sequence.autoGenerateMusic,
+        })
+      );
     }
 
     return sequence;
@@ -312,7 +317,9 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
 
     // Owns the generation mutex, the 'processing' status write, and the
     // run-id persistence (#839).
-    await triggerStoryboard(context.scopedDb, workflowInput);
+    await releaseReservationOnThrow(context.scopedDb, reservationId, () =>
+      triggerStoryboard(context.scopedDb, workflowInput)
+    );
 
     return { success: true };
   });
@@ -482,6 +489,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           model,
         }),
         reservationId,
+        ownsReservation: true,
       };
       try {
         const workflowRunId = await triggerWorkflow('/music', musicInput, {
@@ -501,6 +509,17 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           sequenceId: sequence.id,
           model,
         });
+        if (reservationId) {
+          try {
+            await scopedDb.billing.zeroReservation(reservationId);
+          } catch (releaseError) {
+            logger.error('add-model: failed to zero music reservation', {
+              err: releaseError,
+              sequenceId: sequence.id,
+              reservationId,
+            });
+          }
+        }
         // Mark the pre-stamped row failed so the model can be re-added. Guard
         // the compensating write so its own failure can't mask the original
         // trigger error (which is what we want to surface to the user).
@@ -652,13 +671,14 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         }),
       };
       try {
-        const workflowRunId = await triggerWorkflow(
-          '/motion-batch',
-          workflowInput,
-          {
-            deduplicationId: `add-video-${sequence.id}-${model}-${Date.now()}`,
-            label: buildWorkflowLabel(sequence.id),
-          }
+        const workflowRunId = await releaseReservationOnThrow(
+          scopedDb,
+          reservationId,
+          () =>
+            triggerWorkflow('/motion-batch', workflowInput, {
+              deduplicationId: `add-video-${sequence.id}-${model}-${Date.now()}`,
+              label: buildWorkflowLabel(sequence.id),
+            })
         );
         return {
           workflowRunId,
@@ -750,37 +770,43 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       throw new Error('No shots have a prompt to generate from');
     }
 
-    const reservationId = await reserveRunCredits(
-      scopedDb,
-      multiplyMicros(
-        gateEstimate(
-          estimateImageCost(model, sequence.aspectRatio, 1, {
-            pricing: await getEffectiveFalPricing(),
-          }),
-          { model, operation: 'add-image-model' }
-        ),
-        inputs.length
-      ),
-      {
-        errorMessage: 'Insufficient credits to add this image model',
-        sequenceId: sequence.id,
-      }
+    const perShotCost = gateEstimate(
+      estimateImageCost(model, sequence.aspectRatio, 1, {
+        pricing: await getEffectiveFalPricing(),
+      }),
+      { model, operation: 'add-image-model' }
     );
 
-    // Trigger one image workflow per shot. A single shot's trigger failure
-    // shouldn't abort the rest of the batch — mark that shot's pending row
-    // failed (so it doesn't block a future re-add) and continue. Only throw if
-    // every shot failed to trigger.
+    // Trigger one image workflow per shot, each with its own hold. A shared
+    // envelope would let the first child to finish zero leftover for siblings.
+    // A single shot's trigger failure shouldn't abort the rest of the batch.
+    // Only throw if every shot failed to trigger.
     // No pre-seeded variant row: the IMAGE_WORKFLOW (variantOnly) appends the
     // in-flight `frame_variants` 'model' version itself in set-generating-status,
     // and its onFailure marks it failed — so there's nothing to pre-write here.
     let workflowRunId = '';
     let triggered = 0;
     for (const input of inputs) {
+      let reservationId: string | undefined;
+      try {
+        reservationId = await reserveRunCredits(scopedDb, perShotCost, {
+          errorMessage: 'Insufficient credits to add this image model',
+          sequenceId: sequence.id,
+        });
+      } catch (error) {
+        logger.error('add-model: insufficient credits for remaining shots', {
+          err: error,
+          sequenceId: sequence.id,
+          model,
+          triggered,
+        });
+        if (triggered === 0) throw error;
+        break;
+      }
       try {
         workflowRunId = await triggerWorkflow(
           '/image',
-          { ...input, reservationId },
+          { ...input, reservationId, ownsReservation: true },
           {
             deduplicationId: `add-image-${input.shotId}-${model}-${Date.now()}`,
             label: buildWorkflowLabel(sequence.id),
@@ -797,6 +823,17 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           shotId: input.shotId,
           model,
         });
+        if (reservationId) {
+          try {
+            await scopedDb.billing.zeroReservation(reservationId);
+          } catch (releaseError) {
+            logger.error('add-model: failed to zero image reservation', {
+              err: releaseError,
+              sequenceId: sequence.id,
+              reservationId,
+            });
+          }
+        }
       }
     }
     if (triggered === 0) {

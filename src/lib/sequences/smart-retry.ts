@@ -31,13 +31,16 @@ import {
   resolveVideoModel,
 } from '@/lib/ai/resolve-asset-models';
 import {
+  estimateAudioCost,
   estimateImageCost,
   estimateVideoCost,
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
-import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
-import { reserveRunCredits } from '@/lib/billing/preflight';
+import {
+  releaseReservationOnThrow,
+  reserveRunCredits,
+} from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -203,28 +206,29 @@ export async function executeSmartRetry(context: SmartRetryContext) {
 
     // Owns the generation mutex, the 'processing' status write, and the
     // run-id persistence (#839).
-    await triggerStoryboard(context.scopedDb, {
-      userId: user.id,
-      teamId,
-      sequenceId: sequence.id,
-      reservationId,
-      options: {
-        shotsPerScene: 3,
-        generateThumbnails: true,
-        generateDescriptions: true,
-        aiProvider: 'openrouter',
-        regenerateAll: true,
-      },
-      autoGenerateMotion: sequence.autoGenerateMotion,
-      autoGenerateMusic: sequence.autoGenerateMusic,
-    });
+    await releaseReservationOnThrow(context.scopedDb, reservationId, () =>
+      triggerStoryboard(context.scopedDb, {
+        userId: user.id,
+        teamId,
+        sequenceId: sequence.id,
+        reservationId,
+        options: {
+          shotsPerScene: 3,
+          generateThumbnails: true,
+          generateDescriptions: true,
+          aiProvider: 'openrouter',
+          regenerateAll: true,
+        },
+        autoGenerateMotion: sequence.autoGenerateMotion,
+        autoGenerateMusic: sequence.autoGenerateMusic,
+      })
+    );
 
     return { retryType: 'full' as const, retriedItems: ['full storyboard'] };
   }
 
   // Smart retry: only retry failed parts
   const retried: string[] = [];
-  let totalCost = ZERO_MICROS;
 
   // Model identity lives on the version that produced each asset (#1066).
   // Every shot here is in a failed state, so the FAILED attempt's model is the
@@ -266,42 +270,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   const hasMusicFailure =
     sequence.musicStatus === 'failed' && sequence.musicPrompt;
 
-  // Calculate total cost — sum per shot since scenes may use different models.
   const pricing = await getEffectiveFalPricing();
-  for (const shot of failedImageShots) {
-    totalCost = addMicros(
-      totalCost,
-      gateEstimate(
-        estimateImageCost(imageModelFor(shot), sequence.aspectRatio, 1, {
-          pricing,
-        }),
-        { model: imageModelFor(shot), operation: 'smart-retry:image' }
-      )
-    );
-  }
-
-  if (failedMotionShots.length > 0) {
-    const { snapDuration } = await import('@/lib/motion/snap-duration');
-    for (const shot of failedMotionShots) {
-      const model = videoModelFor(shot);
-      totalCost = addMicros(
-        totalCost,
-        gateEstimate(
-          estimateVideoCost(model, snapDuration(undefined, model), { pricing }),
-          { model, operation: 'smart-retry:motion' }
-        )
-      );
-    }
-  }
-
-  const reservationId =
-    totalCost > 0
-      ? await reserveRunCredits(context.scopedDb, totalCost, {
-          providers: ['fal'],
-          errorMessage: 'Insufficient credits to retry failed items',
-          sequenceId: sequence.id,
-        })
-      : undefined;
 
   // 1. Retry failed images
   if (failedImageShots.length > 0) {
@@ -325,12 +294,27 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         characterTags
       );
 
+      const imageModel = imageModelFor(shot);
+      const imageCost = gateEstimate(
+        estimateImageCost(imageModel, sequence.aspectRatio, 1, { pricing }),
+        { model: imageModel, operation: 'smart-retry:image' }
+      );
+      const reservationId =
+        imageCost > 0
+          ? await reserveRunCredits(context.scopedDb, imageCost, {
+              providers: ['fal'],
+              errorMessage: 'Insufficient credits to retry failed items',
+              sequenceId: sequence.id,
+            })
+          : undefined;
+
       const workflowInput: ImageWorkflowInput = {
         userId: user.id,
         teamId,
         reservationId,
+        ownsReservation: true,
         prompt,
-        model: imageModelFor(shot),
+        model: imageModel,
         imageSize: aspectRatioToImageSize(sequence.aspectRatio),
         numImages: 1,
         shotId: shot.id,
@@ -342,9 +326,11 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         referenceImages,
       };
 
-      await triggerWorkflow('/image', workflowInput, {
-        label: buildWorkflowLabel(sequence.id),
-      });
+      await releaseReservationOnThrow(context.scopedDb, reservationId, () =>
+        triggerWorkflow('/image', workflowInput, {
+          label: buildWorkflowLabel(sequence.id),
+        })
+      );
       triggeredImages++;
     }
 
@@ -353,6 +339,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
 
   // 2. Retry failed motion
   if (failedMotionShots.length > 0) {
+    const { snapDuration } = await import('@/lib/motion/snap-duration');
     let triggeredMotion = 0;
     for (const shot of failedMotionShots) {
       const imageUrl = shot.image?.url;
@@ -361,10 +348,27 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       const shotVideoModel = videoModelFor(shot);
       const scene = sceneOf(shot);
       const selectedMotion = selectedMotionByShot.get(shot.id) ?? null;
+      const motionCost = gateEstimate(
+        estimateVideoCost(
+          shotVideoModel,
+          snapDuration(undefined, shotVideoModel),
+          { pricing }
+        ),
+        { model: shotVideoModel, operation: 'smart-retry:motion' }
+      );
+      const reservationId =
+        motionCost > 0
+          ? await reserveRunCredits(context.scopedDb, motionCost, {
+              providers: ['fal'],
+              errorMessage: 'Insufficient credits to retry failed items',
+              sequenceId: sequence.id,
+            })
+          : undefined;
       const workflowInput: MotionWorkflowInput = {
         userId: user.id,
         teamId,
         reservationId,
+        ownsReservation: true,
         shotId: shot.id,
         sceneId: shot.sceneId,
         sequenceId: sequence.id,
@@ -387,9 +391,11 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         duration: shot.durationMs ? shot.durationMs / 1000 : undefined,
       };
 
-      await triggerWorkflow('/motion', workflowInput, {
-        label: buildWorkflowLabel(sequence.id),
-      });
+      await releaseReservationOnThrow(context.scopedDb, reservationId, () =>
+        triggerWorkflow('/motion', workflowInput, {
+          label: buildWorkflowLabel(sequence.id),
+        })
+      );
       triggeredMotion++;
     }
 
@@ -402,12 +408,26 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   if (hasMusicFailure && sequence.musicPrompt) {
     const allShots = await context.scopedDb.shots.listBySequence(sequence.id);
     const totalDuration = sumShotDurationsSeconds(allShots);
+    const musicModel = safeAudioModel(sequence.musicModel, DEFAULT_MUSIC_MODEL);
+    const musicCost = gateEstimate(
+      estimateAudioCost(musicModel, totalDuration || 30, { pricing }),
+      { model: musicModel, operation: 'smart-retry:music' }
+    );
+    const reservationId =
+      musicCost > 0
+        ? await reserveRunCredits(context.scopedDb, musicCost, {
+            providers: ['fal'],
+            errorMessage: 'Insufficient credits to retry failed items',
+            sequenceId: sequence.id,
+          })
+        : undefined;
 
     const musicInput: MusicWorkflowInput = {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
       reservationId,
+      ownsReservation: true,
       prompt: sequence.musicPrompt,
       tags: sequence.musicTags ?? '',
       duration: totalDuration || 30,
@@ -418,9 +438,11 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       musicError: null,
     });
 
-    await triggerWorkflow('/music', musicInput, {
-      label: buildWorkflowLabel(sequence.id),
-    });
+    await releaseReservationOnThrow(context.scopedDb, reservationId, () =>
+      triggerWorkflow('/music', musicInput, {
+        label: buildWorkflowLabel(sequence.id),
+      })
+    );
 
     retried.push('music');
   }
@@ -447,7 +469,6 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         userId: user.id,
         teamId,
         sequenceId: sequence.id,
-        reservationId,
         sceneSummaries: scenes,
         analysisModelId:
           getAnalysisModelById(sequence.analysisModel)?.id ??

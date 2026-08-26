@@ -137,6 +137,62 @@ describe('deductWorkflowCredits', () => {
     );
   });
 
+  it('alerts the full cost when the reservation is missing', async () => {
+    reportSkippedDeduction.mockClear();
+    const { scopedDb, tryDeductCredits, captureReservation, checkAutoTopUp } =
+      makeScopedDb();
+    captureReservation.mockResolvedValue({ ok: false, reason: 'missing' });
+
+    await deductWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(2_000_000),
+      usedOwnKey: false,
+      description: 'Motion generation (test-model)',
+      idempotencyKey: 'wf-1:motion',
+      workflowName: 'MotionWorkflow:cf',
+      reservationId: 'res_gone',
+    });
+
+    expect(tryDeductCredits).not.toHaveBeenCalled();
+    expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
+    expect(reportSkippedDeduction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costMicros: micros(2_000_000),
+        workflowName: 'MotionWorkflow:cf',
+      })
+    );
+  });
+
+  it('alerts when capture collects nothing of the actual', async () => {
+    reportSkippedDeduction.mockClear();
+    const { scopedDb, tryDeductCredits, captureReservation, checkAutoTopUp } =
+      makeScopedDb();
+    captureReservation.mockResolvedValue({
+      ok: true,
+      captured: ZERO_MICROS,
+      skippedDeltaMicros: micros(2_000_000),
+    });
+
+    await deductWorkflowCreditsImpl({
+      scopedDb,
+      costMicros: micros(2_000_000),
+      usedOwnKey: false,
+      description: 'Motion generation (test-model)',
+      idempotencyKey: 'wf-1:motion',
+      workflowName: 'MotionWorkflow:cf',
+      reservationId: 'res_1',
+    });
+
+    expect(tryDeductCredits).not.toHaveBeenCalled();
+    expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
+    expect(reportSkippedDeduction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        costMicros: micros(2_000_000),
+        workflowName: 'MotionWorkflow:cf',
+      })
+    );
+  });
+
   it('skips when the team used its own key', async () => {
     const { scopedDb, tryDeductCredits, captureReservation } = makeScopedDb();
 

@@ -384,6 +384,52 @@ describe('createReservation / captureReservation / zeroReservation (#1310)', () 
     expect(await billing.getBalance()).toBe(0);
   });
 
+  it('concurrent captures split remaining instead of silent-zeroing a sibling', async () => {
+    // Posted equals the hold so grow cannot cover the extra — this is the
+    // #1310 race: two $1.20 captures against $1.80 remaining used to let the
+    // loser return captured:0 with no skippedDelta, so deduction posted $0.
+    const held = micros(1_800_000);
+    await db
+      .update(credits)
+      .set({ balance: held })
+      .where(eq(credits.teamId, teamId));
+
+    const billing = createBillingMethods(db, teamId, userId);
+    const created = await billing.createReservation(held, {
+      idempotencyKey: 'run-1:reserve',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const actual = micros(1_200_000);
+    const results = await Promise.all([
+      billing.captureReservation(created.reservationId, actual, {
+        description: 'Motion A',
+        idempotencyKey: 'run-1:motion-a',
+      }),
+      billing.captureReservation(created.reservationId, actual, {
+        description: 'Motion B',
+        idempotencyKey: 'run-1:motion-b',
+      }),
+    ]);
+
+    expect(results.every((r) => r.ok)).toBe(true);
+    const okResults = results.filter(
+      (r): r is Extract<typeof r, { ok: true }> => r.ok
+    );
+    const capturedSum = okResults.reduce((sum, r) => sum + r.captured, 0);
+    const skippedSum = okResults.reduce(
+      (sum, r) => sum + (r.skippedDeltaMicros ?? 0),
+      0
+    );
+    expect(capturedSum).toBe(held);
+    expect(skippedSum).toBe(micros(600_000));
+    expect(
+      okResults.some((r) => r.captured === 0 && !r.skippedDeltaMicros)
+    ).toBe(false);
+    expect(await billing.getBalance()).toBe(0);
+  });
+
   it('expired remaining does not reduce available', async () => {
     const billing = createBillingMethods(db, teamId, userId);
     const created = await billing.createReservation(cost, {

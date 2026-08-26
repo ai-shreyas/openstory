@@ -12,7 +12,11 @@ import {
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { getFrameImageUrl } from '@/lib/shots/frame-image';
-import { requireCredits, reserveRunCredits } from '@/lib/billing/preflight';
+import {
+  releaseReservationOnThrow,
+  requireCredits,
+  reserveRunCredits,
+} from '@/lib/billing/preflight';
 import { getVariantGridConfig } from '@/lib/constants/aspect-ratios';
 import { cropTileFromGrid } from '@/lib/image/image-crop';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
@@ -86,9 +90,10 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
 
     // Owns the generation mutex, the 'processing' status write, and the
     // run-id persistence (#839).
-    const { workflowRunId } = await triggerStoryboard(
+    const { workflowRunId } = await releaseReservationOnThrow(
       context.scopedDb,
-      workflowInput
+      reservationId,
+      () => triggerStoryboard(context.scopedDb, workflowInput)
     );
 
     return { workflowRunId, shots: [] };

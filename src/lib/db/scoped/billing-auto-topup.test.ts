@@ -7,6 +7,7 @@ import { micros } from '@/lib/billing/money';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
 import {
+  creditReservations,
   credits,
   teamBillingSettings,
   teams,
@@ -68,6 +69,7 @@ afterAll(() => {
 beforeEach(async () => {
   vi.clearAllMocks();
   await db.delete(transactions);
+  await db.delete(creditReservations);
   await db.delete(teamBillingSettings);
   await db.delete(credits);
   await db.delete(teams);
@@ -136,6 +138,27 @@ describe('maybeAutoTopUp', () => {
     await billing.checkAutoTopUp();
 
     expect(paymentIntentCreate).not.toHaveBeenCalled();
+  });
+
+  it('charges when available funds are below the threshold even if posted is not', async () => {
+    // Posted $6, $5 held → available $1, threshold $5. Auto-top-up used to
+    // key off posted and skip while the pill showed $1.
+    await seedSettings({ balance: 6_000_000, thresholdMicros: 5_000_000 });
+    paymentIntentCreate.mockResolvedValue({
+      id: 'pi_1',
+      status: 'succeeded',
+      latest_charge: null,
+    });
+
+    const billing = createBillingMethods(db, teamId, userId);
+    const held = await billing.createReservation(micros(5_000_000), {
+      idempotencyKey: 'hold-1',
+    });
+    expect(held.ok).toBe(true);
+
+    await billing.checkAutoTopUp();
+
+    expect(paymentIntentCreate).toHaveBeenCalledTimes(1);
   });
 
   it('honours a $0 threshold instead of reading it as "unset"', async () => {

@@ -8,6 +8,9 @@ import type { Microdollars } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { InsufficientCreditsError } from '@/lib/errors';
 import { generateId } from '@/lib/db/id';
+import { getLogger } from '@/lib/observability/logger';
+
+const logger = getLogger(['openstory', 'billing', 'preflight']);
 
 /**
  * The two live checks a preflight makes: whether the team can pay, and whether
@@ -111,4 +114,35 @@ export async function reserveRunCredits(
     );
   }
   return result.reservationId;
+}
+
+type ReservationReleaseDb = {
+  billing: Pick<ScopedDb['billing'], 'zeroReservation'>;
+};
+
+/**
+ * Zero a hold if the work after `reserveRunCredits` throws (trigger
+ * failed, sequence insert failed). Success leaves leftover for the
+ * workflow that owns the envelope to capture against and zero.
+ */
+export async function releaseReservationOnThrow<T>(
+  scopedDb: ReservationReleaseDb,
+  reservationId: string | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (reservationId) {
+      try {
+        await scopedDb.billing.zeroReservation(reservationId);
+      } catch (releaseError) {
+        logger.error('Failed to zero reservation after trigger error', {
+          err: releaseError,
+          reservationId,
+        });
+      }
+    }
+    throw error;
+  }
 }

@@ -531,8 +531,12 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     });
 
     if (!renderGate.spawnRenders) {
+      const shortMessage = `Not enough credits to generate images for ${scenes.length} scenes. Add credits and retry.`;
       await step.do('emit-reservation-short', async () => {
         if (!sequenceId) return;
+        await scopedDb
+          .sequence(sequenceId)
+          .updateStatus('failed', shortMessage);
         await getGenerationChannel(sequenceId).emit(
           'generation.reservation:short',
           {
@@ -550,7 +554,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           );
         }
       });
-      return scenesWithVisualPrompts;
+      throw new NonRetryableError(shortMessage);
     }
 
     // ----------------------------------------------------------------------

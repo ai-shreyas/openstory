@@ -76,6 +76,12 @@ export interface UserWorkflowContext {
    * last-resort deduct. Children inherit this from the parent payload.
    */
   reservationId?: string;
+  /**
+   * This run created the envelope (add-model / smart-retry / single-shot).
+   * The base class zeros leftover on success and failure. Leave unset on
+   * children of a shared parent envelope — only the parent zeros.
+   */
+  ownsReservation?: boolean;
 }
 
 export interface SequenceWorkflowContext extends UserWorkflowContext {

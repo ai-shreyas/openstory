@@ -20,7 +20,10 @@ import {
   estimateBatchMotionCost,
   resolveBatchShotVideoModel,
 } from '@/lib/motion/batch-motion-cost';
-import { reserveRunCredits } from '@/lib/billing/preflight';
+import {
+  releaseReservationOnThrow,
+  reserveRunCredits,
+} from '@/lib/billing/preflight';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import { generateMotionSchema } from '@/lib/schemas/shot.schemas';
@@ -209,13 +212,14 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       ],
     };
 
-    const workflowRunId = await triggerWorkflow(
-      '/motion-batch',
-      workflowInput,
-      {
-        deduplicationId: `motion-batch-${shot.id}-${Date.now()}`,
-        label: buildWorkflowLabel(sequence.id),
-      }
+    const workflowRunId = await releaseReservationOnThrow(
+      context.scopedDb,
+      reservationId,
+      () =>
+        triggerWorkflow('/motion-batch', workflowInput, {
+          deduplicationId: `motion-batch-${shot.id}-${Date.now()}`,
+          label: buildWorkflowLabel(sequence.id),
+        })
     );
 
     return { workflowRunId, shotId: shot.id };
@@ -449,13 +453,14 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       music: musicConfig,
     };
 
-    const workflowRunId = await triggerWorkflow(
-      '/motion-batch',
-      workflowInput,
-      {
-        deduplicationId: `motion-batch-${sequence.id}-${Date.now()}`,
-        label: buildWorkflowLabel(sequence.id),
-      }
+    const workflowRunId = await releaseReservationOnThrow(
+      context.scopedDb,
+      reservationId,
+      () =>
+        triggerWorkflow('/motion-batch', workflowInput, {
+          deduplicationId: `motion-batch-${sequence.id}-${Date.now()}`,
+          label: buildWorkflowLabel(sequence.id),
+        })
     );
 
     return {

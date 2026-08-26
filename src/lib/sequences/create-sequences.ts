@@ -26,7 +26,10 @@ import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
-import { reserveRunCredits } from '@/lib/billing/preflight';
+import {
+  releaseReservationOnThrow,
+  reserveRunCredits,
+} from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -230,26 +233,19 @@ export const createSequences = createServerOnlyFn(
       throw new Error('Style ID and aspect ratio are required');
     }
 
-    const reservationId = await reserveRunCredits(
-      context.scopedDb,
-      estimateStoryboardPreflightCost({
-        script,
-        imageModel: primaryImageModel,
-        imageModelCount: imageModels.length,
-        aspectRatio,
-        autoGenerateMotion,
-        videoModels,
-        autoGenerateMusic,
-        audioModels,
-        // Align with Generate ActionCost (duration chip → scene count + clip length).
-        targetDurationSeconds,
-        pricing: await getEffectiveFalPricing(),
-      }),
-      {
-        providers: ['fal', 'openrouter'],
-        errorMessage: 'Insufficient credits to generate storyboard',
-      }
-    );
+    const envelopeCost = estimateStoryboardPreflightCost({
+      script,
+      imageModel: primaryImageModel,
+      imageModelCount: imageModels.length,
+      aspectRatio,
+      autoGenerateMotion,
+      videoModels,
+      autoGenerateMusic,
+      audioModels,
+      // Align with Generate ActionCost (duration chip → scene count + clip length).
+      targetDurationSeconds,
+      pricing: await getEffectiveFalPricing(),
+    });
 
     // Automatic style (#1213). `'auto'` asks for a fresh script-derived style;
     // a style already bound to another sequence (regenerate / copy of an auto
@@ -267,89 +263,105 @@ export const createSequences = createServerOnlyFn(
           : undefined;
 
         const sequenceId = generateId();
-        const boundStyle =
-          styleSource.kind === 'library'
-            ? null
-            : await context.scopedDb.styles.createForSequence({
-                sequenceId,
-                draft: styleSource.draft,
-              });
-
-        const sequence = await context.scopedDb.sequences.create({
-          id: sequenceId,
-          title: data.title || 'Untitled Sequence',
-          script: data.script,
-          styleId: boundStyle?.id ?? styleId,
-          deferStyleSnapshot: styleSource.kind === 'pending',
-          aspectRatio,
-          analysisModel:
-            getAnalysisModelById(modelId)?.id ||
-            resolveModelForCountry(DEFAULT_ANALYSIS_MODEL, country),
-          imageModel: primaryImageModel,
-          videoModel: autoGenerateMotion ? primaryVideoModel : undefined,
-          musicModel: persistedMusicModel,
-          autoGenerateMotion,
-          autoGenerateMusic,
-          suggestedTalentIds: suggestedTalentIds?.length
-            ? suggestedTalentIds
-            : undefined,
-          suggestedLocationIds: suggestedLocationIds?.length
-            ? suggestedLocationIds
-            : undefined,
-        });
-
-        // Promote any draft element uploads to this new sequence (temp → final
-        // path + insert rows + trigger vision). Runs before workflow trigger
-        // so analyze-script-workflow can wait for vision to complete.
-        if (elementUploads && elementUploads.length > 0) {
-          await promoteTempElements({
-            scopedDb: context.scopedDb,
-            teamId,
-            userId: context.user.id,
-            sequenceId: sequence.id,
-            uploads: elementUploads,
-          });
-        }
-
-        // Carry forward elements from the source sequence when regenerating.
-        if (sourceSequenceId) {
-          await copySequenceElements({
-            scopedDb: context.scopedDb,
-            teamId,
-            userId: context.user.id,
-            sourceSequenceId,
-            targetSequenceId: sequence.id,
-          });
-        }
-
-        const workflowInput: StoryboardTriggerInput = {
-          userId: context.user.id,
-          teamId,
-          sequenceId: sequence.id,
-          reservationId,
-          imageModels,
-          videoModels,
-          options: {
-            shotsPerScene: 3,
-            generateThumbnails: true,
-            generateDescriptions: true,
-            aiProvider: 'openrouter',
-            regenerateAll: true,
-          },
-          autoGenerateMotion,
-          autoGenerateMusic,
-          musicModel: autoGenerateMusic ? primaryAudioModel : undefined,
-          audioModels: autoGenerateMusic ? audioModels : undefined,
-          suggestedTalentIds,
-          suggestedLocationIds,
-        };
-
-        const { workflowRunId } = await triggerStoryboard(
+        const reservationId = await reserveRunCredits(
           context.scopedDb,
-          workflowInput
+          envelopeCost,
+          {
+            providers: ['fal', 'openrouter'],
+            errorMessage: 'Insufficient credits to generate storyboard',
+            sequenceId,
+          }
         );
 
-        return { sequence, workflowRunId };
+        return releaseReservationOnThrow(
+          context.scopedDb,
+          reservationId,
+          async () => {
+            const boundStyle =
+              styleSource.kind === 'library'
+                ? null
+                : await context.scopedDb.styles.createForSequence({
+                    sequenceId,
+                    draft: styleSource.draft,
+                  });
+
+            const sequence = await context.scopedDb.sequences.create({
+              id: sequenceId,
+              title: data.title || 'Untitled Sequence',
+              script: data.script,
+              styleId: boundStyle?.id ?? styleId,
+              deferStyleSnapshot: styleSource.kind === 'pending',
+              aspectRatio,
+              analysisModel:
+                getAnalysisModelById(modelId)?.id ||
+                resolveModelForCountry(DEFAULT_ANALYSIS_MODEL, country),
+              imageModel: primaryImageModel,
+              videoModel: autoGenerateMotion ? primaryVideoModel : undefined,
+              musicModel: persistedMusicModel,
+              autoGenerateMotion,
+              autoGenerateMusic,
+              suggestedTalentIds: suggestedTalentIds?.length
+                ? suggestedTalentIds
+                : undefined,
+              suggestedLocationIds: suggestedLocationIds?.length
+                ? suggestedLocationIds
+                : undefined,
+            });
+
+            // Promote any draft element uploads to this new sequence (temp → final
+            // path + insert rows + trigger vision). Runs before workflow trigger
+            // so analyze-script-workflow can wait for vision to complete.
+            if (elementUploads && elementUploads.length > 0) {
+              await promoteTempElements({
+                scopedDb: context.scopedDb,
+                teamId,
+                userId: context.user.id,
+                sequenceId: sequence.id,
+                uploads: elementUploads,
+              });
+            }
+
+            // Carry forward elements from the source sequence when regenerating.
+            if (sourceSequenceId) {
+              await copySequenceElements({
+                scopedDb: context.scopedDb,
+                teamId,
+                userId: context.user.id,
+                sourceSequenceId,
+                targetSequenceId: sequence.id,
+              });
+            }
+
+            const workflowInput: StoryboardTriggerInput = {
+              userId: context.user.id,
+              teamId,
+              sequenceId: sequence.id,
+              reservationId,
+              imageModels,
+              videoModels,
+              options: {
+                shotsPerScene: 3,
+                generateThumbnails: true,
+                generateDescriptions: true,
+                aiProvider: 'openrouter',
+                regenerateAll: true,
+              },
+              autoGenerateMotion,
+              autoGenerateMusic,
+              musicModel: autoGenerateMusic ? primaryAudioModel : undefined,
+              audioModels: autoGenerateMusic ? audioModels : undefined,
+              suggestedTalentIds,
+              suggestedLocationIds,
+            };
+
+            const { workflowRunId } = await triggerStoryboard(
+              context.scopedDb,
+              workflowInput
+            );
+
+            return { sequence, workflowRunId };
+          }
+        );
       })
     );
 

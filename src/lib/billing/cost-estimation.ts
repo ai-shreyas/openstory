@@ -52,6 +52,7 @@ type GateOperation =
   | 'shot-variants'
   | 'smart-retry:image'
   | 'smart-retry:motion'
+  | 'smart-retry:music'
   | 'storyboard:character-sheets'
   | 'storyboard:location-sheets'
   | 'storyboard:motion'

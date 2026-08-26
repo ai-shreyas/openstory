@@ -24,6 +24,18 @@ describe('storyboard envelope wiring', () => {
     }
   );
 
+  test('create-sequences reserves inside the analysis-model loop', () => {
+    const source = readFileSync(
+      'src/lib/sequences/create-sequences.ts',
+      'utf8'
+    );
+    const mapIdx = source.indexOf('analysisModels.map');
+    const reserveIdx = source.lastIndexOf('reserveRunCredits(');
+    expect(mapIdx).toBeGreaterThan(-1);
+    expect(reserveIdx).toBeGreaterThan(mapIdx);
+    expect(source).toMatch(/releaseReservationOnThrow/);
+  });
+
   test('analyze-script grows or stops before spawning shot-images', () => {
     const source = readFileSync(
       'src/lib/workflows/analyze-script-workflow.ts',

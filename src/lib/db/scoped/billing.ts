@@ -13,7 +13,6 @@ import {
   totalCheckoutCents,
 } from '@/lib/billing/constants';
 import {
-  addMicros,
   type Microdollars,
   micros,
   microsToDisplayUsd,
@@ -106,6 +105,15 @@ export type CaptureReservationResult =
       captured: Microdollars;
       skippedDeltaMicros?: Microdollars;
     };
+
+function skippedCaptureDelta(
+  actualMicros: Microdollars,
+  captured: Microdollars
+): Microdollars | undefined {
+  return actualMicros > captured
+    ? subtractMicros(actualMicros, captured)
+    : undefined;
+}
 
 function mapBatchSource(
   type: TransactionType,
@@ -552,7 +560,7 @@ export function createBillingMethods(
       });
     }
 
-    void maybeAutoTopUp(newBalance).catch((err) => {
+    void maybeAutoTopUp().catch((err) => {
       logger.error('Auto top-up failed after deduction', {
         teamId,
         balanceMicros: newBalance,
@@ -715,7 +723,7 @@ export function createBillingMethods(
     });
 
     if (txType === 'credit_usage') {
-      void maybeAutoTopUp(newBalance).catch((err) => {
+      void maybeAutoTopUp().catch((err) => {
         logger.error('Auto top-up failed after reservation debit', {
           teamId,
           balanceMicros: newBalance,
@@ -931,8 +939,20 @@ export function createBillingMethods(
       return { ok: true, captured: ZERO_MICROS };
     }
 
+    // Replay before grow — a retried over-actual capture must not inflate
+    // remaining a second time.
+    const already = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+    if (already) {
+      const captured = micros(Math.abs(already.amount));
+      return {
+        ok: true,
+        captured,
+        skippedDeltaMicros: skippedCaptureDelta(actualMicros, captured),
+      };
+    }
+
     const [reservation] = await db
-      .select()
+      .select({ id: creditReservations.id })
       .from(creditReservations)
       .where(
         and(
@@ -943,46 +963,64 @@ export function createBillingMethods(
       .limit(1);
     if (!reservation) return { ok: false, reason: 'missing' };
 
-    const remaining = micros(reservation.remainingAmount);
-    let skippedDeltaMicros: Microdollars | undefined;
-    let take = actualMicros <= remaining ? actualMicros : remaining;
-    const extra =
-      actualMicros > remaining
-        ? subtractMicros(actualMicros, remaining)
-        : ZERO_MICROS;
+    const now = new Date();
+    const nowSeconds = Math.floor(now.getTime() / 1000);
+    const expiresAt = new Date(now.getTime() + RESERVATION_TTL_MS);
+    const txId = generateId();
+    const txType: TransactionType = 'credit_usage';
+    const description =
+      opts.description ?? `Usage: $${microsToUsd(actualMicros).toFixed(4)}`;
+    const metadataJson = JSON.stringify({
+      reservationId,
+      ...opts.metadata,
+    });
 
-    if (extra > 0) {
-      const grown = await growReservation(reservationId, extra);
-      if (grown.ok) {
-        take = actualMicros;
-      } else {
-        skippedDeltaMicros = extra;
-      }
-    }
+    // Take is computed in SQL at debit time so two captures racing the
+    // same envelope split remaining instead of one silent-zeroing.
+    const takeExpr = sql`(
+      select min(${creditReservations.remainingAmount}, ${actualMicros})
+      from ${creditReservations}
+      where ${creditReservations.id} = ${reservationId}
+        and ${creditReservations.teamId} = ${teamId}
+    )`;
+    const extraExpr = sql`max(0, ${actualMicros} - ${creditReservations.remainingAmount})`;
 
-    if (take <= 0) {
-      return { ok: true, captured: ZERO_MICROS, skippedDeltaMicros };
-    }
-
-    const already = await getTransactionByIdempotencyKey(opts.idempotencyKey);
-    if (already) {
-      return {
-        ok: true,
-        captured: micros(Math.abs(already.amount)),
-        skippedDeltaMicros,
-      };
-    }
-
-    const [held] = await db
+    const growHold = db
       .update(creditReservations)
       .set({
-        remainingAmount: sql`${creditReservations.remainingAmount} - ${take}`,
+        remainingAmount: sql`${creditReservations.remainingAmount} + ${extraExpr}`,
+        originalAmount: sql`${creditReservations.originalAmount} + ${extraExpr}`,
+        expiresAt,
       })
       .where(
         and(
           eq(creditReservations.id, reservationId),
           eq(creditReservations.teamId, teamId),
-          gte(creditReservations.remainingAmount, take),
+          sql`${extraExpr} > 0`,
+          sql`${extraExpr} <= (
+            (select ${credits.balance} from ${credits} where ${credits.teamId} = ${teamId})
+            - coalesce((
+              select sum(${creditReservations.remainingAmount})
+              from ${creditReservations}
+              where ${creditReservations.teamId} = ${teamId}
+                and ${creditReservations.remainingAmount} > 0
+                and ${creditReservations.expiresAt} > ${nowSeconds}
+            ), 0)
+          )`
+        )
+      );
+
+    const updateBalance = db
+      .update(credits)
+      .set({
+        balance: sql`${credits.balance} - ${takeExpr}`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(credits.teamId, teamId),
+          sql`${takeExpr} > 0`,
+          sql`${credits.balance} >= ${takeExpr}`,
           notExists(
             db
               .select({ id: transactions.id })
@@ -995,47 +1033,99 @@ export function createBillingMethods(
               )
           )
         )
-      )
-      .returning({ remaining: creditReservations.remainingAmount });
+      );
 
-    if (!held) {
-      const replay = await getTransactionByIdempotencyKey(opts.idempotencyKey);
-      if (replay) {
+    const insertTransaction = db
+      .insert(transactions)
+      .select(
+        db
+          .select({
+            id: sql<string>`${txId}`.as('id'),
+            teamId: sql<string>`${teamId}`.as('team_id'),
+            userId: sql<string>`${userId}`.as('user_id'),
+            type: sql<string>`${txType}`.as('type'),
+            amount: sql<number>`(${takeExpr}) * -1`.as('amount'),
+            balanceAfter: credits.balance,
+            description: sql<string>`${description}`.as('description'),
+            metadata: sql`${metadataJson}`.as('metadata'),
+            idempotencyKey: sql<string>`${opts.idempotencyKey}`.as(
+              'idempotency_key'
+            ),
+            createdAt: sql`${nowSeconds}`.as('created_at'),
+          })
+          .from(credits)
+          .where(and(eq(credits.teamId, teamId), sql`changes() > 0`))
+      )
+      .onConflictDoNothing()
+      .returning({ id: transactions.id, amount: transactions.amount });
+
+    const reduceRemaining = db
+      .update(creditReservations)
+      .set({
+        remainingAmount: sql`${creditReservations.remainingAmount} - min(${creditReservations.remainingAmount}, ${actualMicros})`,
+      })
+      .where(
+        and(
+          eq(creditReservations.id, reservationId),
+          eq(creditReservations.teamId, teamId),
+          sql`changes() > 0`
+        )
+      );
+
+    const readBackBalance = db
+      .select({ balance: credits.balance })
+      .from(credits)
+      .where(eq(credits.teamId, teamId));
+
+    const [, , insertedRows, , balanceRows] = await db.batch([
+      growHold,
+      updateBalance,
+      insertTransaction,
+      reduceRemaining,
+      readBackBalance,
+    ]);
+
+    const inserted = insertedRows[0];
+    if (!inserted) {
+      const raced = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+      if (raced) {
+        const captured = micros(Math.abs(raced.amount));
         return {
           ok: true,
-          captured: micros(Math.abs(replay.amount)),
-          skippedDeltaMicros,
+          captured,
+          skippedDeltaMicros: skippedCaptureDelta(actualMicros, captured),
         };
       }
-      return { ok: true, captured: ZERO_MICROS, skippedDeltaMicros };
+      return {
+        ok: true,
+        captured: ZERO_MICROS,
+        skippedDeltaMicros: skippedCaptureDelta(actualMicros, ZERO_MICROS),
+      };
     }
 
-    const debit = await tryDebit(take, {
-      description:
-        opts.description ?? `Usage: $${microsToUsd(take).toFixed(4)}`,
-      metadata: {
-        reservationId,
-        ...opts.metadata,
-      },
-      idempotencyKey: opts.idempotencyKey,
+    const captured = micros(Math.abs(inserted.amount));
+    const balanceRow = balanceRows[0];
+    const newBalance = micros(balanceRow?.balance ?? 0);
+
+    await emitTeamFunds({
+      amountMicros: negateMicros(captured),
+      transactionId: inserted.id,
+      type: txType,
     });
-    if (!debit.ok) {
-      await db
-        .update(creditReservations)
-        .set({
-          remainingAmount: sql`${creditReservations.remainingAmount} + ${take}`,
-        })
-        .where(
-          and(
-            eq(creditReservations.id, reservationId),
-            eq(creditReservations.teamId, teamId)
-          )
-        );
-      skippedDeltaMicros = addMicros(skippedDeltaMicros ?? ZERO_MICROS, take);
-      return { ok: true, captured: ZERO_MICROS, skippedDeltaMicros };
-    }
 
-    return { ok: true, captured: take, skippedDeltaMicros };
+    void maybeAutoTopUp().catch((err) => {
+      logger.error('Auto top-up failed after reservation capture', {
+        teamId,
+        balanceMicros: newBalance,
+        err,
+      });
+    });
+
+    return {
+      ok: true,
+      captured,
+      skippedDeltaMicros: skippedCaptureDelta(actualMicros, captured),
+    };
   }
 
   async function zeroReservation(reservationId: string): Promise<void> {
@@ -1099,7 +1189,7 @@ export function createBillingMethods(
       });
   }
 
-  async function maybeAutoTopUp(currentBalance: Microdollars): Promise<void> {
+  async function maybeAutoTopUp(): Promise<void> {
     if (!isStripeEnabled()) return;
 
     const settings = await read.getBillingSettings();
@@ -1116,7 +1206,10 @@ export function createBillingMethods(
       return;
     }
 
-    if (currentBalance > settings.autoTopUpThresholdMicros) {
+    // Holds reduce spendable funds; posted balance can sit above the
+    // threshold while the pill shows available below it.
+    const { available } = await read.getAvailable();
+    if (available > settings.autoTopUpThresholdMicros) {
       return;
     }
 
@@ -1223,8 +1316,7 @@ export function createBillingMethods(
   }
 
   async function checkAutoTopUp(): Promise<void> {
-    const balance = await read.getBalance();
-    await maybeAutoTopUp(balance);
+    await maybeAutoTopUp();
   }
 
   /** Sum active (non-expired) batch remainingAmounts and compare to credits.balance */

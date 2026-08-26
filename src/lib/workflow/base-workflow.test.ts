@@ -24,7 +24,8 @@ import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { WorkflowValidationError } from '@/lib/workflow/errors';
 import type { UserWorkflowContext } from '@/lib/workflow/types';
 
-const SCOPED_DB = { scoped: true };
+const zeroReservation = vi.fn(async () => undefined);
+const SCOPED_DB = { scoped: true, billing: { zeroReservation } };
 
 vi.doMock('#env', () => ({
   getEnv: () => ({ E2E_TEST: undefined }),
@@ -73,13 +74,17 @@ const PARENT_HINT = {
   eventType: 'done-child_01XYZ',
 };
 
-function makeEvent(withParent: boolean): Readonly<WorkflowEvent<TestPayload>> {
+function makeEvent(
+  withParent: boolean,
+  extra: Partial<TestPayload> = {}
+): Readonly<WorkflowEvent<TestPayload>> {
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal WorkflowEvent stub: run() only reads payload + instanceId
   return {
     payload: {
       userId: 'u1',
       teamId: 't1',
       ...(withParent ? { _parent: PARENT_HINT } : {}),
+      ...extra,
     },
     instanceId: 'child_run_A',
     workflowName: 'child',
@@ -242,6 +247,47 @@ describe('OpenStoryWorkflowEntrypoint.run', () => {
       'ok'
     );
     expect(notifyParent).not.toHaveBeenCalled();
+  });
+
+  test('owned reservation is zeroed after a successful run', async () => {
+    zeroReservation.mockClear();
+    const { workflow } = makeWorkflow(() => Promise.resolve('ok'));
+
+    await workflow.run(
+      makeEvent(false, { reservationId: 'res_1', ownsReservation: true }),
+      makeStep()
+    );
+
+    expect(zeroReservation).toHaveBeenCalledWith('res_1');
+  });
+
+  test('owned reservation is zeroed when the run fails', async () => {
+    zeroReservation.mockClear();
+    notifyParentOfFailure.mockReset();
+    const { workflow } = makeWorkflow(() =>
+      Promise.reject(new Error('fal request failed'))
+    );
+
+    await expect(
+      workflow.run(
+        makeEvent(false, { reservationId: 'res_1', ownsReservation: true }),
+        makeStep()
+      )
+    ).rejects.toThrow('fal request failed');
+
+    expect(zeroReservation).toHaveBeenCalledWith('res_1');
+  });
+
+  test('shared child envelopes are not zeroed by the base class', async () => {
+    zeroReservation.mockClear();
+    const { workflow } = makeWorkflow(() => Promise.resolve('ok'));
+
+    await workflow.run(
+      makeEvent(false, { reservationId: 'res_parent' }),
+      makeStep()
+    );
+
+    expect(zeroReservation).not.toHaveBeenCalled();
   });
 
   // Workflows are where nearly every instrumented LLM/media call runs, and no

@@ -49,6 +49,21 @@ import { getLogger, serializeError } from '@/lib/observability/logger';
 
 const logger = getLogger(['openstory', 'workflow', 'cf', 'base']);
 
+async function zeroOwnedReservation(
+  payload: UserWorkflowContext,
+  scopedDb: WorkflowScopedDb
+): Promise<void> {
+  if (!payload.ownsReservation || !payload.reservationId) return;
+  try {
+    await scopedDb.billing.zeroReservation(payload.reservationId);
+  } catch (err) {
+    logger.error(
+      `[${payload.reservationId}] Failed to zero owned reservation:`,
+      { err }
+    );
+  }
+}
+
 let e2ePricingSeed: Promise<unknown> | null = null;
 
 async function ensureE2eModelPricing(): Promise<void> {
@@ -143,6 +158,7 @@ export abstract class OpenStoryWorkflowEntrypoint<
 
     try {
       const result = await this.runImpl(event, step, scopedDb);
+      await zeroOwnedReservation(event.payload, scopedDb);
 
       // Notify the parent on success (Pattern 3 fan-in). No-op for top-level
       // workflows that weren't spawned via spawnAndAwaitChild.
@@ -186,7 +202,7 @@ export abstract class OpenStoryWorkflowEntrypoint<
         err: serializeError(error),
       });
 
-      if (this.onFailure) {
+      if (this.onFailure || event.payload.ownsReservation) {
         // Wrap in step.do so cleanup retries on its own merits. The catch
         // sits OUTSIDE the step — catching inside would make the step
         // succeed on the first attempt and silently skip the engine's
@@ -197,6 +213,7 @@ export abstract class OpenStoryWorkflowEntrypoint<
         // persisted workflowRunId (see lib/cron/reconcile-all.ts).
         try {
           await step.do('emit-failure', async () => {
+            await zeroOwnedReservation(event.payload, scopedDb);
             await this.onFailure?.({ event, error: sanitized, scopedDb });
           });
         } catch (cleanupError) {

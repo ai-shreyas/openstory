@@ -643,7 +643,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
 
     // Settle the spawn-time reservation against fal's billed cost. If this
     // run never reserved (BYOK / unpriced), deductWorkflowCredits falls back
-    // to an atomic try-deduct and last-resort skip.
+    // to an atomic try-deduct.
     if (actualCost > 0 && input.teamId && !gatedUsedOwnKey) {
       await step.do('deduct-credits', async () => {
         await deductWorkflowCredits({
