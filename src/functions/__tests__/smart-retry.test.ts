@@ -54,8 +54,10 @@ vi.doMock('@/lib/workflow/client', () => ({
 }));
 
 const requireCreditsMock = vi.fn();
+const reserveRunCreditsMock = vi.fn();
 vi.doMock('@/lib/billing/preflight', () => ({
   requireCredits: requireCreditsMock,
+  reserveRunCredits: reserveRunCreditsMock,
 }));
 
 // The live pricing loader reads D1 (unavailable under node tests).
@@ -370,6 +372,8 @@ function resetMocks() {
   triggerWorkflowMock.mockResolvedValue('wf_child');
   requireCreditsMock.mockReset();
   requireCreditsMock.mockResolvedValue(undefined);
+  reserveRunCreditsMock.mockReset();
+  reserveRunCreditsMock.mockResolvedValue(undefined);
 }
 
 describe('executeSmartRetry — generation mutex (#839)', () => {
@@ -402,9 +406,14 @@ describe('executeSmartRetry — full retry fallback', () => {
     const result = await executeSmartRetry(context);
 
     expect(triggerStoryboardMock).toHaveBeenCalledTimes(1);
+    expect(reserveRunCreditsMock).toHaveBeenCalledTimes(1);
     expect(triggerStoryboardMock).toHaveBeenCalledWith(
       scopedDb,
-      expect.objectContaining({ sequenceId: 'seq_1', teamId: 't1' })
+      expect.objectContaining({
+        sequenceId: 'seq_1',
+        teamId: 't1',
+        reservationId: undefined,
+      })
     );
     expect(triggerWorkflowMock).not.toHaveBeenCalled();
     // The launcher owns the 'processing' write — no direct status write here.

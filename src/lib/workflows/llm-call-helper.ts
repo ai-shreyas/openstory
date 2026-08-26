@@ -194,6 +194,8 @@ export type DurableLLMCallContext = {
   workflowRunId: string;
   /** Scoped DB context for resolving team API keys + deducting credits. */
   scopedDb?: WorkflowScopedDb;
+  /** Run envelope to capture against when the parent held one (#1310). */
+  reservationId?: string;
 };
 
 export type DurableStreamingLLMCallContext = DurableLLMCallContext & {
@@ -402,6 +404,7 @@ export async function durableLLMCallCf<TSchema extends z.ZodType>(
         usedOwnKey: keySource === 'team',
         description: `LLM analysis (${modelId})`,
         idempotencyKey: `${callContext.workflowRunId}:llm-${name}`,
+        reservationId: callContext.reservationId,
         metadata: {
           model: modelId,
           phase: phase.number,
@@ -613,6 +616,7 @@ export async function durableStreamingLLMCallCf<TSchema extends z.ZodType>(
         usedOwnKey: keySource === 'team',
         description: `LLM analysis (${modelId})`,
         idempotencyKey: `${callContext.workflowRunId}:llm-${name}`,
+        reservationId: callContext.reservationId,
         metadata: {
           model: modelId,
           phase: phase.number,

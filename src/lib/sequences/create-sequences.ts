@@ -26,7 +26,7 @@ import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
-import { requireCredits } from '@/lib/billing/preflight';
+import { reserveRunCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -230,7 +230,7 @@ export const createSequences = createServerOnlyFn(
       throw new Error('Style ID and aspect ratio are required');
     }
 
-    await requireCredits(
+    const reservationId = await reserveRunCredits(
       context.scopedDb,
       estimateStoryboardPreflightCost({
         script,
@@ -326,6 +326,7 @@ export const createSequences = createServerOnlyFn(
           userId: context.user.id,
           teamId,
           sequenceId: sequence.id,
+          reservationId,
           imageModels,
           videoModels,
           options: {

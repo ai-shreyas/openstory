@@ -37,7 +37,7 @@ import {
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
-import { requireCredits } from '@/lib/billing/preflight';
+import { requireCredits, reserveRunCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -182,7 +182,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       DEFAULT_VIDEO_MODEL
     );
 
-    await requireCredits(
+    const reservationId = await reserveRunCredits(
       context.scopedDb,
       estimateStoryboardPreflightCost({
         script: sequence.script ?? '',
@@ -197,6 +197,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       {
         providers: ['fal', 'openrouter'],
         errorMessage: 'Insufficient credits to retry storyboard',
+        sequenceId: sequence.id,
       }
     );
 
@@ -206,6 +207,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
+      reservationId,
       options: {
         shotsPerScene: 3,
         generateThumbnails: true,

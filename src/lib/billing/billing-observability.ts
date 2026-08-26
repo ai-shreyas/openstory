@@ -92,6 +92,37 @@ export type SkippedDeductionContext = {
  * call (#1310). Emitted so unbilled spend is a queryable metric rather
  * than a log grep.
  */
+export type ReservationShortContext = {
+  teamId?: string;
+  sequenceId?: string;
+  neededMicros: number;
+  remainingMicros: number;
+  sceneCount: number;
+};
+
+/**
+ * Grow after scene-split failed: stills/motion will not spawn. The split,
+ * bibles, and prompts stay. Emitted so a shortfall is queryable (#1310).
+ */
+export function reportReservationShort(ctx: ReservationShortContext): void {
+  logger.warn(
+    'Storyboard reservation could not grow to cover remaining work',
+    ctx
+  );
+
+  const posthog = getPostHogClient();
+  posthog?.capture({
+    distinctId: ctx.teamId ?? 'system',
+    event: 'billing_reservation_short',
+    properties: {
+      sequence_id: ctx.sequenceId,
+      needed_micros: ctx.neededMicros,
+      remaining_micros: ctx.remainingMicros,
+      scene_count: ctx.sceneCount,
+    },
+  });
+}
+
 export function reportSkippedDeduction(ctx: SkippedDeductionContext): void {
   logger.warn('Completed AI generation skipped deduction', ctx);
 

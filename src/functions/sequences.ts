@@ -18,7 +18,7 @@ import {
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { sumShotDurationsSeconds } from '@/lib/sequences/shot-durations';
 import { multiplyMicros } from '@/lib/billing/money';
-import { requireCredits } from '@/lib/billing/preflight';
+import { requireCredits, reserveRunCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
@@ -171,7 +171,7 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
     }
 
     if (needsRegeneration) {
-      await requireCredits(
+      const reservationId = await reserveRunCredits(
         context.scopedDb,
         estimateStoryboardPreflightCost({
           script: sequence.script ?? '',
@@ -193,6 +193,7 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
         {
           providers: ['fal', 'openrouter'],
           errorMessage: 'Insufficient credits to regenerate storyboard',
+          sequenceId,
         }
       );
 
@@ -204,6 +205,7 @@ export const updateSequenceFn = createServerFn({ method: 'POST' })
         userId: context.user.id,
         teamId: context.teamId,
         sequenceId,
+        reservationId,
         options: {
           shotsPerScene: 3,
           generateThumbnails: true,
@@ -268,7 +270,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
       throw new Error('Only failed sequences can be retried');
     }
 
-    await requireCredits(
+    const reservationId = await reserveRunCredits(
       context.scopedDb,
       estimateStoryboardPreflightCost({
         script: sequence.script ?? '',
@@ -288,6 +290,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
       {
         providers: ['fal', 'openrouter'],
         errorMessage: 'Insufficient credits to retry storyboard',
+        sequenceId: sequence.id,
       }
     );
 
@@ -295,6 +298,7 @@ export const retryStoryboardFn = createServerFn({ method: 'POST' })
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
+      reservationId,
       options: {
         shotsPerScene: 3,
         generateThumbnails: true,

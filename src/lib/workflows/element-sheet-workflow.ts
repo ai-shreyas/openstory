@@ -188,6 +188,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
           workflowRunId: event.instanceId,
           userId: input.userId,
           sequenceId,
+          reservationId: input.reservationId,
           kind: 'element-sheet',
           logTag: '[ElementSheetWorkflow:cf]',
           subject: `element ${entry.token}`,
@@ -213,6 +214,7 @@ export class ElementSheetWorkflow extends OpenStoryWorkflowEntrypoint<ElementShe
             usedOwnKey: imageResult.metadata.usedOwnKey,
             description: `Element reference (${generationParams.model})`,
             idempotencyKey: `${event.instanceId}:element-ref-${index}`,
+            reservationId: input.reservationId,
             metadata: {
               ...falUsage,
               model: generationParams.model,

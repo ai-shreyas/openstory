@@ -12,7 +12,7 @@ import {
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { getFrameImageUrl } from '@/lib/shots/frame-image';
-import { requireCredits } from '@/lib/billing/preflight';
+import { requireCredits, reserveRunCredits } from '@/lib/billing/preflight';
 import { getVariantGridConfig } from '@/lib/constants/aspect-ratios';
 import { cropTileFromGrid } from '@/lib/image/image-crop';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
@@ -50,7 +50,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
   .handler(async ({ context }) => {
     const { sequence, user } = context;
 
-    await requireCredits(
+    const reservationId = await reserveRunCredits(
       context.scopedDb,
       estimateStoryboardCost({
         imageModel: safeTextToImageModel(
@@ -66,6 +66,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
       {
         providers: ['fal', 'openrouter'],
         errorMessage: 'Insufficient credits to generate storyboard',
+        sequenceId: sequence.id,
       }
     );
 
@@ -73,6 +74,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
       userId: user.id,
       teamId: sequence.teamId,
       sequenceId: sequence.id,
+      reservationId,
       options: {
         shotsPerScene: 3,
         generateThumbnails: true,

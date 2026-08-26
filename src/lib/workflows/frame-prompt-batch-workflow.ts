@@ -78,6 +78,7 @@ export class FramePromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<FrameP
       );
 
       const childPayload: FramePromptWorkflowInput = {
+        reservationId: input.reservationId,
         scene,
         sceneBefore,
         sceneAfter,

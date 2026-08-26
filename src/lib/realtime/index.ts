@@ -391,6 +391,15 @@ export const realtimeSchema = {
     failed: z.object({
       message: z.string(),
     }),
+    /**
+     * Scene-split found more work than the click envelope can grow to cover.
+     * Split/bibles/prompts stay; stills and motion do not spawn (#1310).
+     */
+    'reservation:short': z.object({
+      neededUsd: z.number(),
+      remainingUsd: z.number(),
+      sceneCount: z.number(),
+    }),
     // Terminal events
     complete: z.object({
       sequenceId: z.string(),
