@@ -94,11 +94,10 @@ describe('studioCreateInputSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('accepts a prompt-only video request', () => {
+  it('accepts a prompt-only video request without an image model', () => {
     const parsed = studioCreateInputSchema.parse({
       activity: 'video',
       prompt: 'the fox turns toward camera',
-      imageModel: 'gpt_image_2',
       videoModel: 'seedance_v2',
       aspectRatio: '9:16',
       duration: 5,
@@ -106,6 +105,7 @@ describe('studioCreateInputSchema', () => {
     expect(parsed.activity).toBe('video');
     if (parsed.activity === 'video') {
       expect(parsed.videoModel).toBe('seedance_v2');
+      expect(parsed).not.toHaveProperty('imageModel');
     }
   });
 });
@@ -125,6 +125,7 @@ describe('createStudioAssets', () => {
         imageModel: 'gpt_image_2',
         aspectRatio: '16:9',
         count: 1,
+        referenceImages: [],
       })
     ).rejects.toBeInstanceOf(AccountRestrictedError);
 
@@ -145,6 +146,7 @@ describe('createStudioAssets', () => {
         imageModel: 'gpt_image_2',
         aspectRatio: '16:9',
         count: 1,
+        referenceImages: [],
       })
     ).rejects.toThrow('Insufficient credits');
 
@@ -164,6 +166,7 @@ describe('createStudioAssets', () => {
       imageModel: 'gpt_image_2',
       aspectRatio: '16:9',
       count: 2,
+      referenceImages: [],
     });
 
     expect(result.assets).toHaveLength(2);
@@ -208,6 +211,7 @@ describe('createStudioAssets', () => {
         imageModel: 'gpt_image_2',
         aspectRatio: '16:9',
         count: 1,
+        referenceImages: [],
       })
     ).rejects.toThrow('binding exploded');
 
@@ -226,6 +230,7 @@ describe('createStudioAssets', () => {
       imageModel: 'gpt_image_2',
       aspectRatio: '16:9',
       count: 1,
+      referenceImages: [],
     });
     const second = await createStudioAssets(scopedDb, {
       activity: 'image',
@@ -233,6 +238,7 @@ describe('createStudioAssets', () => {
       imageModel: 'gpt_image_2',
       aspectRatio: '1:1',
       count: 1,
+      referenceImages: [],
     });
 
     const newest = await scopedDb.generatedAssets.list({
@@ -261,5 +267,51 @@ describe('createStudioAssets', () => {
       favoritesOnly: true,
     });
     expect(favorites.assets.map((row) => row.id)).toEqual([firstId]);
+  });
+
+  it('reserves a video row against the T2V endpoint with no image model', async () => {
+    const scopedDb = createScopedDb(TEAM_ID, USER_ID);
+    const result = await createStudioAssets(scopedDb, {
+      activity: 'video',
+      prompt: 'the fox turns toward camera',
+      videoModel: 'seedance_v2',
+      aspectRatio: '9:16',
+      duration: 5,
+      count: 1,
+      mode: 'text',
+      referenceImages: [],
+      referenceVideos: [],
+      referenceAudio: [],
+    });
+
+    expect(result.assets).toHaveLength(1);
+    const rows = await db.select().from(generatedAssets);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.activity).toBe('video');
+    expect(rows[0]?.endpointId).toBe(
+      'bytedance/seedance-2.0/enterprise/v2/text-to-video'
+    );
+    expect(rows[0]?.input).toMatchObject({
+      prompt: 'the fox turns toward camera',
+      videoModel: 'seedance_v2',
+      aspectRatio: '9:16',
+    });
+    expect(rows[0]?.input).not.toHaveProperty('imageModel');
+
+    expect(mockTriggerWorkflow).toHaveBeenCalledWith(
+      '/studio',
+      expect.objectContaining({
+        activity: 'video',
+        prompt: 'the fox turns toward camera',
+        videoModel: 'seedance_v2',
+        aspectRatio: '9:16',
+      }),
+      expect.objectContaining({
+        deduplicationId: expect.stringMatching(/^studio-/),
+      })
+    );
+    expect(mockTriggerWorkflow.mock.calls[0]?.[1]).not.toHaveProperty(
+      'imageModel'
+    );
   });
 });

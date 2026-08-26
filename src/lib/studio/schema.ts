@@ -1,20 +1,31 @@
 /**
  * Prompt-only Images and Videos (#1274). Client-safe: no env, no adapters.
  *
- * Sequence image + image-to-video models only — not the flagged `/models`
- * catalog. Video is still-then-motion: a prompt-only clip generates a still
- * with the chosen image model, then animates it with the chosen video model.
+ * Sequence image + video families only — not the flagged `/models` catalog.
+ * Video is text-to-video: the prompt goes to each family's T2V sibling, not
+ * through a still and image-to-video.
  */
 
 import {
+  getEditEndpoint,
   IMAGE_MODELS,
   IMAGE_TO_VIDEO_MODELS,
   isValidImageToVideoModel,
   isValidTextToImageModel,
+  supportsReferenceImages,
   type ImageToVideoModel,
   type TextToImageModel,
 } from '@/lib/ai/models';
 import { aspectRatioSchema } from '@/lib/constants/aspect-ratios';
+import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
+import {
+  STUDIO_VIDEO_MODES,
+  studioAudioLimit,
+  studioReferenceLimit,
+  studioSupportsEndFrame,
+  studioVideoEndpointId,
+  studioVideoRefLimit,
+} from '@/lib/studio/text-to-video';
 import { z } from 'zod';
 
 const visibleImageModelKeys = Object.entries(IMAGE_MODELS)
@@ -45,23 +56,106 @@ const promptSchema = z
 const countSchema = z.number().int().min(1).max(4);
 
 export const studioCreateInputSchema = z.discriminatedUnion('activity', [
-  z.object({
-    activity: z.literal('image'),
-    prompt: promptSchema,
-    imageModel: imageModelKeySchema,
-    aspectRatio: aspectRatioSchema,
-    count: countSchema.default(1),
-  }),
-  z.object({
-    activity: z.literal('video'),
-    prompt: promptSchema,
-    imageModel: imageModelKeySchema,
-    videoModel: videoModelKeySchema,
-    aspectRatio: aspectRatioSchema,
-    duration: z.number().positive(),
-    count: countSchema.default(1),
-    generateAudio: z.boolean().optional(),
-  }),
+  z
+    .object({
+      activity: z.literal('image'),
+      prompt: promptSchema,
+      imageModel: imageModelKeySchema,
+      aspectRatio: aspectRatioSchema,
+      count: countSchema.default(1),
+      /** Routes to the model's edit endpoint; bound as `@Image1`…`@ImageN`. */
+      referenceImages: z.array(mediaUrlSchema).max(9).default([]),
+    })
+    .superRefine((input, ctx) => {
+      if (
+        input.referenceImages.length > 0 &&
+        !supportsReferenceImages(input.imageModel)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['referenceImages'],
+          message: `${IMAGE_MODELS[input.imageModel].name} does not take reference images`,
+        });
+      }
+    }),
+  z
+    .object({
+      activity: z.literal('video'),
+      prompt: promptSchema,
+      videoModel: videoModelKeySchema,
+      aspectRatio: aspectRatioSchema,
+      duration: z.number().positive(),
+      count: countSchema.default(1),
+      generateAudio: z.boolean().optional(),
+      mode: z.enum(STUDIO_VIDEO_MODES).default('text'),
+      /** Reference mode: stills bound as `@Image1`…`@ImageN`, in order. */
+      referenceImages: z.array(mediaUrlSchema).max(9).default([]),
+      /** Reference mode: clips bound as `@Video1`…`@VideoN`. */
+      referenceVideos: z.array(mediaUrlSchema).max(3).default([]),
+      /** Reference mode: audio clips bound as `@Audio1`…`@AudioN`. */
+      referenceAudio: z.array(mediaUrlSchema).max(3).default([]),
+      /** Frames mode: the first frame, and optionally the last. */
+      startImageUrl: mediaUrlSchema.optional(),
+      endImageUrl: mediaUrlSchema.optional(),
+    })
+    .superRefine((input, ctx) => {
+      const limit = studioReferenceLimit(input.videoModel);
+      if (input.mode === 'reference') {
+        if (limit === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['mode'],
+            message: `${IMAGE_TO_VIDEO_MODELS[input.videoModel].name} does not take reference images`,
+          });
+        }
+        if (input.referenceImages.length + input.referenceVideos.length === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['referenceImages'],
+            message: 'Attach at least one reference image or video',
+          });
+        }
+        if (
+          input.referenceVideos.length > studioVideoRefLimit(input.videoModel)
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['referenceVideos'],
+            message: `Up to ${studioVideoRefLimit(input.videoModel)} reference videos`,
+          });
+        }
+        if (input.referenceAudio.length > studioAudioLimit(input.videoModel)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['referenceAudio'],
+            message: `Up to ${studioAudioLimit(input.videoModel)} audio clips`,
+          });
+        }
+        if (input.referenceImages.length > limit) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['referenceImages'],
+            message: `Up to ${limit} reference images`,
+          });
+        }
+      }
+      if (input.mode === 'frames') {
+        if (!input.startImageUrl) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['startImageUrl'],
+            message: 'Pick a start frame',
+          });
+        }
+        if (input.endImageUrl && !studioSupportsEndFrame(input.videoModel)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['endImageUrl'],
+            message: `${IMAGE_TO_VIDEO_MODELS[input.videoModel].name} does not take an end frame`,
+          });
+        }
+      }
+    }),
 ]);
 
 export type StudioCreateInput = z.infer<typeof studioCreateInputSchema>;
@@ -79,31 +173,19 @@ export type StudioCreateResult = {
   assets: StudioCreateAsset[];
 };
 
-export function studioEndpointId(
-  input: Pick<StudioCreateInput, 'activity'> & {
-    imageModel: TextToImageModel;
-    videoModel?: ImageToVideoModel;
-  }
-): string {
+export function studioEndpointId(input: StudioCreateInput): string {
   if (input.activity === 'video') {
-    if (!input.videoModel) {
-      throw new Error('Video generation requires a video model');
-    }
-    return IMAGE_TO_VIDEO_MODELS[input.videoModel].id;
+    return studioVideoEndpointId(input.videoModel, input.mode);
   }
-  return IMAGE_MODELS[input.imageModel].id;
+  return (
+    (input.referenceImages.length > 0
+      ? getEditEndpoint(input.imageModel)
+      : null) ?? IMAGE_MODELS[input.imageModel].id
+  );
 }
 
-export function studioModelName(
-  input: Pick<StudioCreateInput, 'activity'> & {
-    imageModel: TextToImageModel;
-    videoModel?: ImageToVideoModel;
-  }
-): string {
+export function studioModelName(input: StudioCreateInput): string {
   if (input.activity === 'video') {
-    if (!input.videoModel) {
-      throw new Error('Video generation requires a video model');
-    }
     return IMAGE_TO_VIDEO_MODELS[input.videoModel].name;
   }
   return IMAGE_MODELS[input.imageModel].name;

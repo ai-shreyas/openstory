@@ -37,7 +37,7 @@ export function StudioView({ activity, sort, favorites }: StudioViewProps) {
           <PageHeader>
             <PageDescription>
               {activity === 'video'
-                ? 'Generate a clip from a prompt. Same models as sequences — a still, then motion.'
+                ? 'Generate a clip from a prompt. Same video models as sequences.'
                 : 'Generate a still from a prompt. Same image models as sequences.'}
             </PageDescription>
           </PageHeader>

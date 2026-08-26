@@ -12,14 +12,10 @@
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import {
   estimateImageCost,
-  estimateVideoCost,
+  estimateStudioVideoCost,
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
-import {
-  addMicros,
-  multiplyMicros,
-  type Microdollars,
-} from '@/lib/billing/money';
+import { multiplyMicros, type Microdollars } from '@/lib/billing/money';
 import { requireCredits } from '@/lib/billing/preflight';
 import { requireGenerationAllowed } from '@/lib/compliance/generation-gate';
 import {
@@ -28,7 +24,6 @@ import {
 } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { GeneratedAssetInput } from '@/lib/db/schema';
-import { snapDuration } from '@/lib/motion/snap-duration';
 import { getLogger } from '@/lib/observability/logger';
 import {
   studioEndpointId,
@@ -36,6 +31,7 @@ import {
   type StudioCreateInput,
   type StudioCreateResult,
 } from '@/lib/studio/schema';
+import { snapStudioVideoDuration } from '@/lib/studio/text-to-video';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import type { StudioGenerationWorkflowInput } from '@/lib/workflow/types';
 
@@ -45,38 +41,61 @@ function estimateStudioCost(
   input: StudioCreateInput,
   pricing: Awaited<ReturnType<typeof getEffectiveFalPricing>>
 ): Microdollars {
-  const perImage = gateEstimate(
-    estimateImageCost(input.imageModel, input.aspectRatio, 1, { pricing }),
-    { model: input.imageModel, operation: 'studio-image' }
-  );
-
   if (input.activity === 'image') {
+    const perImage = gateEstimate(
+      estimateImageCost(input.imageModel, input.aspectRatio, 1, {
+        pricing,
+        edit: input.referenceImages.length > 0,
+      }),
+      { model: input.imageModel, operation: 'studio-image' }
+    );
     return multiplyMicros(perImage, input.count);
   }
 
-  const duration = snapDuration(input.duration, input.videoModel);
+  const duration = snapStudioVideoDuration(input.duration, input.videoModel);
   const perVideo = gateEstimate(
-    estimateVideoCost(input.videoModel, duration, { pricing }),
+    estimateStudioVideoCost(input.videoModel, duration, {
+      pricing,
+      mode: input.mode,
+    }),
     { model: input.videoModel, operation: 'studio-video' }
   );
-  return multiplyMicros(addMicros(perImage, perVideo), input.count);
+  return multiplyMicros(perVideo, input.count);
 }
 
 function snapshotInput(input: StudioCreateInput): GeneratedAssetInput {
-  const base: GeneratedAssetInput = {
+  if (input.activity === 'video') {
+    const snapshot: GeneratedAssetInput = {
+      prompt: input.prompt,
+      aspectRatio: input.aspectRatio,
+      videoModel: input.videoModel,
+      duration: snapStudioVideoDuration(input.duration, input.videoModel),
+      count: input.count,
+      mode: input.mode,
+    };
+    if (input.generateAudio !== undefined) {
+      snapshot.generateAudio = input.generateAudio;
+    }
+    if (input.mode === 'reference') {
+      snapshot.referenceImages = input.referenceImages;
+      snapshot.referenceVideos = input.referenceVideos;
+      snapshot.referenceAudio = input.referenceAudio;
+    }
+    if (input.mode === 'frames' && input.startImageUrl) {
+      snapshot.startImageUrl = input.startImageUrl;
+      if (input.endImageUrl) snapshot.endImageUrl = input.endImageUrl;
+    }
+    return snapshot;
+  }
+  return {
     prompt: input.prompt,
     aspectRatio: input.aspectRatio,
     imageModel: input.imageModel,
     count: input.count,
+    ...(input.referenceImages.length > 0 && {
+      referenceImages: input.referenceImages,
+    }),
   };
-  if (input.activity === 'video') {
-    base.videoModel = input.videoModel;
-    base.duration = snapDuration(input.duration, input.videoModel);
-    if (input.generateAudio !== undefined) {
-      base.generateAudio = input.generateAudio;
-    }
-  }
-  return base;
 }
 
 function workflowPayload(
@@ -85,22 +104,42 @@ function workflowPayload(
   input: StudioCreateInput
 ): StudioGenerationWorkflowInput {
   const aspectRatio: AspectRatio = input.aspectRatio;
-  const payload: StudioGenerationWorkflowInput = {
+  if (input.activity === 'video') {
+    return {
+      userId: scopedDb.userId,
+      teamId: scopedDb.teamId,
+      assetId,
+      activity: 'video',
+      prompt: input.prompt,
+      aspectRatio,
+      videoModel: input.videoModel,
+      duration: snapStudioVideoDuration(input.duration, input.videoModel),
+      generateAudio: input.generateAudio,
+      mode: input.mode,
+      ...(input.mode === 'reference' && {
+        referenceImages: input.referenceImages,
+        referenceVideos: input.referenceVideos,
+        referenceAudio: input.referenceAudio,
+      }),
+      ...(input.mode === 'frames' && {
+        startImageUrl: input.startImageUrl,
+        endImageUrl: input.endImageUrl,
+      }),
+    };
+  }
+  return {
     userId: scopedDb.userId,
     teamId: scopedDb.teamId,
     assetId,
-    activity: input.activity,
+    activity: 'image',
     prompt: input.prompt,
     imageModel: input.imageModel,
     aspectRatio,
     imageSize: aspectRatioToImageSize(aspectRatio),
+    ...(input.referenceImages.length > 0 && {
+      referenceImages: input.referenceImages,
+    }),
   };
-  if (input.activity === 'video') {
-    payload.videoModel = input.videoModel;
-    payload.duration = snapDuration(input.duration, input.videoModel);
-    payload.generateAudio = input.generateAudio;
-  }
-  return payload;
 }
 
 /**

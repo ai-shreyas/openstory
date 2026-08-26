@@ -7,6 +7,14 @@
  * ship the workflow client into the browser bundle (#1257).
  */
 
+import {
+  draftStudioPrompt,
+  STUDIO_DRAFT_MODEL,
+} from '@/lib/ai/studio-prompt-draft';
+import { reportMissingBillingCost } from '@/lib/billing/billing-observability';
+import { estimateLLMCost } from '@/lib/billing/cost-estimation';
+import { InsufficientCreditsError } from '@/lib/errors';
+import { mediaUrlSchema } from '@/lib/schemas/media-url.schemas';
 import { createStudioAssets } from '@/lib/studio/create-studio-asset';
 import { studioCreateInputSchema } from '@/lib/studio/schema';
 import { GENERATED_ASSET_ACTIVITIES } from '@/lib/db/schema';
@@ -88,4 +96,64 @@ export const deleteStudioAssetFn = createServerFn({ method: 'POST' })
     }
     await context.scopedDb.generatedAssets.delete(data.id);
     return { id: data.id };
+  });
+
+const draftReferenceSchema = z.object({
+  url: mediaUrlSchema,
+  label: z.string().min(1).max(200),
+  kind: z.enum(['image', 'video', 'audio']),
+});
+
+/**
+ * Draft a prompt from the attached references. Billed like element vision:
+ * credit-gated on the platform key, charged from reported usage.
+ */
+export const draftStudioPromptFn = createServerFn({ method: 'POST' })
+  .middleware([authWithTeamMiddleware])
+  .validator(
+    zodValidator(
+      z.object({
+        activity: z.enum(['image', 'video']),
+        references: z.array(draftReferenceSchema).max(15).default([]),
+        startImageUrl: mediaUrlSchema.optional(),
+        endImageUrl: mediaUrlSchema.optional(),
+        currentPrompt: z.string().max(5000).optional(),
+      })
+    )
+  )
+  .handler(async ({ context, data }) => {
+    const { scopedDb } = context;
+    const llmKey = await scopedDb.apiKeys.resolveLlmKey();
+    if (llmKey.source !== 'team') {
+      const canAfford = await scopedDb.billing.hasEnoughCredits(
+        estimateLLMCost(1)
+      );
+      if (!canAfford) {
+        throw new InsufficientCreditsError(
+          'Insufficient credits to draft a prompt'
+        );
+      }
+    }
+
+    const result = await draftStudioPrompt({
+      ...data,
+      llmKey,
+      observability: { userId: context.user.id, tags: ['studio', 'draft'] },
+    });
+
+    if (!result.usedOwnKey) {
+      if (result.costMicros > 0) {
+        await scopedDb.billing.deductCredits(result.costMicros, {
+          description: `Studio prompt draft (${STUDIO_DRAFT_MODEL})`,
+          metadata: { model: STUDIO_DRAFT_MODEL },
+        });
+      } else {
+        reportMissingBillingCost({
+          source: 'studio-prompt-draft',
+          modelId: STUDIO_DRAFT_MODEL,
+          metadata: { references: data.references.length },
+        });
+      }
+    }
+    return { prompt: result.prompt };
   });

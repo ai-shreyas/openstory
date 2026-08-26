@@ -1,4 +1,3 @@
-import { AssetResult } from '@/components/schema-form/asset-result';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -22,7 +21,7 @@ import {
   studioPrompt,
 } from '@/lib/studio/outputs';
 import { cn } from '@/lib/utils';
-import { Images, Star, Trash2 } from 'lucide-react';
+import { Download, Images, Star, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 function aspectClass(asset: GeneratedAsset): string {
@@ -132,6 +131,46 @@ function StudioCard({
   );
 }
 
+/** The opened asset at viewer size: the media fills the dialog, letterboxed. */
+function StudioViewer({ asset }: { asset: GeneratedAsset }) {
+  const primary = studioPrimaryOutput(asset);
+  const poster = studioPosterOutput(asset);
+  const prompt = studioPrompt(asset);
+  if (asset.status === 'failed') {
+    return (
+      <p className="flex min-h-0 flex-1 items-center justify-center text-sm text-destructive">
+        {asset.error ?? 'Generation failed'}
+      </p>
+    );
+  }
+  if (!primary) {
+    return <Skeleton className="min-h-0 flex-1 rounded-lg" />;
+  }
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-muted">
+      {primary.contentType.startsWith('video/') ? (
+        <video
+          src={primary.url}
+          poster={poster?.url}
+          controls
+          autoPlay
+          loop
+          playsInline
+          className="max-h-full max-w-full object-contain"
+        >
+          <track kind="captions" />
+        </video>
+      ) : (
+        <img
+          src={primary.url}
+          alt={prompt || 'Generated image'}
+          className="max-h-full max-w-full object-contain"
+        />
+      )}
+    </div>
+  );
+}
+
 export function StudioGallery({
   assets,
   isLoading,
@@ -210,19 +249,35 @@ export function StudioGallery({
           if (!open) setOpenId(null);
         }}
       >
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="flex h-[94vh] w-[96vw] max-w-none flex-col gap-3 p-4 sm:max-w-none">
           {openAsset && (
             <>
-              <DialogHeader>
-                <DialogTitle className="pr-8 text-base">
+              <DialogHeader className="shrink-0">
+                <DialogTitle className="line-clamp-2 pr-8 text-base">
                   {studioPrompt(openAsset) || 'Generated asset'}
                 </DialogTitle>
                 <DialogDescription>
                   {openAsset.modelName} · {studioAspectRatio(openAsset)}
                 </DialogDescription>
               </DialogHeader>
-              <AssetResult asset={openAsset} />
-              <div className="flex justify-end">
+              <StudioViewer asset={openAsset} />
+              <div className="flex shrink-0 items-center justify-end gap-2">
+                {(() => {
+                  const primary = studioPrimaryOutput(openAsset);
+                  if (!primary) return null;
+                  const ext = primary.contentType.split('/')[1] ?? 'bin';
+                  return (
+                    <Button asChild variant="outline">
+                      <a
+                        href={primary.url}
+                        download={`openstory-${openAsset.id}.${ext}`}
+                      >
+                        <Download aria-hidden="true" />
+                        Download
+                      </a>
+                    </Button>
+                  );
+                })()}
                 <Button
                   type="button"
                   variant="destructive"

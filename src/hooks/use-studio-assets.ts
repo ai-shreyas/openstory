@@ -2,6 +2,7 @@ import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import {
   createStudioAssetsFn,
   deleteStudioAssetFn,
+  draftStudioPromptFn,
   listStudioAssetsFn,
   setStudioAssetFavoriteFn,
 } from '@/functions/studio-assets';
@@ -98,6 +99,16 @@ export function useDeleteStudioAsset() {
       void queryClient.invalidateQueries({ queryKey: studioAssetKeys.all });
       toast.success('Deleted');
     },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
+export function useDraftStudioPrompt() {
+  return useMutation({
+    mutationFn: (input: Parameters<typeof draftStudioPromptFn>[0]['data']) =>
+      draftStudioPromptFn({ data: input }),
     onError: (error) => {
       toast.error(error.message);
     },

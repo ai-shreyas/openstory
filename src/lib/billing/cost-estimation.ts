@@ -9,6 +9,7 @@
 
 import { estimateFalCost, type EffectiveFalPricing } from '@/lib/ai/fal-cost';
 import {
+  getEditEndpoint,
   AUDIO_MODELS,
   IMAGE_MODELS,
   IMAGE_TO_VIDEO_MODELS,
@@ -19,6 +20,10 @@ import {
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
 import { aspectRatioToDimensions } from '@/lib/constants/aspect-ratios';
 import { resolveMotionEndpoint } from '@/lib/motion/resolve-motion-endpoint';
+import {
+  studioVideoEndpointId,
+  type StudioVideoMode,
+} from '@/lib/studio/text-to-video';
 import { getLogger } from '@/lib/observability/logger';
 import { reportFlooredEstimate } from './billing-observability';
 import { type Microdollars, addMicros, micros, multiplyMicros } from './money';
@@ -125,12 +130,12 @@ export function estimateImageCost(
   model: TextToImageModel,
   aspectRatio: AspectRatio,
   numImages: number,
-  opts: { pricing: FalPricingMap; resolution?: string }
+  opts: { pricing: FalPricingMap; resolution?: string; edit?: boolean }
 ): Microdollars | null {
   const { width, height } = aspectRatioToDimensions(aspectRatio);
 
   return estimateFalCost(
-    IMAGE_MODELS[model].id,
+    (opts.edit ? getEditEndpoint(model) : null) ?? IMAGE_MODELS[model].id,
     {
       numImages,
       widthPx: width,
@@ -171,6 +176,25 @@ export function estimateVideoCost(
   const falEndpointId = endpointId || IMAGE_TO_VIDEO_MODELS[model].id;
   return estimateFalCost(
     falEndpointId,
+    {
+      durationSeconds,
+      resolution: opts.resolution,
+    },
+    opts.pricing
+  );
+}
+
+/**
+ * Pre-flight cost of a prompt-only studio clip. Prices the T2V sibling,
+ * not the sequence image-to-video endpoint.
+ */
+export function estimateStudioVideoCost(
+  model: ImageToVideoModel,
+  durationSeconds: number,
+  opts: { pricing: FalPricingMap; resolution?: string; mode?: StudioVideoMode }
+): Microdollars | null {
+  return estimateFalCost(
+    studioVideoEndpointId(model, opts.mode),
     {
       durationSeconds,
       resolution: opts.resolution,

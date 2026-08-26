@@ -21,7 +21,10 @@
  * convention, so the two agree in the normal flow.
  */
 
-import type { MentionItem } from '@/components/scenes/prompt-mention/mention-items';
+import {
+  mentionShowsAt,
+  type MentionItem,
+} from '@/components/scenes/prompt-mention/mention-items';
 
 export type MentionSegment =
   | { type: 'text'; value: string }
@@ -75,7 +78,7 @@ export function splitMentions(
     // deliberate `SCARLETT` / `BONDI_SCREEN` references) — never lowercase
     // prose or a stale lowercased form. A legacy kebab alias is exempt.
     if (
-      item.section !== 'locations' &&
+      !mentionShowsAt(item.section) &&
       form.toLowerCase() === item.tag.toLowerCase() &&
       form !== form.toUpperCase()
     ) {
@@ -91,7 +94,7 @@ export function splitMentions(
     if (before) segments.push({ type: 'text', value: before });
     // Cast names + element tokens highlight in place (no `@`); locations show
     // their kebab slug as `@slug`.
-    const display = item.section === 'locations' ? `@${item.tag}` : item.tag;
+    const display = mentionShowsAt(item.section) ? `@${item.tag}` : item.tag;
     segments.push({ type: 'mention', item, display });
     lastIdx = formEnd;
   }

@@ -10,7 +10,23 @@ import type {
   SequenceLocation,
 } from '@/lib/db/schema';
 
-export type MentionSection = 'elements' | 'cast' | 'locations';
+/**
+ * `references` = stills attached to a studio composer (pill `@ImageN`);
+ * `images` = the team's generated stills, offered so picking one attaches it.
+ */
+export type MentionSection =
+  | 'references'
+  | 'elements'
+  | 'cast'
+  | 'locations'
+  | 'images';
+
+/** Sections whose pill renders with a leading `@` (the tag has no CAPS form). */
+export function mentionShowsAt(section: MentionSection): boolean {
+  return (
+    section === 'locations' || section === 'references' || section === 'images'
+  );
+}
 
 /** Fields buildMentionItems actually consumes. */
 export type MentionCharacterInput = Pick<
@@ -168,13 +184,17 @@ export function mentionInsertAttrs(item: {
 }
 
 export const SECTION_LABELS: Record<MentionSection, string> = {
+  references: 'Attached',
   elements: 'Elements',
   cast: 'Cast',
   locations: 'Locations',
+  images: 'Images',
 };
 
 export const SECTION_ORDER: MentionSection[] = [
+  'references',
   'elements',
   'cast',
   'locations',
+  'images',
 ];
