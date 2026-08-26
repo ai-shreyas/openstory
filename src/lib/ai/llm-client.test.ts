@@ -356,6 +356,47 @@ describe('llm-client', () => {
       );
     });
 
+    it('retries DeepSeek rejecting image input with the vision fallback (#1323)', async () => {
+      mockChat
+        .mockReturnValueOnce(
+          (async function* () {
+            yield {
+              type: 'RUN_ERROR',
+              message: 'No endpoints found that support image input',
+              model: 'deepseek/deepseek-v4-pro-0813',
+            };
+          })()
+        )
+        .mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'vision answer' };
+          })()
+        );
+
+      const result = await callLLM({
+        model: 'deepseek/deepseek-v4-pro-0813',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', content: 'describe' },
+              {
+                type: 'image',
+                source: { type: 'url', value: 'https://cdn/el.png' },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result).toBe('vision answer');
+      expect(mockCreateAdapter).toHaveBeenNthCalledWith(
+        2,
+        'mistralai/mistral-small-2603',
+        undefined
+      );
+    });
+
     it('does not retry a region block after content was already yielded', async () => {
       mockChat.mockReturnValueOnce(
         (async function* () {
