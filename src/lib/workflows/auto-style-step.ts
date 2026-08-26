@@ -32,6 +32,7 @@ export async function deriveAutoStyle(
     script: string;
     aspectRatio: AspectRatio;
     analysisModelId: AnalysisModelId;
+    reservationId?: string;
   }
 ): Promise<StyleConfig> {
   const { scopedDb, sequenceId, styleId } = params;
@@ -53,7 +54,12 @@ export async function deriveAutoStyle(
       additionalMetadata: { styleId },
       reasoning: true,
     },
-    { sequenceId, workflowRunId: params.workflowRunId, scopedDb }
+    {
+      sequenceId,
+      workflowRunId: params.workflowRunId,
+      scopedDb,
+      reservationId: params.reservationId,
+    }
   );
 
   // The LLM result is a cached durable step, so a coercion failure here replays

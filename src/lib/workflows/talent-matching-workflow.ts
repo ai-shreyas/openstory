@@ -116,6 +116,7 @@ export class TalentMatchingWorkflow extends OpenStoryWorkflowEntrypoint<TalentMa
               userId: input.userId,
               workflowRunId: event.instanceId,
               scopedDb,
+              reservationId: input.reservationId,
             }
           )
         : { matches: [] as Array<{ characterId: string; talentId: string }> };

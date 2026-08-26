@@ -355,6 +355,7 @@ export class FramePromptWorkflow extends OpenStoryWorkflowEntrypoint<FramePrompt
         usedOwnKey: keySource === 'team',
         description: `LLM analysis (${analysisModelId})`,
         idempotencyKey: `${event.instanceId}:llm-${STEP_NAME}`,
+        reservationId: input.reservationId,
         metadata: {
           model: analysisModelId,
           phase: PHASE.number,

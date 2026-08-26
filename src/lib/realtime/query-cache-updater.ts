@@ -616,6 +616,7 @@ export function updateQueryCacheFromEvent(
 
     case 'generation.complete':
     case 'generation.failed':
+    case 'generation.reservation:short':
     case 'generation.updated':
       // Invalidate sequence to get updated status/title
       void queryClient.invalidateQueries({

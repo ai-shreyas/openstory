@@ -97,6 +97,7 @@ export class MotionPromptBatchWorkflow extends OpenStoryWorkflowEntrypoint<Motio
         const sceneAfter =
           sceneIndex < scenes.length - 1 ? scenes[sceneIndex + 1] : undefined;
         const childPayload: MotionPromptWorkflowInput = {
+          reservationId: input.reservationId,
           scene,
           sceneBefore,
           sceneAfter,

@@ -76,6 +76,7 @@ import {
 
 import {
   creditBatches,
+  creditReservations,
   credits,
   teamBillingSettings,
   transactions,
@@ -322,7 +323,7 @@ export { audio, StyleConfigSchema, StyleSampleVideoSchema, styles, vfx };
 export type { Audio, NewStyle, Style, StyleConfig, Vfx } from './libraries';
 
 // Credits, Transactions, and Billing
-export { credits, transactions };
+export { creditReservations, credits, transactions };
 
 /**
  * drizzle-kit only diffs TOP-LEVEL exported tables — tables reachable only
@@ -452,6 +453,7 @@ export const schema = {
   // Credits & Billing
   credits,
   creditBatches,
+  creditReservations,
   transactions,
   teamBillingSettings,
 

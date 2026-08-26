@@ -23,11 +23,15 @@
  * including `scene-split` (LLM streaming wrapped in a single `step.do`) and
  * `motion-batch` (Phase 5 motion + music + merge tree). */
 
+import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { sanitizeScriptContent } from '@/lib/ai/prompt-validation';
 import { resolveAudioModels } from '@/lib/ai/resolve-audio-models';
 import { resolveImageModels } from '@/lib/ai/resolve-image-models';
 import { resolveVideoModels } from '@/lib/ai/resolve-video-models';
 import type { Scene } from '@/lib/ai/scene-analysis.schema';
+import { estimateStoryboardRenderCost } from '@/lib/billing/cost-estimation';
+import { microsToUsd } from '@/lib/billing/money';
+import { gateStoryboardRenders } from '@/lib/billing/storyboard-render-gate';
 import { generateId } from '@/lib/db/id';
 import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { assembleMotionPrompt } from '@/lib/motion/assemble-motion-prompt';
@@ -214,6 +218,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
             userId: input.userId,
             teamId: input.teamId,
             sequenceId,
+            reservationId: input.reservationId,
             promptName: 'phase/scene-splitting-boundaries-chat',
             aspectRatio,
             script: sanitizeScriptContent(script),
@@ -237,6 +242,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
             script,
             aspectRatio,
             analysisModelId,
+            reservationId: input.reservationId,
           })
         : Promise.resolve(inputStyleConfig),
     ]);
@@ -260,6 +266,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           sequenceId,
           userId: input.userId,
           teamId: input.teamId,
+          reservationId: input.reservationId,
           analysisModelId,
           suggestedTalentIds,
           suggestedTalent: input.suggestedTalent,
@@ -281,6 +288,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           sequenceId,
           userId: input.userId,
           teamId: input.teamId,
+          reservationId: input.reservationId,
           analysisModelId,
           suggestedLocationIds,
           suggestedLocations: input.suggestedLocations,
@@ -360,6 +368,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           userId: input.userId,
           teamId: input.teamId,
           sequenceId,
+          reservationId: input.reservationId,
           entries: missingElementEntries,
           imageModel,
           styleConfig,
@@ -383,6 +392,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
               sequenceId,
               userId: input.userId,
               teamId: input.teamId,
+              reservationId: input.reservationId,
               characterBible,
               talentMatches: talentCharacterMatches,
               imageModel,
@@ -409,6 +419,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
             sequenceId,
             userId: input.userId,
             teamId: input.teamId,
+            reservationId: input.reservationId,
             locationBible,
             libraryLocationMatches,
             // Use the sequence's image model for location sheets, mirroring
@@ -434,6 +445,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
             userId: input.userId,
             teamId: input.teamId,
             sequenceId,
+            reservationId: input.reservationId,
             scenes,
             aspectRatio,
             characterBible: castCharacterBible,
@@ -487,6 +499,66 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     const generatedElements = elementSheetSettled.value;
     const allElements = [...elementsMinimal, ...generatedElements];
 
+    const totalDurationSeconds = scenes.reduce(
+      (sum, scene) => sum + (scene.metadata?.durationSeconds || 5),
+      0
+    );
+    const renderGate = await step.do('grow-reservation', async () => {
+      const remainingWork = estimateStoryboardRenderCost({
+        imageModel,
+        imageModelCount: imageModels.length,
+        aspectRatio,
+        estimatedSceneCount: scenes.length,
+        autoGenerateMotion,
+        videoModels: autoGenerateMotion ? videoModels : undefined,
+        videoDurationSeconds: Math.max(
+          5,
+          Math.round(totalDurationSeconds / Math.max(scenes.length, 1))
+        ),
+        autoGenerateMusic: autoGenerateMusic && autoGenerateMotion,
+        audioModels:
+          autoGenerateMusic && autoGenerateMotion ? audioModels : undefined,
+        audioDurationSeconds: totalDurationSeconds,
+        pricing: await getEffectiveFalPricing(),
+      });
+      return gateStoryboardRenders({
+        scopedDb,
+        reservationId: input.reservationId,
+        remainingWork,
+        sceneCount: scenes.length,
+        sequenceId,
+      });
+    });
+
+    if (!renderGate.spawnRenders) {
+      // Gate already zeroed leftover. Fail the sequence and throw so the
+      // parent does not mark it completed with no stills.
+      const shortMessage = `Not enough credits to generate images for ${scenes.length} scenes. Add credits and retry.`;
+      await step.do('emit-reservation-short', async () => {
+        if (!sequenceId) return;
+        await scopedDb
+          .sequence(sequenceId)
+          .updateStatus('failed', shortMessage);
+        await getGenerationChannel(sequenceId).emit(
+          'generation.reservation:short',
+          {
+            neededUsd: microsToUsd(renderGate.neededMicros),
+            remainingUsd: microsToUsd(renderGate.remainingMicros),
+            sceneCount: scenes.length,
+          }
+        );
+      });
+      await step.do('record-analysis-duration', async () => {
+        if (sequenceId) {
+          await scopedDb.sequences.updateAnalysisDurationMs(
+            sequenceId,
+            Date.now() - startTime
+          );
+        }
+      });
+      throw new NonRetryableError(shortMessage);
+    }
+
     // ----------------------------------------------------------------------
     // PHASE 4: shot images + motion/music prompts in parallel
     // ----------------------------------------------------------------------
@@ -523,6 +595,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       userId: input.userId,
       teamId: input.teamId,
       sequenceId,
+      reservationId: input.reservationId,
       scenesWithVisualPrompts,
       charactersWithSheets,
       locationsWithSheets,
@@ -596,6 +669,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           userId: input.userId,
           teamId: input.teamId,
           sequenceId,
+          reservationId: input.reservationId,
           scenesWithVisualPrompts,
           shotMapping,
           aspectRatio,
@@ -737,6 +811,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
           userId: input.userId,
           teamId: input.teamId,
           sequenceId,
+          reservationId: input.reservationId,
           includeMusic: shouldGenerateMusic,
           shots: batchShots,
           videoModels,
@@ -771,7 +846,17 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
     error: string;
     scopedDb: WorkflowScopedDb;
   }): Promise<void> {
-    const { sequenceId } = event.payload;
+    const { sequenceId, reservationId } = event.payload;
+    if (reservationId) {
+      try {
+        await scopedDb.billing.zeroReservation(reservationId);
+      } catch (releaseError) {
+        logger.error(
+          `[AnalyzeScriptWorkflow:cf] Failed to zero reservation ${reservationId}:`,
+          { err: releaseError }
+        );
+      }
+    }
     if (!sequenceId) return;
 
     const sanitized = sanitizeFailResponse(error);

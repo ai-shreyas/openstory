@@ -150,6 +150,7 @@ export class CharacterBibleWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         userId: input.userId,
         teamId: input.teamId,
         sequenceId: input.sequenceId,
+        reservationId: input.reservationId,
         characterDbId,
         characterName: character.name,
         characterMetadata: character,

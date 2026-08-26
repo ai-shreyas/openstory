@@ -35,7 +35,6 @@ import {
 } from '@/lib/mocks/frame-fixtures';
 import { toShotView, type ShotView } from '@/lib/shots/shot-view';
 import { estimateImageCost, gateEstimate } from '@/lib/billing/cost-estimation';
-import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
 
 const assertNoActiveStoryboardMock = vi.fn();
 const triggerStoryboardMock = vi.fn();
@@ -53,9 +52,14 @@ vi.doMock('@/lib/workflow/client', () => ({
   triggerWorkflow: triggerWorkflowMock,
 }));
 
-const requireCreditsMock = vi.fn();
+const reserveRunCreditsMock = vi.fn();
 vi.doMock('@/lib/billing/preflight', () => ({
-  requireCredits: requireCreditsMock,
+  reserveRunCredits: reserveRunCreditsMock,
+  releaseReservationOnThrow: async (
+    _db: unknown,
+    _id: unknown,
+    work: () => Promise<unknown>
+  ) => work(),
 }));
 
 const notifySequenceReadyMock = vi.fn();
@@ -379,8 +383,8 @@ function resetMocks() {
   triggerStoryboardMock.mockResolvedValue({ workflowRunId: 'wf_new' });
   triggerWorkflowMock.mockReset();
   triggerWorkflowMock.mockResolvedValue('wf_child');
-  requireCreditsMock.mockReset();
-  requireCreditsMock.mockResolvedValue(undefined);
+  reserveRunCreditsMock.mockReset();
+  reserveRunCreditsMock.mockResolvedValue(undefined);
   notifySequenceReadyMock.mockReset();
   notifySequenceReadyMock.mockResolvedValue('sent');
 }
@@ -415,9 +419,14 @@ describe('executeSmartRetry — full retry fallback', () => {
     const result = await executeSmartRetry(context);
 
     expect(triggerStoryboardMock).toHaveBeenCalledTimes(1);
+    expect(reserveRunCreditsMock).toHaveBeenCalledTimes(1);
     expect(triggerStoryboardMock).toHaveBeenCalledWith(
       scopedDb,
-      expect.objectContaining({ sequenceId: 'seq_1', teamId: 't1' })
+      expect.objectContaining({
+        sequenceId: 'seq_1',
+        teamId: 't1',
+        reservationId: undefined,
+      })
     );
     expect(triggerWorkflowMock).not.toHaveBeenCalled();
     // The launcher owns the 'processing' write — no direct status write here.
@@ -608,39 +617,41 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
     // the sequence default.
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/image',
-      expect.objectContaining({ shotId: 'shot-a', model: 'gpt_image_2' }),
+      expect.objectContaining({
+        shotId: 'shot-a',
+        model: 'gpt_image_2',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/image',
-      expect.objectContaining({ shotId: 'shot-b', model: 'flux_2_max' }),
+      expect.objectContaining({
+        shotId: 'shot-b',
+        model: 'flux_2_max',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
 
-    // Pre-flight credit check sums per-shot costs across the two models —
-    // a regression to single-model `multiply(cost, count)` pricing would diverge
-    // whenever the shots were rendered by differently-priced models.
-    const expectedCost = addMicros(
-      addMicros(
-        ZERO_MICROS,
-        gateEstimate(
-          estimateImageCost('gpt_image_2', '16:9', 1, { pricing: FAL_PRICING }),
-          {
-            model: 'gpt_image_2',
-            operation: 'smart-retry:image',
-          }
-        )
-      ),
-      gateEstimate(
-        estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
-        {
-          model: 'flux_2_max',
-          operation: 'smart-retry:image',
-        }
-      )
+    // One hold per shot so leftover zeros cannot kill a sibling envelope.
+    const gptCost = gateEstimate(
+      estimateImageCost('gpt_image_2', '16:9', 1, { pricing: FAL_PRICING }),
+      {
+        model: 'gpt_image_2',
+        operation: 'smart-retry:image',
+      }
     );
-    expect(requireCreditsMock).toHaveBeenCalledTimes(1);
-    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
+    const fluxCost = gateEstimate(
+      estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+      {
+        model: 'flux_2_max',
+        operation: 'smart-retry:image',
+      }
+    );
+    expect(reserveRunCreditsMock).toHaveBeenCalledTimes(2);
+    expect(reserveRunCreditsMock.mock.calls[0]?.[1]).toEqual(gptCost);
+    expect(reserveRunCreditsMock.mock.calls[1]?.[1]).toEqual(fluxCost);
   });
 
   test("retries each failed motion video with its selected version's model", async () => {
@@ -670,12 +681,20 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
 
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/motion',
-      expect.objectContaining({ shotId: 'shot-a', model: 'seedance_v2' }),
+      expect.objectContaining({
+        shotId: 'shot-a',
+        model: 'seedance_v2',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
     expect(triggerWorkflowMock).toHaveBeenCalledWith(
       '/motion',
-      expect.objectContaining({ shotId: 'shot-b', model: 'kling_v3_pro' }),
+      expect.objectContaining({
+        shotId: 'shot-b',
+        model: 'kling_v3_pro',
+        ownsReservation: true,
+      }),
       expect.objectContaining({ label: expect.any(String) })
     );
   });
@@ -705,16 +724,13 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
       expect.objectContaining({ label: expect.any(String) })
     );
     // …and it is priced as flux_2_max, so the estimate matches the charge.
-    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
-      addMicros(
-        ZERO_MICROS,
-        gateEstimate(
-          estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
-          {
-            model: 'flux_2_max',
-            operation: 'smart-retry:image',
-          }
-        )
+    expect(reserveRunCreditsMock.mock.calls[0]?.[1]).toEqual(
+      gateEstimate(
+        estimateImageCost('flux_2_max', '16:9', 1, { pricing: FAL_PRICING }),
+        {
+          model: 'flux_2_max',
+          operation: 'smart-retry:image',
+        }
       )
     );
   });

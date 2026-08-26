@@ -72,6 +72,18 @@ import type { musicDesignResultSchema } from '../ai/response-schemas';
 export interface UserWorkflowContext {
   userId: string;
   teamId: string;
+  /**
+   * Run envelope (#1310). Optional so in-flight instances without it still
+   * last-resort deduct. Children inherit this from the parent payload.
+   */
+  reservationId?: string;
+  /**
+   * This instance created a private envelope (add-model per shot, smart-retry
+   * leaf). The base class zeros leftover on success and failure. Leave unset
+   * on shared-envelope children so the base class does not zero; parents may
+   * still zero explicitly.
+   */
+  ownsReservation?: boolean;
 }
 
 export interface SequenceWorkflowContext extends UserWorkflowContext {

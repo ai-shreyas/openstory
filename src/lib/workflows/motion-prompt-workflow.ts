@@ -142,6 +142,7 @@ export class MotionPromptWorkflow extends OpenStoryWorkflowEntrypoint<MotionProm
         sequenceId,
         workflowRunId: event.instanceId,
         scopedDb,
+        reservationId: input.reservationId,
         shotPromptStream:
           input.emitStreaming && shotId
             ? { shotId, promptType: 'motion' }

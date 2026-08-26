@@ -135,6 +135,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
       workflowRunId: event.instanceId,
       userId: input.userId,
       sequenceId: input.sequenceId,
+      reservationId: input.reservationId,
       kind: 'location-sheet',
       logTag: '[LocationSheetWorkflow:cf]',
       subject: `reference for ${input.locationName}`,
@@ -160,6 +161,7 @@ export class LocationSheetWorkflow extends OpenStoryWorkflowEntrypoint<LocationS
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Location sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
+        reservationId: input.reservationId,
         metadata: {
           ...falUsage,
           model: generationParams.model,

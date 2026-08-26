@@ -178,6 +178,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
             usedOwnKey: posterResult.metadata.usedOwnKey,
             description: `Sequence poster (${PREVIEW_IMAGE_MODEL})`,
             idempotencyKey: `${event.instanceId}:poster`,
+            reservationId: input.reservationId,
             metadata: {
               ...posterUsage,
               model: PREVIEW_IMAGE_MODEL,
@@ -199,6 +200,7 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
         userId: input.userId,
         teamId: input.teamId,
         sequenceId,
+        reservationId: input.reservationId,
         script,
         aspectRatio,
         styleConfig: input.styleConfig,
@@ -231,6 +233,13 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
       // common case.
       timeout: '6 hours',
     });
+
+    const reservationId = input.reservationId;
+    if (reservationId) {
+      await step.do('zero-reservation', async () => {
+        await scopedDb.billing.zeroReservation(reservationId);
+      });
+    }
 
     await step.do('mark-completed', async () => {
       await seq.updateStatus('completed');
@@ -279,7 +288,17 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     // sequence failed — its message ("Your OpenRouter API key is invalid…")
     // is more specific than the parent's wrapper ("Child workflow
     // analyze-script… failed: …").
-    const { sequenceId } = event.payload;
+    const { sequenceId, reservationId } = event.payload;
+    if (reservationId) {
+      try {
+        await scopedDb.billing.zeroReservation(reservationId);
+      } catch (releaseError) {
+        logger.error(
+          `[StoryboardWorkflow:cf] Failed to zero reservation ${reservationId}:`,
+          { err: releaseError }
+        );
+      }
+    }
     if (!sequenceId) return;
 
     const sequence = await scopedDb.liveRead.sequences.getForUser({
