@@ -5,8 +5,11 @@
  * fn file's exported helpers in the CLIENT bundle (#1257). The handler
  * references this only inside its body, which the compiler strips.
  *
- * Order: validate models (schema) → compliance gate → credit gate → reserve
- * rows → trigger `/studio`. A rejected prompt costs nothing and leaves no row.
+ * Order: validate models (schema) → compliance gate → one run envelope per
+ * requested asset (#1310) → reserve rows → trigger `/studio`. A rejected
+ * prompt costs nothing and leaves no row. Each child owns its hold so leftover
+ * zeros on completion; a shared envelope would let the first finish drop
+ * leftover for siblings.
  */
 
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
@@ -16,7 +19,10 @@ import {
   gateEstimate,
 } from '@/lib/billing/cost-estimation';
 import { multiplyMicros, type Microdollars } from '@/lib/billing/money';
-import { requireCredits } from '@/lib/billing/preflight';
+import {
+  releaseReservationOnThrow,
+  reserveRunCredits,
+} from '@/lib/billing/preflight';
 import { requireGenerationAllowed } from '@/lib/compliance/generation-gate';
 import type { ScopedDb } from '@/lib/db/scoped';
 import type { GeneratedAssetInput } from '@/lib/db/schema';
@@ -94,6 +100,23 @@ function snapshotInput(input: StudioCreateInput): GeneratedAssetInput {
   };
 }
 
+async function zeroUnusedReservations(
+  scopedDb: ScopedDb,
+  reservationIds: Array<string | undefined>
+): Promise<void> {
+  for (const reservationId of reservationIds) {
+    if (!reservationId) continue;
+    try {
+      await scopedDb.billing.zeroReservation(reservationId);
+    } catch (error) {
+      logger.error('Failed to zero unused studio reservation', {
+        err: error,
+        reservationId,
+      });
+    }
+  }
+}
+
 /**
  * Reserve `count` studio rows and trigger a `/studio` run for each.
  */
@@ -108,66 +131,101 @@ export async function createStudioAssets(
     };
   }
   const pricing = await getEffectiveFalPricing();
-  const estimatedCost = estimateStudioCost(input, pricing);
+  const perItemCost = estimateStudioCost({ ...input, count: 1 }, pricing);
+  const creditErrorMessage =
+    input.activity === 'video'
+      ? 'Insufficient credits for video generation'
+      : 'Insufficient credits for image generation';
 
   await requireGenerationAllowed({
     userId: scopedDb.userId,
     teamId: scopedDb.teamId,
   });
 
-  await requireCredits(scopedDb, estimatedCost, {
-    errorMessage:
-      input.activity === 'video'
-        ? 'Insufficient credits for video generation'
-        : 'Insufficient credits for image generation',
-  });
+  // Hold every item before inserting any row. A shared envelope would let
+  // the first child to finish zero leftover for siblings; a later reserve
+  // failing after earlier rows exist would leave a partial click.
+  const reservationIds: Array<string | undefined> = [];
+  try {
+    for (let index = 0; index < input.count; index += 1) {
+      reservationIds.push(
+        await reserveRunCredits(scopedDb, perItemCost, {
+          errorMessage: creditErrorMessage,
+        })
+      );
+    }
+  } catch (error) {
+    await zeroUnusedReservations(scopedDb, reservationIds);
+    throw error;
+  }
 
   const endpointId = studioEndpointId(input);
   const modelName = studioModelName(input);
   const snapshot = snapshotInput(input);
   const assets: StudioCreateResult['assets'] = [];
 
-  for (let index = 0; index < input.count; index += 1) {
-    const row = await scopedDb.generatedAssets.insert({
-      provider: 'fal',
-      endpointId,
-      activity: input.activity,
-      modelName,
-      source: 'studio',
-      input: snapshot,
-      status: 'queued',
-    });
+  try {
+    for (let index = 0; index < input.count; index += 1) {
+      const reservationId = reservationIds[index];
+      const { rowId, workflowRunId } = await releaseReservationOnThrow(
+        scopedDb,
+        reservationId,
+        async () => {
+          const row = await scopedDb.generatedAssets.insert({
+            provider: 'fal',
+            endpointId,
+            activity: input.activity,
+            modelName,
+            source: 'studio',
+            input: snapshot,
+            status: 'queued',
+          });
 
-    const workflowInput: StudioGenerationWorkflowInput = {
-      userId: scopedDb.userId,
-      teamId: scopedDb.teamId,
-      assetId: row.id,
-      input,
-    };
+          const workflowInput: StudioGenerationWorkflowInput = {
+            userId: scopedDb.userId,
+            teamId: scopedDb.teamId,
+            assetId: row.id,
+            reservationId,
+            ownsReservation: true,
+            input,
+          };
 
-    let workflowRunId: string;
-    try {
-      workflowRunId = await triggerWorkflow('/studio', workflowInput, {
-        deduplicationId: `studio-${row.id}`,
-      });
-    } catch (error) {
-      await scopedDb.generatedAssets.markFailed(
-        row.id,
-        'The generation could not be started — please try again.'
+          try {
+            const workflowRunId = await triggerWorkflow(
+              '/studio',
+              workflowInput,
+              { deduplicationId: `studio-${row.id}` }
+            );
+            return { rowId: row.id, workflowRunId };
+          } catch (error) {
+            await scopedDb.generatedAssets.markFailed(
+              row.id,
+              'The generation could not be started — please try again.'
+            );
+            throw error;
+          }
+        }
       );
-      throw error;
-    }
 
-    try {
-      await scopedDb.generatedAssets.setWorkflowRunId(row.id, workflowRunId);
-    } catch (error) {
-      logger.error(
-        `Failed to persist workflowRunId ${workflowRunId} for studio asset ${row.id}`,
-        { data: error instanceof Error ? error.message : error }
-      );
-    }
+      try {
+        await scopedDb.generatedAssets.setWorkflowRunId(rowId, workflowRunId);
+      } catch (error) {
+        logger.error(
+          `Failed to persist workflowRunId ${workflowRunId} for studio asset ${rowId}`,
+          { data: error instanceof Error ? error.message : error }
+        );
+      }
 
-    assets.push({ id: row.id, workflowRunId });
+      assets.push({ id: rowId, workflowRunId });
+    }
+  } catch (error) {
+    // The failed item's hold is already zeroed by releaseReservationOnThrow.
+    // Started children keep theirs. Drop the ones we never triggered.
+    await zeroUnusedReservations(
+      scopedDb,
+      reservationIds.slice(assets.length + 1)
+    );
+    throw error;
   }
 
   return { assets };

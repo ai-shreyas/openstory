@@ -126,10 +126,19 @@ const VIDEO: StudioCreateInput = {
 };
 
 function makeEvent(
-  input: StudioCreateInput
+  input: StudioCreateInput,
+  extra: Partial<StudioGenerationWorkflowInput> = {}
 ): Readonly<WorkflowEvent<StudioGenerationWorkflowInput>> {
   return {
-    payload: { userId: 'u1', teamId: 'team-1', assetId: 'asset-1', input },
+    payload: {
+      userId: 'u1',
+      teamId: 'team-1',
+      assetId: 'asset-1',
+      reservationId: 'res-studio-1',
+      ownsReservation: true,
+      input,
+      ...extra,
+    },
     instanceId: 'run-1',
     workflowName: 'studio',
     timestamp: new Date(0),
@@ -181,6 +190,7 @@ describe('StudioGenerationWorkflow image', () => {
       expect.objectContaining({
         costMicros: 12_000,
         idempotencyKey: 'run-1:studio-image',
+        reservationId: 'res-studio-1',
       })
     );
     expect(generatedAssets.markCompleted).toHaveBeenCalledWith('asset-1', {
@@ -232,7 +242,10 @@ describe('StudioGenerationWorkflow video', () => {
       'persist-result',
     ]);
     expect(mockDeductWorkflowCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ costMicros: 70_000 })
+      expect.objectContaining({
+        costMicros: 70_000,
+        reservationId: 'res-studio-1',
+      })
     );
     expect(generatedAssets.markCompleted).toHaveBeenCalledWith('asset-1', {
       outputs: [{ url: '/r2/videos/a.mp4', contentType: 'video/mp4' }],

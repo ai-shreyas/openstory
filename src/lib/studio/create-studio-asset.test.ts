@@ -1,8 +1,9 @@
 /**
  * Tests for the prompt-only studio create flow (#1274).
  *
- * Pins: sequence-model validation, credit gate before insert, one workflow
- * per requested image, trigger-failure marks the reserved row failed.
+ * Pins: sequence-model validation, one run envelope per requested asset
+ * before insert, one workflow per image, trigger-failure marks the reserved
+ * row failed and drops unused holds.
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,18 +14,31 @@ import { generateId } from '@/lib/db/id';
 import type { Database } from '@/lib/db/client';
 import { generatedAssets, teams, user } from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
+import { InsufficientCreditsError } from '@/lib/errors';
 import { studioCreateInputSchema } from '@/lib/studio/schema';
 
 let db: Database;
 
-const mockRequireCredits = vi.fn();
+const mockReserveRunCredits = vi.fn();
 const mockTriggerWorkflow = vi.fn();
 const mockRequireGenerationAllowed = vi.fn();
 const mockGetEffectiveFalPricing = vi.fn();
 
 vi.doMock('#db-client', () => ({ getDb: () => db }));
-vi.doMock('@/lib/billing/preflight', () => ({
-  requireCredits: mockRequireCredits,
+vi.doMock('@/lib/billing/preflight', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/billing/preflight')>();
+  return {
+    ...actual,
+    reserveRunCredits: mockReserveRunCredits,
+  };
+});
+vi.doMock('@/lib/realtime', () => ({
+  getBillingChannel: () => ({
+    emit: vi.fn().mockResolvedValue(undefined),
+    history: async () => [],
+  }),
+  billingChannelId: (teamId: string) => `billing:${teamId}`,
 }));
 vi.doMock('@/lib/workflow/client', () => ({
   triggerWorkflow: mockTriggerWorkflow,
@@ -53,7 +67,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await db.delete(generatedAssets);
   vi.clearAllMocks();
-  mockRequireCredits.mockResolvedValue(undefined);
+  mockReserveRunCredits.mockResolvedValue('res-studio-1');
   mockTriggerWorkflow.mockResolvedValue('wf-studio-1');
   mockRequireGenerationAllowed.mockResolvedValue(undefined);
   mockGetEffectiveFalPricing.mockResolvedValue({});
@@ -129,13 +143,13 @@ describe('createStudioAssets', () => {
       })
     ).rejects.toBeInstanceOf(AccountRestrictedError);
 
-    expect(mockRequireCredits).not.toHaveBeenCalled();
+    expect(mockReserveRunCredits).not.toHaveBeenCalled();
     expect(await db.select().from(generatedAssets)).toEqual([]);
   });
 
   it('stops at the credit gate without inserting a row', async () => {
-    mockRequireCredits.mockRejectedValueOnce(
-      new Error('Insufficient credits for image generation')
+    mockReserveRunCredits.mockRejectedValueOnce(
+      new InsufficientCreditsError('Insufficient credits for image generation')
     );
     const scopedDb = createScopedDb(TEAM_ID, USER_ID);
 
@@ -183,12 +197,15 @@ describe('createStudioAssets', () => {
       imageModel: 'gpt_image_2',
     });
 
+    expect(mockReserveRunCredits).toHaveBeenCalledTimes(2);
     expect(mockTriggerWorkflow).toHaveBeenCalledTimes(2);
     expect(mockTriggerWorkflow).toHaveBeenCalledWith(
       '/studio',
       expect.objectContaining({
         userId: USER_ID,
         teamId: TEAM_ID,
+        reservationId: 'res-studio-1',
+        ownsReservation: true,
         input: expect.objectContaining({
           activity: 'image',
           prompt: 'a red fox in fog',
@@ -200,6 +217,35 @@ describe('createStudioAssets', () => {
         deduplicationId: expect.stringMatching(/^studio-/),
       })
     );
+  });
+
+  it('zeros earlier holds if a later reserve fails, leaving no row', async () => {
+    mockReserveRunCredits
+      .mockResolvedValueOnce('res-1')
+      .mockRejectedValueOnce(
+        new InsufficientCreditsError(
+          'Insufficient credits for image generation'
+        )
+      );
+    const scopedDb = createScopedDb(TEAM_ID, USER_ID);
+    const zero = vi
+      .spyOn(scopedDb.billing, 'zeroReservation')
+      .mockResolvedValue(undefined);
+
+    await expect(
+      createStudioAssets(scopedDb, {
+        activity: 'image',
+        prompt: 'a red fox',
+        imageModel: 'gpt_image_2',
+        aspectRatio: '16:9',
+        count: 2,
+        referenceImages: [],
+      })
+    ).rejects.toBeInstanceOf(InsufficientCreditsError);
+
+    expect(zero).toHaveBeenCalledWith('res-1');
+    expect(mockTriggerWorkflow).not.toHaveBeenCalled();
+    expect(await db.select().from(generatedAssets)).toEqual([]);
   });
 
   it('marks the reserved row failed when the workflow trigger throws', async () => {
@@ -222,6 +268,39 @@ describe('createStudioAssets', () => {
     expect(rows[0]?.status).toBe('failed');
     expect(rows[0]?.error).toMatch(/could not be started/);
     expect(rows[0]?.workflowRunId).toBeNull();
+  });
+
+  it('keeps the started hold and zeros unused ones when a later trigger fails', async () => {
+    mockReserveRunCredits
+      .mockResolvedValueOnce('res-a')
+      .mockResolvedValueOnce('res-b')
+      .mockResolvedValueOnce('res-c');
+    mockTriggerWorkflow
+      .mockResolvedValueOnce('wf-a')
+      .mockRejectedValueOnce(new Error('binding exploded'));
+    const scopedDb = createScopedDb(TEAM_ID, USER_ID);
+    const zero = vi.spyOn(scopedDb.billing, 'zeroReservation');
+
+    await expect(
+      createStudioAssets(scopedDb, {
+        activity: 'image',
+        prompt: 'a red fox',
+        imageModel: 'gpt_image_2',
+        aspectRatio: '16:9',
+        count: 3,
+        referenceImages: [],
+      })
+    ).rejects.toThrow('binding exploded');
+
+    expect(zero).toHaveBeenCalledWith('res-b');
+    expect(zero).toHaveBeenCalledWith('res-c');
+    expect(zero).not.toHaveBeenCalledWith('res-a');
+    expect(mockTriggerWorkflow).toHaveBeenCalledTimes(2);
+
+    const rows = await db.select().from(generatedAssets);
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((row) => row.status === 'queued')).toHaveLength(1);
+    expect(rows.filter((row) => row.status === 'failed')).toHaveLength(1);
   });
 
   it('lists studio assets newest-first and can filter favorites', async () => {
@@ -303,6 +382,8 @@ describe('createStudioAssets', () => {
     expect(mockTriggerWorkflow).toHaveBeenCalledWith(
       '/studio',
       expect.objectContaining({
+        reservationId: 'res-studio-1',
+        ownsReservation: true,
         input: expect.objectContaining({
           activity: 'video',
           prompt: 'the fox turns toward camera',

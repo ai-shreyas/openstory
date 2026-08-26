@@ -50,3 +50,24 @@ describe('storyboard envelope wiring', () => {
     expect(source).toMatch(/NonRetryableError/);
   });
 });
+
+describe('studio envelope wiring', () => {
+  test('create holds one envelope per asset and the workflow captures it', () => {
+    const createSource = readFileSync(
+      'src/lib/studio/create-studio-asset.ts',
+      'utf8'
+    );
+    expect(createSource).toMatch(/reserveRunCredits\s*\(/);
+    expect(createSource).toMatch(/ownsReservation:\s*true/);
+    expect(createSource).toMatch(/releaseReservationOnThrow/);
+    expect(createSource).not.toMatch(/requireCredits\s*\(/);
+
+    const workflowSource = readFileSync(
+      'src/lib/workflows/studio-generation-workflow.ts',
+      'utf8'
+    );
+    expect(workflowSource).toMatch(
+      /reservationId:\s*event\.payload\.reservationId/
+    );
+  });
+});

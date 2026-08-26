@@ -7,7 +7,7 @@
  *
  *   1. set-running
  *   2. generate-image, or submit/poll video (retried on a content flag)
- *   3. deduct-credits from reported units
+ *   3. capture credits against the run envelope from reported units
  *   4. upload outputs to R2
  *   5. record-provenance
  *   6. persist-result on the reserved `generated_assets` row — last, so a
@@ -138,6 +138,7 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
           usedOwnKey: imageResult.metadata.usedOwnKey,
           description: `Studio image (${imageModel})`,
           idempotencyKey: `${event.instanceId}:studio-image`,
+          reservationId: event.payload.reservationId,
           metadata: {
             ...falUsage,
             model: imageModel,
@@ -369,6 +370,7 @@ export class StudioGenerationWorkflow extends OpenStoryWorkflowEntrypoint<Studio
           usedOwnKey: job.usedOwnKey,
           description: `Studio video (${videoModel})`,
           idempotencyKey: `${event.instanceId}:studio-video`,
+          reservationId: event.payload.reservationId,
           metadata: {
             model: videoModel,
             assetId,
