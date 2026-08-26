@@ -234,7 +234,7 @@ export function NewSequencePage({
     return (
       <div className="flex h-full flex-col overflow-hidden">
         {billingGate}
-        <PageIntro title={SITE_CONFIG.tagline}>
+        <PageIntro title={SITE_CONFIG.tagline} maxWidth="narrow">
           {SITE_CONFIG.taglineSub}
         </PageIntro>
         <PageContainer

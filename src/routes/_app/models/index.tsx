@@ -28,7 +28,7 @@ function ModelsPage() {
 
   return (
     <div className="h-full overflow-auto">
-      <PageIntro title="Models">
+      <PageIntro title="Models" maxWidth="wide">
         The latest generation models — sometimes before they're announced.
       </PageIntro>
       <PageContainer maxWidth="wide" padding="none" className="pb-8">

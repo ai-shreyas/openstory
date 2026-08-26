@@ -29,7 +29,10 @@ export function StudioView({ activity, sort, favorites }: StudioViewProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
-        <PageIntro title={activity === 'video' ? 'Videos' : 'Images'}>
+        <PageIntro
+          title={activity === 'video' ? 'Videos' : 'Images'}
+          maxWidth="wide"
+        >
           {activity === 'video'
             ? 'Make or edit short clips with any video model.'
             : 'Make or edit images with any image model.'}
