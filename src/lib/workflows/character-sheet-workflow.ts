@@ -278,6 +278,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
       workflowRunId,
       userId: input.userId,
       sequenceId: input.sequenceId,
+      reservationId: input.reservationId,
       kind: 'character-sheet',
       logTag: '[CharacterSheetWorkflow:cf]',
       subject: `sheet for ${input.characterName}`,
@@ -303,6 +304,7 @@ export class CharacterSheetWorkflow extends OpenStoryWorkflowEntrypoint<Characte
         usedOwnKey: imageResult.metadata.usedOwnKey,
         description: `Character sheet (${generationParams.model})`,
         idempotencyKey: `${event.instanceId}:sheet`,
+        reservationId: input.reservationId,
         metadata: {
           ...falUsage,
           model: generationParams.model,

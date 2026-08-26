@@ -23,7 +23,6 @@ import {
 import { extractFalErrorMessage } from '@/lib/ai/fal-error';
 import { computeVideoManifestInputHash } from '@/lib/ai/input-hash';
 import { DEFAULT_VIDEO_MODEL, IMAGE_TO_VIDEO_MODELS } from '@/lib/ai/models';
-import { microsToUsd } from '@/lib/billing/money';
 import {
   deductWorkflowCredits,
   recordFalUsageStep,
@@ -169,13 +168,10 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
 
         const falKeyInfo = await scopedDb.credentials.resolveKey('fal');
         const usedOwnKey = falKeyInfo.source === 'team';
-        if (cost > 0 && !usedOwnKey) {
+        if (cost > 0 && !usedOwnKey && !input.reservationId) {
           const canAfford =
             await scopedDb.liveRead.billing.hasEnoughCredits(cost);
           if (!canAfford) {
-            logger.warn(
-              `[MotionWorkflow:cf] Insufficient credits for team ${input.teamId} (cost: $${microsToUsd(cost).toFixed(4)}), skipping deduction`
-            );
             throw new NonRetryableError(
               `Insufficient credits for motion generation`
             );
@@ -645,10 +641,9 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
         })
       : {};
 
-    // Deduct credits (skip if team used own fal key). Routed through
-    // deductWorkflowCredits so insufficient balances warn-and-skip (with an
-    // auto-top-up attempt) like every other workflow, instead of debiting
-    // the balance negative.
+    // Settle the spawn-time reservation against fal's billed cost. If this
+    // run never reserved (BYOK / unpriced), deductWorkflowCredits falls back
+    // to an atomic try-deduct.
     if (actualCost > 0 && input.teamId && !gatedUsedOwnKey) {
       await step.do('deduct-credits', async () => {
         await deductWorkflowCredits({
@@ -657,6 +652,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           usedOwnKey: job.usedOwnKey,
           description: `Motion generation (${model})`,
           idempotencyKey: `${event.instanceId}:motion`,
+          reservationId: input.reservationId,
           metadata: {
             ...falUsage,
             model,

@@ -10,7 +10,11 @@ vi.doMock('@/lib/posthog-server', () => ({
   getPostHogClient: () => ({ capture }),
 }));
 
-const { reportMissingBillingCost } = await import('../billing-observability');
+const {
+  reportMissingBillingCost,
+  reportReservationShort,
+  reportSkippedDeduction,
+} = await import('../billing-observability');
 
 describe('reportMissingBillingCost', () => {
   it('logs and captures a billing_missing_cost event', () => {
@@ -38,6 +42,71 @@ describe('reportMissingBillingCost', () => {
         source: 'workflow-deduction',
         workflow_name: 'StoryboardWorkflow',
         model_id: 'fal/flux',
+      }),
+    });
+  });
+});
+
+describe('reportReservationShort', () => {
+  it('logs and captures a billing_reservation_short event', () => {
+    loggerWarn.mockClear();
+    capture.mockClear();
+
+    reportReservationShort({
+      teamId: 'team_1',
+      sequenceId: 'seq_1',
+      neededMicros: 3_000_000,
+      remainingMicros: 1_000_000,
+      sceneCount: 20,
+    });
+
+    expect(loggerWarn).toHaveBeenCalledWith(
+      'Storyboard reservation could not grow to cover remaining work',
+      expect.objectContaining({
+        sequenceId: 'seq_1',
+        neededMicros: 3_000_000,
+      })
+    );
+    expect(capture).toHaveBeenCalledWith({
+      distinctId: 'team_1',
+      event: 'billing_reservation_short',
+      properties: {
+        sequence_id: 'seq_1',
+        needed_micros: 3_000_000,
+        remaining_micros: 1_000_000,
+        scene_count: 20,
+      },
+    });
+  });
+});
+
+describe('reportSkippedDeduction', () => {
+  it('logs and captures a billing_skipped_deduction event', () => {
+    loggerWarn.mockClear();
+    capture.mockClear();
+
+    reportSkippedDeduction({
+      teamId: 'team_1',
+      workflowName: 'MotionWorkflow:cf',
+      description: 'Motion generation (seedance)',
+      costMicros: 1_222_200,
+      idempotencyKey: 'wf-1:motion',
+    });
+
+    expect(loggerWarn).toHaveBeenCalledWith(
+      'Completed AI generation skipped deduction',
+      expect.objectContaining({
+        workflowName: 'MotionWorkflow:cf',
+        costMicros: 1_222_200,
+      })
+    );
+    expect(capture).toHaveBeenCalledWith({
+      distinctId: 'team_1',
+      event: 'billing_skipped_deduction',
+      properties: expect.objectContaining({
+        workflow_name: 'MotionWorkflow:cf',
+        cost_micros: 1_222_200,
+        idempotency_key: 'wf-1:motion',
       }),
     });
   });

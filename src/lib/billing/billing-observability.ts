@@ -77,6 +77,68 @@ export function reportBillingDrift(ctx: BillingDriftContext): void {
   });
 }
 
+export type SkippedDeductionContext = {
+  teamId?: string;
+  workflowName?: string;
+  description?: string;
+  costMicros: number;
+  idempotencyKey?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ReservationShortContext = {
+  teamId?: string;
+  sequenceId?: string;
+  neededMicros: number;
+  remainingMicros: number;
+  sceneCount: number;
+};
+
+/**
+ * Grow after scene-split failed: stills/motion will not spawn. The split,
+ * bibles, and prompts stay. Emitted so a shortfall is queryable (#1310).
+ */
+export function reportReservationShort(ctx: ReservationShortContext): void {
+  logger.warn(
+    'Storyboard reservation could not grow to cover remaining work',
+    ctx
+  );
+
+  const posthog = getPostHogClient();
+  posthog?.capture({
+    distinctId: ctx.teamId ?? 'system',
+    event: 'billing_reservation_short',
+    properties: {
+      sequence_id: ctx.sequenceId,
+      needed_micros: ctx.neededMicros,
+      remaining_micros: ctx.remainingMicros,
+      scene_count: ctx.sceneCount,
+    },
+  });
+}
+
+/**
+ * Generation ran but some or all of the cost was not posted: missing hold,
+ * capture short of actual, or posted-balance tryDeduct refused. Emitted so
+ * unbilled spend is a queryable metric rather than a log grep.
+ */
+export function reportSkippedDeduction(ctx: SkippedDeductionContext): void {
+  logger.warn('Completed AI generation skipped deduction', ctx);
+
+  const posthog = getPostHogClient();
+  posthog?.capture({
+    distinctId: ctx.teamId ?? 'system',
+    event: 'billing_skipped_deduction',
+    properties: {
+      workflow_name: ctx.workflowName,
+      description: ctx.description,
+      cost_micros: ctx.costMicros,
+      idempotency_key: ctx.idempotencyKey,
+      ...ctx.metadata,
+    },
+  });
+}
+
 /** Log and emit analytics when a completed generation has nothing to bill. */
 export function reportMissingBillingCost(ctx: MissingBillingCostContext): void {
   logger.warn('Completed AI generation with no billable cost reported', ctx);

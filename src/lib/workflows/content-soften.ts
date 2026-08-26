@@ -67,6 +67,7 @@ export async function softenRejectedImagePrompt(
     analysisModelId: AnalysisModelId;
     shotId?: string;
     model: string;
+    reservationId?: string;
     /** Durable step name — must be unique per call within a run. */
     name?: string;
   }
@@ -93,6 +94,7 @@ export async function softenRejectedImagePrompt(
       userId: args.userId,
       workflowRunId: args.workflowRunId,
       scopedDb: args.scopedDb,
+      reservationId: args.reservationId,
     }
   );
 
@@ -136,6 +138,7 @@ export type GenerateImageSofteningArgs = {
   rebuild?: (prompt: string, model: TextToImageModel) => ImageGenerationParams;
   /** Ids for structured logs. */
   meta?: Record<string, unknown>;
+  reservationId?: string;
 };
 
 export type GenerateImageSofteningResult = {
@@ -274,6 +277,7 @@ export async function generateImageSoftening(
       analysisModelId: args.analysisModelId ?? DEFAULT_ANALYSIS_MODEL,
       model: params.model,
       name: `soften-${stepName}`,
+      reservationId: args.reservationId,
     });
   } catch (error) {
     logger.warn(`${logTag} failed to soften prompt for ${subject}`, {

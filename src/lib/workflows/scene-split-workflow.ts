@@ -1011,6 +1011,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         usedOwnKey: streamResult.llmKeySource === 'team',
         description: `LLM analysis (${SCENE_SPLIT_MODEL})`,
         idempotencyKey: `${event.instanceId}:llm-${STEP_NAME}`,
+        reservationId: input.reservationId,
         metadata: {
           model: SCENE_SPLIT_MODEL,
           phase: PHASE.number,
@@ -1028,6 +1029,7 @@ export class SceneSplitWorkflow extends OpenStoryWorkflowEntrypoint<SceneSplitWo
         usedOwnKey: biblesResult.llmKeySource === 'team',
         description: `LLM analysis (${modelId})`,
         idempotencyKey: `${event.instanceId}:llm-${BIBLES_STEP_NAME}`,
+        reservationId: input.reservationId,
         metadata: {
           model: modelId,
           phase: PHASE.number,

@@ -61,6 +61,14 @@ export const LOW_BALANCE_THRESHOLD_USD = 5;
 /** Minimum time between auto-top-up charges in milliseconds (60 seconds) */
 export const AUTO_TOPUP_COOLDOWN_MS = 60_000;
 
+/**
+ * How long a run envelope stays in the available SUM (#1310).
+ * Longer than AnalyzeScript's 90-minute image await plus 45-minute motion
+ * await under burst, so in-flight capture still owns the row after
+ * `expiresAt` would drop it from *new* reserves.
+ */
+export const RESERVATION_TTL_MS = 6 * 60 * 60 * 1000;
+
 /** Number of months before credit batches expire */
 const CREDIT_EXPIRY_MONTHS = 12;
 

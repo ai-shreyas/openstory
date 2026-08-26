@@ -52,6 +52,7 @@ type GateOperation =
   | 'shot-variants'
   | 'smart-retry:image'
   | 'smart-retry:motion'
+  | 'smart-retry:music'
   | 'storyboard:character-sheets'
   | 'storyboard:location-sheets'
   | 'storyboard:motion'
@@ -233,24 +234,7 @@ export function estimateLocationSheetCount(sceneCount: number): number {
   return 3;
 }
 
-/**
- * Estimate the total cost of a storyboard workflow.
- * Includes: LLM analysis, character/location sheet images, per-shot images,
- * and optionally per-shot motion generation.
- *
- * `estimatedSceneCount` is treated as the number of **shot stills** to bill
- * (today the pipeline is ~1 still per scene). Callers should pass
- * `estimateSceneCount(script, { targetDurationSeconds })` so pre-Enhance
- * duration chips and enhanced "Scene N — 5s" headings both count accurately
- * (#1140). Prefer `estimateStoryboardPreflightCost` at server gates so
- * motion/music flags stay aligned with Generate ActionCost.
- *
- * Always returns a number for gates: components with no honest estimate
- * contribute `UNKNOWN_ESTIMATE_FLOOR` per call. Generate's ActionCost and
- * film-cost showcase also use this total after an honest primary-image probe;
- * unpriced motion/audio lines may still embed floors in that composite.
- */
-export function estimateStoryboardCost(opts: {
+export type StoryboardCostOpts = {
   imageModel: TextToImageModel;
   /** Number of image models selected (multiplies per-shot image cost) */
   imageModelCount?: number;
@@ -277,17 +261,89 @@ export function estimateStoryboardCost(opts: {
   audioDurationSeconds?: number;
   /** Live pricing map from `getEffectiveFalPricing()`. */
   pricing: FalPricingMap;
-}): Microdollars {
+};
+
+/**
+ * Stills + optional motion + optional music for an already-split board.
+ * Excludes LLM analysis and character/location sheets (those already ran).
+ * Used to grow the run envelope after scene-split (#1310).
+ */
+export function estimateStoryboardRenderCost(
+  opts: StoryboardCostOpts
+): Microdollars {
   const sceneCount = opts.estimatedSceneCount ?? DEFAULT_ESTIMATED_SCENE_COUNT;
   const imageModelCount = opts.imageModelCount ?? 1;
+  const { pricing } = opts;
+
+  let totalCost = multiplyMicros(
+    gateEstimate(
+      estimateImageCost(opts.imageModel, opts.aspectRatio, sceneCount, {
+        pricing,
+      }),
+      { model: opts.imageModel, operation: 'storyboard:shot-images' },
+      sceneCount
+    ),
+    imageModelCount
+  );
+
+  if (opts.autoGenerateMotion && opts.videoModels?.length) {
+    const duration = opts.videoDurationSeconds ?? 5;
+    for (const model of opts.videoModels) {
+      const perShotMotion = gateEstimate(
+        estimateVideoCost(model, duration, {
+          pricing,
+          hasReferenceImages: true,
+        }),
+        { model, operation: 'storyboard:motion' }
+      );
+      totalCost = addMicros(
+        totalCost,
+        multiplyMicros(perShotMotion, sceneCount)
+      );
+    }
+  }
+
+  if (opts.autoGenerateMusic && opts.audioModels?.length) {
+    const audioDuration = opts.audioDurationSeconds ?? sceneCount * 5;
+    for (const model of opts.audioModels) {
+      totalCost = addMicros(
+        totalCost,
+        gateEstimate(estimateAudioCost(model, audioDuration, { pricing }), {
+          model,
+          operation: 'storyboard:music',
+        })
+      );
+    }
+  }
+
+  return totalCost;
+}
+
+/**
+ * Estimate the total cost of a storyboard workflow.
+ * Includes: LLM analysis, character/location sheet images, per-shot images,
+ * and optionally per-shot motion generation.
+ *
+ * `estimatedSceneCount` is treated as the number of **shot stills** to bill
+ * (today the pipeline is ~1 still per scene). Callers should pass
+ * `estimateSceneCount(script, { targetDurationSeconds })` so pre-Enhance
+ * duration chips and enhanced "Scene N — 5s" headings both count accurately
+ * (#1140). Prefer `estimateStoryboardPreflightCost` at server gates so
+ * motion/music flags stay aligned with Generate ActionCost.
+ *
+ * Always returns a number for gates: components with no honest estimate
+ * contribute `UNKNOWN_ESTIMATE_FLOOR` per call. Generate's ActionCost and
+ * film-cost showcase also use this total after an honest primary-image probe;
+ * unpriced motion/audio lines may still embed floors in that composite.
+ */
+export function estimateStoryboardCost(opts: StoryboardCostOpts): Microdollars {
+  const sceneCount = opts.estimatedSceneCount ?? DEFAULT_ESTIMATED_SCENE_COUNT;
   const { pricing } = opts;
   const characterSheets = estimateCharacterSheetCount(sceneCount);
   const locationSheets = estimateLocationSheetCount(sceneCount);
 
-  // LLM calls: script analysis + character bible + location bible (~3 calls)
   const llmCost = estimateLLMCost(3);
 
-  // Character / location sheets — count scales with board size (not a flat 3+3).
   const characterSheetCost = gateEstimate(
     estimateImageCost(opts.imageModel, '16:9', characterSheets, { pricing }),
     {
@@ -306,62 +362,8 @@ export function estimateStoryboardCost(opts: {
     locationSheets
   );
 
-  // Per-shot images (multiplied by number of selected image models)
-  const shotCost = multiplyMicros(
-    gateEstimate(
-      estimateImageCost(opts.imageModel, opts.aspectRatio, sceneCount, {
-        pricing,
-      }),
-      { model: opts.imageModel, operation: 'storyboard:shot-images' },
-      sceneCount
-    ),
-    imageModelCount
-  );
-
-  let totalCost = addMicros(
+  return addMicros(
     addMicros(addMicros(llmCost, characterSheetCost), locationSheetCost),
-    shotCost
+    estimateStoryboardRenderCost(opts)
   );
-
-  // Optional motion generation for all shots. Each selected video model
-  // produces its own video per shot, so sum each model's own per-shot cost
-  // (priced from its parameters) rather than scaling one model's rate by a
-  // count — a mixed selection has genuinely different per-model costs.
-  if (opts.autoGenerateMotion && opts.videoModels?.length) {
-    const duration = opts.videoDurationSeconds ?? 5;
-    // Storyboard generates cast/location sheets before motion, so Seedance
-    // (and any model with a ref endpoint) almost always hits reference-to-video.
-    for (const model of opts.videoModels) {
-      const perShotMotion = gateEstimate(
-        estimateVideoCost(model, duration, {
-          pricing,
-          hasReferenceImages: true,
-        }),
-        { model, operation: 'storyboard:motion' }
-      );
-      totalCost = addMicros(
-        totalCost,
-        multiplyMicros(perShotMotion, sceneCount)
-      );
-    }
-  }
-
-  // Optional music generation — one track per sequence per audio model. Sum
-  // each selected model's own cost (priced from its parameters) rather than
-  // scaling the primary's rate by a count — a mixed selection has genuinely
-  // different per-model costs (mirrors the per-model video costing above).
-  if (opts.autoGenerateMusic && opts.audioModels?.length) {
-    const audioDuration = opts.audioDurationSeconds ?? sceneCount * 5;
-    for (const model of opts.audioModels) {
-      totalCost = addMicros(
-        totalCost,
-        gateEstimate(estimateAudioCost(model, audioDuration, { pricing }), {
-          model,
-          operation: 'storyboard:music',
-        })
-      );
-    }
-  }
-
-  return totalCost;
 }

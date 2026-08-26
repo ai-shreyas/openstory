@@ -12,6 +12,7 @@ import {
   estimateLLMCost,
   estimateLocationSheetCount,
   estimateStoryboardCost,
+  estimateStoryboardRenderCost,
   estimateVideoCost,
   gateEstimate,
 } from './cost-estimation';
@@ -230,6 +231,58 @@ describe('estimateStoryboardCost', () => {
         })
       )
     ).toBe(noMusic);
+  });
+
+  it('render cost is stills + motion + music, excluding analysis sheets and LLM', () => {
+    const total = Number(
+      estimateStoryboardCost({
+        ...base,
+        autoGenerateMotion: true,
+        videoModels: [VIDEO_A],
+        autoGenerateMusic: true,
+        audioModels: [AUDIO_A],
+      })
+    );
+    const render = Number(
+      estimateStoryboardRenderCost({
+        ...base,
+        autoGenerateMotion: true,
+        videoModels: [VIDEO_A],
+        autoGenerateMusic: true,
+        audioModels: [AUDIO_A],
+      })
+    );
+    const sheets =
+      Number(
+        estimateImageCost(
+          IMAGE_MODEL,
+          '16:9',
+          estimateCharacterSheetCount(SCENE_COUNT),
+          {
+            pricing: FAL_PRICING,
+          }
+        )
+      ) +
+      Number(
+        estimateImageCost(
+          IMAGE_MODEL,
+          '16:9',
+          estimateLocationSheetCount(SCENE_COUNT),
+          {
+            pricing: FAL_PRICING,
+          }
+        )
+      );
+    const analysis = Number(estimateLLMCost(3)) + sheets;
+    const stills = Number(
+      estimateImageCost(IMAGE_MODEL, base.aspectRatio, SCENE_COUNT, {
+        pricing: FAL_PRICING,
+      })
+    );
+    expect(render).toBe(
+      stills + motionContribution(VIDEO_A) + audioContribution(AUDIO_A)
+    );
+    expect(total).toBe(render + analysis);
   });
 
   it('adds no motion cost when motion is off or no models are selected', () => {
