@@ -9,7 +9,7 @@ import { micros } from '@/lib/billing/money';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { InsufficientCreditsError } from '@/lib/errors';
 import { describe, expect, it } from 'vitest';
-import { requireCredits } from './preflight';
+import { requireCredits, reserveRunCredits } from './preflight';
 
 function fakeScopedDb(opts: {
   keys: Array<'fal' | 'openrouter'>;
@@ -26,6 +26,17 @@ function fakeScopedDb(opts: {
     },
     billing: {
       hasEnoughCredits: () => Promise.resolve(opts.canAfford ?? false),
+      createReservation: () =>
+        Promise.resolve(
+          opts.canAfford
+            ? {
+                ok: true as const,
+                reservationId: 'res_1',
+                remaining: COST,
+                replay: false,
+              }
+            : { ok: false as const }
+        ),
     },
   } as unknown as ScopedDb;
 }
@@ -94,5 +105,24 @@ describe('requireCredits BYOK coverage', () => {
     await expect(
       requireCredits(fakeScopedDb({ keys: ['openrouter'] }), COST)
     ).rejects.toThrow(InsufficientCreditsError);
+  });
+});
+
+describe('reserveRunCredits', () => {
+  it('returns undefined for BYOK fal keys', async () => {
+    const db = fakeScopedDb({ keys: ['fal'] });
+    await expect(reserveRunCredits(db, COST)).resolves.toBeUndefined();
+  });
+
+  it('creates an envelope when the team can pay', async () => {
+    const db = fakeScopedDb({ keys: [], canAfford: true });
+    await expect(reserveRunCredits(db, COST)).resolves.toBe('res_1');
+  });
+
+  it('throws when available funds cannot cover the estimate', async () => {
+    const db = fakeScopedDb({ keys: [] });
+    await expect(reserveRunCredits(db, COST)).rejects.toThrow(
+      InsufficientCreditsError
+    );
   });
 });

@@ -20,7 +20,7 @@ import {
   estimateBatchMotionCost,
   resolveBatchShotVideoModel,
 } from '@/lib/motion/batch-motion-cost';
-import { requireCredits } from '@/lib/billing/preflight';
+import { reserveRunCredits } from '@/lib/billing/preflight';
 import { buildMotionReferenceImages } from '@/lib/motion/build-motion-references';
 import { resolveShotDuration } from '@/lib/motion/resolve-shot-duration';
 import { generateMotionSchema } from '@/lib/schemas/shot.schemas';
@@ -140,7 +140,7 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       model,
     });
 
-    await requireCredits(
+    const reservationId = await reserveRunCredits(
       context.scopedDb,
       gateEstimate(
         estimateVideoCost(model, duration, {
@@ -149,7 +149,10 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
         }),
         { model, operation: 'motion' }
       ),
-      { errorMessage: 'Insufficient credits for motion generation' }
+      {
+        errorMessage: 'Insufficient credits for motion generation',
+        sequenceId: sequence.id,
+      }
     );
 
     // Both of these are snapshotted HERE rather than re-read in the workflow:
@@ -176,6 +179,7 @@ export const generateShotMotionFn = createServerFn({ method: 'POST' })
       userId: context.user.id,
       teamId,
       sequenceId: sequence.id,
+      reservationId,
       includeMusic: false,
       shots: [
         {
@@ -346,9 +350,14 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       }
     );
 
-    await requireCredits(context.scopedDb, estimatedCost, {
-      errorMessage: `Insufficient credits for batch motion generation (${eligibleShots.length} shots)`,
-    });
+    const reservationId = await reserveRunCredits(
+      context.scopedDb,
+      estimatedCost,
+      {
+        errorMessage: `Insufficient credits for batch motion generation (${eligibleShots.length} shots)`,
+        sequenceId: sequence.id,
+      }
+    );
 
     const includeMusic =
       (data.includeMusic ?? false) && sequence.musicStatus !== 'generating';
@@ -399,6 +408,7 @@ export const batchGenerateMotionFn = createServerFn({ method: 'POST' })
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
+      reservationId,
       includeMusic,
       shots: eligibleShots.map((shot) => {
         const shotModel = resolveShotVideoModel(shot);

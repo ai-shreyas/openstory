@@ -168,7 +168,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
 
         const falKeyInfo = await scopedDb.credentials.resolveKey('fal');
         const usedOwnKey = falKeyInfo.source === 'team';
-        if (cost > 0 && !usedOwnKey) {
+        if (cost > 0 && !usedOwnKey && !input.reservationId) {
           const canAfford =
             await scopedDb.liveRead.billing.hasEnoughCredits(cost);
           if (!canAfford) {
@@ -652,6 +652,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
           usedOwnKey: job.usedOwnKey,
           description: `Motion generation (${model})`,
           idempotencyKey: `${event.instanceId}:motion`,
+          reservationId: input.reservationId,
           metadata: {
             ...falUsage,
             model,

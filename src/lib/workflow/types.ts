@@ -71,6 +71,11 @@ import type { musicDesignResultSchema } from '../ai/response-schemas';
 export interface UserWorkflowContext {
   userId: string;
   teamId: string;
+  /**
+   * Run envelope (#1310). Optional so in-flight instances without it still
+   * last-resort deduct. Children inherit this from the parent payload.
+   */
+  reservationId?: string;
 }
 
 export interface SequenceWorkflowContext extends UserWorkflowContext {
