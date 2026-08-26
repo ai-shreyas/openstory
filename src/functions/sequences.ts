@@ -18,7 +18,7 @@ import {
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { sumShotDurationsSeconds } from '@/lib/sequences/shot-durations';
 import { multiplyMicros } from '@/lib/billing/money';
-import { requireCredits, reserveRunCredits } from '@/lib/billing/preflight';
+import { reserveRunCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { Shot } from '@/lib/db/schema';
@@ -450,7 +450,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       const allShots = await scopedDb.shots.listBySequence(sequence.id);
       const totalDuration = sumShotDurationsSeconds(allShots) || 30;
 
-      await requireCredits(
+      const reservationId = await reserveRunCredits(
         scopedDb,
         gateEstimate(
           estimateAudioCost(model, totalDuration, {
@@ -458,7 +458,10 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           }),
           { model, operation: 'add-audio-model' }
         ),
-        { errorMessage: 'Insufficient credits to add this audio model' }
+        {
+          errorMessage: 'Insufficient credits to add this audio model',
+          sequenceId: sequence.id,
+        }
       );
 
       await scopedDb.sequenceVariants.upsertMusicPrimary({
@@ -470,13 +473,16 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         status: 'pending',
       });
 
-      const musicInput = buildAddAudioMusicInput({
-        baseCtx,
-        prompt: sequence.musicPrompt,
-        tags: sequence.musicTags,
-        durationSeconds: totalDuration,
-        model,
-      });
+      const musicInput = {
+        ...buildAddAudioMusicInput({
+          baseCtx,
+          prompt: sequence.musicPrompt,
+          tags: sequence.musicTags,
+          durationSeconds: totalDuration,
+          model,
+        }),
+        reservationId,
+      };
       try {
         const workflowRunId = await triggerWorkflow('/music', musicInput, {
           deduplicationId: `add-audio-${sequence.id}-${model}-${Date.now()}`,
@@ -573,7 +579,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         throw new Error('No shots have a completed image to animate yet');
       }
 
-      await requireCredits(
+      const reservationId = await reserveRunCredits(
         scopedDb,
         multiplyMicros(
           gateEstimate(
@@ -584,7 +590,10 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
           ),
           eligible.length
         ),
-        { errorMessage: 'Insufficient credits to add this video model' }
+        {
+          errorMessage: 'Insufficient credits to add this video model',
+          sequenceId: sequence.id,
+        }
       );
 
       const sceneContext = await loadSceneContextBySequence(
@@ -611,6 +620,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         );
       const workflowInput: BatchMotionMusicWorkflowInput = {
         ...baseCtx,
+        reservationId,
         includeMusic: false,
         videoModels: [model],
         // Adding a video model lands as an alternate only — never the primary
@@ -740,7 +750,7 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
       throw new Error('No shots have a prompt to generate from');
     }
 
-    await requireCredits(
+    const reservationId = await reserveRunCredits(
       scopedDb,
       multiplyMicros(
         gateEstimate(
@@ -751,7 +761,10 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
         ),
         inputs.length
       ),
-      { errorMessage: 'Insufficient credits to add this image model' }
+      {
+        errorMessage: 'Insufficient credits to add this image model',
+        sequenceId: sequence.id,
+      }
     );
 
     // Trigger one image workflow per shot. A single shot's trigger failure
@@ -765,10 +778,14 @@ export const addModelToSequenceFn = createServerFn({ method: 'POST' })
     let triggered = 0;
     for (const input of inputs) {
       try {
-        workflowRunId = await triggerWorkflow('/image', input, {
-          deduplicationId: `add-image-${input.shotId}-${model}-${Date.now()}`,
-          label: buildWorkflowLabel(sequence.id),
-        });
+        workflowRunId = await triggerWorkflow(
+          '/image',
+          { ...input, reservationId },
+          {
+            deduplicationId: `add-image-${input.shotId}-${model}-${Date.now()}`,
+            label: buildWorkflowLabel(sequence.id),
+          }
+        );
         triggered++;
       } catch (error) {
         // Log every per-shot trigger failure so a systemic cause (e.g. a

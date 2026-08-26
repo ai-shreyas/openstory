@@ -37,7 +37,7 @@ import type {
 } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
 import { getBillingChannel } from '@/lib/realtime';
-import { and, count, desc, eq, gt, gte, notExists, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, notExists, sql } from 'drizzle-orm';
 import { generateId } from '../id';
 import { giftTokenRedemptions, giftTokens } from '../schema';
 
@@ -52,20 +52,25 @@ import { getLogger } from '@/lib/observability/logger';
  * Call only after a *new* transaction row was inserted (not on idempotent
  * replay).
  */
-async function emitBalanceUpdated(opts: {
+async function emitFundsUpdated(opts: {
   teamId: string;
-  newBalance: Microdollars;
-  /** Signed ledger amount (negative for usage). */
+  balance: Microdollars;
+  reserved: Microdollars;
+  available: Microdollars;
+  /** Signed ledger amount (negative for usage). Zero when only a hold changed. */
   amountMicros: Microdollars;
-  transactionId: string;
-  type: TransactionType;
+  transactionId?: string;
+  type?: TransactionType;
 }): Promise<void> {
   await getBillingChannel(opts.teamId).emit('billing.balance:updated', {
     teamId: opts.teamId,
-    balanceUsd: microsToUsd(opts.newBalance),
+    balanceUsd: microsToUsd(opts.balance),
+    availableUsd: microsToUsd(opts.available),
+    reservedUsd: microsToUsd(opts.reserved),
     amountUsd: microsToUsd(opts.amountMicros),
-    transactionId: opts.transactionId,
-    type: opts.type,
+    ...(opts.transactionId != null && opts.type
+      ? { transactionId: opts.transactionId, type: opts.type }
+      : {}),
   });
 }
 
@@ -135,6 +140,7 @@ function createBillingReadMethods(db: Database, teamId: string) {
   }
 
   async function reservedSum(now = new Date()): Promise<Microdollars> {
+    const nowSeconds = Math.floor(now.getTime() / 1000);
     const [row] = await db
       .select({
         total: sql<number>`coalesce(sum(${creditReservations.remainingAmount}), 0)`,
@@ -144,7 +150,7 @@ function createBillingReadMethods(db: Database, teamId: string) {
         and(
           eq(creditReservations.teamId, teamId),
           sql`${creditReservations.remainingAmount} > 0`,
-          gt(creditReservations.expiresAt, now)
+          sql`${creditReservations.expiresAt} > ${nowSeconds}`
         )
       );
     return micros(Number(row?.total ?? 0));
@@ -269,6 +275,21 @@ export function createBillingMethods(
 ) {
   const read = createBillingReadMethods(db, teamId);
 
+  async function emitTeamFunds(opts: {
+    amountMicros: Microdollars;
+    transactionId?: string;
+    type?: TransactionType;
+  }): Promise<void> {
+    const snapshot = await read.getAvailable();
+    await emitFundsUpdated({
+      teamId,
+      ...snapshot,
+      amountMicros: opts.amountMicros,
+      transactionId: opts.transactionId,
+      type: opts.type,
+    });
+  }
+
   async function addCredits(
     amountMicros: Microdollars,
     opts: {
@@ -355,9 +376,7 @@ export function createBillingMethods(
     });
 
     const newBalance = micros(updated.balance);
-    await emitBalanceUpdated({
-      teamId,
-      newBalance,
+    await emitTeamFunds({
       amountMicros,
       transactionId,
       type: txType,
@@ -526,9 +545,7 @@ export function createBillingMethods(
     }
 
     if (isNewCharge) {
-      await emitBalanceUpdated({
-        teamId,
-        newBalance,
+      await emitTeamFunds({
         amountMicros: negateMicros(chargedAmount),
         transactionId,
         type: 'credit_usage',
@@ -691,9 +708,7 @@ export function createBillingMethods(
       return { ok: false };
     }
 
-    await emitBalanceUpdated({
-      teamId,
-      newBalance,
+    await emitTeamFunds({
       amountMicros: signedAmount,
       transactionId,
       type: txType,
@@ -837,6 +852,7 @@ export function createBillingMethods(
       return { ok: false };
     }
 
+    await emitTeamFunds({ amountMicros: ZERO_MICROS });
     return {
       ok: true,
       reservationId: created.id,
@@ -897,9 +913,9 @@ export function createBillingMethods(
       )
       .returning({ remaining: creditReservations.remainingAmount });
 
-    return updated
-      ? { ok: true, remaining: micros(updated.remaining) }
-      : { ok: false };
+    if (!updated) return { ok: false };
+    await emitTeamFunds({ amountMicros: ZERO_MICROS });
+    return { ok: true, remaining: micros(updated.remaining) };
   }
 
   async function captureReservation(
@@ -1032,6 +1048,7 @@ export function createBillingMethods(
           eq(creditReservations.teamId, teamId)
         )
       );
+    await emitTeamFunds({ amountMicros: ZERO_MICROS });
   }
 
   async function updateAutoTopUpSettings(settings: {

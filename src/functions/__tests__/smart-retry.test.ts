@@ -53,10 +53,8 @@ vi.doMock('@/lib/workflow/client', () => ({
   triggerWorkflow: triggerWorkflowMock,
 }));
 
-const requireCreditsMock = vi.fn();
 const reserveRunCreditsMock = vi.fn();
 vi.doMock('@/lib/billing/preflight', () => ({
-  requireCredits: requireCreditsMock,
   reserveRunCredits: reserveRunCreditsMock,
 }));
 
@@ -370,8 +368,6 @@ function resetMocks() {
   triggerStoryboardMock.mockResolvedValue({ workflowRunId: 'wf_new' });
   triggerWorkflowMock.mockReset();
   triggerWorkflowMock.mockResolvedValue('wf_child');
-  requireCreditsMock.mockReset();
-  requireCreditsMock.mockResolvedValue(undefined);
   reserveRunCreditsMock.mockReset();
   reserveRunCreditsMock.mockResolvedValue(undefined);
 }
@@ -635,8 +631,8 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
         }
       )
     );
-    expect(requireCreditsMock).toHaveBeenCalledTimes(1);
-    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
+    expect(reserveRunCreditsMock).toHaveBeenCalledTimes(1);
+    expect(reserveRunCreditsMock.mock.calls[0]?.[1]).toEqual(expectedCost);
   });
 
   test("retries each failed motion video with its selected version's model", async () => {
@@ -701,7 +697,7 @@ describe('executeSmartRetry — per-asset model selection (#1066)', () => {
       expect.objectContaining({ label: expect.any(String) })
     );
     // …and it is priced as flux_2_max, so the estimate matches the charge.
-    expect(requireCreditsMock.mock.calls[0]?.[1]).toEqual(
+    expect(reserveRunCreditsMock.mock.calls[0]?.[1]).toEqual(
       addMicros(
         ZERO_MICROS,
         gateEstimate(

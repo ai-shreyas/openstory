@@ -267,7 +267,10 @@ export function BillingSettings({ success, canceled }: BillingSettingsProps) {
             <Skeleton className="h-12 w-32" />
           ) : (
             <p className="text-4xl font-bold tabular-nums">
-              ${balanceData?.balance.toFixed(2) ?? '0.00'}
+              $
+              {(balanceData?.availableUsd ?? balanceData?.balance)?.toFixed(
+                2
+              ) ?? '0.00'}
             </p>
           )}
           <ShowCostsToggle />

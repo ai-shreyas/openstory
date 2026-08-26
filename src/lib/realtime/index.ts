@@ -47,17 +47,27 @@ export const realtimeSchema = {
   billing: {
     'balance:updated': z.object({
       teamId: z.string(),
-      /** Post-mutation balance in USD. */
+      /** Posted ledger balance in USD. */
       balanceUsd: z.number(),
+      /**
+       * Spendable funds (posted minus unexpired holds). Additive so old
+       * clients keep using `balanceUsd` (#1310).
+       */
+      availableUsd: z.number().optional(),
+      /** Sum of unexpired reservation remaining. */
+      reservedUsd: z.number().optional(),
       /** Signed ledger amount in USD (negative for usage, positive for top-ups). */
       amountUsd: z.number(),
-      transactionId: z.string(),
-      type: z.enum([
-        'credit_purchase',
-        'credit_usage',
-        'credit_refund',
-        'credit_adjustment',
-      ]),
+      /** Absent on hold-only snapshots (create/grow/zero). */
+      transactionId: z.string().optional(),
+      type: z
+        .enum([
+          'credit_purchase',
+          'credit_usage',
+          'credit_refund',
+          'credit_adjustment',
+        ])
+        .optional(),
     }),
   },
 

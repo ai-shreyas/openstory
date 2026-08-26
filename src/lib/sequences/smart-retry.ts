@@ -37,7 +37,7 @@ import {
 } from '@/lib/billing/cost-estimation';
 import { getEffectiveFalPricing } from '@/lib/ai/fal-pricing-live';
 import { addMicros, ZERO_MICROS } from '@/lib/billing/money';
-import { requireCredits, reserveRunCredits } from '@/lib/billing/preflight';
+import { reserveRunCredits } from '@/lib/billing/preflight';
 import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-preflight-cost';
 import { aspectRatioToImageSize } from '@/lib/constants/aspect-ratios';
 import type { ScopedDb } from '@/lib/db/scoped';
@@ -294,13 +294,14 @@ export async function executeSmartRetry(context: SmartRetryContext) {
     }
   }
 
-  // Single credit check for all retries
-  if (totalCost > 0) {
-    await requireCredits(context.scopedDb, totalCost, {
-      providers: ['fal'],
-      errorMessage: 'Insufficient credits to retry failed items',
-    });
-  }
+  const reservationId =
+    totalCost > 0
+      ? await reserveRunCredits(context.scopedDb, totalCost, {
+          providers: ['fal'],
+          errorMessage: 'Insufficient credits to retry failed items',
+          sequenceId: sequence.id,
+        })
+      : undefined;
 
   // 1. Retry failed images
   if (failedImageShots.length > 0) {
@@ -327,6 +328,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       const workflowInput: ImageWorkflowInput = {
         userId: user.id,
         teamId,
+        reservationId,
         prompt,
         model: imageModelFor(shot),
         imageSize: aspectRatioToImageSize(sequence.aspectRatio),
@@ -362,6 +364,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       const workflowInput: MotionWorkflowInput = {
         userId: user.id,
         teamId,
+        reservationId,
         shotId: shot.id,
         sceneId: shot.sceneId,
         sequenceId: sequence.id,
@@ -404,6 +407,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
       userId: user.id,
       teamId,
       sequenceId: sequence.id,
+      reservationId,
       prompt: sequence.musicPrompt,
       tags: sequence.musicTags ?? '',
       duration: totalDuration || 30,
@@ -443,6 +447,7 @@ export async function executeSmartRetry(context: SmartRetryContext) {
         userId: user.id,
         teamId,
         sequenceId: sequence.id,
+        reservationId,
         sceneSummaries: scenes,
         analysisModelId:
           getAnalysisModelById(sequence.analysisModel)?.id ??
