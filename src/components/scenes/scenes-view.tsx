@@ -72,7 +72,7 @@ import {
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import type { ShotView } from '@/lib/shots/shot-view';
-import { analyzeFailures } from '@/lib/failures/failure-analysis';
+import { analyzeLoadedFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
 import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
@@ -1099,8 +1099,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const [isRetrying, setIsRetrying] = useState(false);
 
   const failureSummary = useMemo(
-    () =>
-      sequence ? analyzeFailures(shots ?? [], sequence, scenesById) : null,
+    () => analyzeLoadedFailures(shots, sequence, scenesById),
     [shots, sequence, scenesById]
   );
 
