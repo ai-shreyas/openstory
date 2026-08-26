@@ -453,7 +453,7 @@ export function StudioReferencePicker({
             onClick={() => fileInput.current?.click()}
           >
             <Upload aria-hidden="true" />
-            Upload {source === 'audio' ? 'audio' : ''}
+            {source === 'audio' ? 'Upload audio' : 'Upload'}
           </Button>
         </DialogHeader>
 
@@ -576,7 +576,7 @@ export function StudioReferencePicker({
                 close();
               }}
             >
-              Add {pending.length > 0 ? pending.length : ''}
+              {pending.length > 0 ? `Add ${pending.length}` : 'Add'}
             </Button>
           </DialogFooter>
         )}

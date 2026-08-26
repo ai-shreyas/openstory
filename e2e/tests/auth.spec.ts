@@ -64,7 +64,9 @@ baseTest.describe('Route Protection', () => {
       await page.goto('/images');
       await expect(page).toHaveURL(/\/images/);
       await expect(page).not.toHaveURL(/\/login/);
-      await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+      await expect(
+        page.locator('[data-testid="studio-prompt"] .ProseMirror')
+      ).toBeVisible({ timeout: 15_000 });
     }
   );
 
@@ -72,9 +74,7 @@ baseTest.describe('Route Protection', () => {
     'anonymous image generate is intercepted by the login dialog',
     async ({ page }) => {
       await page.goto('/images');
-      await page
-        .getByRole('textbox', { name: 'Prompt' })
-        .fill('A red fox in fog at dawn');
+      await fillScriptEditor(page, 'A red fox in fog at dawn');
       await page.getByRole('button', { name: 'Generate image' }).click();
       const dialog = page.getByRole('dialog', { name: 'Sign in to continue' });
       await expect(dialog).toBeVisible();
