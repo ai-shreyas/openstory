@@ -25,10 +25,10 @@ export type TransactionType = (typeof TRANSACTION_TYPES)[number];
  * deduction (see `deductCredits`), not derived from the ledger.
  *
  * The CHECK is the backstop under the application-level gates
- * (`requireCredits` before the work, `reserveCredits` at spawn with
- * `WHERE balance >= amount`, `hasEnoughCredits` after it): if a charge
- * would overdraw a team, the UPDATE matches zero rows instead of going
- * negative. Concurrent siblings serialize on that UPDATE (#1310).
+ * (`requireCredits` / `createReservation` before the work): if a charge
+ * would overdraw posted balance, the UPDATE matches zero rows instead of
+ * going negative. Open holds reduce *available* (`balance − SUM(remaining
+ * WHERE expires_at > now())`), not posted balance (#1310).
  */
 export const credits = snakeCase.table(
   'credits',
@@ -83,6 +83,50 @@ export const transactions = snakeCase.table(
     uniqueIndex('idx_transactions_team_idempotency_key')
       .on(table.teamId, table.idempotencyKey)
       .where(sql`${table.idempotencyKey} IS NOT NULL`),
+  ]
+);
+
+/**
+ * Run envelope (#1310). Holds are not ledger rows: available funds are
+ * `credits.balance − SUM(remaining WHERE remaining > 0 AND expires_at > now())`.
+ * Abandoned holds expire in the SUM with no UPDATE. Capture posts a new
+ * `credit_usage` transaction; leftover is zeroed when the run ends.
+ */
+export const creditReservations = snakeCase.table(
+  'credit_reservations',
+  {
+    id: text()
+      .$defaultFn(() => generateId())
+      .primaryKey()
+      .notNull(),
+    teamId: text()
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    userId: text().references(() => user.id, {
+      onDelete: 'set null',
+    }),
+    sequenceId: text(),
+    originalAmount: integer().notNull(),
+    remainingAmount: integer().notNull(),
+    expiresAt: integer({ mode: 'timestamp' }).notNull(),
+    idempotencyKey: text().notNull(),
+    createdAt: integer({ mode: 'timestamp' })
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex('idx_credit_reservations_team_idempotency_key').on(
+      table.teamId,
+      table.idempotencyKey
+    ),
+    index('idx_credit_reservations_team_expires').on(
+      table.teamId,
+      table.expiresAt
+    ),
+    check(
+      'non_negative_reservation_remaining',
+      sql`${table.remainingAmount} >= 0`
+    ),
   ]
 );
 

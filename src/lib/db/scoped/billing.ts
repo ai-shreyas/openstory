@@ -9,9 +9,11 @@ import {
   calculateExpiryDate,
   isStripeEnabled,
   MIN_TOPUP_AMOUNT_MICROS,
+  RESERVATION_TTL_MS,
   totalCheckoutCents,
 } from '@/lib/billing/constants';
 import {
+  addMicros,
   type Microdollars,
   micros,
   microsToDisplayUsd,
@@ -23,6 +25,7 @@ import {
 import type { Database } from '@/lib/db/client';
 import {
   creditBatches,
+  creditReservations,
   credits,
   teamBillingSettings,
   transactions,
@@ -34,7 +37,7 @@ import type {
 } from '@/lib/db/schema/credits';
 import { ValidationError } from '@/lib/errors';
 import { getBillingChannel } from '@/lib/realtime';
-import { and, count, desc, eq, gte, notExists, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, gte, notExists, sql } from 'drizzle-orm';
 import { generateId } from '../id';
 import { giftTokenRedemptions, giftTokens } from '../schema';
 
@@ -68,22 +71,6 @@ async function emitBalanceUpdated(opts: {
 
 const logger = getLogger(['openstory', 'db', 'billing']);
 
-type ReservationStatus =
-  | 'open'
-  | 'settling'
-  | 'settled'
-  | 'releasing'
-  | 'released';
-
-const RESERVATION_KIND = 'credit_reservation';
-
-type ReservationMeta = {
-  kind: typeof RESERVATION_KIND;
-  reservationStatus: ReservationStatus;
-  reservedMicros: number;
-  skippedDeltaMicros?: number;
-};
-
 type TryDebitResult =
   | {
       ok: true;
@@ -94,58 +81,26 @@ type TryDebitResult =
     }
   | { ok: false };
 
-export type ReserveCreditsResult =
+export type CreateReservationResult =
   | {
-      reserved: true;
-      newBalance: Microdollars;
-      reservedAmount: Microdollars;
-      transactionId: string;
+      ok: true;
+      reservationId: string;
+      remaining: Microdollars;
       replay: boolean;
     }
-  | { reserved: false };
+  | { ok: false };
 
-export type SettleReservationResult =
-  | { status: 'missing' }
-  | { status: 'released' }
-  | { status: 'settled'; skippedDeltaMicros?: Microdollars };
+export type GrowReservationResult =
+  | { ok: true; remaining: Microdollars }
+  | { ok: false };
 
-export type ReleaseReservationResult =
-  | { status: 'missing' }
-  | { status: 'settled' }
-  | { status: 'released' };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- JSON column
-    return value as Record<string, unknown>;
-  }
-  return {};
-}
-
-function reservationStatus(metadata: unknown): ReservationStatus | undefined {
-  const status = asRecord(metadata).reservationStatus;
-  if (
-    status === 'open' ||
-    status === 'settling' ||
-    status === 'settled' ||
-    status === 'releasing' ||
-    status === 'released'
-  ) {
-    return status;
-  }
-  return undefined;
-}
-
-function reservedMicrosOf(
-  row: { amount: number; metadata: unknown },
-  fallback: Microdollars
-): Microdollars {
-  const raw = asRecord(row.metadata).reservedMicros;
-  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
-    return micros(raw);
-  }
-  return fallback;
-}
+export type CaptureReservationResult =
+  | { ok: false; reason: 'missing' }
+  | {
+      ok: true;
+      captured: Microdollars;
+      skippedDeltaMicros?: Microdollars;
+    };
 
 function mapBatchSource(
   type: TransactionType,
@@ -179,11 +134,39 @@ function createBillingReadMethods(db: Database, teamId: string) {
     return micros(row.balance);
   }
 
+  async function reservedSum(now = new Date()): Promise<Microdollars> {
+    const [row] = await db
+      .select({
+        total: sql<number>`coalesce(sum(${creditReservations.remainingAmount}), 0)`,
+      })
+      .from(creditReservations)
+      .where(
+        and(
+          eq(creditReservations.teamId, teamId),
+          sql`${creditReservations.remainingAmount} > 0`,
+          gt(creditReservations.expiresAt, now)
+        )
+      );
+    return micros(Number(row?.total ?? 0));
+  }
+
+  async function getAvailable(now = new Date()): Promise<{
+    balance: Microdollars;
+    reserved: Microdollars;
+    available: Microdollars;
+  }> {
+    const balance = await getBalance();
+    const reserved = await reservedSum(now);
+    const available =
+      balance > reserved ? subtractMicros(balance, reserved) : ZERO_MICROS;
+    return { balance, reserved, available };
+  }
+
   async function hasEnoughCredits(
     estimatedCostMicros: Microdollars
   ): Promise<boolean> {
-    const balance = await getBalance();
-    return balance >= estimatedCostMicros;
+    const { available } = await getAvailable();
+    return available >= estimatedCostMicros;
   }
 
   async function getTransactionHistory(
@@ -269,6 +252,7 @@ function createBillingReadMethods(db: Database, teamId: string) {
 
   return {
     getBalance,
+    getAvailable,
     hasEnoughCredits,
     getTransactionHistory,
     getBillingSettings,
@@ -734,163 +718,6 @@ export function createBillingMethods(
     };
   }
 
-  async function creditBalance(
-    amountMicros: Microdollars,
-    opts: {
-      description: string;
-      metadata: Record<string, unknown>;
-      idempotencyKey: string;
-    }
-  ): Promise<TryDebitResult> {
-    if (amountMicros <= 0) return { ok: false };
-
-    const existing = await getTransactionByIdempotencyKey(opts.idempotencyKey);
-    if (existing) {
-      const [balanceRow] = await db
-        .select({ balance: credits.balance })
-        .from(credits)
-        .where(eq(credits.teamId, teamId))
-        .limit(1);
-      return {
-        ok: true,
-        replay: true,
-        transactionId: existing.id,
-        chargedAmount: micros(Math.abs(existing.amount)),
-        newBalance: micros(balanceRow?.balance ?? 0),
-      };
-    }
-
-    await db
-      .insert(credits)
-      .values({ teamId, balance: 0 })
-      .onConflictDoNothing();
-
-    const txId = generateId();
-    const now = new Date();
-    const nowSeconds = Math.floor(now.getTime() / 1000);
-
-    const updateBalance = db
-      .update(credits)
-      .set({
-        balance: sql`${credits.balance} + ${amountMicros}`,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(credits.teamId, teamId),
-          notExists(
-            db
-              .select({ id: transactions.id })
-              .from(transactions)
-              .where(
-                and(
-                  eq(transactions.teamId, teamId),
-                  eq(transactions.idempotencyKey, opts.idempotencyKey)
-                )
-              )
-          )
-        )
-      );
-
-    const insertTransaction = db
-      .insert(transactions)
-      .select(
-        db
-          .select({
-            id: sql<string>`${txId}`.as('id'),
-            teamId: sql<string>`${teamId}`.as('team_id'),
-            userId: sql<string>`${userId}`.as('user_id'),
-            type: sql<string>`${'credit_refund'}`.as('type'),
-            amount: sql<number>`${amountMicros}`.as('amount'),
-            balanceAfter: credits.balance,
-            description: sql<string>`${opts.description}`.as('description'),
-            metadata: sql`${JSON.stringify(opts.metadata)}`.as('metadata'),
-            idempotencyKey: sql<string>`${opts.idempotencyKey}`.as(
-              'idempotency_key'
-            ),
-            createdAt: sql`${nowSeconds}`.as('created_at'),
-          })
-          .from(credits)
-          .where(and(eq(credits.teamId, teamId), sql`changes() > 0`))
-      )
-      .onConflictDoNothing()
-      .returning({ id: transactions.id });
-
-    const readBackBalance = db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-
-    const [, insertedRows, balanceRows] = await db.batch([
-      updateBalance,
-      insertTransaction,
-      readBackBalance,
-    ]);
-
-    const balanceRow = balanceRows[0];
-    if (!balanceRow) {
-      throw new Error(
-        `creditBalance: credits row missing for team ${teamId} after batch`
-      );
-    }
-    const newBalance = micros(balanceRow.balance);
-    const transactionId = insertedRows[0]?.id;
-    if (!transactionId) {
-      const raced = await getTransactionByIdempotencyKey(opts.idempotencyKey);
-      if (raced) {
-        return {
-          ok: true,
-          replay: true,
-          transactionId: raced.id,
-          chargedAmount: micros(Math.abs(raced.amount)),
-          newBalance,
-        };
-      }
-      return { ok: false };
-    }
-
-    await emitBalanceUpdated({
-      teamId,
-      newBalance,
-      amountMicros,
-      transactionId,
-      type: 'credit_refund',
-    });
-
-    return {
-      ok: true,
-      replay: false,
-      transactionId,
-      chargedAmount: amountMicros,
-      newBalance,
-    };
-  }
-
-  async function casReservationStatus(
-    transactionId: string,
-    from: ReservationStatus,
-    to: ReservationStatus,
-    extra: Record<string, unknown> = {}
-  ): Promise<boolean> {
-    const skipped = extra.skippedDeltaMicros;
-    const setSql =
-      typeof skipped === 'number'
-        ? sql`json_set(${transactions.metadata}, '$.reservationStatus', ${to}, '$.skippedDeltaMicros', ${skipped})`
-        : sql`json_set(${transactions.metadata}, '$.reservationStatus', ${to})`;
-
-    const [updated] = await db
-      .update(transactions)
-      .set({ metadata: setSql })
-      .where(
-        and(
-          eq(transactions.id, transactionId),
-          sql`json_extract(${transactions.metadata}, '$.reservationStatus') = ${from}`
-        )
-      )
-      .returning({ id: transactions.id });
-    return Boolean(updated);
-  }
-
   async function tryDeductCredits(
     amountMicros: Microdollars,
     opts: {
@@ -907,168 +734,304 @@ export function createBillingMethods(
     });
   }
 
-  async function reserveCredits(
+  async function createReservation(
     amountMicros: Microdollars,
     opts: {
-      description: string;
-      metadata?: Record<string, unknown>;
       idempotencyKey: string;
+      sequenceId?: string;
+      ttlMs?: number;
     }
-  ): Promise<ReserveCreditsResult> {
-    const metadata: ReservationMeta & Record<string, unknown> = {
-      ...opts.metadata,
-      kind: RESERVATION_KIND,
-      reservationStatus: 'open',
-      reservedMicros: amountMicros,
+  ): Promise<CreateReservationResult> {
+    if (amountMicros <= 0) return { ok: false };
+
+    const existing = await db
+      .select()
+      .from(creditReservations)
+      .where(
+        and(
+          eq(creditReservations.teamId, teamId),
+          eq(creditReservations.idempotencyKey, opts.idempotencyKey)
+        )
+      )
+      .limit(1);
+    const existingRow = existing[0];
+    if (existingRow) {
+      return {
+        ok: true,
+        reservationId: existingRow.id,
+        remaining: micros(existingRow.remainingAmount),
+        replay: true,
+      };
+    }
+
+    await db
+      .insert(credits)
+      .values({ teamId, balance: 0 })
+      .onConflictDoNothing();
+
+    const reservationId = generateId();
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + (opts.ttlMs ?? RESERVATION_TTL_MS)
+    );
+    const nowSeconds = Math.floor(now.getTime() / 1000);
+    const expiresSeconds = Math.floor(expiresAt.getTime() / 1000);
+
+    const inserted = await db
+      .insert(creditReservations)
+      .select(
+        db
+          .select({
+            id: sql<string>`${reservationId}`.as('id'),
+            teamId: sql<string>`${teamId}`.as('team_id'),
+            userId: sql<string>`${userId}`.as('user_id'),
+            sequenceId: sql`${opts.sequenceId ?? null}`.as('sequence_id'),
+            originalAmount: sql<number>`${amountMicros}`.as('original_amount'),
+            remainingAmount: sql<number>`${amountMicros}`.as(
+              'remaining_amount'
+            ),
+            expiresAt: sql`${expiresSeconds}`.as('expires_at'),
+            idempotencyKey: sql<string>`${opts.idempotencyKey}`.as(
+              'idempotency_key'
+            ),
+            createdAt: sql`${nowSeconds}`.as('created_at'),
+          })
+          .from(credits)
+          .where(
+            and(
+              eq(credits.teamId, teamId),
+              sql`${credits.balance} - coalesce((
+                select sum(${creditReservations.remainingAmount})
+                from ${creditReservations}
+                where ${creditReservations.teamId} = ${teamId}
+                  and ${creditReservations.remainingAmount} > 0
+                  and ${creditReservations.expiresAt} > ${nowSeconds}
+              ), 0) >= ${amountMicros}`
+            )
+          )
+      )
+      .onConflictDoNothing()
+      .returning({ id: creditReservations.id });
+
+    const created = inserted[0];
+    if (!created) {
+      const raced = await db
+        .select()
+        .from(creditReservations)
+        .where(
+          and(
+            eq(creditReservations.teamId, teamId),
+            eq(creditReservations.idempotencyKey, opts.idempotencyKey)
+          )
+        )
+        .limit(1);
+      const racedRow = raced[0];
+      if (racedRow) {
+        return {
+          ok: true,
+          reservationId: racedRow.id,
+          remaining: micros(racedRow.remainingAmount),
+          replay: true,
+        };
+      }
+      return { ok: false };
+    }
+
+    return {
+      ok: true,
+      reservationId: created.id,
+      remaining: amountMicros,
+      replay: false,
     };
-    const result = await tryDebit(amountMicros, {
-      description: opts.description,
-      metadata,
+  }
+
+  async function growReservation(
+    reservationId: string,
+    extraMicros: Microdollars,
+    opts: { ttlMs?: number } = {}
+  ): Promise<GrowReservationResult> {
+    if (extraMicros <= 0) {
+      const [row] = await db
+        .select({ remaining: creditReservations.remainingAmount })
+        .from(creditReservations)
+        .where(
+          and(
+            eq(creditReservations.id, reservationId),
+            eq(creditReservations.teamId, teamId)
+          )
+        )
+        .limit(1);
+      return row
+        ? { ok: true, remaining: micros(row.remaining) }
+        : { ok: false };
+    }
+
+    const now = new Date();
+    const nowSeconds = Math.floor(now.getTime() / 1000);
+    const expiresAt = new Date(
+      now.getTime() + (opts.ttlMs ?? RESERVATION_TTL_MS)
+    );
+
+    const [updated] = await db
+      .update(creditReservations)
+      .set({
+        remainingAmount: sql`${creditReservations.remainingAmount} + ${extraMicros}`,
+        originalAmount: sql`${creditReservations.originalAmount} + ${extraMicros}`,
+        expiresAt,
+      })
+      .where(
+        and(
+          eq(creditReservations.id, reservationId),
+          eq(creditReservations.teamId, teamId),
+          sql`${extraMicros} <= (
+            (select ${credits.balance} from ${credits} where ${credits.teamId} = ${teamId})
+            - coalesce((
+              select sum(${creditReservations.remainingAmount})
+              from ${creditReservations}
+              where ${creditReservations.teamId} = ${teamId}
+                and ${creditReservations.remainingAmount} > 0
+                and ${creditReservations.expiresAt} > ${nowSeconds}
+            ), 0)
+          )`
+        )
+      )
+      .returning({ remaining: creditReservations.remainingAmount });
+
+    return updated
+      ? { ok: true, remaining: micros(updated.remaining) }
+      : { ok: false };
+  }
+
+  async function captureReservation(
+    reservationId: string,
+    actualMicros: Microdollars,
+    opts: {
+      idempotencyKey: string;
+      description?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<CaptureReservationResult> {
+    if (actualMicros <= 0) {
+      return { ok: true, captured: ZERO_MICROS };
+    }
+
+    const [reservation] = await db
+      .select()
+      .from(creditReservations)
+      .where(
+        and(
+          eq(creditReservations.id, reservationId),
+          eq(creditReservations.teamId, teamId)
+        )
+      )
+      .limit(1);
+    if (!reservation) return { ok: false, reason: 'missing' };
+
+    const remaining = micros(reservation.remainingAmount);
+    let skippedDeltaMicros: Microdollars | undefined;
+    let take = actualMicros <= remaining ? actualMicros : remaining;
+    const extra =
+      actualMicros > remaining
+        ? subtractMicros(actualMicros, remaining)
+        : ZERO_MICROS;
+
+    if (extra > 0) {
+      const grown = await growReservation(reservationId, extra);
+      if (grown.ok) {
+        take = actualMicros;
+      } else {
+        skippedDeltaMicros = extra;
+      }
+    }
+
+    if (take <= 0) {
+      return { ok: true, captured: ZERO_MICROS, skippedDeltaMicros };
+    }
+
+    const already = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+    if (already) {
+      return {
+        ok: true,
+        captured: micros(Math.abs(already.amount)),
+        skippedDeltaMicros,
+      };
+    }
+
+    const [held] = await db
+      .update(creditReservations)
+      .set({
+        remainingAmount: sql`${creditReservations.remainingAmount} - ${take}`,
+      })
+      .where(
+        and(
+          eq(creditReservations.id, reservationId),
+          eq(creditReservations.teamId, teamId),
+          gte(creditReservations.remainingAmount, take),
+          notExists(
+            db
+              .select({ id: transactions.id })
+              .from(transactions)
+              .where(
+                and(
+                  eq(transactions.teamId, teamId),
+                  eq(transactions.idempotencyKey, opts.idempotencyKey)
+                )
+              )
+          )
+        )
+      )
+      .returning({ remaining: creditReservations.remainingAmount });
+
+    if (!held) {
+      const replay = await getTransactionByIdempotencyKey(opts.idempotencyKey);
+      if (replay) {
+        return {
+          ok: true,
+          captured: micros(Math.abs(replay.amount)),
+          skippedDeltaMicros,
+        };
+      }
+      return { ok: true, captured: ZERO_MICROS, skippedDeltaMicros };
+    }
+
+    const debit = await tryDebit(take, {
+      description:
+        opts.description ?? `Usage: $${microsToUsd(take).toFixed(4)}`,
+      metadata: {
+        reservationId,
+        ...opts.metadata,
+      },
       idempotencyKey: opts.idempotencyKey,
     });
-    if (!result.ok) return { reserved: false };
-    return {
-      reserved: true,
-      newBalance: result.newBalance,
-      reservedAmount: result.chargedAmount,
-      transactionId: result.transactionId,
-      replay: result.replay,
-    };
-  }
-
-  async function settleReservation(opts: {
-    reservationKey: string;
-    settleKey: string;
-    actualCostMicros: Microdollars;
-    description?: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<SettleReservationResult> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const reservation = await getTransactionByIdempotencyKey(
-        opts.reservationKey
-      );
-      if (!reservation) return { status: 'missing' };
-
-      const status = reservationStatus(reservation.metadata);
-      if (status === 'settled') {
-        const skipped = asRecord(reservation.metadata).skippedDeltaMicros;
-        return typeof skipped === 'number' && skipped > 0
-          ? { status: 'settled', skippedDeltaMicros: micros(skipped) }
-          : { status: 'settled' };
-      }
-      if (status === 'released' || status === 'releasing') {
-        return { status: 'released' };
-      }
-
-      if (status === 'open') {
-        const claimed = await casReservationStatus(
-          reservation.id,
-          'open',
-          'settling'
+    if (!debit.ok) {
+      await db
+        .update(creditReservations)
+        .set({
+          remainingAmount: sql`${creditReservations.remainingAmount} + ${take}`,
+        })
+        .where(
+          and(
+            eq(creditReservations.id, reservationId),
+            eq(creditReservations.teamId, teamId)
+          )
         );
-        if (!claimed) continue;
-      } else if (status !== 'settling') {
-        continue;
-      }
-
-      const reservedAmount = reservedMicrosOf(
-        reservation,
-        micros(Math.abs(reservation.amount))
-      );
-      const actual = opts.actualCostMicros;
-      const delta = subtractMicros(actual, reservedAmount);
-      let skippedDeltaMicros: Microdollars | undefined;
-
-      if (delta > 0) {
-        const extra = await tryDebit(delta, {
-          description:
-            opts.description ??
-            reservation.description ??
-            `Usage: $${microsToUsd(delta).toFixed(4)}`,
-          metadata: {
-            kind: 'credit_reservation_settle',
-            ...opts.metadata,
-          },
-          idempotencyKey: opts.settleKey,
-        });
-        if (!extra.ok) skippedDeltaMicros = delta;
-      } else if (delta < 0) {
-        await creditBalance(negateMicros(delta), {
-          description:
-            opts.description ?? reservation.description ?? 'Unused reservation',
-          metadata: {
-            kind: 'credit_reservation_settle',
-            ...opts.metadata,
-          },
-          idempotencyKey: opts.settleKey,
-        });
-      }
-
-      await casReservationStatus(
-        reservation.id,
-        'settling',
-        'settled',
-        skippedDeltaMicros ? { skippedDeltaMicros } : {}
-      );
-
-      return skippedDeltaMicros
-        ? { status: 'settled', skippedDeltaMicros }
-        : { status: 'settled' };
+      skippedDeltaMicros = addMicros(skippedDeltaMicros ?? ZERO_MICROS, take);
+      return { ok: true, captured: ZERO_MICROS, skippedDeltaMicros };
     }
 
-    throw new Error(
-      `settleReservation: could not claim reservation ${opts.reservationKey} for team ${teamId}`
-    );
+    return { ok: true, captured: take, skippedDeltaMicros };
   }
 
-  async function releaseReservation(opts: {
-    reservationKey: string;
-    releaseKey: string;
-  }): Promise<ReleaseReservationResult> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const reservation = await getTransactionByIdempotencyKey(
-        opts.reservationKey
+  async function zeroReservation(reservationId: string): Promise<void> {
+    await db
+      .update(creditReservations)
+      .set({ remainingAmount: 0 })
+      .where(
+        and(
+          eq(creditReservations.id, reservationId),
+          eq(creditReservations.teamId, teamId)
+        )
       );
-      if (!reservation) return { status: 'missing' };
-
-      const status = reservationStatus(reservation.metadata);
-      if (status === 'settled' || status === 'settling') {
-        return { status: 'settled' };
-      }
-      if (status === 'released') {
-        return { status: 'released' };
-      }
-
-      if (status === 'open') {
-        const claimed = await casReservationStatus(
-          reservation.id,
-          'open',
-          'releasing'
-        );
-        if (!claimed) continue;
-      } else if (status !== 'releasing') {
-        continue;
-      }
-
-      const reservedAmount = reservedMicrosOf(
-        reservation,
-        micros(Math.abs(reservation.amount))
-      );
-      await creditBalance(reservedAmount, {
-        description: reservation.description
-          ? `Released: ${reservation.description}`
-          : 'Released reservation',
-        metadata: { kind: 'credit_reservation_release' },
-        idempotencyKey: opts.releaseKey,
-      });
-
-      await casReservationStatus(reservation.id, 'releasing', 'released');
-      return { status: 'released' };
-    }
-
-    throw new Error(
-      `releaseReservation: could not claim reservation ${opts.reservationKey} for team ${teamId}`
-    );
   }
 
   async function updateAutoTopUpSettings(settings: {
@@ -1362,9 +1325,10 @@ export function createBillingMethods(
     saveStripeCustomerId,
     deductCredits,
     tryDeductCredits,
-    reserveCredits,
-    settleReservation,
-    releaseReservation,
+    createReservation,
+    growReservation,
+    captureReservation,
+    zeroReservation,
     updateAutoTopUpSettings,
     checkAutoTopUp,
     reconcileBatchBalance,

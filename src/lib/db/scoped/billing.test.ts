@@ -12,7 +12,13 @@
 import { micros, negateMicros } from '@/lib/billing/money';
 import type { Database } from '@/lib/db/client';
 import { generateId } from '@/lib/db/id';
-import { credits, teams, transactions, user } from '@/lib/db/schema';
+import {
+  creditReservations,
+  credits,
+  teams,
+  transactions,
+  user,
+} from '@/lib/db/schema';
 import { relations } from '@/lib/db/schema/relations';
 import { type Client, createClient } from '@libsql/client';
 import { eq } from 'drizzle-orm';
@@ -30,6 +36,7 @@ const STARTING_BALANCE = 100_000_000; // $100
 
 async function seed() {
   await db.delete(transactions);
+  await db.delete(creditReservations);
   await db.delete(credits);
   await db.delete(teams);
   await db.delete(user);
@@ -206,20 +213,10 @@ describe('deductCredits without an idempotencyKey (keyless path)', () => {
   });
 });
 
-describe('reserveCredits / settleReservation / releaseReservation (#1310)', () => {
+describe('createReservation / captureReservation / zeroReservation (#1310)', () => {
   const cost = micros(1_000_000); // $1
 
-  function reservationMeta(row: { metadata: unknown }) {
-    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- test fixture
-    return row.metadata as {
-      kind: string;
-      reservationStatus: string;
-      reservedMicros: number;
-    };
-  }
-
-  it('debits the estimate and refuses a concurrent overdraw', async () => {
-    // $5 in the account, ten $1 children: only five can hold a reservation.
+  it('holds against available without posting usage, and refuses a concurrent overdraw', async () => {
     await db
       .update(credits)
       .set({ balance: 5_000_000 })
@@ -228,259 +225,199 @@ describe('reserveCredits / settleReservation / releaseReservation (#1310)', () =
     const billing = createBillingMethods(db, teamId, userId);
     const results = await Promise.all(
       Array.from({ length: 10 }, (_, i) =>
-        billing.reserveCredits(cost, {
-          description: `Motion generation ${i}`,
-          idempotencyKey: `batch:${i}:motion:reserve`,
+        billing.createReservation(cost, {
+          idempotencyKey: `batch:${i}:reserve`,
         })
       )
     );
 
-    const reserved = results.filter((r) => r.reserved);
-    const refused = results.filter((r) => !r.reserved);
+    const reserved = results.filter((r) => r.ok);
+    const refused = results.filter((r) => !r.ok);
     expect(reserved).toHaveLength(5);
     expect(refused).toHaveLength(5);
 
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(0);
+    const available = await billing.getAvailable();
+    expect(available.balance).toBe(5_000_000);
+    expect(available.reserved).toBe(5_000_000);
+    expect(available.available).toBe(0);
 
-    const rows = await db
+    const txRows = await db
       .select()
       .from(transactions)
       .where(eq(transactions.teamId, teamId));
-    expect(rows).toHaveLength(5);
-    expect(rows.every((row) => row.amount === negateMicros(cost))).toBe(true);
-    expect(
-      rows.every((row) => reservationMeta(row).reservationStatus === 'open')
-    ).toBe(true);
+    expect(txRows).toHaveLength(0);
+
+    const holds = await db
+      .select()
+      .from(creditReservations)
+      .where(eq(creditReservations.teamId, teamId));
+    expect(holds).toHaveLength(5);
   });
 
   it('replay of the same reservation key is a no-op', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    const first = await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const first = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
     });
-    const replay = await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const replay = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
     });
 
-    expect(first.reserved).toBe(true);
-    expect(replay.reserved).toBe(true);
-    if (first.reserved && replay.reserved) {
-      expect(replay.transactionId).toBe(first.transactionId);
-      expect(replay.newBalance).toBe(first.newBalance);
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    if (first.ok && replay.ok) {
+      expect(replay.reservationId).toBe(first.reservationId);
       expect(replay.replay).toBe(true);
     }
 
-    const rows = await db
+    const holds = await db
       .select()
-      .from(transactions)
-      .where(eq(transactions.teamId, teamId));
-    expect(rows).toHaveLength(1);
+      .from(creditReservations)
+      .where(eq(creditReservations.teamId, teamId));
+    expect(holds).toHaveLength(1);
   });
 
-  it('settle with equal actual leaves the reservation as the charge', async () => {
+  it('capture equal actual posts usage and leaves leftover 0', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    const reserved = await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
     });
-    expect(reserved.reserved).toBe(true);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
 
-    const settled = await billing.settleReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      settleKey: 'wf-1:motion:settle',
-      actualCostMicros: cost,
-      description: 'Motion generation',
-    });
+    const captured = await billing.captureReservation(
+      created.reservationId,
+      cost,
+      {
+        description: 'Motion generation',
+        idempotencyKey: 'run-1:motion',
+      }
+    );
 
-    expect(settled).toEqual({ status: 'settled' });
+    expect(captured).toEqual({ ok: true, captured: cost });
+    expect(await billing.getBalance()).toBe(STARTING_BALANCE - cost);
 
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE - cost);
-
-    const rows = await db
-      .select()
-      .from(transactions)
-      .where(eq(transactions.teamId, teamId));
-    expect(rows).toHaveLength(1);
-    const reservationRow = rows[0];
-    expect(reservationRow).toBeDefined();
-    if (!reservationRow) return;
-    expect(reservationMeta(reservationRow).reservationStatus).toBe('settled');
+    const available = await billing.getAvailable();
+    expect(available.reserved).toBe(0);
+    expect(available.available).toBe(STARTING_BALANCE - cost);
   });
 
-  it('settle with a cheaper actual refunds the unused hold', async () => {
+  it('capture under actual leaves leftover held until zeroReservation', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
     });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
 
     const actual = micros(400_000);
-    const settled = await billing.settleReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      settleKey: 'wf-1:motion:settle',
-      actualCostMicros: actual,
-      description: 'Motion generation',
-    });
+    const captured = await billing.captureReservation(
+      created.reservationId,
+      actual,
+      {
+        description: 'LLM',
+        idempotencyKey: 'run-1:llm',
+      }
+    );
+    expect(captured).toEqual({ ok: true, captured: actual });
 
-    expect(settled).toEqual({ status: 'settled' });
+    const afterCapture = await billing.getAvailable();
+    expect(afterCapture.balance).toBe(STARTING_BALANCE - actual);
+    expect(afterCapture.reserved).toBe(cost - actual);
+    expect(afterCapture.available).toBe(STARTING_BALANCE - cost);
 
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE - actual);
-
-    const rows = await db
-      .select()
-      .from(transactions)
-      .where(eq(transactions.teamId, teamId));
-    expect(rows).toHaveLength(2);
-    const refund = rows.find((row) => row.type === 'credit_refund');
-    expect(refund?.amount).toBe(cost - actual);
+    await billing.zeroReservation(created.reservationId);
+    const afterZero = await billing.getAvailable();
+    expect(afterZero.reserved).toBe(0);
+    expect(afterZero.available).toBe(STARTING_BALANCE - actual);
   });
 
-  it('settle with a dearer actual debits the difference when the team can pay', async () => {
+  it('capture over actual grows the hold when available covers the extra', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
     });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
 
     const actual = micros(1_250_000);
-    const settled = await billing.settleReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      settleKey: 'wf-1:motion:settle',
-      actualCostMicros: actual,
-      description: 'Motion generation',
-    });
+    const captured = await billing.captureReservation(
+      created.reservationId,
+      actual,
+      {
+        description: 'Motion generation',
+        idempotencyKey: 'run-1:motion',
+      }
+    );
 
-    expect(settled).toEqual({ status: 'settled' });
-
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE - actual);
+    expect(captured).toEqual({ ok: true, captured: actual });
+    expect(await billing.getBalance()).toBe(STARTING_BALANCE - actual);
   });
 
-  it('settle extra that cannot be paid keeps the reservation and reports the skipped delta', async () => {
+  it('capture extra that cannot be paid charges remaining and reports the skipped delta', async () => {
     await db
       .update(credits)
       .set({ balance: 1_000_000 })
       .where(eq(credits.teamId, teamId));
 
     const billing = createBillingMethods(db, teamId, userId);
-    await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
     });
-    // Balance is now $0; actual $1.25 cannot take another $0.25.
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
     const actual = micros(1_250_000);
-    const settled = await billing.settleReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      settleKey: 'wf-1:motion:settle',
-      actualCostMicros: actual,
-      description: 'Motion generation',
-    });
+    const captured = await billing.captureReservation(
+      created.reservationId,
+      actual,
+      {
+        description: 'Motion generation',
+        idempotencyKey: 'run-1:motion',
+      }
+    );
 
-    expect(settled).toEqual({
-      status: 'settled',
-      skippedDeltaMicros: micros(250_000),
-    });
-
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(0);
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+    expect(captured.captured).toBe(cost);
+    expect(captured.skippedDeltaMicros).toBe(micros(250_000));
+    expect(await billing.getBalance()).toBe(0);
   });
 
-  it('release refunds an open reservation and is a no-op after settle', async () => {
+  it('expired remaining does not reduce available', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
+      ttlMs: 1,
     });
+    expect(created.ok).toBe(true);
 
-    const released = await billing.releaseReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      releaseKey: 'wf-1:motion:release',
-    });
-    expect(released).toEqual({ status: 'released' });
-
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE);
-
-    const again = await billing.releaseReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      releaseKey: 'wf-1:motion:release',
-    });
-    expect(again).toEqual({ status: 'released' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const available = await billing.getAvailable();
+    expect(available.reserved).toBe(0);
+    expect(available.available).toBe(STARTING_BALANCE);
   });
 
-  it('release after settle does not refund', async () => {
+  it('capture after expiry of this row still posts usage', async () => {
     const billing = createBillingMethods(db, teamId, userId);
-    await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
+    const created = await billing.createReservation(cost, {
+      idempotencyKey: 'run-1:reserve',
+      ttlMs: 1,
     });
-    await billing.settleReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      settleKey: 'wf-1:motion:settle',
-      actualCostMicros: cost,
-      description: 'Motion generation',
-    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
 
-    const released = await billing.releaseReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      releaseKey: 'wf-1:motion:release',
-    });
-    expect(released).toEqual({ status: 'settled' });
-
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE - cost);
-  });
-
-  it('settle after release does not charge again', async () => {
-    const billing = createBillingMethods(db, teamId, userId);
-    await billing.reserveCredits(cost, {
-      description: 'Motion generation',
-      idempotencyKey: 'wf-1:motion:reserve',
-    });
-    await billing.releaseReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      releaseKey: 'wf-1:motion:release',
-    });
-
-    const settled = await billing.settleReservation({
-      reservationKey: 'wf-1:motion:reserve',
-      settleKey: 'wf-1:motion:settle',
-      actualCostMicros: cost,
-      description: 'Motion generation',
-    });
-    expect(settled).toEqual({ status: 'released' });
-
-    const [credit] = await db
-      .select({ balance: credits.balance })
-      .from(credits)
-      .where(eq(credits.teamId, teamId));
-    expect(credit?.balance).toBe(STARTING_BALANCE);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const captured = await billing.captureReservation(
+      created.reservationId,
+      cost,
+      {
+        description: 'Motion generation',
+        idempotencyKey: 'run-1:motion',
+      }
+    );
+    expect(captured).toEqual({ ok: true, captured: cost });
+    expect(await billing.getBalance()).toBe(STARTING_BALANCE - cost);
   });
 
   it('tryDeductCredits refuses an overdraft instead of throwing', async () => {

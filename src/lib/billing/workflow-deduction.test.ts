@@ -15,13 +15,7 @@ vi.doMock('./billing-observability', () => ({
   reportSkippedDeduction,
 }));
 
-function makeScopedDb({
-  canAfford = true,
-  settleStatus = 'missing',
-}: {
-  canAfford?: boolean;
-  settleStatus?: 'missing' | 'settled' | 'released';
-} = {}) {
+function makeScopedDb({ canAfford = true } = {}) {
   const tryDeductCredits = vi.fn().mockResolvedValue(
     canAfford
       ? {
@@ -33,21 +27,10 @@ function makeScopedDb({
         }
       : { ok: false }
   );
-  const reserveCredits = vi.fn().mockResolvedValue(
-    canAfford
-      ? {
-          reserved: true,
-          newBalance: micros(0),
-          reservedAmount: micros(0),
-          transactionId: 'tx1',
-          replay: false,
-        }
-      : { reserved: false }
-  );
-  const settleReservation = vi.fn().mockResolvedValue({
-    status: settleStatus,
+  const captureReservation = vi.fn().mockResolvedValue({
+    ok: true,
+    captured: micros(2_000_000),
   });
-  const releaseReservation = vi.fn().mockResolvedValue({ status: 'released' });
   const hasEnoughCredits = vi.fn().mockResolvedValue(canAfford);
   const checkAutoTopUp = vi.fn().mockResolvedValue(undefined);
   const recordUsage = vi.fn().mockResolvedValue(undefined);
@@ -56,9 +39,7 @@ function makeScopedDb({
     liveRead: { billing: { hasEnoughCredits, checkAutoTopUp } },
     billing: {
       tryDeductCredits,
-      reserveCredits,
-      settleReservation,
-      releaseReservation,
+      captureReservation,
       checkAutoTopUp,
     },
     modelUsage: { record: recordUsage },
@@ -68,9 +49,7 @@ function makeScopedDb({
   return {
     scopedDb,
     tryDeductCredits,
-    reserveCredits,
-    settleReservation,
-    releaseReservation,
+    captureReservation,
     hasEnoughCredits,
     checkAutoTopUp,
     recordUsage,
@@ -79,14 +58,12 @@ function makeScopedDb({
 
 const {
   deductWorkflowCredits: deductWorkflowCreditsImpl,
-  reserveWorkflowCredits: reserveWorkflowCreditsImpl,
-  releaseWorkflowCredits: releaseWorkflowCreditsImpl,
   recordFalUsage: recordFalUsageImpl,
 } = await import('./workflow-deduction');
 
 describe('deductWorkflowCredits', () => {
   it('forwards the idempotencyKey to tryDeductCredits when no reservation exists', async () => {
-    const { scopedDb, tryDeductCredits, settleReservation } = makeScopedDb();
+    const { scopedDb, tryDeductCredits, captureReservation } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -97,13 +74,7 @@ describe('deductWorkflowCredits', () => {
       metadata: { shotId: 'f1' },
     });
 
-    expect(settleReservation).toHaveBeenCalledWith({
-      reservationKey: 'env_image_abc123:image:reserve',
-      settleKey: 'env_image_abc123:image:settle',
-      actualCostMicros: micros(2_000_000),
-      description: 'Image generation (test-model)',
-      metadata: { shotId: 'f1' },
-    });
+    expect(captureReservation).not.toHaveBeenCalled();
     expect(tryDeductCredits).toHaveBeenCalledTimes(1);
     expect(tryDeductCredits).toHaveBeenCalledWith(micros(2_000_000), {
       description: 'Image generation (test-model)',
@@ -112,10 +83,8 @@ describe('deductWorkflowCredits', () => {
     });
   });
 
-  it('settles a reservation instead of charging the full actual again', async () => {
-    const { scopedDb, tryDeductCredits, settleReservation } = makeScopedDb({
-      settleStatus: 'settled',
-    });
+  it('captures against a reservationId instead of tryDeduct', async () => {
+    const { scopedDb, tryDeductCredits, captureReservation } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -123,22 +92,30 @@ describe('deductWorkflowCredits', () => {
       usedOwnKey: false,
       description: 'Motion generation (test-model)',
       idempotencyKey: 'wf-1:motion',
+      reservationId: 'res_1',
     });
 
-    expect(settleReservation).toHaveBeenCalledTimes(1);
+    expect(captureReservation).toHaveBeenCalledWith(
+      'res_1',
+      micros(2_000_000),
+      {
+        description: 'Motion generation (test-model)',
+        metadata: undefined,
+        idempotencyKey: 'wf-1:motion',
+      }
+    );
     expect(tryDeductCredits).not.toHaveBeenCalled();
   });
 
-  it('alerts when settling a reservation cannot collect the extra actual', async () => {
+  it('alerts when capture cannot collect the extra actual', async () => {
     reportSkippedDeduction.mockClear();
-    const settleReservation = vi.fn().mockResolvedValue({
-      status: 'settled',
+    const { scopedDb, tryDeductCredits, captureReservation, checkAutoTopUp } =
+      makeScopedDb();
+    captureReservation.mockResolvedValue({
+      ok: true,
+      captured: micros(1_000_000),
       skippedDeltaMicros: micros(250_000),
     });
-    const { scopedDb, tryDeductCredits, checkAutoTopUp } = makeScopedDb({
-      settleStatus: 'settled',
-    });
-    scopedDb.billing.settleReservation = settleReservation;
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -147,6 +124,7 @@ describe('deductWorkflowCredits', () => {
       description: 'Motion generation (test-model)',
       idempotencyKey: 'wf-1:motion',
       workflowName: 'MotionWorkflow:cf',
+      reservationId: 'res_1',
     });
 
     expect(tryDeductCredits).not.toHaveBeenCalled();
@@ -160,7 +138,7 @@ describe('deductWorkflowCredits', () => {
   });
 
   it('skips when the team used its own key', async () => {
-    const { scopedDb, tryDeductCredits, settleReservation } = makeScopedDb();
+    const { scopedDb, tryDeductCredits, captureReservation } = makeScopedDb();
 
     await deductWorkflowCreditsImpl({
       scopedDb,
@@ -171,7 +149,7 @@ describe('deductWorkflowCredits', () => {
     });
 
     expect(tryDeductCredits).not.toHaveBeenCalled();
-    expect(settleReservation).not.toHaveBeenCalled();
+    expect(captureReservation).not.toHaveBeenCalled();
   });
 
   it('reports missing cost and skips deduction for zero cost', async () => {
@@ -235,76 +213,6 @@ describe('deductWorkflowCredits', () => {
       costMicros: micros(2_000_000),
       idempotencyKey: 'env_image_abc123:image',
       metadata: undefined,
-    });
-  });
-});
-
-describe('reserveWorkflowCredits', () => {
-  it('holds the estimate against the balance before the provider call', async () => {
-    const { scopedDb, reserveCredits } = makeScopedDb();
-
-    const reserved = await reserveWorkflowCreditsImpl({
-      scopedDb,
-      costMicros: micros(1_222_200),
-      usedOwnKey: false,
-      description: 'Motion generation (seedance)',
-      idempotencyKey: 'wf-1:motion',
-      workflowName: 'MotionWorkflow:cf',
-    });
-
-    expect(reserved).toBe(true);
-    expect(reserveCredits).toHaveBeenCalledWith(micros(1_222_200), {
-      description: 'Motion generation (seedance)',
-      metadata: undefined,
-      idempotencyKey: 'wf-1:motion:reserve',
-    });
-  });
-
-  it('returns false and does not start work when the hold cannot be taken', async () => {
-    const { scopedDb, checkAutoTopUp } = makeScopedDb({ canAfford: false });
-
-    const reserved = await reserveWorkflowCreditsImpl({
-      scopedDb,
-      costMicros: micros(1_222_200),
-      usedOwnKey: false,
-      description: 'Motion generation (seedance)',
-      idempotencyKey: 'wf-1:motion',
-      workflowName: 'MotionWorkflow:cf',
-    });
-
-    expect(reserved).toBe(false);
-    expect(checkAutoTopUp).toHaveBeenCalledTimes(1);
-  });
-
-  it('skips the hold for BYOK teams', async () => {
-    const { scopedDb, reserveCredits } = makeScopedDb();
-
-    const reserved = await reserveWorkflowCreditsImpl({
-      scopedDb,
-      costMicros: micros(1_222_200),
-      usedOwnKey: true,
-      description: 'Motion generation (seedance)',
-      idempotencyKey: 'wf-1:motion',
-    });
-
-    expect(reserved).toBe(true);
-    expect(reserveCredits).not.toHaveBeenCalled();
-  });
-});
-
-describe('releaseWorkflowCredits', () => {
-  it('releases the matching reservation key', async () => {
-    const { scopedDb, releaseReservation } = makeScopedDb();
-
-    await releaseWorkflowCreditsImpl({
-      scopedDb,
-      idempotencyKey: 'wf-1:motion',
-      workflowName: 'MotionWorkflow:cf',
-    });
-
-    expect(releaseReservation).toHaveBeenCalledWith({
-      reservationKey: 'wf-1:motion:reserve',
-      releaseKey: 'wf-1:motion:release',
     });
   });
 });

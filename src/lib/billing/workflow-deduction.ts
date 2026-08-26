@@ -2,11 +2,9 @@
  * Workflow credit deduction. Skips BYOK teams; warns and skips (rather than
  * throwing) on insufficient credits, since the work is already done.
  *
- * Spend that can race a sibling (motion-batch fan-out, #1310) must call
- * `reserveWorkflowCredits` before the provider and `releaseWorkflowCredits`
- * from `onFailure`. `deductWorkflowCredits` then settles the hold against
- * the actual cost. The post-hoc skip is a last-resort guard: it should be
- * unreachable once every generation path reserves first.
+ * When the payload carries a `reservationId` (run envelope, #1310), capture
+ * posts usage against that hold. Otherwise last-resort `tryDeductCredits`
+ * charges posted balance. The post-hoc skip is a last-resort guard.
  *
  * Pricing observations are deliberately NOT recorded here: call sites guard
  * deduction behind `cost > 0 && !usedOwnKey`, so a recorder inside this
@@ -46,19 +44,9 @@ type WorkflowDeductionOpts = {
   metadata?: Record<string, unknown>;
   /** Workflow name for the logger.warn prefix (e.g., "VariantWorkflow") */
   workflowName?: string;
+  /** Run envelope created at the HTTP trigger. Capture against it when set. */
+  reservationId?: string;
 };
-
-function reservationKey(chargeKey: string): string {
-  return `${chargeKey}:reserve`;
-}
-
-function settleKey(chargeKey: string): string {
-  return `${chargeKey}:settle`;
-}
-
-function releaseKey(chargeKey: string): string {
-  return `${chargeKey}:release`;
-}
 
 function logPrefix(workflowName: string | undefined): string {
   return workflowName ? `[${workflowName}]` : '[Workflow]';
@@ -86,68 +74,12 @@ function skipDeduction(
 }
 
 /**
- * Hold `costMicros` against the team balance before the provider call.
- * Returns false when the team cannot pay — the caller must not start work.
- * BYOK / anonymous / zero-cost paths return true without touching the ledger.
- */
-export async function reserveWorkflowCredits(
-  opts: WorkflowDeductionOpts
-): Promise<boolean> {
-  if (!opts.scopedDb) return true;
-  if (opts.usedOwnKey) return true;
-
-  if (opts.costMicros <= 0) {
-    reportMissingBillingCost({
-      source: 'workflow-deduction',
-      workflowName: opts.workflowName,
-      description: opts.description,
-      metadata: opts.metadata,
-      teamId: opts.scopedDb.teamId,
-    });
-    return true;
-  }
-
-  const result = await opts.scopedDb.billing.reserveCredits(opts.costMicros, {
-    description: opts.description,
-    metadata: opts.metadata,
-    idempotencyKey: reservationKey(opts.idempotencyKey),
-  });
-  if (result.reserved) return true;
-
-  const prefix = logPrefix(opts.workflowName);
-  logger.warn(
-    `${prefix} Insufficient credits (cost: $${microsToUsd(opts.costMicros).toFixed(4)}), not starting generation`
-  );
-  void opts.scopedDb.billing.checkAutoTopUp().catch((err) => {
-    logger.error('Failed:', { err });
-  });
-  return false;
-}
-
-/**
- * Refund an open reservation when the generation fails. No-op if the
- * reservation was already settled, never created (BYOK / broke at the
- * gate), or this run has no scoped DB.
- */
-export async function releaseWorkflowCredits(opts: {
-  scopedDb: WorkflowScopedDb | undefined;
-  idempotencyKey: string;
-  workflowName?: string;
-}): Promise<void> {
-  if (!opts.scopedDb) return;
-  await opts.scopedDb.billing.releaseReservation({
-    reservationKey: reservationKey(opts.idempotencyKey),
-    releaseKey: releaseKey(opts.idempotencyKey),
-  });
-}
-
-/**
  * Deduct credits for a completed workflow generation. A `costMicros <= 0` is
  * reported as a pricing bug, not treated as a free call; insufficient credits
  * warn, skip, and fire an auto-top-up attempt.
  *
- * When a matching reservation exists (see `reserveWorkflowCredits`), this
- * settles estimate vs actual instead of charging the full cost again.
+ * When `reservationId` is set, capture against that envelope. Otherwise
+ * last-resort atomic deduct.
  */
 export async function deductWorkflowCredits(
   opts: WorkflowDeductionOpts
@@ -168,18 +100,20 @@ export async function deductWorkflowCredits(
     return;
   }
 
-  const settled = await scopedDb.billing.settleReservation({
-    reservationKey: reservationKey(opts.idempotencyKey),
-    settleKey: settleKey(opts.idempotencyKey),
-    actualCostMicros: opts.costMicros,
-    description: opts.description,
-    metadata: opts.metadata,
-  });
-  if (settled.status !== 'missing') {
-    if (settled.status === 'settled' && settled.skippedDeltaMicros) {
+  if (opts.reservationId) {
+    const captured = await scopedDb.billing.captureReservation(
+      opts.reservationId,
+      opts.costMicros,
+      {
+        description: opts.description,
+        metadata: opts.metadata,
+        idempotencyKey: opts.idempotencyKey,
+      }
+    );
+    if (captured.ok && captured.skippedDeltaMicros) {
       skipDeduction(scopedDb, {
         ...opts,
-        costMicros: settled.skippedDeltaMicros,
+        costMicros: captured.skippedDeltaMicros,
       });
     }
     return;
