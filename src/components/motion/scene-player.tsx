@@ -20,14 +20,7 @@ import { cn } from '@/lib/utils';
 import { copyTextToClipboard } from '@/lib/utils/clipboard';
 import type { ShotView } from '@/lib/shots/shot-view';
 import { AppImage } from '@/components/ui/app-image';
-import {
-  AlertCircle,
-  Download,
-  Link,
-  Loader2,
-  Share2,
-  VideoIcon,
-} from 'lucide-react';
+import { Download, Link, Loader2, Share2, VideoIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { VideoPlayer } from './video-player';
@@ -67,7 +60,7 @@ type ScenePlayerProps = {
    * earlier inputs. Info-level: amber dot on a muted chip, no warning fill.
    */
   staleLabel?: string | null;
-  progressMessage?: string;
+  progressMessage?: React.ReactNode;
   /**
    * In-flight retry state for the selected shot (#882) — rendered as
    * "Retrying (N/M)…" (or "Retrying…") in the player overlay.
@@ -219,15 +212,22 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
                 <span className="absolute top-2 right-2 z-10 rounded bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
                   Preview
                 </span>
+                <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/80 to-transparent p-4">
+                  <p className="text-center text-sm font-medium text-white">
+                    {progressMessage}
+                  </p>
+                </div>
               </>
             ) : (
               <>
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(167,112,239,0.12),transparent_70%)]" />
-                <div className="relative flex flex-col items-center gap-4">
+                <div className="relative flex flex-col items-center gap-4 px-4">
                   <BlobLoader size="lg" />
                   <div className="flex items-center gap-2">
                     <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    <p className="text-sm font-medium">{progressMessage}</p>
+                    <p className="text-center text-sm font-medium">
+                      {progressMessage}
+                    </p>
                   </div>
                 </div>
               </>
@@ -372,19 +372,11 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             </DropdownMenu>
           )}
 
-          {/* Error overlay */}
-          <div
-            className={cn(
-              'absolute inset-0 flex items-center justify-center pointer-events-none',
-              // Use semi-transparent overlay if image exists, solid bg if not
-              displayImage ? 'bg-muted/80' : 'bg-transparent'
-            )}
-          >
-            <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              <AlertCircle className="h-8 w-8" />
-              <span className="text-sm">Failed to generate video</span>
-            </div>
-          </div>
+          <VideoStateOverlay
+            thumbnailUrl={displayImage}
+            videoStatus="failed"
+            videoError={currentShot.primaryVideo?.error ?? null}
+          />
           {frameOverlay}
         </div>
       ) : (
@@ -454,6 +446,9 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             aspectRatio={aspectRatio}
             className="h-full w-full"
             autoPlay={shouldAutoPlay}
+            playSource="canvas"
+            sequenceId={currentShot.sequenceId}
+            shotId={currentShot.id}
             onTimeUpdate={onTimeUpdate}
             onPause={handlePause}
             onEnded={handleEnded}
@@ -464,6 +459,9 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             videoStatus={
               isVariantVideoPreview ? 'completed' : currentShot.videoStatus
             }
+            imageStatus={currentShot.frame.imageStatus}
+            imageError={currentShot.frame.imageError}
+            videoError={currentShot.primaryVideo?.error ?? null}
             progressMessage={progressMessage}
             retry={retry}
           />
@@ -490,7 +488,7 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
           )}
           {isPreviewImage && !isVariantPreview && (
             <span className="absolute top-2 right-2 z-10 rounded bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
-              Preview
+              Animatic
             </span>
           )}
           {frameOverlay}

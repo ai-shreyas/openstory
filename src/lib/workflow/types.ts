@@ -259,6 +259,18 @@ export interface StoryboardWorkflowInput extends SequenceWorkflowContext {
   suggestedTalent?: SuggestedTalentSnapshot[];
   /** @see LocationMatchingWorkflowInput.suggestedLocations — resolved by the launcher. */
   suggestedLocations?: SuggestedLocationSnapshot[];
+  /**
+   * Owner's email at trigger time (#1276). Null when the triggering user has
+   * no address on the team — the ready-email step then no-ops.
+   */
+  ownerEmail?: string | null;
+  /** Absolute `/sequences/:id/scenes` URL, snapshotted with the app origin. */
+  sequenceUrl: string;
+  /**
+   * When false, skip the ready email. API-key `/api/v1` callers poll and
+   * don't want a mailbox ping. Default (undefined) is send.
+   */
+  notify?: boolean;
 }
 
 /**
@@ -279,6 +291,8 @@ export type StoryboardTriggerInput = Omit<
   | 'musicPromptSource'
   | 'suggestedTalent'
   | 'suggestedLocations'
+  | 'ownerEmail'
+  | 'sequenceUrl'
 >;
 
 /**
@@ -323,9 +337,6 @@ export interface AnalyzeScriptWorkflowInput extends SequenceWorkflowContext {
 export type SceneSplitWorkflowInput = SequenceWorkflowContext & {
   promptName: string;
   modelId: AnalysisModelId;
-  /** Only styles the per-scene preview stills; absent while an automatic style
-   *  is still being derived alongside this run (#1213). */
-  styleConfig?: StyleConfig;
   aspectRatio: AspectRatio;
   script: string;
   /** User-uploaded elements to make the model aware of uppercase tokens */

@@ -662,24 +662,26 @@ describe('llm-client', () => {
           yield { type: 'TEXT_MESSAGE_CONTENT', delta: 'hi' };
         })();
 
-      it('keeps Anthropic models off Azure by default', async () => {
-        // Azure-hosted Claude rejects our analysis schemas ("compiled grammar
-        // is too large"); Anthropic's own endpoint accepts them.
+      it("pins Anthropic models to Anthropic's own endpoint", async () => {
+        // Vertex advertises response_format without structured_outputs (#1285);
+        // Azure's grammar is too small. Pinning with `only` is what actually
+        // excludes them — requireParameters does not, and with Vertex off at
+        // the account it emptied the candidate set (#1302).
         mockChat.mockReturnValue(textStream());
 
         await drain(
           callLLMStream({
-            model: 'anthropic/claude-fable-5',
+            model: 'anthropic/claude-opus-5',
             messages: [{ role: 'user', content: 'test' }],
           })
         );
 
         expect(mockChat.mock.calls[0]?.[0]?.modelOptions.provider).toEqual({
-          ignore: ['azure'],
+          only: ['anthropic'],
         });
       });
 
-      it('leaves non-Anthropic models unrestricted', async () => {
+      it('only requires parameter support for non-Anthropic models', async () => {
         mockChat.mockReturnValue(textStream());
 
         await drain(
@@ -689,24 +691,43 @@ describe('llm-client', () => {
           })
         );
 
-        expect(
-          mockChat.mock.calls[0]?.[0]?.modelOptions.provider
-        ).toBeUndefined();
+        expect(mockChat.mock.calls[0]?.[0]?.modelOptions.provider).toEqual({
+          requireParameters: true,
+        });
       });
 
-      it('caller-supplied provider preferences win', async () => {
+      it('sends max_tokens, not max_completion_tokens, so requireParameters keeps DeepSeek routable', async () => {
+        // DeepSeek endpoints advertise `max_tokens` only; `max_completion_tokens`
+        // + requireParameters returned "No endpoints found" on the region fallback.
+        mockChat.mockReturnValue(textStream());
+
+        await drain(
+          callLLMStream({
+            model: 'deepseek/deepseek-v4-pro-0813',
+            max_tokens: 300,
+            messages: [{ role: 'user', content: 'test' }],
+          })
+        );
+
+        const options = mockChat.mock.calls[0]?.[0]?.modelOptions;
+        expect(options.maxTokens).toBe(300);
+        expect(options.maxCompletionTokens).toBeUndefined();
+      });
+
+      it('caller-supplied provider preferences layer on top', async () => {
         mockChat.mockReturnValue(textStream());
 
         await drain(
           callLLMStream({
             model: 'anthropic/claude-sonnet-5',
             messages: [{ role: 'user', content: 'test' }],
-            provider: { only: ['anthropic'] },
+            provider: { allowFallbacks: false },
           })
         );
 
         expect(mockChat.mock.calls[0]?.[0]?.modelOptions.provider).toEqual({
           only: ['anthropic'],
+          allowFallbacks: false,
         });
       });
     });

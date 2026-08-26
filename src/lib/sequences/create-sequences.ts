@@ -91,6 +91,11 @@ export type CreateSequencesContext = {
   scopedDb: ScopedDb;
   user: { id: string };
   teamId: string;
+  /**
+   * When false, the storyboard run skips the ready email (#1276). `/api/v1`
+   * callers poll; dashboard creates leave this undefined (send).
+   */
+  notify?: boolean;
 };
 
 export type CreateSequencesResult = {
@@ -326,6 +331,7 @@ export const createSequences = createServerOnlyFn(
           userId: context.user.id,
           teamId,
           sequenceId: sequence.id,
+          notify: context.notify,
           imageModels,
           videoModels,
           options: {

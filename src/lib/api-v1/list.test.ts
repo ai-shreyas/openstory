@@ -73,6 +73,7 @@ function makeSequence(overrides: Partial<Sequence> = {}): Sequence {
     statusError: null,
     workflowRunId: null,
     posterUrl: null,
+    readyEmailSentAt: null,
     autoGenerateMotion: false,
     autoGenerateMusic: false,
     suggestedTalentIds: null,

@@ -3,7 +3,12 @@
  */
 
 import { Heading, Section, Text } from '@react-email/components';
-import { EmailLayout, headingClass, paragraphClass } from './email-layout';
+import {
+  detailRowClass,
+  EmailLayout,
+  headingClass,
+  paragraphClass,
+} from './email-layout';
 
 interface AbuseReportEmailProps {
   appName: string;
@@ -12,8 +17,6 @@ interface AbuseReportEmailProps {
   targetType: string;
   hasTrace: boolean;
 }
-
-const detailRowClass = 'm-0 text-sm leading-6 text-gray-700';
 
 export const AbuseReportEmail: React.FC<AbuseReportEmailProps> = ({
   appName,
@@ -32,7 +35,7 @@ export const AbuseReportEmail: React.FC<AbuseReportEmailProps> = ({
         triage it.
       </Text>
 
-      <Section className="my-6 rounded-lg bg-gray-100 p-6">
+      <Section className="my-6 rounded-lg bg-muted p-6">
         <Text className={detailRowClass}>
           <strong>Reference:</strong> {reference}
         </Text>

@@ -28,7 +28,11 @@ import {
   restrictionNotice,
 } from '@/lib/compliance/enforcement';
 import { loadComplianceState } from '@/lib/compliance/generation-gate';
-import { AccountRestrictedError, NotFoundError } from '@/lib/errors';
+import {
+  AccountRestrictedError,
+  AuthenticationError,
+  NotFoundError,
+} from '@/lib/errors';
 import {
   errorHeadline,
   getLogger,
@@ -370,7 +374,7 @@ export const authMiddleware = createMiddleware({ type: 'function' }).server(
     const session = await auth.api.getSession({ headers: request.headers });
 
     if (!session?.user) {
-      throw new Error('Authentication required');
+      throw new AuthenticationError('Authentication required');
     }
 
     return next({

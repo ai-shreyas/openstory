@@ -11,6 +11,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 1,
     contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Default analysis model; frontier reasoning and coding',
   },
@@ -21,6 +22,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 1,
     contextWindow: 500_000,
+    maxOutputTokens: 450_000,
     // Accepts image input — required so the motion-prompt pass can be
     // conditioned on the rendered starting frame (#929). Conservative: only
     // models known to accept image input are `true`; text-only models fall
@@ -35,6 +37,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 2,
     contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Most intelligent Anthropic model, new tier above Opus',
   },
@@ -45,6 +48,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 3,
     contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'State-of-the-art coding and structured output',
   },
@@ -55,6 +59,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 4,
     contextWindow: 2_000_000,
+    maxOutputTokens: 1_800_000,
     vision: true,
     description: 'Lowest hallucination rate, flagship agentic model',
     hidden: true,
@@ -66,6 +71,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 5,
     contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Opus 5 low-latency; used for scene-split',
   },
@@ -76,6 +82,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 6,
     contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Frontier reasoning and coding',
     hidden: true,
@@ -87,6 +94,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'open-source' as const,
     qualityRank: 7,
     contextWindow: 262_144,
+    maxOutputTokens: 209_715,
     vision: true,
     description: 'Apache 2.0, 119B MoE, multimodal + agentic coding',
   },
@@ -97,6 +105,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'open-source' as const,
     qualityRank: 8,
     contextWindow: 1_048_576,
+    maxOutputTokens: 943_717,
     // Text-only.
     vision: false,
     description: 'Open-weights frontier reasoning, 1M context',
@@ -108,6 +117,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'open-source' as const,
     qualityRank: 8,
     contextWindow: 163_840,
+    maxOutputTokens: 147_456,
     // Text-only.
     vision: false,
     description: 'MIT license, MMLU 94.2, GPT-5 class reasoning',
@@ -120,6 +130,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'open-source' as const,
     qualityRank: 9,
     contextWindow: 1_048_576,
+    maxOutputTokens: 262_144,
     // GLM-5.2 is text-only. Image-bearing calls (the vision-conditioned motion
     // path, #929) transparently route to `DEFAULT_VISION_MODEL` — see
     // `resolveVisionModel`. GLM's own vision sibling GLM-4.6V was tried (#942)
@@ -135,6 +146,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 10,
     contextWindow: 1_048_576,
+    maxOutputTokens: 65_536,
     vision: true,
     description: 'Frontier multimodal reasoning with 1M context',
   },
@@ -145,6 +157,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 11,
     contextWindow: 1_050_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Latest GPT-5 series with 1M context',
   },
@@ -155,6 +168,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 12,
     contextWindow: 1_048_576,
+    maxOutputTokens: 65_536,
     vision: true,
     description: 'Fast multimodal with 1M context',
   },
@@ -165,6 +179,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 13,
     contextWindow: 400_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Fast reasoning with configurable effort modes',
   },
@@ -175,6 +190,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 14,
     contextWindow: 262_144,
+    maxOutputTokens: 131_072,
     vision: true,
     description: 'Fast multimodal with 4 reasoning effort modes',
   },
@@ -185,6 +201,7 @@ export const SCRIPT_ANALYSIS_MODELS = [
     license: 'proprietary' as const,
     qualityRank: 15,
     contextWindow: 400_000,
+    maxOutputTokens: 128_000,
     vision: true,
     description: 'Fastest and most cost-efficient GPT-5.4 variant',
   },
@@ -239,6 +256,34 @@ export const ANALYSIS_MODEL_IDS = getAllModelIds();
 export function getContextWindow(modelId: string): number {
   const model = SCRIPT_ANALYSIS_MODELS.find((m) => m.id === modelId);
   return model?.contextWindow ?? 128_000;
+}
+
+/**
+ * Conservative output ceiling for an unknown model — below every ceiling in
+ * the table, so a model we don't know can never be sent an over-limit budget.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
+
+/**
+ * The output-token budget to send for a call, as a fraction of the context
+ * window but never above what the model can actually emit (#1308).
+ *
+ * Call sites used to send `getContextWindow(model) * 0.5` as `max_tokens`,
+ * which conflates two different limits: half of Opus 5's 1M context is
+ * 500,000, but its real completion ceiling is 128,000 — and half of Gemini's
+ * 1,048,576 is 8× its 65,536 ceiling. The fraction still expresses "leave
+ * room for the input"; the clamp keeps the request legal.
+ *
+ * Ceilings are `top_provider.max_completion_tokens` from OpenRouter's
+ * `/api/v1/models`, the same catalogue that serves the calls.
+ */
+export function getMaxOutputTokens(modelId: string, fraction = 0.5): number {
+  const model = SCRIPT_ANALYSIS_MODELS.find((m) => m.id === modelId);
+  const ceiling = model?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const budget = Math.floor(
+    (model?.contextWindow ?? 128_000) * Math.min(Math.max(fraction, 0), 1)
+  );
+  return Math.max(1, Math.min(budget, ceiling));
 }
 
 /**

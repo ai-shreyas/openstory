@@ -17,7 +17,7 @@ export const AUTO_STYLE_ID = 'auto';
 
 export const AUTO_STYLE_PLACEHOLDER_NAME = 'Automatic style';
 
-const STYLE_CATEGORIES = [
+export const STYLE_CATEGORIES = [
   'film',
   'commercial',
   'ecommerce',
@@ -47,25 +47,86 @@ const AUTO_STYLE_PLACEHOLDER_CONFIG: StyleConfig = {
  * `sceneDurationResponseSchema`). Bounds are applied in
  * {@link autoStyleDraftFromResponse}, which re-validates against the real
  * `StyleConfigSchema`.
+ *
+ * `category`/`pace` keep their `enum` (a hard constraint on strict routes —
+ * Anthropic supports `enum` + `default`) but `.catch()` to a default: this is
+ * a guess, and an off-vocabulary word from a non-enforcing route must never
+ * fail the run (#1285). Missing recipe strings are filled from a collapsed
+ * look/motion paragraph or the placeholder (#1304) if a non-enforcing
+ * route still ignores the schema keys.
  */
-export const autoStyleResponseSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  category: z.enum(STYLE_CATEGORIES),
-  tags: z.array(z.string()),
-  mood: z.string(),
-  artStyle: z.string(),
-  medium: z.string(),
-  lighting: z.string(),
-  colorPalette: z.array(z.string()),
-  colorGrading: z.string(),
-  camera: z.string(),
-  shots: z.string(),
-  pace: z.enum(STYLE_PACE_VALUES),
-  /** 1 = stillness, 5 = kinetic chaos. */
-  energy: z.number(),
-  references: z.array(z.string()),
-});
+/** Where a category guess lands when the model coins its own word. */
+export const DEFAULT_AUTO_STYLE_CATEGORY = 'film';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function firstProse(...candidates: unknown[]): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Non-enforcing routes (OpenRouter→Opus 5, #1304) have emitted `look` /
+ * `motion` prose instead of the flat recipe keys, or nested the fields
+ * under objects with those names. Lift those into the flat fields so a
+ * style guess never fails the run. `z.preprocess` is parse-only —
+ * `z.toJSONSchema` still emits the inner object, so the provider schema
+ * stays aligned with the prompt (no `look`/`motion` keys).
+ */
+function coerceCollapsedAutoStyle(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const look = raw.look;
+  const motion = raw.motion;
+  const lookObj = isRecord(look) ? look : undefined;
+  const motionObj = isRecord(motion) ? motion : undefined;
+  const lookProse = typeof look === 'string' ? look : undefined;
+  const motionProse = typeof motion === 'string' ? motion : undefined;
+  const fallback = AUTO_STYLE_PLACEHOLDER_CONFIG.look;
+  return {
+    ...raw,
+    mood: firstProse(raw.mood, lookObj?.mood, lookProse) ?? fallback.mood,
+    artStyle:
+      firstProse(raw.artStyle, lookObj?.artStyle, lookProse) ??
+      fallback.artStyle,
+    medium: firstProse(raw.medium, lookObj?.medium) ?? '',
+    lighting:
+      firstProse(raw.lighting, lookObj?.lighting, lookProse) ??
+      fallback.lighting,
+    colorGrading:
+      firstProse(raw.colorGrading, lookObj?.colorGrading, lookProse) ??
+      fallback.colorGrading,
+    camera:
+      firstProse(raw.camera, motionObj?.camera, motionProse) ??
+      AUTO_STYLE_PLACEHOLDER_CONFIG.motion.camera,
+    shots: firstProse(raw.shots, motionObj?.shots) ?? '',
+  };
+}
+
+export const autoStyleResponseSchema = z.preprocess(
+  coerceCollapsedAutoStyle,
+  z.object({
+    name: z.string(),
+    description: z.string(),
+    category: z.enum(STYLE_CATEGORIES).catch(DEFAULT_AUTO_STYLE_CATEGORY),
+    tags: z.array(z.string()),
+    mood: z.string(),
+    artStyle: z.string(),
+    medium: z.string(),
+    lighting: z.string(),
+    colorPalette: z.array(z.string()),
+    colorGrading: z.string(),
+    camera: z.string(),
+    shots: z.string(),
+    pace: z.enum(STYLE_PACE_VALUES).catch('measured'),
+    /** 1 = stillness, 5 = kinetic chaos. */
+    energy: z.number(),
+    references: z.array(z.string()),
+  })
+);
 
 export type AutoStyleResponse = z.infer<typeof autoStyleResponseSchema>;
 

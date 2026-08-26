@@ -16,6 +16,63 @@ test.describe('Sequences', () => {
     await expect(page).toHaveURL(/\/sequences/);
   });
 
+  test('restores remembered search when returning to a bare /sequences', async ({
+    page,
+  }) => {
+    await page.goto('/sequences');
+    await page.evaluate(() => {
+      localStorage.setItem(
+        'openstory:sequences-list:v1',
+        JSON.stringify({
+          search: 'night diner',
+          analysisModel: null,
+          imageModel: null,
+          aspectRatio: '9:16',
+          styleId: null,
+          supportMode: false,
+          hideInternal: false,
+        })
+      );
+    });
+    await page.goto('/sequences');
+
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('q'))
+      .toBe('night diner');
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('aspectRatio'))
+      .toBe('9:16');
+    await expect(
+      page.getByRole('textbox', { name: 'Search by title…' })
+    ).toHaveValue('night diner');
+  });
+
+  test('remembered support mode does not break a non-admin list', async ({
+    page,
+  }) => {
+    await page.goto('/sequences');
+    await page.evaluate(() => {
+      localStorage.setItem(
+        'openstory:sequences-list:v1',
+        JSON.stringify({
+          search: '',
+          analysisModel: null,
+          imageModel: null,
+          aspectRatio: null,
+          styleId: null,
+          supportMode: true,
+          hideInternal: false,
+        })
+      );
+    });
+    await page.goto('/sequences');
+
+    await expect(
+      page.getByRole('textbox', { name: 'Search by title…' })
+    ).toBeVisible();
+    await expect(page.getByText('Failed to load sequences')).toHaveCount(0);
+  });
+
   test('home page has script input', async ({ page }) => {
     await page.goto('/');
 
@@ -64,7 +121,7 @@ test.describe('Sequences', () => {
     expect(metrics.scrollTopAfter).toBeGreaterThan(100);
   });
 
-  test('composer starts empty with Automatic selected, not Action', async ({
+  test('composer starts empty with Match script selected, not Action', async ({
     page,
   }) => {
     await page.goto('/');
@@ -86,7 +143,7 @@ test.describe('Sequences', () => {
       page.getByText('Paste a screenplay, or a one-liner we can expand.')
     ).toBeVisible();
     const automatic = page.getByRole('button', {
-      name: 'Automatic style: derive a style from the script',
+      name: 'Match script: derive a style from the script',
     });
     await expect(automatic).toHaveAttribute('aria-pressed', 'true');
     await expect(
@@ -110,7 +167,7 @@ test.describe('Sequences', () => {
     await expect(generate).toBeEnabled();
   });
 
-  test('Try-this-style URL seeds the style sample, not Automatic', async ({
+  test('Try-this-style URL seeds the style sample, not Match script', async ({
     page,
   }) => {
     await page.goto('/?style=product-ad');
@@ -120,7 +177,7 @@ test.describe('Sequences', () => {
     ).toBeVisible({ timeout: 15_000 });
     await expect(
       page.getByRole('button', {
-        name: 'Automatic style: derive a style from the script',
+        name: 'Match script: derive a style from the script',
       })
     ).toHaveAttribute('aria-pressed', 'false');
     await expect(
@@ -144,7 +201,7 @@ test.describe('Sequences', () => {
     ).toBeVisible();
     await expect(
       page.getByRole('button', {
-        name: 'Automatic style: derive a style from the script',
+        name: 'Match script: derive a style from the script',
       })
     ).toHaveAttribute('aria-pressed', 'false');
   });

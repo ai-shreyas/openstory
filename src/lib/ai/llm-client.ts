@@ -379,17 +379,29 @@ function toGrokReasoningEffort(
 // chat(). The public LLMRequestParams surface keeps its OpenAI-style
 // snake_case names; this is the single mapping point.
 function buildModelOptions(params: LLMRequestParams) {
-  // Azure-hosted Claude compiles strict structured-output schemas against a
-  // much smaller grammar budget than Anthropic's own endpoint and rejects our
-  // analysis schemas ("The compiled grammar is too large"). Keep Anthropic
-  // models off Azure; an explicit caller-supplied preference still wins.
-  const provider =
-    params.provider ??
-    (params.model.startsWith('anthropic/') ? { ignore: ['azure'] } : undefined);
+  // Anthropic models: pin to Anthropic's own endpoint. OpenRouter also hosts
+  // Claude on Google Vertex (advertises `response_format` but not
+  // `structured_outputs` — silent free-form JSON, #1285) and Azure (grammar
+  // too small for our schemas). `requireParameters: true` was meant to skip
+  // those hosts, but Vertex still matches on `response_format`, and once
+  // Vertex is disabled at the account the remaining filter
+  // (`requireParameters` + ignore azure) empties the candidate set (#1302:
+  // "No endpoints found that can handle the requested parameters").
+  // `only: ['anthropic']` is the actual selection; requireParameters stays
+  // for every other vendor. Caller-supplied preferences layer on top.
+  const provider: ProviderPreferences = {
+    ...(params.model.startsWith('anthropic/')
+      ? { only: ['anthropic'] }
+      : { requireParameters: true }),
+    ...params.provider,
+  };
   return {
-    ...(provider && { provider }),
+    provider,
     ...(params.reasoning && { reasoning: params.reasoning }),
-    maxCompletionTokens: params.max_tokens,
+    // `maxTokens`, not `maxCompletionTokens`: DeepSeek endpoints advertise only
+    // `max_tokens`, so `max_completion_tokens` + requireParameters empties the
+    // candidate set ("No endpoints found…") on the region fallback.
+    maxTokens: params.max_tokens,
     temperature: params.temperature,
     topP: params.top_p,
     frequencyPenalty: params.frequency_penalty,

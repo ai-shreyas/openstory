@@ -1,4 +1,5 @@
 import { GenerationProgressBanner } from '@/components/generation/generation-progress-banner';
+import { RenderWaitCopy } from '@/components/generation/render-wait-copy';
 import { MotionProgressBanner } from '@/components/generation/motion-progress-banner';
 import { type ModelGenerationStatus } from '@/components/model/base-model-selector';
 import { DivergenceCompareDialog } from '@/components/scenes/divergence-compare-dialog';
@@ -45,7 +46,7 @@ import {
   useShotsBySequence,
   useUndiscardVariant,
 } from '@/hooks/use-shots';
-import { useStyle } from '@/hooks/use-styles';
+import { useSequenceStyle } from '@/hooks/use-styles';
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_MUSIC_MODEL,
@@ -72,15 +73,19 @@ import {
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import type { ShotView } from '@/lib/shots/shot-view';
-import { analyzeFailures } from '@/lib/failures/failure-analysis';
+import { analyzeLoadedFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
 import { useStaleDetected } from '@/lib/realtime/use-stale-detected';
 import type { Sequence } from '@/types/database';
 import { usePostHog } from '@posthog/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import {
+  estimateSceneCount,
+  estimateTotalSeconds,
+} from '@/lib/generation/time-estimate';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 /**
@@ -217,7 +222,6 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   search = {},
 }) => {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const posthog = usePostHog();
 
   const { showGate: showBillingGate } = useFalBillingGate();
@@ -271,7 +275,27 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   });
   const aspectRatio = sequence?.aspectRatio || DEFAULT_ASPECT_RATIO;
   const isProcessing = sequence?.status === 'processing';
-  const { data: style } = useStyle(sequence?.styleId ?? '');
+  const processingRef = useRef(isProcessing);
+  processingRef.current = isProcessing;
+  const leftCapturedRef = useRef(false);
+
+  useEffect(() => {
+    leftCapturedRef.current = false;
+  }, [sequenceId]);
+
+  useEffect(() => {
+    const captureLeave = () => {
+      if (!processingRef.current || leftCapturedRef.current) return;
+      leftCapturedRef.current = true;
+      posthog.capture('render_wait_left', { sequence_id: sequenceId });
+    };
+    window.addEventListener('pagehide', captureLeave);
+    return () => {
+      window.removeEventListener('pagehide', captureLeave);
+      captureLeave();
+    };
+  }, [sequenceId, posthog]);
+  const { data: style } = useSequenceStyle(sequenceId);
   const styleCategory = style?.category ?? undefined;
   const sequenceMusicModel = safeAudioModel(
     sequence?.musicModel,
@@ -1100,14 +1124,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const [isRetrying, setIsRetrying] = useState(false);
 
   const failureSummary = useMemo(
-    () =>
-      sequence ? analyzeFailures(shots ?? [], sequence, scenesById) : null,
+    () => analyzeLoadedFailures(shots, sequence, scenesById),
     [shots, sequence, scenesById]
   );
-
-  const handleFullRetry = useCallback(() => {
-    void navigate({ to: '/sequences/$id/script', params: { id: sequenceId } });
-  }, [sequenceId, navigate]);
 
   const handleSmartRetry = useCallback(async () => {
     setIsRetrying(true);
@@ -1235,6 +1254,44 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   // generationState.currentPhase here would let leftover phase events from
   // past runs hijack the UI back to the 5-stage banner.
   const isGenerationActive = isProcessing;
+  const willEmail = isGenerationActive && !sequence.readyEmailSentAt;
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const startTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isProcessing) {
+      startTimeRef.current = null;
+      setElapsedSeconds(0);
+      return;
+    }
+    startTimeRef.current = sequence.updatedAt.getTime();
+    const tick = () => {
+      const start = startTimeRef.current ?? Date.now();
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [isProcessing, sequenceId, sequence?.updatedAt]);
+
+  const remainingSeconds = useMemo(() => {
+    const phase1Completed = generationState.phases[0]?.status === 'completed';
+    const sceneCount = phase1Completed ? generationState.scenes.length : 0;
+    return Math.max(
+      0,
+      estimateTotalSeconds(
+        sceneCount,
+        sequence?.script ? estimateSceneCount(sequence.script) : undefined,
+        generationState.phases.length
+      ) - elapsedSeconds
+    );
+  }, [
+    elapsedSeconds,
+    generationState.phases,
+    generationState.scenes.length,
+    sequence?.script,
+  ]);
+  const etaMinutes = Math.max(1, Math.round(remainingSeconds / 60));
 
   return (
     <div className="flex h-full flex-col">
@@ -1246,6 +1303,8 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             isProcessing={isProcessing}
             startedAt={sequence.updatedAt}
             script={sequence.script ?? undefined}
+            remainingSeconds={remainingSeconds}
+            willEmail={willEmail}
           />
         </div>
       )}
@@ -1266,12 +1325,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
           </div>
         )}
 
-      {/* Failure summary with smart retry */}
-      {failureSummary?.hasFailed && (
+      {/* Failure summary with smart retry — wait until the run finishes so a
+          single in-flight miss doesn't headline the first result (#1286). */}
+      {failureSummary?.hasFailed && !isGenerationActive && (
         <FailureSummaryBanner
           summary={failureSummary}
           onRetry={() => void handleSmartRetry()}
-          onFullRetry={handleFullRetry}
+          onFullRetry={() => void handleSmartRetry()}
           isRetrying={isRetrying}
         />
       )}
@@ -1305,7 +1365,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
             styleName={styleName}
             modelMissingShotIds={shotsMissingActiveImage}
             modelMissingLabel={activeImageModelLabel}
-            staleShotIds={staleShotIds}
+            staleShotIds={isGenerationActive ? undefined : staleShotIds}
           />
         </div>
 
@@ -1373,6 +1433,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                     : null
                 }
                 staleLabel={
+                  !isGenerationActive &&
                   effectiveTab === 'image-prompt' &&
                   curSelectedShotId &&
                   !regeneratingImages.has(curSelectedShotId)
@@ -1385,8 +1446,15 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                     : null
                 }
                 progressMessage={
-                  generationState.phases.find((p) => p.status === 'active')
-                    ?.phaseName
+                  isGenerationActive ? (
+                    <RenderWaitCopy
+                      etaMinutes={etaMinutes}
+                      willEmail={willEmail}
+                    />
+                  ) : (
+                    generationState.phases.find((p) => p.status === 'active')
+                      ?.phaseName
+                  )
                 }
                 retry={selectedShotRetry}
                 onSelectShot={handleSelectShot}
@@ -1395,6 +1463,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                 onGenerateSceneVariantsStart={(id) =>
                   handleRegenerateStart(id, 'scene-variants')
                 }
+                firstRunActive={isGenerationActive}
               />
             )}
           </div>

@@ -107,12 +107,14 @@ function makeScopedDb(opts: {
   );
   const getTalentByIds = vi.fn(async () => opts.talent ?? []);
   const getLocationsByIds = vi.fn(async () => opts.locations ?? []);
+  const getMemberEmail = vi.fn(async () => 'owner@example.com');
   const stub = {
     sequences: { getForUser, claimWorkflowSlot, update },
     styles: { getById: getStyleById },
     sequenceElements: { list: listElements },
     talent: { getByIds: getTalentByIds },
     locations: { getByIds: getLocationsByIds },
+    teamManagement: { getMemberEmail },
     sequence: () => ({ updateStatus }),
   };
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- minimal ScopedDb stub exposing only what the launcher touches
@@ -220,6 +222,8 @@ describe('triggerStoryboard', () => {
       // Casting identity is snapshotted here too; INPUT suggests neither.
       suggestedTalent: [],
       suggestedLocations: [],
+      ownerEmail: 'owner@example.com',
+      sequenceUrl: expect.stringMatching(/\/sequences\/seq_1\/scenes$/),
     });
   });
 
