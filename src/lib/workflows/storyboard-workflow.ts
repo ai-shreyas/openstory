@@ -32,6 +32,10 @@ import type { WorkflowScopedDb } from '@/lib/db/scoped-workflow';
 import { generateImageWithProvider } from '@/lib/image/image-generation';
 import { uploadPosterToStorage } from '@/lib/image/image-storage';
 import { buildPosterPrompt } from '@/lib/prompts/poster-prompt';
+import {
+  notifySequenceReady,
+  sequenceScenesUrl,
+} from '@/lib/emails/notify-sequence-ready';
 import { getGenerationChannel } from '@/lib/realtime';
 import { validateSequenceAuth } from '@/lib/workflow/auth';
 import { spawnAndAwaitChild } from '@/lib/workflow/await-child';
@@ -101,6 +105,8 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     // state. Non-critical — failures are logged and swallowed so a poster
     // outage cannot block the storyboard. Mirrors the QStash original's
     // try/catch swallow inside the step.
+    let posterUrl: string | null = null;
+
     const posterResult = await step.do('generate-poster', async () => {
       try {
         const prompt = buildPosterPrompt(title, script, styleConfig);
@@ -143,13 +149,17 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
           }
         });
 
-        const posterUrl = storedPosterUrl ?? generatedPosterUrl;
+        const savedPosterUrl = storedPosterUrl ?? generatedPosterUrl;
+        posterUrl = savedPosterUrl;
 
         await step.do('save-poster', async () => {
-          await scopedDb.sequences.update({ id: sequenceId, posterUrl });
+          await scopedDb.sequences.update({
+            id: sequenceId,
+            posterUrl: savedPosterUrl,
+          });
           await getGenerationChannel(sequenceId).emit(
             'generation.poster:ready',
-            { posterUrl }
+            { posterUrl: savedPosterUrl }
           );
         });
 
@@ -231,6 +241,20 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
         sequenceId,
       });
     });
+
+    // After emit-complete: a send retry must not strand the player on processing.
+    await step.do('email-ready', async () => {
+      await notifySequenceReady({
+        scopedDb,
+        sequenceId,
+        ownerEmail: input.ownerEmail,
+        title,
+        sequenceUrl: input.sequenceUrl || sequenceScenesUrl(sequenceId),
+        posterUrl,
+        notify: input.notify,
+        userId,
+      });
+    });
   }
 
   protected override async onFailure({
@@ -261,7 +285,11 @@ export class StoryboardWorkflow extends OpenStoryWorkflowEntrypoint<StoryboardWo
     const sequence = await scopedDb.liveRead.sequences.getForUser({
       sequenceId,
     });
-    if (sequence.status === 'failed') return;
+    // Trailing steps (email-ready) run AFTER mark-completed. A send failure
+    // must not un-complete a successful generation.
+    if (sequence.status === 'failed' || sequence.status === 'completed') {
+      return;
+    }
 
     await scopedDb.sequence(sequenceId).updateStatus('failed', error);
     await getGenerationChannel(sequenceId).emit('generation.failed', {

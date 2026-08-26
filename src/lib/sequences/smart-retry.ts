@@ -51,6 +51,11 @@ import { toShotView } from '@/lib/shots/shot-view';
 import { buildCharacterReferenceImages } from '@/lib/prompts/character-prompt';
 import { triggerWorkflow } from '@/lib/workflow/client';
 import { buildWorkflowLabel } from '@/lib/workflow/labels';
+import { toWorkflowScopedDb } from '@/lib/db/scoped-workflow';
+import {
+  notifySequenceReady,
+  sequenceScenesUrl,
+} from '@/lib/emails/notify-sequence-ready';
 import {
   assertNoActiveStoryboard,
   triggerStoryboard,
@@ -63,6 +68,9 @@ import type {
 } from '@/lib/workflow/types';
 import { buildMusicSceneSummaries } from '@/lib/workflows/music-scene-summaries';
 import { sumShotDurationsSeconds } from '@/lib/sequences/shot-durations';
+import { getLogger } from '@/lib/observability/logger';
+
+const logger = getLogger(['openstory', 'sequences', 'smart-retry']);
 
 function getSceneCharacterReferenceImages(
   allCharacters: Character[],
@@ -476,6 +484,25 @@ export async function executeSmartRetry(context: SmartRetryContext) {
   // status flips back to 'failed' and the failure summary reappears.
   if (sequence.status === 'failed') {
     await context.scopedDb.sequence(sequence.id).updateStatus('completed');
+    const ownerEmail = await context.scopedDb.teamManagement.getMemberEmail(
+      user.id
+    );
+    try {
+      await notifySequenceReady({
+        scopedDb: toWorkflowScopedDb(context.scopedDb),
+        sequenceId: sequence.id,
+        ownerEmail,
+        title: sequence.title,
+        sequenceUrl: sequenceScenesUrl(sequence.id),
+        posterUrl: sequence.posterUrl,
+        userId: user.id,
+      });
+    } catch (err) {
+      logger.error('Ready email failed after smart-retry complete', {
+        err,
+        sequenceId: sequence.id,
+      });
+    }
   }
 
   return { retryType: 'smart' as const, retriedItems: retried };

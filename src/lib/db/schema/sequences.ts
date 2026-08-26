@@ -142,6 +142,11 @@ export const sequences = snakeCase.table(
     // back to the player's empty state until the sequence regenerates.
     posterUrl: text(),
 
+    // Dedup for the "your video is ready" email (#1276). Conceptual key is
+    // `${sequenceId}:ready` — claimed with a CAS write so workflow step
+    // retries and smart-retry re-completes cannot double-send.
+    readyEmailSentAt: integer({ mode: 'timestamp' }),
+
     // Auto-generation flags (set at sequence creation, read by UI for phase display)
     // TB-20260804: DB-Audit: autoGenerateMotion and autoGenerateMusic should not be stored. They should be set when the workflow is initiated.
     autoGenerateMotion: integer({ mode: 'boolean' }).default(false).notNull(),

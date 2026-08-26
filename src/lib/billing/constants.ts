@@ -33,6 +33,14 @@ const SIGNUP_GRANT_USD = 20;
 /** Free credit granted to every new team on signup, in microdollars */
 export const SIGNUP_GRANT_MICROS: Microdollars = usdToMicros(SIGNUP_GRANT_USD);
 
+/**
+ * Rough cost of another default short, used in the ready-email balance line
+ * (#1276). Matches the issue copy ("about ~$13") rather than a live estimate
+ * — pricing may be empty, and the point is "you probably can't fund a second
+ * run", not a precise quote.
+ */
+export const TYPICAL_SHORT_COST_USD = 13;
+
 /** Minimum top-up amount in USD */
 export const MIN_TOPUP_AMOUNT_USD = 10;
 

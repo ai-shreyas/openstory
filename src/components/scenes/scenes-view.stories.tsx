@@ -65,6 +65,7 @@ const mockSequence: Sequence = {
   musicPromptInputHash: null,
   includeMusic: true,
   posterUrl: null,
+  readyEmailSentAt: null,
   autoGenerateMotion: false,
   autoGenerateMusic: false,
   suggestedTalentIds: null,
