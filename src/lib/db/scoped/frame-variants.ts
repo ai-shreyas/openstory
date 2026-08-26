@@ -805,17 +805,27 @@ export function createFrameVariantsMethods(db: Database) {
       frameIds: string[]
     ): Promise<Map<string, FrameVariant>> => {
       if (frameIds.length === 0) return new Map();
-      const rows = await db
-        .select({ frameId: frames.id, version: frameVariants })
-        .from(frames)
-        .innerJoin(
-          frameVariants,
-          eq(frameVariants.id, frames.selectedImageVersionId)
-        )
-        .where(
-          and(inArray(frames.id, frameIds), isNull(frameVariants.discardedAt))
-        );
-      return new Map(rows.map((r) => [r.frameId, r.version]));
+      const byFrame = new Map<string, FrameVariant>();
+      for (let i = 0; i < frameIds.length; i += PREVIEW_BY_FRAMES_BATCH) {
+        const rows = await db
+          .select({ frameId: frames.id, version: frameVariants })
+          .from(frames)
+          .innerJoin(
+            frameVariants,
+            eq(frameVariants.id, frames.selectedImageVersionId)
+          )
+          .where(
+            and(
+              inArray(
+                frames.id,
+                frameIds.slice(i, i + PREVIEW_BY_FRAMES_BATCH)
+              ),
+              isNull(frameVariants.discardedAt)
+            )
+          );
+        for (const r of rows) byFrame.set(r.frameId, r.version);
+      }
+      return byFrame;
     },
 
     /**
