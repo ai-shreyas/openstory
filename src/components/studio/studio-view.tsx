@@ -3,8 +3,7 @@ import { StudioGallery } from '@/components/studio/studio-gallery';
 import { useAuthGate } from '@/components/auth/auth-gate-provider';
 import { Button } from '@/components/ui/button';
 import { PageContainer } from '@/components/layout/page-container';
-import { PageDescription } from '@/components/typography/page-description';
-import { PageHeader } from '@/components/typography/page-header';
+import { PageIntro } from '@/components/typography/page-intro';
 import { useStudioAssets } from '@/hooks/use-studio-assets';
 import type { StudioActivity, StudioSort } from '@/lib/studio/schema';
 import { Link } from '@tanstack/react-router';
@@ -30,18 +29,12 @@ export function StudioView({ activity, sort, favorites }: StudioViewProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
-        <PageContainer maxWidth="wide">
-          <h1 className="sr-only">
-            {activity === 'video' ? 'Videos' : 'Images'}
-          </h1>
-          <PageHeader>
-            <PageDescription>
-              {activity === 'video'
-                ? 'Make or edit short clips with any video model.'
-                : 'Make or edit images with any image model.'}
-            </PageDescription>
-          </PageHeader>
-
+        <PageIntro title={activity === 'video' ? 'Videos' : 'Images'}>
+          {activity === 'video'
+            ? 'Make or edit short clips with any video model.'
+            : 'Make or edit images with any image model.'}
+        </PageIntro>
+        <PageContainer maxWidth="wide" padding="none" className="pb-8">
           <div className="flex flex-wrap items-center gap-2">
             <Button
               asChild

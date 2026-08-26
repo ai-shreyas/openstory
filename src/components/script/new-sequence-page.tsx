@@ -1,6 +1,7 @@
 import { BillingGateDialog } from '@/components/billing/billing-gate-dialog';
 import { OpenStoryLogo } from '@/components/icons/openstory-logo';
 import { PageContainer } from '@/components/layout/page-container';
+import { PageIntro } from '@/components/typography/page-intro';
 import { ScriptView } from '@/components/script/script-view';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useBillingGate } from '@/hooks/use-billing-gate';
@@ -227,16 +228,20 @@ export function NewSequencePage({
     );
   }
 
-  // Signed-in: one-liner + full-height script box (no logo).
-  // Logged-out: logo + tagline + composer.
+  // Signed-in: same left one-liner as Sequences / Images / Models, then the
+  // script box. Logged-out: logo + centered tagline + composer.
   if (user) {
     return (
-      <div className="h-full">
+      <div className="flex h-full flex-col overflow-hidden">
         {billingGate}
-        <PageContainer maxWidth="narrow" fullHeight className="space-y-4">
-          <p className="shrink-0 text-center text-sm text-muted-foreground text-pretty">
-            {SITE_CONFIG.taglineSub}
-          </p>
+        <PageIntro title={SITE_CONFIG.tagline}>
+          {SITE_CONFIG.taglineSub}
+        </PageIntro>
+        <PageContainer
+          maxWidth="narrow"
+          padding="none"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
           <div className="flex min-h-0 flex-1 flex-col">
             <ScriptView
               key={from ? `copy:${from}` : composerKey}
