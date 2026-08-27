@@ -318,6 +318,9 @@ export const getBillingBalanceFn = createServerFn({ method: 'GET' })
         amountUsd: settings.autoTopUpAmountMicros
           ? microsToUsd(micros(settings.autoTopUpAmountMicros))
           : null,
+        lastFailure: settings.autoTopUpFailedAt
+          ? { at: new Date(settings.autoTopUpFailedAt).toISOString() }
+          : null,
       },
       hasPaymentMethod: !!settings.stripeCustomerId,
     };

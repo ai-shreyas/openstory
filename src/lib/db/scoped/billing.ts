@@ -6,6 +6,7 @@
 
 import {
   AUTO_TOPUP_COOLDOWN_MS,
+  AUTO_TOPUP_DECLINE_COOLDOWN_MS,
   calculateExpiryDate,
   isStripeEnabled,
   MIN_TOPUP_AMOUNT_MICROS,
@@ -74,6 +75,22 @@ async function emitFundsUpdated(opts: {
 }
 
 const logger = getLogger(['openstory', 'db', 'billing']);
+
+/**
+ * Duck-type Stripe card errors. This module is in the client graph via
+ * scoped-db middleware, so a static `stripe` import would ship the Node
+ * SDK to the browser (#1253).
+ */
+function stripeDeclineCode(err: unknown): string | null {
+  if (typeof err !== 'object' || err === null || !('type' in err)) return null;
+  if (err.type !== 'StripeCardError' && err.type !== 'card_error') return null;
+  const declineCode =
+    'decline_code' in err && typeof err.decline_code === 'string'
+      ? err.decline_code
+      : null;
+  const code = 'code' in err && typeof err.code === 'string' ? err.code : null;
+  return declineCode ?? code ?? 'card_declined';
+}
 
 type TryDebitResult =
   | {
@@ -298,6 +315,29 @@ export function createBillingMethods(
     });
   }
 
+  async function clearAutoTopUpFailure(): Promise<void> {
+    await db
+      .update(teamBillingSettings)
+      .set({
+        autoTopUpFailedAt: null,
+        autoTopUpDeclineCode: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(teamBillingSettings.teamId, teamId));
+  }
+
+  async function recordAutoTopUpFailure(declineCode: string): Promise<void> {
+    await db
+      .update(teamBillingSettings)
+      .set({
+        autoTopUpFailedAt: new Date(),
+        autoTopUpDeclineCode: declineCode,
+        updatedAt: new Date(),
+      })
+      .where(eq(teamBillingSettings.teamId, teamId));
+    await emitTeamFunds({ amountMicros: ZERO_MICROS });
+  }
+
   async function addCredits(
     amountMicros: Microdollars,
     opts: {
@@ -389,6 +429,12 @@ export function createBillingMethods(
       transactionId,
       type: txType,
     });
+
+    // A successful card charge (checkout, saved-card purchase, or
+    // auto-top-up) is the signal that the payment method works again.
+    if (txType === 'credit_purchase') {
+      await clearAutoTopUpFailure();
+    }
 
     return { newBalance, transactionId };
   }
@@ -1173,6 +1219,8 @@ export function createBillingMethods(
         autoTopUpEnabled: settings.enabled,
         autoTopUpThresholdMicros: settings.thresholdMicros,
         autoTopUpAmountMicros: settings.amountMicros,
+        autoTopUpFailedAt: null,
+        autoTopUpDeclineCode: null,
       })
       .onConflictDoUpdate({
         target: teamBillingSettings.teamId,
@@ -1184,6 +1232,8 @@ export function createBillingMethods(
           ...(settings.amountMicros !== undefined && {
             autoTopUpAmountMicros: settings.amountMicros,
           }),
+          autoTopUpFailedAt: null,
+          autoTopUpDeclineCode: null,
           updatedAt: new Date(),
         },
       });
@@ -1210,6 +1260,19 @@ export function createBillingMethods(
     // threshold while the pill shows available below it.
     const { available } = await read.getAvailable();
     if (available > settings.autoTopUpThresholdMicros) {
+      return;
+    }
+
+    if (
+      settings.autoTopUpFailedAt &&
+      Date.now() - settings.autoTopUpFailedAt.getTime() <
+        AUTO_TOPUP_DECLINE_COOLDOWN_MS
+    ) {
+      logger.debug('Auto top-up skipped: decline cooldown', {
+        teamId,
+        declineCode: settings.autoTopUpDeclineCode,
+        failedAt: settings.autoTopUpFailedAt,
+      });
       return;
     }
 
@@ -1271,33 +1334,49 @@ export function createBillingMethods(
         ? defaultPaymentMethod
         : defaultPaymentMethod.id;
 
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency: 'usd',
-      customer: settings.stripeCustomerId,
-      payment_method: paymentMethodId,
-      off_session: true,
-      confirm: true,
-      expand: ['latest_charge'],
-      // userId is required by stripeWebhookMiddleware — without it every
-      // payment_intent.* webhook for this charge is rejected with a 400.
-      metadata: {
-        teamId,
-        userId,
-        type: 'auto_top_up',
-      },
-    });
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: amountCents,
+        currency: 'usd',
+        customer: settings.stripeCustomerId,
+        payment_method: paymentMethodId,
+        off_session: true,
+        confirm: true,
+        expand: ['latest_charge'],
+        // userId is required by stripeWebhookMiddleware — without it every
+        // payment_intent.* webhook for this charge is rejected with a 400.
+        metadata: {
+          teamId,
+          userId,
+          type: 'auto_top_up',
+        },
+      });
+    } catch (err) {
+      const declineCode = stripeDeclineCode(err);
+      if (declineCode) {
+        logger.error('Auto top-up declined', {
+          teamId,
+          declineCode,
+          amountCents,
+        });
+        await recordAutoTopUpFailure(declineCode);
+        return;
+      }
+      throw err;
+    }
 
     if (paymentIntent.status !== 'succeeded') {
       // Declines and SCA (`requires_action`) are the common off-session
-      // outcomes. Nothing downstream retries, so this is the only record that
-      // auto-top-up has stopped working for this team.
+      // outcomes. Record a cooldown so the next debit/capture does not
+      // fire another PaymentIntent at the same card (#1334).
       logger.error('Auto top-up payment did not succeed', {
         teamId,
         status: paymentIntent.status,
         amountCents,
         stripePaymentIntentId: paymentIntent.id,
       });
+      await recordAutoTopUpFailure(paymentIntent.status);
       return;
     }
 
@@ -1432,6 +1511,7 @@ export function createBillingMethods(
     ...read,
     addCredits,
     saveStripeCustomerId,
+    clearAutoTopUpFailure,
     deductCredits,
     tryDeductCredits,
     createReservation,
