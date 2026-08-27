@@ -357,10 +357,10 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute top-2 right-2 z-10 h-8 w-8 bg-black/50 text-white hover:bg-black/70"
+                  className="absolute top-2 right-2 z-10 h-11 w-11 bg-black/50 text-white hover:bg-black/70 md:h-8 md:w-8"
                   aria-label="Share image"
                 >
-                  <Share2 className="h-4 w-4" />
+                  <Share2 className="h-5 w-5 md:h-4 md:w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -387,17 +387,16 @@ export const ScenePlayer: React.FC<ScenePlayerProps> = ({
             className
           )}
         >
-          {/* Share dropdown */}
           {(currentShot.image?.url || currentShot.video?.url) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute top-2 right-2 z-10 h-8 w-8 bg-black/50 text-white hover:bg-black/70"
+                  className="absolute top-2 right-2 z-10 h-11 w-11 bg-black/50 text-white hover:bg-black/70 md:h-8 md:w-8"
                   aria-label="Share"
                 >
-                  <Share2 className="h-4 w-4" />
+                  <Share2 className="h-5 w-5 md:h-4 md:w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

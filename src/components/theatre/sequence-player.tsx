@@ -41,6 +41,8 @@ import { cn } from '@/lib/utils';
 import { usePostHog } from '@posthog/react';
 import {
   AlertCircle,
+  Maximize,
+  Minimize,
   Music,
   Pause,
   Play,
@@ -97,6 +99,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
   sequenceId,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<SequencePlayerEngine | null>(null);
   const posthog = usePostHog();
   const readyKeyRef = useRef<string | null>(null);
@@ -334,6 +337,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
 
   return (
     <div
+      ref={containerRef}
       data-testid="sequence-player"
       data-state={meta ? 'ready' : 'loading'}
       className={cn(
@@ -415,6 +419,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({
           onSeek={seek}
           onVolumeChange={setVolume}
           onToggleMute={() => setMuted((m) => !m)}
+          containerRef={containerRef}
         />
       )}
     </div>
@@ -432,6 +437,7 @@ type PlayerControlsProps = {
   onSeek: (seconds: number) => void;
   onVolumeChange: (v: number) => void;
   onToggleMute: () => void;
+  containerRef: React.RefObject<HTMLElement | null>;
 };
 
 const PlayerControls: React.FC<PlayerControlsProps> = ({
@@ -445,38 +451,51 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   onSeek,
   onVolumeChange,
   onToggleMute,
+  containerRef,
 }) => {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenEnabled, setFullscreenEnabled] = useState(false);
+
+  useEffect(() => {
+    setFullscreenEnabled(document.fullscreenEnabled);
+    const sync = () =>
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, [containerRef]);
 
   return (
     <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 bg-gradient-to-t from-black/80 to-transparent p-3">
       <button
         type="button"
         aria-label="Seek"
-        className="group relative h-2 cursor-pointer rounded-full bg-white/20"
+        className="group relative flex min-h-11 cursor-pointer items-center md:h-2 md:min-h-0"
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const fraction = (e.clientX - rect.left) / rect.width;
           onSeek(fraction * duration);
         }}
       >
-        <div
-          className="h-full rounded-full bg-white transition-[width] duration-75"
-          style={{ width: `${progress}%` }}
-        />
+        <div className="relative h-3 w-full rounded-full bg-white/20 md:h-2">
+          <div
+            className="h-full rounded-full bg-white transition-[width] duration-75"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
       </button>
       <div className="flex items-center gap-3 text-white">
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 text-white hover:bg-white/10 hover:text-white"
+          className="h-11 w-11 text-white hover:bg-white/10 hover:text-white md:h-8 md:w-8"
           onClick={onTogglePlay}
           aria-label={playing ? 'Pause' : 'Play'}
         >
           {playing ? (
-            <Pause className="h-4 w-4" />
+            <Pause className="h-5 w-5 md:h-4 md:w-4" />
           ) : (
-            <Play className="h-4 w-4" />
+            <Play className="h-5 w-5 md:h-4 md:w-4" />
           )}
         </Button>
         <span className="text-xs tabular-nums">
@@ -488,16 +507,18 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-white hover:bg-white/10 hover:text-white"
+              className="h-11 w-11 text-white hover:bg-white/10 hover:text-white md:h-8 md:w-8"
               onClick={onToggleMute}
               aria-label={muted ? 'Unmute' : 'Mute'}
             >
               {muted ? (
-                <VolumeX className="h-4 w-4" />
+                <VolumeX className="h-5 w-5 md:h-4 md:w-4" />
               ) : (
-                <Volume2 className="h-4 w-4" />
+                <Volume2 className="h-5 w-5 md:h-4 md:w-4" />
               )}
             </Button>
+            {/* iOS/Android hardware volume owns loudness; a desktop-only range
+                just crowds the play/time/fullscreen row. */}
             <input
               type="range"
               min={0}
@@ -505,10 +526,33 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
               step={0.01}
               value={muted ? 0 : volume}
               onChange={(e) => onVolumeChange(Number(e.target.value))}
-              className="h-1 w-20 accent-white"
+              className="hidden h-1 w-20 accent-white md:block"
               aria-label="Volume"
             />
           </div>
+        )}
+        {fullscreenEnabled && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 text-white hover:bg-white/10 hover:text-white md:h-8 md:w-8"
+            onClick={() => {
+              const el = containerRef.current;
+              if (!el) return;
+              if (document.fullscreenElement === el) {
+                void document.exitFullscreen();
+                return;
+              }
+              void el.requestFullscreen().catch(() => undefined);
+            }}
+            aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+          >
+            {isFullscreen ? (
+              <Minimize className="h-5 w-5 md:h-4 md:w-4" />
+            ) : (
+              <Maximize className="h-5 w-5 md:h-4 md:w-4" />
+            )}
+          </Button>
         )}
       </div>
     </div>
@@ -526,7 +570,7 @@ const MusicToggle: React.FC<{
         variant="ghost"
         size="icon"
         className={cn(
-          'h-8 w-8 text-white hover:bg-white/10 hover:text-white',
+          'h-11 w-11 text-white hover:bg-white/10 hover:text-white md:h-8 md:w-8',
           className
         )}
         onClick={onToggle}
@@ -534,7 +578,7 @@ const MusicToggle: React.FC<{
         aria-label={enabled ? 'Turn music off' : 'Turn music on'}
       >
         <span className="relative inline-flex">
-          <Music className="h-4 w-4" />
+          <Music className="h-5 w-5 md:h-4 md:w-4" />
           {!enabled && (
             <span
               aria-hidden
