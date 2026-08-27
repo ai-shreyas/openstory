@@ -194,7 +194,13 @@ testWithUser.describe('Variant Selection', () => {
 
     // Variants moved from a tab to a dialog opened from the canvas image (#986):
     // select the shot, then open the variants dialog from the starting frame.
-    await shotThumbnail.click();
+    // The list item is a real <a href> (#1339), so the click lands whether or
+    // not React has hydrated; selection is URL state, so gate on `?shot=<id>`
+    // rather than on the SSR-visible thumbnail.
+    await page.getByRole('link', { name: 'Scene 1' }).click();
+    await expect(page).toHaveURL(new RegExp(`shot=${testShot.id}`), {
+      timeout: 15_000,
+    });
     const variantsButton = page.getByRole('button', {
       name: 'Frame variants',
     });
