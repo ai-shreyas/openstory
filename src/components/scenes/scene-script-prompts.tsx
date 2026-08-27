@@ -1043,10 +1043,12 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         motionPrompt: mp,
         characterTags,
         description: sceneDescription,
+        generateAudio,
       },
       effectiveMotionModel
     );
   }, [
+    generateAudio,
     editedMotionPrompt,
     rawMotionPrompt,
     shotMotionPrompt,
@@ -1146,6 +1148,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           motionPrompt: mp,
           characterTags,
           description: sceneDescription,
+          generateAudio,
         },
         modelKey
       );

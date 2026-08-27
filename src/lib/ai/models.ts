@@ -78,6 +78,19 @@ export const IMAGE_TO_VIDEO_MODELS = {
     maxPromptLength: 2500,
     performance: { estimatedGenerationTime: 15, quality: 'best' as const },
   },
+  minimax_h3_max: {
+    id: 'minimax/h3-max/image-to-video',
+    name: 'MiniMax H3 Max',
+    vendor: 'MiniMax',
+    license: 'proprietary' as const,
+    qualityRank: 4,
+    // Always generates audio (lip-synced dialogue, ambience, score) with no
+    // API switch — the schema has no generate_audio, so the builder must
+    // direct it in-prompt. See buildMinimaxH3Prompt.
+    supportsAudio: true,
+    maxPromptLength: 2500,
+    performance: { estimatedGenerationTime: 15, quality: 'best' as const },
+  },
   seedance_v2: {
     id: 'bytedance/seedance-2.0/enterprise/v2/image-to-video',
     name: 'Seedance 2.0',
