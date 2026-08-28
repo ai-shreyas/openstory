@@ -90,7 +90,7 @@ The AI model for generating scene images. You can select **multiple image models
 | FLUX.2 Dev                 | Black Forest Labs | Open source, 32B open weights                        |
 | Qwen Image 2 Pro           | Alibaba           | Apache 2.0, native 2K, text rendering                |
 | HiDream I1                 | HiDream           | MIT licensed, 17B parameters                         |
-| Seedream 5                 | ByteDance         | Unified generation and editing                       |
+| Seedream 5.0 Pro           | ByteDance         | Flagship generation and editing                      |
 
 ### Motion Model
 
@@ -103,7 +103,7 @@ The AI model for image-to-video animation. Toggle **Auto-generate motion** to au
 | Kling v3 Pro       | Kling      | ~20s                         |
 | Grok Imagine Video | SpaceXAI   | ~20s                         |
 | MiniMax Hailuo 02  | MiniMax    | ~15s                         |
-| Seedance 2.0       | ByteDance  | ~15s (default; native audio) |
+| Seedance 2.0       | ByteDance  | ~20s (default; native audio) |
 
 ### Music Model
 

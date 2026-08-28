@@ -61,6 +61,8 @@ import {
   DEFAULT_VIDEO_MODEL,
   IMAGE_MODELS,
   IMAGE_TO_VIDEO_MODELS,
+  getBytePlusImageModelId,
+  getBytePlusVideoModelId,
   getCompatibleModel,
   safeImageToVideoModel,
   safeTextToImageModel,
@@ -77,8 +79,12 @@ import {
   DEFAULT_ASPECT_RATIO,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import { getMediaRoutesFn } from '@/functions/media-routes';
 import { getStorageDomainFn } from '@/functions/storage-config';
 import {
+  boundPromptImages,
+  imageUrlsFromFalInput,
+  imageUrlsFromPromptParts,
   OptimisedPromptPanel,
   promptFromFalInput,
   type OptimisedPromptPreview,
@@ -90,7 +96,9 @@ import {
 } from '@/lib/ai/content-rejection';
 import { isNativeGrokVideoModel } from '@/lib/ai/grok-native';
 import { buildImageRequest } from '@/lib/image/build-image-request';
+import { buildBytePlusImageRequest } from '@/lib/image/build-byteplus-image-request';
 import { buildGrokVideoRequest } from '@/lib/motion/build-grok-video-request';
+import { buildBytePlusVideoRequest } from '@/lib/motion/build-byteplus-video-request';
 import { buildMotionRequest } from '@/lib/motion/build-model-input';
 import {
   buildMotionReferenceImages,
@@ -1104,6 +1112,15 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   });
   const storageDomain = storageConfig?.storageDomain ?? null;
 
+  // Which media route the platform is on (#1157) — decides whether the request
+  // preview below shows a fal body or an Ark one.
+  const { data: mediaRoutes } = useQuery({
+    queryKey: ['media-routes'],
+    queryFn: () => getMediaRoutesFn(),
+    staleTime: Infinity,
+  });
+  const byteplusEnabled = mediaRoutes?.byteplusEnabled ?? false;
+
   // Mirror of toCdnUrl for the client: absolutize only when the CDN domain
   // is configured, so prod previews show exactly what fal receives.
   const absolutizeUrl = useCallback(
@@ -1179,6 +1196,40 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           json: JSON.stringify(request.input, null, 2),
           promptLength: prompt.length,
           maxPromptLength: config.maxPromptLength,
+          images: boundPromptImages(
+            imageUrlsFromPromptParts(request.input.prompt),
+            (position) => `<IMAGE_${position - 1}>`
+          ),
+        };
+      }
+      if (byteplusEnabled && getBytePlusVideoModelId(modelKey) !== undefined) {
+        const ark = buildBytePlusVideoRequest(
+          {
+            prompt: modelPrompt,
+            imageUrl,
+            duration,
+            aspectRatio,
+            generateAudio: videoModelSupportsAudio(modelKey)
+              ? generateAudio
+              : undefined,
+            referenceImages,
+          },
+          modelKey
+        );
+        const { modelId, ...body } = ark;
+        const textPart = ark.prompt.find((part) => part.type === 'text');
+        const prompt = textPart?.content ?? modelPrompt;
+        return {
+          modelName: config.name,
+          endpointId: modelId,
+          prompt,
+          json: JSON.stringify(body, null, 2),
+          promptLength: prompt.length,
+          maxPromptLength: config.maxPromptLength,
+          images: boundPromptImages(
+            imageUrlsFromPromptParts(ark.prompt),
+            (position) => `@Image${position}`
+          ),
         };
       }
       const request = buildMotionRequest(
@@ -1201,6 +1252,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         json: JSON.stringify(request.input, null, 2),
         promptLength: modelPrompt.length,
         maxPromptLength: config.maxPromptLength,
+        images: boundPromptImages(
+          imageUrlsFromFalInput(request.input),
+          (position) => `@Image${position}`
+        ),
       };
     } catch {
       return null;
@@ -1219,6 +1274,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     aspectRatio,
     generateAudio,
     absolutizeUrl,
+    byteplusEnabled,
   ]);
 
   // Exact fal request for the *selected* image model — same reference
@@ -1248,7 +1304,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           referenceImages,
           config.maxPromptLength
         );
-      const request = buildImageRequest({
+      const buildParams = {
         model: modelKey,
         prompt: enhancedPrompt,
         imageSize: aspectRatio
@@ -1256,7 +1312,24 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           : undefined,
         numImages: 1,
         referenceImageUrls: referenceUrls,
-      });
+      };
+      if (byteplusEnabled && getBytePlusImageModelId(modelKey) !== undefined) {
+        const { modelId, ...body } = buildBytePlusImageRequest(buildParams);
+        return {
+          modelName: config.name,
+          endpointId: modelId,
+          prompt: enhancedPrompt,
+          json: JSON.stringify(body, null, 2),
+          promptLength: enhancedPrompt.length,
+          maxPromptLength: config.maxPromptLength,
+          images: boundPromptImages(
+            referenceUrls,
+            (position) => `Image ${position}`
+          ),
+        };
+      }
+      const request = buildImageRequest(buildParams);
+      const falImageUrls = imageUrlsFromFalInput(request.input);
       return {
         modelName: config.name,
         endpointId: request.endpointId,
@@ -1264,6 +1337,10 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
         json: JSON.stringify(request.input, null, 2),
         promptLength: enhancedPrompt.length,
         maxPromptLength: config.maxPromptLength,
+        images: boundPromptImages(
+          falImageUrls.length > 0 ? falImageUrls : referenceUrls,
+          (position) => `Image ${position}`
+        ),
       };
     } catch {
       return null;
@@ -1279,6 +1356,7 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
     mentionLocations,
     aspectRatio,
     absolutizeUrl,
+    byteplusEnabled,
   ]);
 
   // Has the *currently-selected* video model produced a video for this scene —
