@@ -75,6 +75,7 @@ import {
   resolveVideoModel,
 } from '@/lib/ai/resolve-asset-models';
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
+import { isSetImageOffered } from '@/lib/shots/set-image-offer';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
 import type { ShotView } from '@/lib/shots/shot-view';
 import { analyzeLoadedFailures } from '@/lib/failures/failure-analysis';
@@ -223,7 +224,11 @@ function removeAllFromSet(prev: Set<string>, ids: string[]): Set<string> {
 }
 
 function isTerminalStatus(status: string | null): boolean {
-  return status === 'completed' || status === 'failed';
+  // 'cancelled' (#1108): a user cancel is terminal — it must clear the
+  // regenerating spinner like completed/failed do.
+  return (
+    status === 'completed' || status === 'failed' || status === 'cancelled'
+  );
 }
 
 export const ScenesView: React.FC<ScenesViewProps> = ({
@@ -731,23 +736,15 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const scriptScene =
     selectedScenes.length === 1 ? selectedScenes[0] : undefined;
 
-  // Batched staleness for the in-focus scene's shots (#1077): feeds the scene
-  // panel's stale-shot summary, the left-rail dots and the canvas chip, and
-  // primes the per-shot staleness cache. `scriptScene` is the shot's own scene
-  // at shot scope, so this covers both scopes.
+  // Scene batch feeds the in-focus summary; sequence batch feeds the left
+  // rail so unselected shots (including other scenes) still get amber dots.
   const { data: sceneStaleness, isError: sceneStalenessFailed } =
     useSceneShotStaleness({
       sequenceId,
       sceneId: scriptScene?.id,
     });
-  // Sequence scope has no focused scene — its summary covers every shot.
-  // Gated so the whole-sequence hash recompute only runs while that panel
-  // is actually showing.
   const { data: sequenceStaleness, isError: sequenceStalenessFailed } =
-    useSequenceShotStaleness({
-      sequenceId,
-      enabled: scope === 'sequence',
-    });
+    useSequenceShotStaleness({ sequenceId });
   const scriptSceneShots = useMemo(
     () =>
       scriptScene && shots
@@ -765,15 +762,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   const scopeShots = scope === 'sequence' ? shots : scriptSceneShots;
   const staleShotIds = useMemo(() => {
     const set = new Set<string>();
-    for (const [shotId, staleness] of Object.entries(scopeStaleness ?? {})) {
-      const isStale =
-        effectiveTab === 'image-prompt'
-          ? staleness.thumbnail === 'stale'
-          : shotIsStale(staleness);
-      if (isStale) set.add(shotId);
+    // Sequence-wide first so every rail thumbnail can show a dot; the
+    // in-focus scene batch overwrites the same keys when it arrives.
+    const merged = { ...sequenceStaleness, ...sceneStaleness };
+    for (const [shotId, staleness] of Object.entries(merged)) {
+      if (shotIsStale(staleness)) set.add(shotId);
     }
     return set;
-  }, [effectiveTab, scopeStaleness]);
+  }, [sequenceStaleness, sceneStaleness]);
 
   // Model identity lives on the version that produced the asset (#1066), so the
   // tabs target whatever the selected shot's selected image/video version was
@@ -989,10 +985,18 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         );
         // Same rule as the inspector Set Image button: only when the dropdown
         // model is not the one that produced the current primary still.
+        // Uploads are already current — don't ask to Set Image (that would
+        // revert to an older generation).
         if (
-          variantForSelectedModel?.status === 'completed' &&
-          variantForSelectedModel.url &&
-          effectiveImageModel !== currentImageModel
+          isSetImageOffered({
+            variantCompleted:
+              variantForSelectedModel?.status === 'completed' &&
+              !!variantForSelectedModel.url,
+            currentImageUrl: selectedShot.image?.url,
+            currentKind: selectedShot.image?.kind,
+            currentModel: selectedShot.image?.model,
+            dropdownModel: effectiveImageModel,
+          })
         ) {
           return {
             ...none,
@@ -1233,12 +1237,16 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       videoModel,
       generateAudio,
     }: BatchGenerateMotionArgs) => {
-      // Optimistic: compute eligible shots locally (same filter as backend)
+      // Optimistic: compute eligible shots locally (same filter as backend).
+      // 'cancelled' is user-initiated (#1108 Phase 4): deliberately eligible
+      // for a user-driven batch generate, never auto-retried.
       const eligibleShotIds = (shots ?? [])
         .filter(
           (f) =>
             f.frame.imageStatus === 'completed' &&
-            (f.videoStatus === 'pending' || f.videoStatus === 'failed')
+            (f.videoStatus === 'pending' ||
+              f.videoStatus === 'failed' ||
+              f.videoStatus === 'cancelled')
         )
         .map((f) => f.id);
 
@@ -1368,6 +1376,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
 
   // One prop bag for the desktop sidebar and the phone sheet — same list.
   const sceneListProps: SceneListProps = {
+    sequenceId,
     shots,
     scenes,
     segments,
@@ -1376,6 +1385,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     selection,
     aspectRatio,
     onSelectScene: handleSelectScene,
+    onSelectShot: handleSelectShot,
     onClearSelection: handleClearSelection,
     regeneratingImages,
     regeneratingMotion,

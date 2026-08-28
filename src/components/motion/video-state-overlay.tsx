@@ -7,7 +7,15 @@ import {
 import { cn } from '@/lib/utils';
 import { AlertCircle, Info, Loader2 } from 'lucide-react';
 
-type ShotStatus = 'pending' | 'generating' | 'completed' | 'failed' | null;
+// 'cancelled' (#1108) renders like 'pending': no failure banner, no spinner —
+// a deliberate cancel is neutral, and any previously selected video plays.
+type ShotStatus =
+  | 'pending'
+  | 'generating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | null;
 
 type VideoStateOverlayProps = {
   thumbnailUrl?: string | null;

@@ -66,15 +66,26 @@ function isValidMusicStatus(
   );
 }
 
-// Narrows to the non-null union it actually tests, so it can guard the
-// non-nullable `videoStatus` as well as the nullable `frame.imageStatus`.
-function isValidShotStatus(status: unknown): status is ShotView['videoStatus'] {
+// Narrows to the statuses image emits carry. 'cancelled' (#1108) is
+// deliberately absent HERE: only VIDEO carries it (see isValidVideoStatus) —
+// image cancels settle the frame to completed/pending server-side. This base
+// union is assignable to the nullable `frame.imageStatus`.
+type LiveEmitStatus = 'pending' | 'generating' | 'completed' | 'failed';
+function isValidShotStatus(status: unknown): status is LiveEmitStatus {
   return (
     status === 'pending' ||
     status === 'generating' ||
     status === 'completed' ||
     status === 'failed'
   );
+}
+
+// The video vocabulary includes 'cancelled' (#1108): a second tab's cache
+// must converge on 'cancelled' verbatim, never a transient 'failed'.
+function isValidVideoStatus(
+  status: unknown
+): status is LiveEmitStatus | 'cancelled' {
+  return isValidShotStatus(status) || status === 'cancelled';
 }
 
 /**
@@ -315,17 +326,18 @@ export function updateQueryCacheFromEvent(
                     videoUrl && f.video
                       ? { ...f.video, url: videoUrl }
                       : f.video,
-                  videoStatus: isValidShotStatus(status)
+                  videoStatus: isValidVideoStatus(status)
                     ? status
                     : f.videoStatus,
-                  // Surface the failure reason live (#881) — see image handler.
+                  // Surface the failure/cancel reason live (#881, #1108) —
+                  // see image handler.
                   primaryVideo: f.primaryVideo
                     ? {
                         ...f.primaryVideo,
                         error:
-                          status === 'failed'
+                          status === 'failed' || status === 'cancelled'
                             ? (errorMessage ?? f.primaryVideo.error)
-                            : isValidShotStatus(status)
+                            : isValidVideoStatus(status)
                               ? null
                               : f.primaryVideo.error,
                       }
@@ -338,7 +350,11 @@ export function updateQueryCacheFromEvent(
         // the segment's `selectedVideoVersionId`. Neither the new row nor a
         // first failure's `error` can be synthesized in place, so refetch
         // (#1067).
-        if (status === 'completed' || status === 'failed') {
+        if (
+          status === 'completed' ||
+          status === 'failed' ||
+          status === 'cancelled'
+        ) {
           debouncedInvalidate(
             queryClient,
             shotKeys.list(sequenceId),
@@ -350,8 +366,14 @@ export function updateQueryCacheFromEvent(
       // stay current (#545). Unlike the image handler, refresh on `failed` too:
       // motion-workflow.onFailure writes a `failed` variant row, and the
       // switcher should reflect that terminal state without waiting for a
-      // background refetch.
-      if (status === 'completed' || status === 'failed') {
+      // background refetch — 'cancelled' (#1108) included, or a remote tab's
+      // per-model coverage marker keeps spinning after a cancel until
+      // staleTime lapses, which is exactly what this branch exists to avoid.
+      if (
+        status === 'completed' ||
+        status === 'failed' ||
+        status === 'cancelled'
+      ) {
         debouncedInvalidate(
           queryClient,
           ['sequence-video-variants', sequenceId],
@@ -634,11 +656,30 @@ export function updateQueryCacheFromEvent(
       // Refresh the character list so the cast grid (TalentView) and the
       // per-scene cast (SceneCastTab) populate live instead of only after a
       // page refresh. Debounced because character-sheet:progress fires
-      // generating + completed for every character.
+      // generating + completed for every character. History keys too — the
+      // version strip is a separate query from the list.
       debouncedInvalidate(
         queryClient,
         sequenceCharacterKeys.list(sequenceId),
         `sequence-characters:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        characterSheetVariantKeys.all,
+        `character-sheet-variants:${sequenceId}`
+      );
+      break;
+
+    case 'generation.location-sheet:progress':
+      debouncedInvalidate(
+        queryClient,
+        sequenceLocationKeys.list(sequenceId),
+        `sequence-locations:${sequenceId}`
+      );
+      debouncedInvalidate(
+        queryClient,
+        locationSheetVariantKeys.all,
+        `location-sheet-variants:${sequenceId}`
       );
       break;
 

@@ -927,6 +927,11 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             `[MotionWorkflow:cf] Shot ${shotId} was deleted, skipping final update`
           );
         }
+        if (outcome.status === 'cancelled') {
+          logger.info(
+            `[MotionWorkflow:cf] version ${videoVersionId} was cancelled mid-render; discarding result`
+          );
+        }
       });
 
       // Provenance (#1180). Recorded even when the shot was deleted mid-render:

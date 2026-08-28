@@ -38,14 +38,22 @@ function asOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
-type ShotStatus = 'pending' | 'generating' | 'completed' | 'failed';
+// 'cancelled' (#1108): a video cancel is terminal — storing it clears any
+// 'generating' overlay like the other terminal statuses do.
+type ShotStatus =
+  | 'pending'
+  | 'generating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 function asShotStatus(value: unknown): ShotStatus | undefined {
   if (
     value === 'pending' ||
     value === 'generating' ||
     value === 'completed' ||
-    value === 'failed'
+    value === 'failed' ||
+    value === 'cancelled'
   ) {
     return value;
   }
@@ -358,6 +366,7 @@ export function useGenerationStream(
       'generation.talent:unmatched',
       'generation.location:matched',
       'generation.character-sheet:progress',
+      'generation.location-sheet:progress',
       'generation.poster:ready',
       'generation.style:ready',
       'generation.preview:replaced',
