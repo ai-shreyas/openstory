@@ -109,6 +109,7 @@ import {
   toastDragImportCorsError,
 } from '@/lib/utils/drag-images';
 import { cn } from '@/lib/utils';
+import { usePostHog } from '@posthog/react';
 import {
   ArrowUp,
   AudioLines,
@@ -261,7 +262,8 @@ function AddTile({
 }
 
 export function StudioComposer({ activity }: StudioComposerProps) {
-  const { requireAuth } = useAuthGate();
+  const { requireAuth, isAuthenticated } = useAuthGate();
+  const posthog = usePostHog();
   const { showGate } = useFalBillingGate();
   const { pricing } = useFalPricing();
   const create = useCreateStudioAssets();
@@ -281,6 +283,7 @@ export function StudioComposer({ activity }: StudioComposerProps) {
   const [generateAudio, setGenerateAudio] = useState(true);
   const [lastShuffled, setLastShuffled] = useState<string | null>(null);
   const [replaceConfirm, setReplaceConfirm] = useState(false);
+  const [emptyPrompt, setEmptyPrompt] = useState(false);
 
   // Reference is the default: it is what the tiles, @ list and picker are for.
   const [mode, setMode] = useState<StudioVideoMode>('reference');
@@ -356,7 +359,10 @@ export function StudioComposer({ activity }: StudioComposerProps) {
     (effectiveMode === 'reference' &&
       references.length + videoRefs.length > 0) ||
     (effectiveMode === 'frames' && startFrame !== null);
-  const canSubmit = trimmed.length > 0 && modeReady && uploading === 0;
+  // Generate stays live on an empty prompt (#1393) — an empty click is the
+  // cheapest place to open the login dialog or offer a random prompt. Only
+  // an unready mode or an in-flight upload actually disables it.
+  const canSubmit = modeReady && uploading === 0;
 
   // --- references -----------------------------------------------------------
 
@@ -581,7 +587,11 @@ export function StudioComposer({ activity }: StudioComposerProps) {
     (effectiveMode === 'reference' && draftSources.length > 0) ||
     (effectiveMode === 'frames' && startFrame !== null);
 
-  const applyDraft = () => {
+  const applyDraft = (options?: {
+    /** Intent to write from when the composer is empty. */
+    seed?: string;
+    onDrafted?: (next: string) => void;
+  }) => {
     draft.mutate(
       {
         activity,
@@ -591,18 +601,37 @@ export function StudioComposer({ activity }: StudioComposerProps) {
             : [],
         startImageUrl: mode === 'frames' ? startFrame?.url : undefined,
         endImageUrl: mode === 'frames' ? endFrame?.url : undefined,
-        currentPrompt: trimmed || undefined,
+        currentPrompt: trimmed || options?.seed,
       },
       {
         onSuccess: ({ prompt: next }) => {
           setPrompt(next);
           setLastShuffled(next);
+          options?.onDrafted?.(next);
         },
         onError: (error) => {
           if (isInsufficientCreditsError(error)) showGate();
         },
       }
     );
+  };
+
+  /**
+   * "Try something random": the draft flow invents the prompt — from whatever
+   * is attached, or from nothing at all. Deliberately NOT seeded from the
+   * Shuffle pool: those are the canned tour prompts, and reusing one here
+   * would hand every "random" user the same dozen shots.
+   *
+   * It stops there. The prompt lands in the composer for the user to read and
+   * edit before they spend anything on generating it.
+   */
+  const generateRandom = () => {
+    posthog.capture('empty_prompt_choice', {
+      surface: 'studio',
+      activity,
+      choice: 'random',
+    });
+    applyDraft({ onDrafted: () => setEmptyPrompt(false) });
   };
 
   /**
@@ -731,6 +760,16 @@ export function StudioComposer({ activity }: StudioComposerProps) {
 
   const submit = () => {
     if (!canSubmit) return;
+    if (trimmed.length === 0) {
+      posthog.capture('empty_prompt_generate_clicked', {
+        surface: 'studio',
+        activity,
+        authenticated: isAuthenticated,
+      });
+      // Logged out: the login dialog is the ask. Logged in: pick a prompt.
+      if (requireAuth()) setEmptyPrompt(true);
+      return;
+    }
     requireAuth(() => {
       create.mutate(buildInput(), {
         onError: (error) => {
@@ -1107,7 +1146,7 @@ export function StudioComposer({ activity }: StudioComposerProps) {
             variant="ghost"
             size="sm"
             className="gap-1.5"
-            onClick={applyDraft}
+            onClick={() => applyDraft()}
             disabled={draft.isPending}
           >
             <Sparkles className="size-3.5" aria-hidden="true" />
@@ -1185,6 +1224,43 @@ export function StudioComposer({ activity }: StudioComposerProps) {
           if (picker) void uploadFiles(files, picker);
         }}
       />
+
+      <AlertDialog open={emptyPrompt} onOpenChange={setEmptyPrompt}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>What should we make?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The prompt is empty. Describe the {isVideo ? 'shot' : 'still'} you
+              want, or we'll write one for you to look over.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() =>
+                posthog.capture('empty_prompt_choice', {
+                  surface: 'studio',
+                  activity,
+                  choice: 'own_prompt',
+                })
+              }
+            >
+              I'll write it
+            </AlertDialogCancel>
+            <AlertDialogAction
+              // Keep the dialog up while the draft streams — closing on click
+              // would leave the click with no visible effect for a second or two.
+              onClick={(event) => {
+                event.preventDefault();
+                generateRandom();
+              }}
+              disabled={draft.isPending}
+            >
+              <Sparkles className="size-3.5" />
+              {draft.isPending ? 'Writing a prompt…' : 'Try something random'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={replaceConfirm} onOpenChange={setReplaceConfirm}>
         <AlertDialogContent>
