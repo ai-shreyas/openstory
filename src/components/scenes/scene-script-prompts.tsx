@@ -400,6 +400,16 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
   const { ref: imagePromptRef, voice: imageVoice } = useEditorDictation();
   const { ref: motionPromptRef, voice: motionVoice } = useEditorDictation();
 
+  // Drop a live take when the shot changes so the previous shot's document
+  // cannot land in the new shot's draft. The buttons remount via `key`.
+  useEffect(() => {
+    imagePromptRef.current?.endDictation();
+    motionPromptRef.current?.endDictation();
+    // Refs are stable; the take must end when the shot id changes, not when
+    // the handle object identity does.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [shot?.id]);
+
   const queryClient = useQueryClient();
   const setImageFromVariant = useSetImageFromVariant();
   const setVideoFromVariant = useSetVideoFromVariant();
@@ -1759,10 +1769,18 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                   label="Copy image prompt"
                 />
                 <VoiceInputButton
+                  key={shot?.id}
                   label="image prompt"
                   size="icon-xs"
                   disabled={isAwaitingVisualPrompt}
                   {...imageVoice}
+                  onStart={() => {
+                    // Treat dictation as a user edit even though the mic
+                    // never focuses the editor (so Escape still hits the button).
+                    const started = imageVoice.onStart();
+                    if (started) imageFocusedRef.current = true;
+                    return started;
+                  }}
                 />
               </div>
             </div>
@@ -2060,10 +2078,17 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
                   label="Copy motion prompt"
                 />
                 <VoiceInputButton
+                  key={shot?.id}
                   label="motion prompt"
                   size="icon-xs"
                   disabled={isAwaitingMotionPrompt}
                   {...motionVoice}
+                  onStart={() => {
+                    // Same as the image mic: Focused means dirty, not DOM focus.
+                    const started = motionVoice.onStart();
+                    if (started) motionFocusedRef.current = true;
+                    return started;
+                  }}
                 />
               </div>
             </div>
