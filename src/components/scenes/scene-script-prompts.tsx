@@ -106,9 +106,11 @@ import {
   CONTENT_REJECTION_USER_TITLE,
   isContentRejectionError,
 } from '@/lib/ai/content-rejection';
+import { isNativeGeminiVideoModel } from '@/lib/ai/gemini-native';
 import { isNativeGrokVideoModel } from '@/lib/ai/grok-native';
 import { buildImageRequest } from '@/lib/image/build-image-request';
 import { buildBytePlusImageRequest } from '@/lib/image/build-byteplus-image-request';
+import { buildGeminiVideoRequest } from '@/lib/motion/build-gemini-video-request';
 import { buildGrokVideoRequest } from '@/lib/motion/build-grok-video-request';
 import { buildBytePlusVideoRequest } from '@/lib/motion/build-byteplus-video-request';
 import { buildMotionRequest } from '@/lib/motion/build-model-input';
@@ -1298,6 +1300,32 @@ export const SceneScriptPrompts: React.FC<SceneScriptPromptsProps> = ({
           images: boundPromptImages(
             imageUrlsFromPromptParts(ark.prompt),
             (position) => `@Image${position}`
+          ),
+        };
+      }
+      if (isNativeGeminiVideoModel(modelKey)) {
+        const request = buildGeminiVideoRequest({
+          prompt: modelPrompt,
+          imageUrl,
+          duration,
+          aspectRatio,
+          referenceImages,
+          model: modelKey,
+        });
+        const textPart = request.input.prompt.find(
+          (part) => part.type === 'text'
+        );
+        const prompt = textPart?.content ?? modelPrompt;
+        return {
+          modelName: config.name,
+          endpointId: request.endpointId,
+          prompt,
+          json: JSON.stringify(request.input, null, 2),
+          promptLength: prompt.length,
+          maxPromptLength: config.maxPromptLength,
+          images: boundPromptImages(
+            imageUrlsFromPromptParts(request.input.prompt),
+            (position) => `<IMAGE_REF_${position - 1}>`
           ),
         };
       }
