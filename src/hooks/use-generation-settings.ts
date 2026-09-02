@@ -26,6 +26,11 @@ import {
   DEFAULT_ASPECT_RATIO,
   type AspectRatio,
 } from '@/lib/constants/aspect-ratios';
+import {
+  DEFAULT_RESOLUTION,
+  isResolution,
+  type Resolution,
+} from '@/lib/constants/resolutions';
 import { useCallback, useEffect, useState } from 'react';
 
 import { getLogger } from '@/lib/observability/logger';
@@ -33,12 +38,17 @@ import { getLogger } from '@/lib/observability/logger';
 const logger = getLogger(['openstory', 'ui', 'use-generation-settings']);
 
 // Bump when product defaults change so prior localStorage snapshots are ignored
-// (v4 → v5: Turbo is the product default).
+// (v4 → v5: Turbo is the product default). Adding a FIELD is not a reason to
+// bump — `loadSettings` falls back per-field, so an older snapshot still loads.
+// Bumping strands e2e's pinned settings (`GENERATION_SETTINGS_KEY` in
+// e2e/fixtures/test-utils.ts mirrors this literal), which silently reverts the
+// recorded pipeline to Turbo defaults and fails as an aimock fixture miss.
 const STORAGE_KEY = 'openstory:generation-settings:v5';
 
 type GenerationSettings = {
   generationMode: GenerationMode;
   aspectRatio: AspectRatio;
+  resolution: Resolution;
   analysisModels: AnalysisModelId[];
   imageModel: TextToImageModel;
   imageModels: TextToImageModel[];
@@ -74,6 +84,7 @@ function withMode(settings: GenerationSettings): GenerationSettings {
 const DEFAULT_SETTINGS: GenerationSettings = withMode({
   generationMode: DEFAULT_GENERATION_MODE,
   aspectRatio: DEFAULT_ASPECT_RATIO,
+  resolution: DEFAULT_RESOLUTION,
   analysisModels: [TURBO_DEFAULT_ANALYSIS],
   imageModel: TURBO_DEFAULT_IMAGE,
   imageModels: [TURBO_DEFAULT_IMAGE],
@@ -216,10 +227,14 @@ function loadSettings(): GenerationSettings {
     const generationMode = isGenerationMode(bag.generationMode)
       ? bag.generationMode
       : DEFAULT_GENERATION_MODE;
+    const resolution = isResolution(bag.resolution)
+      ? bag.resolution
+      : DEFAULT_RESOLUTION;
 
     return withMode({
       generationMode,
       aspectRatio,
+      resolution,
       analysisModels,
       imageModel,
       imageModels,

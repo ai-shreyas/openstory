@@ -1417,6 +1417,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     segmentsError,
     selection,
     aspectRatio,
+    resolution: sequence?.resolution,
     onSelectScene: handleSelectScene,
     onSelectShot: handleSelectShot,
     onClearSelection: handleClearSelection,
@@ -1585,12 +1586,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                   styleId={sequence?.styleId ?? undefined}
                   stylePending={sequence?.styleConfig == null}
                   aspectRatio={aspectRatio}
+                  resolution={sequence?.resolution}
                   analysisModel={sequence?.analysisModel ?? undefined}
                 />
                 <div className="px-4 pb-4">
                   <SceneScriptPrompts
                     shot={selectedShot}
                     sequenceId={sequenceId}
+                    resolution={sequence?.resolution}
                     selectedTab={effectiveTab}
                     visibleTabs={visibleTabs}
                     onTabChange={(tab) => {

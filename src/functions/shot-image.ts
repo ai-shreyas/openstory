@@ -62,6 +62,7 @@ export const generateShotsFn = createServerFn({ method: 'POST' })
           DEFAULT_IMAGE_MODEL
         ),
         aspectRatio: sequence.aspectRatio,
+        resolution: sequence.resolution,
         videoModels: [
           safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL),
         ],
@@ -257,7 +258,10 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
           data.model ?? DEFAULT_IMAGE_MODEL,
           sequence.aspectRatio,
           numImages,
-          { pricing: await getEffectiveFalPricing() }
+          {
+            pricing: await getEffectiveFalPricing(),
+            resolution: sequence.resolution,
+          }
         ),
         {
           model: data.model ?? DEFAULT_IMAGE_MODEL,
@@ -298,6 +302,7 @@ export const generateShotVariantsFn = createServerFn({ method: 'POST' })
       promptVersionId: selectedPrompt?.id ?? null,
       model: data.model,
       aspectRatio: sequence.aspectRatio,
+      resolution: sequence.resolution,
       imageSize: data.imageSize || gridConfig.imageSize,
       numImages,
       seed: data.seed,
@@ -410,7 +415,10 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
           resolveUpscaleModel(sheet.model),
           sequence.aspectRatio,
           1,
-          { pricing: await getEffectiveFalPricing() }
+          {
+            pricing: await getEffectiveFalPricing(),
+            resolution: sequence.resolution,
+          }
         ),
         {
           model: resolveUpscaleModel(sheet.model),
@@ -463,6 +471,7 @@ export const selectShotVariantFn = createServerFn({ method: 'POST' })
       croppedTileUrl: cropResult.url,
       croppedTilePath: cropResult.path,
       aspectRatio: sequence.aspectRatio,
+      resolution: sequence.resolution,
       characterReferences,
       locationReferences,
       // The framing version the upscaled tile derives from (#989) — the upscale

@@ -34,6 +34,7 @@ import { estimateStoryboardPreflightCost } from '@/lib/billing/storyboard-prefli
 import { generateId } from '@/lib/db/id';
 import type { ScopedDb } from '@/lib/db/scoped';
 import { ValidationError } from '@/lib/errors';
+import { DEFAULT_RESOLUTION } from '@/lib/constants/resolutions';
 import {
   AUTO_STYLE_ID,
   type AutoStyleDraft,
@@ -125,6 +126,7 @@ export const createSequences = createServerOnlyFn(
       script,
       styleId,
       aspectRatio,
+      resolution = DEFAULT_RESOLUTION,
       analysisModels: requestedAnalysisModels,
       imageModel: imageModelLegacy,
       imageModels: imageModelsInput,
@@ -244,6 +246,7 @@ export const createSequences = createServerOnlyFn(
       imageModel: primaryImageModel,
       imageModelCount: imageModels.length,
       aspectRatio,
+      resolution,
       autoGenerateMotion,
       videoModels,
       autoGenerateMusic,
@@ -298,6 +301,7 @@ export const createSequences = createServerOnlyFn(
               styleId: boundStyle?.id ?? styleId,
               deferStyleSnapshot: styleSource.kind === 'pending',
               aspectRatio,
+              resolution,
               analysisModel:
                 getAnalysisModelById(modelId)?.id ||
                 resolveModelForCountry(DEFAULT_ANALYSIS_MODEL, country),
@@ -394,6 +398,7 @@ export const createSequences = createServerOnlyFn(
         style_id: styleId,
         automatic_style: styleSource.kind !== 'library',
         aspect_ratio: aspectRatio,
+        resolution,
         sequence_ids: sequenceIds,
         sequence_count: sequenceIds.length,
         analysis_model_count: analysisModels.length,

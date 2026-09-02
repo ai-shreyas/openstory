@@ -97,6 +97,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       sequenceId,
       script,
       aspectRatio,
+      resolution,
       styleConfig: inputStyleConfig,
       pendingAutoStyleId,
       analysisModelId,
@@ -508,6 +509,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
         imageModel,
         imageModelCount: imageModels.length,
         aspectRatio,
+        resolution,
         estimatedSceneCount: scenes.length,
         autoGenerateMotion,
         videoModels: autoGenerateMotion ? videoModels : undefined,
@@ -607,6 +609,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
       imageModel,
       imageModels,
       aspectRatio,
+      resolution,
       sceneSnapshots,
     };
     shotImagesPayload.snapshotInputHash = await computeShotImagesHashFromDto({
@@ -756,6 +759,7 @@ export class AnalyzeScriptWorkflow extends OpenStoryWorkflowEntrypoint<AnalyzeSc
         motionPromptVersionIdsBySceneId: motionPromptVersionIdsBySceneId ?? {},
         videoModel: primaryVideoModel,
         aspectRatio,
+        resolution,
         characters: charactersWithSheets,
         elements: allElements,
       });

@@ -13,7 +13,13 @@
  */
 
 import { IMAGE_TO_VIDEO_MODELS, type ImageToVideoModel } from '@/lib/ai/models';
+import { motionResolutionTokens } from '@/lib/motion/build-model-input';
 import type { AspectRatio } from '@/lib/constants/aspect-ratios';
+import {
+  DEFAULT_RESOLUTION,
+  pickVideoResolution,
+  type Resolution,
+} from '@/lib/constants/resolutions';
 
 const STUDIO_TEXT_TO_VIDEO_ENDPOINTS = {
   grok_imagine_video_1_5: 'xai/grok-imagine-video/v1.5/text-to-video',
@@ -269,13 +275,20 @@ export function renumberStudioReferences(
   );
 }
 
-const STUDIO_VIDEO_RESOLUTION: Partial<Record<ImageToVideoModel, string>> = {
-  grok_imagine_video_1_5: '720p',
-  veo3_1: '1080p',
-  seedance_v2: '720p',
-  seedance_v2_5: '720p',
-  minimax_h3_max: '768P',
-};
+/**
+ * The model's own spelling of a tier, or undefined when it takes none (#1449).
+ * The tokens come from the i2v endpoint's generated schema — the studio T2V
+ * and reference-to-video siblings advertise the same enum, so there is one
+ * source for both routes rather than a hand-kept copy that can drift.
+ */
+export function studioVideoResolution(
+  model: ImageToVideoModel,
+  resolution: Resolution | undefined
+): string | undefined {
+  const options = motionResolutionTokens(IMAGE_TO_VIDEO_MODELS[model].id);
+  if (options.length === 0) return undefined;
+  return pickVideoResolution(options, resolution ?? DEFAULT_RESOLUTION);
+}
 
 export function studioVideoEndpointId(
   model: ImageToVideoModel,
@@ -354,6 +367,7 @@ type StudioVideoInput = {
   model: ImageToVideoModel;
   duration?: number;
   aspectRatio?: AspectRatio;
+  resolution?: Resolution;
   generateAudio?: boolean;
 };
 
@@ -389,7 +403,7 @@ export function buildStudioVideoInput(
     modelOptions.generate_audio = options.generateAudio;
   }
 
-  const resolution = STUDIO_VIDEO_RESOLUTION[model];
+  const resolution = studioVideoResolution(model, options.resolution);
   if (resolution) modelOptions.resolution = resolution;
 
   if (model === 'minimax_h3_max') {

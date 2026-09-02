@@ -309,6 +309,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             renderSegmentId,
             sequenceId: input.sequenceId,
             model,
+            resolution: input.resolution ?? null,
             manifest,
             inputHash,
             status: 'generating',
@@ -592,6 +593,7 @@ export class MotionWorkflow extends OpenStoryWorkflowEntrypoint<MotionWorkflowIn
             fps: input.fps,
             motionBucket: input.motionBucket,
             aspectRatio: input.aspectRatio,
+            ...(input.resolution && { resolution: input.resolution }),
             generateAudio: input.generateAudio,
             // Cast/element reference images (#873) — only Kling v3 Pro emits them.
             referenceImages: input.referenceImages,
