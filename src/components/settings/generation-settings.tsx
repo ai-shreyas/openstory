@@ -23,6 +23,7 @@ import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_MUSIC_MODEL,
   DEFAULT_VIDEO_MODEL,
+  IMAGE_TO_VIDEO_MODELS,
   type AudioModel,
   type ImageToVideoModel,
   type TextToImageModel,
@@ -34,7 +35,8 @@ import {
   availableResolutions,
   resolutionCeilingNote,
 } from '@/lib/ai/resolution-support';
-import { useState, type FC } from 'react';
+import { useMemo, useState, type FC } from 'react';
+import { useViaAvailability } from '@/hooks/use-via-availability';
 import { AspectRatioPills } from './aspect-ratio-pills';
 import { ResolutionPills } from './resolution-pills';
 import { GenerationSettingsTrigger } from './generation-settings-trigger';
@@ -76,6 +78,13 @@ type GenerationSettingsProps = {
   imageModels: TextToImageModel[];
   videoModels: ImageToVideoModel[];
   autoGenerateMotion?: boolean;
+  /**
+   * Generate a still per shot before motion (the frame-based workflow). Off,
+   * the default, renders each shot straight to video from the cast / location
+   * / element sheets. Omit the change handler to hide the control (contexts
+   * that cannot switch mode).
+   */
+  generateStartFrames?: boolean;
   audioModels?: AudioModel[];
   autoGenerateMusic?: boolean;
   onAspectRatioChange: (value: AspectRatio) => void;
@@ -84,6 +93,7 @@ type GenerationSettingsProps = {
   onImageModelsChange: (value: TextToImageModel[]) => void;
   onVideoModelsChange: (value: ImageToVideoModel[]) => void;
   onAutoGenerateMotionChange?: (value: boolean) => void;
+  onGenerateStartFramesChange?: (value: boolean) => void;
   onAudioModelsChange?: (value: AudioModel[]) => void;
   onAutoGenerateMusicChange?: (value: boolean) => void;
   disabled?: boolean;
@@ -121,6 +131,7 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
   imageModels,
   videoModels,
   autoGenerateMotion = true,
+  generateStartFrames = false,
   audioModels,
   autoGenerateMusic = true,
   onAspectRatioChange,
@@ -129,6 +140,7 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
   onImageModelsChange,
   onVideoModelsChange,
   onAutoGenerateMotionChange,
+  onGenerateStartFramesChange,
   onAudioModelsChange,
   onAutoGenerateMusicChange,
   disabled = false,
@@ -151,6 +163,45 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
     imageModels,
     videoModels: autoGenerateMotion ? videoModels : [],
     aspectRatio,
+  };
+
+  // Per-team list from the `_app` loader, so the copy names the models this
+  // team can actually pick — Grok Imagine included when xAI is reachable.
+  const { referenceOnlyModels } = useViaAvailability();
+  const referenceOnlyModelNames = useMemo(
+    () =>
+      new Intl.ListFormat('en', { style: 'long', type: 'disjunction' }).format(
+        referenceOnlyModels.map((m) => IMAGE_TO_VIDEO_MODELS[m].name)
+      ),
+    [referenceOnlyModels]
+  );
+
+  /**
+   * Reference-only renders nothing without motion, and the server rejects
+   * that pair. Turning motion off only *disables* the start-frame toggle,
+   * leaving its value to be submitted — so switch start frames on here instead.
+   */
+  const handleAutoGenerateMotionChange = (next: boolean) => {
+    onAutoGenerateMotionChange?.(next);
+    if (!next && !generateStartFrames) onGenerateStartFramesChange?.(true);
+  };
+
+  /**
+   * Turning start frames OFF narrows the motion list, which can strand a selection
+   * the server would then reject at submit. Drop the models that cannot render
+   * without a start frame here, falling back to the first capable one so the
+   * selection is never empty — the user sees the change while the panel is
+   * open, rather than an error after pressing Generate.
+   */
+  const handleGenerateStartFramesChange = (next: boolean) => {
+    onGenerateStartFramesChange?.(next);
+    if (next) return;
+    const capable = videoModels.filter((m) => referenceOnlyModels.includes(m));
+    if (capable.length === videoModels.length) return;
+    const fallback = referenceOnlyModels[0];
+    onVideoModelsChange(
+      capable.length > 0 ? capable : fallback ? [fallback] : videoModels
+    );
   };
 
   return (
@@ -273,9 +324,26 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
                 id="auto-generate-motion"
                 label="Auto-generate motion"
                 checked={autoGenerateMotion}
-                onChange={onAutoGenerateMotionChange}
+                onChange={handleAutoGenerateMotionChange}
                 disabled={disabled}
               />
+            )}
+            {onGenerateStartFramesChange && (
+              <AutoToggle
+                id="generate-start-frames"
+                label="Generate start frames"
+                checked={generateStartFrames}
+                onChange={handleGenerateStartFramesChange}
+                disabled={disabled || !autoGenerateMotion}
+              />
+            )}
+            {onGenerateStartFramesChange && !generateStartFrames && (
+              <p className="text-xs text-muted-foreground">
+                Each shot renders straight to video from the character, location
+                and element references — no still is generated first. Faster and
+                cheaper, with looser control over composition. Only{' '}
+                {referenceOnlyModelNames} can do this.
+              </p>
             )}
             {singleSelectMotion ? (
               <MotionModelSelector
@@ -286,6 +354,7 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
                 styleCategory={styleCategory}
                 recommendedVideoModel={recommendedVideoModel}
                 styleName={styleName}
+                referenceOnly={!generateStartFrames}
               />
             ) : (
               <MotionModelMultiSelector
@@ -296,6 +365,7 @@ export const GenerationSettings: FC<GenerationSettingsProps> = ({
                 styleCategory={styleCategory}
                 recommendedVideoModel={recommendedVideoModel}
                 styleName={styleName}
+                referenceOnly={!generateStartFrames}
               />
             )}
           </section>

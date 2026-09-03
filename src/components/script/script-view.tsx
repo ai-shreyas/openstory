@@ -54,6 +54,7 @@ import { useGenerationSettings } from '@/hooks/use-generation-settings';
 import { useComposedScript } from '@/hooks/use-scenes';
 import { useSequenceCharacters } from '@/hooks/use-sequence-characters';
 import { useSequenceDraft } from '@/hooks/use-sequence-draft';
+import { useViaAvailability } from '@/hooks/use-via-availability';
 import {
   useSequenceElements,
   type DraftElementUpload,
@@ -315,6 +316,10 @@ export const ScriptView: FC<{
     clearDraft,
   } = useSequenceDraft();
 
+  // Which video models can render reference-only for this team — resolved
+  // server-side and seeded by the `_app` route loader.
+  const { referenceOnlyModels } = useViaAvailability();
+
   // Initialize with sequence values (if editing) or localStorage defaults (if creating)
   const sequenceAnalysisModels: AnalysisModelId[] = useMemo(() => {
     if (isEditing && sequence.analysisModel) {
@@ -333,6 +338,7 @@ export const ScriptView: FC<{
     imageModels: TextToImageModel[];
     videoModels: ImageToVideoModel[];
     autoGenerateMotion: boolean;
+    generateStartFrames: boolean;
     audioModels: AudioModel[];
     autoGenerateMusic: boolean;
   }>(() => ({
@@ -348,7 +354,20 @@ export const ScriptView: FC<{
       isEditing && sequence.videoModel
         ? [safeImageToVideoModel(sequence.videoModel, DEFAULT_VIDEO_MODEL)]
         : savedSettings.videoModels,
-    autoGenerateMotion: isEditing ? false : savedSettings.autoGenerateMotion,
+    // Re-generating an existing sequence defaults motion OFF — except in
+    // reference-only, where motion is the ONLY thing that renders and the
+    // create schema rejects the pair outright. Seeding `false` there made
+    // every reference-only sequence un-regenerable: Generate 400s, and the
+    // reference-only toggle is disabled while motion is off, so the error
+    // named a control the user could not reach.
+    autoGenerateMotion: isEditing
+      ? !sequence.generateStartFrames
+      : savedSettings.autoGenerateMotion,
+    // Editing an existing sequence inherits its mode; a new one starts from
+    // the remembered setting.
+    generateStartFrames: isEditing
+      ? sequence.generateStartFrames
+      : savedSettings.generateStartFrames,
     audioModels:
       isEditing && sequence.musicModel
         ? [safeAudioModel(sequence.musicModel, DEFAULT_MUSIC_MODEL)]
@@ -362,6 +381,7 @@ export const ScriptView: FC<{
     imageModels,
     videoModels,
     autoGenerateMotion,
+    generateStartFrames,
     audioModels,
     autoGenerateMusic,
   } = genSettings;
@@ -691,6 +711,7 @@ export const ScriptView: FC<{
         imageModels: savedSettings.imageModels,
         videoModels: savedSettings.videoModels,
         autoGenerateMotion: savedSettings.autoGenerateMotion,
+        generateStartFrames: savedSettings.generateStartFrames,
         audioModels: savedSettings.audioModels,
         autoGenerateMusic: savedSettings.autoGenerateMusic,
       });
@@ -794,10 +815,16 @@ export const ScriptView: FC<{
       styleMayApplyImage(generationMode, recommendedImageModel)
         ? recommendedImageModel
         : null;
+    // A style's recommendation is a preference; reference-only is a hard
+    // constraint. Two seeded styles recommend Grok Imagine, which has no fal
+    // reference-to-video route — applying it here would build a selection the
+    // create schema rejects at Generate, after the settings panel is closed.
     const validVideo =
       recommendedVideoModel &&
       isValidImageToVideoModel(recommendedVideoModel) &&
-      styleMayApplyVideo(generationMode, recommendedVideoModel)
+      styleMayApplyVideo(generationMode, recommendedVideoModel) &&
+      (generateStartFrames ||
+        referenceOnlyModels.includes(recommendedVideoModel))
         ? recommendedVideoModel
         : null;
     const parsedRatio = recommendedAspectRatio
@@ -853,6 +880,8 @@ export const ScriptView: FC<{
     selectedStyle?.name,
     recommendedImageModel,
     recommendedVideoModel,
+    generateStartFrames,
+    referenceOnlyModels,
     recommendedAspectRatio,
     generationMode,
   ]);
@@ -970,6 +999,7 @@ export const ScriptView: FC<{
         videoModels,
         videoModel: videoModels[0] ?? DEFAULT_VIDEO_MODEL,
         autoGenerateMotion,
+        generateStartFrames,
         autoGenerateMusic,
         musicModel: audioModels[0] ?? DEFAULT_MUSIC_MODEL,
         audioModels,
@@ -1326,6 +1356,7 @@ export const ScriptView: FC<{
         ? motionDurations.perShotSeconds
         : undefined,
       autoGenerateMusic,
+      referenceOnly: !generateStartFrames,
       audioModels: autoGenerateMusic ? audioModels : undefined,
       audioDurationSeconds: autoGenerateMusic
         ? motionDurations.totalSeconds
@@ -1343,6 +1374,7 @@ export const ScriptView: FC<{
     videoModels,
     autoGenerateMusic,
     audioModels,
+    generateStartFrames,
   ]);
 
   // Nothing written yet: Enhance writes the script instead of expanding one
@@ -1492,6 +1524,7 @@ export const ScriptView: FC<{
             imageModels={imageModels}
             videoModels={videoModels}
             autoGenerateMotion={autoGenerateMotion}
+            generateStartFrames={generateStartFrames}
             audioModels={audioModels}
             autoGenerateMusic={autoGenerateMusic}
             onAspectRatioChange={(v) => updateGen('aspectRatio', v)}
@@ -1501,6 +1534,9 @@ export const ScriptView: FC<{
             onVideoModelsChange={(v) => updateGen('videoModels', v)}
             onAutoGenerateMotionChange={(v) =>
               updateGen('autoGenerateMotion', v)
+            }
+            onGenerateStartFramesChange={(v) =>
+              updateGen('generateStartFrames', v)
             }
             onAudioModelsChange={(v) => updateGen('audioModels', v)}
             onAutoGenerateMusicChange={(v) => updateGen('autoGenerateMusic', v)}

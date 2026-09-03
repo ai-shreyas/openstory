@@ -54,6 +54,7 @@ Oh, hi Mom. Yeah, I'm fine. Just... working on a big project.`,
   readyEmailSentAt: null,
   autoGenerateMotion: false,
   autoGenerateMusic: false,
+  generateStartFrames: true,
   suggestedTalentIds: null,
   suggestedLocationIds: null,
 };

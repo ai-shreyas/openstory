@@ -156,9 +156,21 @@ const PHASES = [
   { name: 'Generating images\u2026', shortName: 'Images' },
 ] as const;
 
+/**
+ * Reference-only renders straight to video, so phase 4 — shot images — never
+ * runs, and its motion prompts are folded into phase 3 alongside the reference
+ * sheets. The step is DROPPED rather than relabelled: it has no work left of
+ * its own, and a chip that only ever waits is one the user watches for no
+ * reason. Phase 3's own label already reads "References & prompts", which is
+ * exactly what it now does.
+ */
+const REFERENCE_ONLY_SKIPPED_PHASE = 4;
+
 export type GenerationPhaseConfig = {
   autoGenerateMotion: boolean;
   autoGenerateMusic: boolean;
+  /** Straight-to-video: no shot-images phase, so no phase 4 at all. */
+  referenceOnly?: boolean;
 };
 
 function getPhase5Label(config: GenerationPhaseConfig): {
@@ -219,7 +231,9 @@ export function createInitialState(
     phaseName: p.name,
     shortName: p.shortName,
     status: 'pending' as const,
-  }));
+  })).filter(
+    (p) => !(config?.referenceOnly && p.phase === REFERENCE_ONLY_SKIPPED_PHASE)
+  );
 
   if (config && (config.autoGenerateMotion || config.autoGenerateMusic)) {
     const label = getPhase5Label(config);

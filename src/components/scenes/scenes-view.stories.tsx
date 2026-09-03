@@ -69,6 +69,7 @@ const mockSequence: Sequence = {
   readyEmailSentAt: null,
   autoGenerateMotion: false,
   autoGenerateMusic: false,
+  generateStartFrames: true,
   suggestedTalentIds: null,
   suggestedLocationIds: null,
 };
@@ -238,6 +239,7 @@ const mockShot = (spec: {
       sceneId: spec.sceneId,
       shotNumber: 1,
       durationMs: 5000,
+      useStartFrame: null,
       selectedMotionPromptVersionId: null,
       renderSegmentId: null,
       deletedAt: null,

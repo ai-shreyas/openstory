@@ -78,7 +78,8 @@ import {
 import { DEFAULT_ASPECT_RATIO } from '@/lib/constants/aspect-ratios';
 import { isSetImageOffered } from '@/lib/shots/set-image-offer';
 import type { FrameVariant, ShotVariant } from '@/lib/db/schema';
-import type { ShotView } from '@/lib/shots/shot-view';
+import { rendersReferenceOnly } from '@/lib/shots/use-start-frame';
+import { isBatchMotionEligible, type ShotView } from '@/lib/shots/shot-view';
 import { analyzeLoadedFailures } from '@/lib/failures/failure-analysis';
 import type { GenerationPhaseConfig } from '@/lib/realtime/generation-stream.reducer';
 import { useGenerationStream } from '@/lib/realtime/use-generation-stream';
@@ -290,6 +291,9 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     },
   });
   const aspectRatio = sequence?.aspectRatio || DEFAULT_ASPECT_RATIO;
+  // No stills are ever rendered in this mode, so every motion-eligibility
+  // check has to stop requiring one (`isBatchMotionEligible`).
+  const generateStartFrames = sequence?.generateStartFrames ?? false;
   const isProcessing = sequence?.status === 'processing';
   const processingRef = useRef(isProcessing);
   processingRef.current = isProcessing;
@@ -369,8 +373,13 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     () => ({
       autoGenerateMotion: sequence?.autoGenerateMotion ?? false,
       autoGenerateMusic: sequence?.autoGenerateMusic ?? false,
+      referenceOnly: !(sequence?.generateStartFrames ?? false),
     }),
-    [sequence?.autoGenerateMotion, sequence?.autoGenerateMusic]
+    [
+      sequence?.autoGenerateMotion,
+      sequence?.autoGenerateMusic,
+      sequence?.generateStartFrames,
+    ]
   );
 
   // Subscribe to real-time generation events when sequence is processing.
@@ -1242,12 +1251,11 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
       // 'cancelled' is user-initiated (#1108 Phase 4): deliberately eligible
       // for a user-driven batch generate, never auto-retried.
       const eligibleShotIds = (shots ?? [])
-        .filter(
-          (f) =>
-            f.frame.imageStatus === 'completed' &&
-            (f.videoStatus === 'pending' ||
-              f.videoStatus === 'failed' ||
-              f.videoStatus === 'cancelled')
+        .filter((f) =>
+          isBatchMotionEligible(
+            f,
+            rendersReferenceOnly(f, { generateStartFrames })
+          )
         )
         .map((f) => f.id);
 
@@ -1323,7 +1331,14 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
         }
       }
     },
-    [sequenceId, shots, queryClient, posthog, showBillingGate]
+    [
+      sequenceId,
+      shots,
+      generateStartFrames,
+      queryClient,
+      posthog,
+      showBillingGate,
+    ]
   );
 
   const musicPromptsReady = !!(sequence?.musicPrompt && sequence.musicTags);
@@ -1431,6 +1446,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
     initialMusicModel: sequenceMusicModel,
     initialVideoModel: sequenceVideoModel,
     styleCategory,
+    generateStartFrames,
     recommendedVideoModel,
     styleName,
     modelMissingShotIds: shotsMissingActiveImage,
@@ -1594,6 +1610,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
                     shot={selectedShot}
                     sequenceId={sequenceId}
                     resolution={sequence?.resolution}
+                    sequenceGeneratesStartFrames={generateStartFrames}
                     selectedTab={effectiveTab}
                     visibleTabs={visibleTabs}
                     onTabChange={(tab) => {

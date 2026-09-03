@@ -157,6 +157,19 @@ export const sequences = snakeCase.table(
     // retries and smart-retry re-completes cannot double-send.
     readyEmailSentAt: integer({ mode: 'timestamp' }),
 
+    // Sequence default for "does a shot animate from a rendered still"
+    // (`shots.useStartFrame` overrides it per shot, NULL = inherit; resolve
+    // with `usesStartFrame()`, never raw). Off by default: a new sequence
+    // renders reference-only, straight to video from the cast / location /
+    // element sheets, and this is the opt-in back to the frame-based
+    // workflow. Replaced the inverted `referenceOnly` (ADD COLUMN + backfill +
+    // DROP COLUMN, no rebuild, #612). Set at creation and never toggled
+    // after (`updateSequenceSchema` omits it): the storyboard trigger
+    // snapshots it onto the workflow payload,
+    // and every stored motion prompt's input hash folds the resolved mode in,
+    // so flipping it re-stales the prompts rather than mixing two styles.
+    generateStartFrames: integer({ mode: 'boolean' }).default(false).notNull(),
+
     // Auto-generation flags (set at sequence creation, read by UI for phase display)
     // TB-20260804: DB-Audit: autoGenerateMotion and autoGenerateMusic should not be stored. They should be set when the workflow is initiated.
     autoGenerateMotion: integer({ mode: 'boolean' }).default(false).notNull(),
